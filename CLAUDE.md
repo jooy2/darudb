@@ -75,9 +75,9 @@ From the bottom up: `format` and `crypto`, then `storage`, `btree`, `lock`, `txn
 - **Queries**: filtering, sorting and links between objects. Joins at the level of a SQL engine are not a v1 goal, though more is welcome later.
 - **Several processes on one file must be stable.** Designs that coordinate processes through shared memory have been effectively limited to one process at a time, and fixing that is one of DaruDB's central tasks.
 
-## Architecture **[Tentative]**
+## Architecture
 
-The drafts in [design/](design/README.md) pin down and in places change the items below. Until the maintainer accepts them, the items here stand; [Awaiting review](design/README.md#awaiting-review) lists every difference.
+The storage engine, crash safety, several processes and encryption are **[Decided]**: the maintainer accepted the specifications in [design/](design/README.md) on 2026-09-23, and those documents are the authority on every detail below. The rest of this section is **[Tentative]**.
 
 ```text
 Rust API         Node.js binding (napi-rs)         Dart binding (dart:ffi + build hooks)
@@ -85,48 +85,64 @@ Rust API         Node.js binding (napi-rs)         Dart binding (dart:ffi + buil
   Objects, schema, queries   (query IR, indexes, migrations)
   Transactions, snapshots, cross-process locks   (OS file range locks)
   Copy-on-write B+tree
-  Page I/O, page cache, checksums, AEAD encryption
+  Page I/O, page cache, checks, AEAD encryption
 ```
 
 - **One engine, thin bindings.** Query semantics live only in the engine. A binding builds a query IR and passes it in, so every language behaves the same way.
 - **Why Rust**: memory safety (use-after-free crashes are the class of bug this project most wants to leave behind), good distribution through Dart build hooks and napi-rs, and C-level performance.
 - **What Rust does not prevent**: durability bugs such as a wrong fsync order or a mistake in the commit protocol. Only tests catch those, which is why the storage and multi-process suites are the heaviest in the repository.
 
-### Storage engine
+### Storage engine **[Decided]**
+
+Specified in [design/file-format.md](design/file-format.md).
 
 - **Copy-on-write B+tree.** A committed page is never modified in place.
-- **Atomic commit through a double-buffered header.** The file header holds two commit slots, and a single flag byte says which one is the primary, so flipping that byte is the commit.
-- **Checksums on every page, Merkle-style.** Each parent page stores its children's checksums, which is how a partly written transaction is detected and rolled back.
+- **A header with a selector byte and three commit slots.** One slot holds the published commit, one the durable commit, and the writer fills the third, so no record anyone may need is ever overwritten.
+- **Every pointer carries the page number, the transaction id that wrote the page, and the page's check** (32 bytes). Each page is verified against its pointer before use. The check is XXH3-128 in a plain file and the AEAD tag in an encrypted one.
 - **No mmap; positional reads and writes (`pread` / `pwrite`) through our own page cache.** Memory-mapped files are hard to prove sound in Rust, because another process can change the mapped bytes under a live reference, and they conflict with both multi-process access and encryption. The cost is the zero-copy read path mmap would give, so the performance goal has to be proven by benchmarks against this design.
-- **Storage layout**: a record tree `(collection, primary key) → record bytes`, and an index tree `(collection, field, value, primary key)`.
-- **Page size**: never assume the operating system's page size is 4 KB. Android now uses 16 KB pages. The database page size is recorded in the file header.
+- **Page size**: a power of two from 4096 to 65536, recorded in the header; 4096 by default until the benchmarks decide. It is independent of the operating system's page size, which is never assumed (Android now uses 16 KB pages).
+- **Every page reserves a 24-byte nonce field, encrypted or not**, so a tree has the same shape either way and one test suite covers both.
+- **Storage layout** (**[Tentative]**, phase 4): a record tree `(collection, primary key) → record bytes`, and an index tree `(collection, field, value, primary key)`.
 
-### Crash safety and recovery
+### Crash safety and recovery **[Decided]**
 
-- **Minimal assumptions about the file system**: a one-byte write is atomic, data is durable after fsync, and overwriting one sector does not damage the ones around it.
-- **On open**: check the recovery-needed flag. If it is set, go back to the last valid commit and rebuild the allocator's state.
-- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checksums are valid), online backup, and compaction.
-- **Not supported**: network file systems (NFS, SMB).
+Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 
-### Several processes
+- **Five platform assumptions and no others**: a one-byte write is atomic, a write changes only the bytes it names, a successful sync makes earlier writes durable, byte-range locks work and die with their owner, and the file system is local. [design/README.md](design/README.md#what-the-engine-assumes-of-the-platform) states them exactly.
+- **A sync commit costs one barrier.** The barrier is the commit point; flipping the selector afterwards publishes a commit that is already durable, so readers never see one that a power cut could undo.
+- **Deferred commits** are published without a barrier and become durable at the next one. A power cut undoes them only from the newest backwards; a process crash loses none. The format supports them from the start, even if the kernel ships sync commits first.
+- **Recovery** runs in the first process to open the file. It adopts the newest commit that is either published with the unsynced bit clear or passes checking, where checking reads only the pages written since that commit's durable transaction id.
+- **A failed barrier is not retried.** The commit fails with `SYNC_FAILED`, and the handle is unusable until the file is reopened.
+- **A new database is written to a temporary file and moved into place without replacing anything**, so the path holds either nothing or a complete database.
+- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checks are valid), online backup, and compaction.
+- **Not supported**: network file systems (NFS, SMB). They are detected and refused with `UNSUPPORTED_FILE_SYSTEM`.
+
+### Several processes **[Decided]**
+
+Specified in [design/locking.md](design/locking.md).
 
 - **No mutexes in shared memory.** A process that dies holding a shared-memory mutex leaves it held, recovering from that needs robust mutexes that not every platform has, and a lock file with a memory layout in it breaks between processes of different architectures.
-- **Only operating-system file range locks** (`fcntl` on Unix, `LockFileEx` on Windows). When a process dies, the operating system releases its locks, and nothing beyond the normal recovery on open is needed.
-- **The lock protocol**: fixed byte ranges in the file are reserved as locks for the header, the writer, and the active transactions. A reader holds a shared lock on byte `TXN_BASE + txn_id` for as long as its transaction lives. The writer scans that range to find the oldest transaction still reading, and only reuses pages no reader can still see.
-- **Cache invalidation**: when a process sees a commit ID newer than its own, it drops its page cache.
-- **Two-phase commit** whenever more than one process has the file open.
-- **Concurrency model**: one writing process at a time and any number of readers.
+- **Only operating-system byte-range locks** (`fcntl` on Unix, `LockFileEx` on Windows), on bytes from 2^62 up, where no data ever is: an open lock, a writer lock, and one byte per snapshot. When a process dies, the operating system releases its locks, and nothing else needs cleaning up.
+- **One operating-system handle per file per process**, shared by every `Database` object for that file, because closing any descriptor drops all of a process's POSIX locks.
+- **Readers take no header lock**: they read the header, register their snapshot, and read it again.
+- **The writer reclaims pages** only from groups that no registered snapshot and no possible recovery can still reach.
+- **The page cache is keyed by page number and check**, so a stale entry never matches and nothing has to be invalidated when another process commits.
+- **Concurrency model**: one writing process at a time and any number of readers. Waiting for the writer lock past the busy timeout fails with `BUSY`.
+- **iOS**: the system terminates a suspended app that holds a file lock in an App Group container, and the open lock is held while a database is open.
 - **Test this area harder than any other.** Concurrent reads and writes from several processes, with processes killed at random, are the phase 3 exit criterion.
 
-### Encryption
+### Encryption **[Decided]**
 
-- **Page-level AEAD.** Candidates are AES-256-GCM and XChaCha20-Poly1305. With encryption on, the AEAD tag doubles as the page checksum.
-- **A data key wrapped by a key-encryption key.** The file stores the data key (DEK) encrypted under the key-encryption key (KEK), so changing a password or a key rewraps one small value rather than re-encrypting the file.
-- **A password becomes a key through a memory-hard KDF** (Argon2 or similar). A MAC keyed from a fast hash of a password can be brute-forced on GPUs, and unauthenticated modes such as CBC are not used at all.
+Specified in [design/file-format.md](design/file-format.md#encryption).
+
+- **Page-level AEAD with XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer.
+- **A data key wrapped by a key-encryption key**, stored in every commit record. Changing a password is an ordinary commit that rewraps the key, followed by two empty sync commits that overwrite the old key block in the other slots.
+- **A password becomes a key through Argon2id**, with its parameters stored in the key block. Unauthenticated modes such as CBC are not used at all.
 - **Operating-system keystores** (Keychain, Android Keystore, DPAPI) are worth offering as helpers in the bindings.
 - **Encryption and multi-process access do not conflict here**, because there is no shared memory and no mmap.
+- **The header stays plain**, so page size, transaction ids and file size are visible; everything inside a page is not.
 
-### API and query model
+### API and query model **[Tentative]**
 
 - **Query results are plain objects (snapshots).** No accessor objects tied to the database's lifetime, so there is no "used after the database was closed" crash to have.
 - **v1 queries**
@@ -150,7 +166,7 @@ Rust API         Node.js binding (napi-rs)         Dart binding (dart:ffi + buil
 - **Every failure has a stable code**, `Error::code` in `crates/darudb/src/error.rs`, in `SCREAMING_SNAKE_CASE`. Bindings pass it through unchanged (`error.code` in JavaScript). A code, once released, is not renamed; retiring one is a breaking change.
 - **A database file is untrusted input.** Anything read from disk is validated before it is used, and a damaged file produces an error, never a panic.
 
-### Bindings and distribution
+### Bindings and distribution **[Tentative]**
 
 - **Node.js**: napi-rs. Node-API is ABI-stable, so a binary does not need rebuilding per Node.js version. Prebuilt binaries ship as per-platform optional npm packages.
 - **Dart**: `dart:ffi` with Dart build hooks (native assets), official from Dart 3.10 and Flutter 3.38. The Rust code is built with `native_toolchain_rust` or a similar package. The hook's imports belong in `dependencies`, not `dev_dependencies`, or the hook does not compile in consumer apps.

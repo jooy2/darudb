@@ -1,6 +1,6 @@
 # File format
 
-Status: draft for review. This document describes file format version 2.
+Status: accepted. This document describes file format version 2.
 
 A DaruDB database is one file, divided into pages of equal size. Page 0 is the header, which says what the file is and where its newest commits are. Every other page is a node of a B+tree or part of an overflow run that holds one large value. This document gives the layout of each. [Commits and recovery](commits-and-recovery.md) says how they change, and [Locking](locking.md) says how several processes share them.
 
@@ -30,7 +30,10 @@ The page size is unrelated to the operating system's memory page size, which the
 
 A check is 16 bytes that prove a page is the one expected.
 
-- In a **plain file**, the check of page `n` is the XXH3-128 hash of the page number, as 8 bytes, followed by the first `P − 16` bytes of the page. Covering the page number means a page written to the wrong place fails its own check.
+- In a **plain file**, the check of page `n` is the XXH3-128 hash, with seed 0, of the page number as 8 bytes followed by the first `P − 16` bytes of the page. Covering the page number means a page written to the wrong place fails its own check.
+
+Wherever this document stores an XXH3-128 value, it stores the 128-bit hash as a little-endian integer, like every other integer here.
+
 - In an **encrypted file**, the check is the page's authentication tag ([Encryption](#encryption)).
 
 XXH3-128 is fast enough that verifying every page on every read costs little, and 128 bits make an accidental match negligible even across billions of pages. It is not a cryptographic hash, and it does not need to be: it only has to catch accidents. Deliberate tampering is what the encrypted file's tags are for. Which Rust implementation of XXH3 the engine uses is decided when it is written, under the dependency rules in `CONTRIBUTING.md`.
@@ -243,9 +246,7 @@ The key limit guarantees that four entries always fit in a node, whatever their 
 
 ## Encryption
 
-The cipher is chosen when the file is created and recorded in the static fields; a file does not change between plain and encrypted except by being rewritten into a new file. This section is the proposal for the open question on encryption in `TODO.md`: the choices it makes stay proposals until the maintainer accepts them.
-
-### Pages
+The cipher is chosen when the file is created and recorded in the static fields; a file does not change between plain and encrypted except by being rewritten into a new file. ### Pages
 
 Each page is encrypted with **XChaCha20-Poly1305** under the file's data key (DEK), which is 32 random bytes generated when the file is created.
 

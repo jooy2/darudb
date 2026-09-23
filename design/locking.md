@@ -1,6 +1,6 @@
 # Locking
 
-Status: draft for review.
+Status: accepted.
 
 How any number of processes share one database file. The only state they share is the file's content and the operating system's byte-range locks on it: no shared memory, no lock file with a layout in it, and nothing that a process dying can leave behind for the others to clean up. [Commits and recovery](commits-and-recovery.md) says what the writer does once it holds the lock; this document says how it gets there and how readers stay out of its way.
 

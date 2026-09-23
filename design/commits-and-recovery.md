@@ -1,6 +1,6 @@
 # Commits and recovery
 
-Status: draft for review.
+Status: accepted.
 
 How a transaction changes the file without ever putting a committed state at risk, when a commit becomes durable, and what opening a file after a crash does. [File format](file-format.md) gives the layout of everything named here, and [Locking](locking.md) says how several processes take turns.
 
@@ -181,13 +181,13 @@ Starting from each of `c`'s three root pointers whose transaction id is above `L
 
 1. Build page 0: the static fields with a fresh random file id, slot 0 holding the first commit (transaction id 1, durable transaction id 0, page count 1, null roots, next tree id 16), slots 1 and 2 empty, and the selector pointing at slot 0 with the unsynced bit clear.
 1. Write it to a new temporary file in the same directory, named after the database with a random suffix, and issue a barrier.
-1. Move the temporary file to the database's name **without replacing anything**: `renameat2` with `RENAME_NOREPLACE` on Linux and Android, `renamex_np` with `RENAME_EXCL` on macOS and iOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on Windows. Where the file system refuses those, link the temporary file to the name, which also fails if the name exists, and remove the temporary file.
+1. Move the temporary file to the database's name **without replacing anything**: link it to the name, which fails if the name exists, then remove the temporary name. On a file system without links, use the platform's no-replace rename where it has one: `renameat2` with `RENAME_NOREPLACE` on Linux and Android, `renamex_np` with `RENAME_EXCL` on macOS and iOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on Windows.
 1. If the name is taken, another process created the database first: remove the temporary file and open the existing one as usual.
 1. On Unix-like systems, issue a barrier on the directory, so that the new name survives a power cut.
 
 So the file at the path is either absent or a complete database, and two processes creating it at once cannot collide. A file of zero length is never a database and is refused with `NOT_A_DATABASE`.
 
-On the rare file system that supports neither a no-replace move nor links, the engine falls back to creating the file directly and writing page 0 while holding the open lock exclusively. A crash in between leaves an empty file, which is refused as above, and the file has to be deleted by hand.
+On a file system that supports neither links nor a no-replace rename, the engine falls back to creating the file directly and writing page 0 while holding the open lock exclusively. A crash in between leaves an empty file, which is refused as above, and the file has to be deleted by hand.
 
 A temporary file left behind by a crash is never read by the engine and is safe to delete.
 
