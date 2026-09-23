@@ -73,6 +73,12 @@ DARUDB_CRASH_SEEDS=2000 cargo test -p darudb --release --lib crash
 DARUDB_KILL_ROUNDS=500 cargo test -p darudb --release --test process_kill
 ```
 
+A change meant to make the engine faster comes with numbers from before and after it, on the same machine:
+
+```bash
+cargo run -p darudb --release --example kernel_bench
+```
+
 For the Node.js binding:
 
 ```bash

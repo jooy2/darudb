@@ -70,6 +70,8 @@ Tests sit beside what they test, plus three places that test the whole engine:
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
 - `tests/transactions.rs` and `tests/open.rs`: the public API on real files.
 
+`examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
+
 ## Scope **[Decided]**
 
 - **Targets**
