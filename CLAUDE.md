@@ -1,0 +1,211 @@
+# Working in this repository
+
+What a reader has to know before changing anything here, and where to find the rest. [CONTRIBUTING.md](CONTRIBUTING.md) has the full procedure and every command; this file is the map, the requirements and the design decisions. [TODO.md](TODO.md) is the roadmap, the open questions and the work that outlived a session.
+
+Decisions below carry one of two marks:
+
+- **[Decided]**: the maintainer has made this call. Do not reopen it without being asked.
+- **[Tentative]**: the direction agreed in discussion, whose details may still change. **Check with the user before changing one or pinning down its details.** When an open question in `TODO.md` is decided, move it into the section here that it belongs to.
+
+## What this is
+
+DaruDB is an embedded database that keeps an application's data in one local file. The engine is written in Rust and shipped to Rust, Node.js and Dart through thin bindings. The work goes to the Rust engine and the Node.js binding first; Dart follows.
+
+The five requirements, in the order the maintainer ranked them. **[Decided]**
+
+1. **Performance.** Reads and writes faster than the embedded SQL engines applications usually reach for, measured at the same durability settings. Whether that is reached is for benchmarks to say, and until they exist, nothing here claims it.
+1. **Encryption.** Encryption of the whole database file, with authentication, and keys handled properly.
+1. **Stability.** Rarely crashes, the file does not break easily, a broken file can be recovered, and several processes can use one file at the same time.
+1. **Compatibility.** Runs on many operating systems, from old releases to the latest. The file format is versioned, and every format version and every schema version comes with a migration from the one before.
+1. **Developer convenience.** Queries are easy to write, and so is a schema.
+
+The project is written and maintained with coding agents, now and later. Keep the structure easy to pick up cold: one responsibility per module, a doc comment at the top of each module saying what it owns and which invariants it keeps, tests next to the behaviour they check, and no coupling that a reader of one file cannot see.
+
+## Rules that hold everywhere
+
+- **Never name another database product in this repository.** Not in code, comments, documentation, commit messages, tests or benchmark names. DaruDB goes its own way, and its designs are described on their own terms. **[Decided]**
+- **Our own code from the start.** No existing database engine is embedded with a plan to swap it out later, and no existing database is forked. Studying other designs is fine; copying them is not. **[Decided]**
+- **Everything in the repository is English**: code, identifiers, comments, commit messages, error messages. The Korean pages under `docs/ko` are the exception, and the changelogs stay English even on the Korean site.
+- **Prose is plain and explains why.** Comments and documentation say what a decision costs and what the alternative was, in complete sentences, with no emoji and no decoration.
+
+## Layout
+
+| Path            | What it is                                              | Entered with                                                    |
+| --------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
+| `crates/darudb` | The engine and the Rust API, the crate `darudb`         | `cargo test -p darudb` from the root                            |
+| `packages/node` | The Node.js binding, the npm package `darudb` (napi-rs) | `npm install`, then `npm run build`, `npm test`, `npm run lint` |
+| `docs`          | The VitePress site, shared by every package             | `npm install`, then `npm run dev`                               |
+
+**The root is a Cargo workspace and nothing else.** `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml` are there; there is no root `package.json` and no npm workspace. Each JavaScript folder installs and runs on its own, so check which folder a command belongs to before running it. `packages/node` is both an npm package and a member of the Cargo workspace.
+
+`packages/dart` is planned and will hold the Dart package and its Rust glue crate, the same way `packages/node` does.
+
+### The engine, module by module
+
+`crates/darudb/src` is layered, and a module only uses the modules below it. Keeping that one-way is what lets a layer be read, tested and replaced on its own.
+
+| Module        | Owns                                                                 | State    |
+| ------------- | -------------------------------------------------------------------- | -------- |
+| `database.rs` | `Database`, the public handle: open, create, close                   | Skeleton |
+| `options.rs`  | `OpenOptions`, and validating what the caller asked for              | Skeleton |
+| `error.rs`    | `Error`, `Result`, and each failure's stable code                    | Skeleton |
+| `storage/`    | How bytes reach the disk: positional I/O, sync, later the page cache | Skeleton |
+| `format/`     | What bytes on disk mean: the file header, constants. No I/O at all   | Skeleton |
+| `btree/`      | The copy-on-write B+tree                                             | Planned  |
+| `txn/`        | Transactions, snapshots, the commit protocol                         | Planned  |
+| `lock/`       | Cross-process coordination through file range locks                  | Planned  |
+| `crypto/`     | Page encryption, key wrapping, key derivation                        | Planned  |
+| `schema/`     | Collections, fields, indexes, schema migrations                      | Planned  |
+| `query/`      | The query IR and its execution                                       | Planned  |
+| `tools/`      | Integrity check, salvage, backup, compact                            | Planned  |
+
+From the bottom up: `format` and `crypto`, then `storage`, `btree`, `lock`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
+
+## Scope **[Decided]**
+
+- **Targets**
+  - Rust: the crate is a public API, not only the engine behind the bindings.
+  - Node.js: servers and desktop applications.
+  - Dart: Flutter apps, and Dart servers and command-line tools.
+- **Out of scope**
+  - Browsers and websites (WASM, IndexedDB, OPFS and the like).
+  - Remote sync. This is a local file database.
+  - Reactive or live-object notifications, for now. They were inconvenient in practice and a frequent source of crashes in the designs that had them.
+- **Queries**: filtering, sorting and links between objects. Joins at the level of a SQL engine are not a v1 goal, though more is welcome later.
+- **Several processes on one file must be stable.** Designs that coordinate processes through shared memory have been effectively limited to one process at a time, and fixing that is one of DaruDB's central tasks.
+
+## Architecture **[Tentative]**
+
+```text
+Rust API         Node.js binding (napi-rs)         Dart binding (dart:ffi + build hooks)
+    └─────────────────────── Rust engine ───────────────────────┘
+  Objects, schema, queries   (query IR, indexes, migrations)
+  Transactions, snapshots, cross-process locks   (OS file range locks)
+  Copy-on-write B+tree
+  Page I/O, page cache, checksums, AEAD encryption
+```
+
+- **One engine, thin bindings.** Query semantics live only in the engine. A binding builds a query IR and passes it in, so every language behaves the same way.
+- **Why Rust**: memory safety (use-after-free crashes are the class of bug this project most wants to leave behind), good distribution through Dart build hooks and napi-rs, and C-level performance.
+- **What Rust does not prevent**: durability bugs such as a wrong fsync order or a mistake in the commit protocol. Only tests catch those, which is why the storage and multi-process suites are the heaviest in the repository.
+
+### Storage engine
+
+- **Copy-on-write B+tree.** A committed page is never modified in place.
+- **Atomic commit through a double-buffered header.** The file header holds two commit slots, and a single flag byte says which one is the primary, so flipping that byte is the commit.
+- **Checksums on every page, Merkle-style.** Each parent page stores its children's checksums, which is how a partly written transaction is detected and rolled back.
+- **No mmap; positional reads and writes (`pread` / `pwrite`) through our own page cache.** Memory-mapped files are hard to prove sound in Rust, because another process can change the mapped bytes under a live reference, and they conflict with both multi-process access and encryption. The cost is the zero-copy read path mmap would give, so the performance goal has to be proven by benchmarks against this design.
+- **Storage layout**: a record tree `(collection, primary key) → record bytes`, and an index tree `(collection, field, value, primary key)`.
+- **Page size**: never assume the operating system's page size is 4 KB. Android now uses 16 KB pages. The database page size is recorded in the file header.
+
+### Crash safety and recovery
+
+- **Minimal assumptions about the file system**: a one-byte write is atomic, data is durable after fsync, and overwriting one sector does not damage the ones around it.
+- **On open**: check the recovery-needed flag. If it is set, go back to the last valid commit and rebuild the allocator's state.
+- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checksums are valid), online backup, and compaction.
+- **Not supported**: network file systems (NFS, SMB).
+
+### Several processes
+
+- **No mutexes in shared memory.** A process that dies holding a shared-memory mutex leaves it held, recovering from that needs robust mutexes that not every platform has, and a lock file with a memory layout in it breaks between processes of different architectures.
+- **Only operating-system file range locks** (`fcntl` on Unix, `LockFileEx` on Windows). When a process dies, the operating system releases its locks, and nothing beyond the normal recovery on open is needed.
+- **The lock protocol**: fixed byte ranges in the file are reserved as locks for the header, the writer, and the active transactions. A reader holds a shared lock on byte `TXN_BASE + txn_id` for as long as its transaction lives. The writer scans that range to find the oldest transaction still reading, and only reuses pages no reader can still see.
+- **Cache invalidation**: when a process sees a commit ID newer than its own, it drops its page cache.
+- **Two-phase commit** whenever more than one process has the file open.
+- **Concurrency model**: one writing process at a time and any number of readers.
+- **Test this area harder than any other.** Concurrent reads and writes from several processes, with processes killed at random, are the phase 3 exit criterion.
+
+### Encryption
+
+- **Page-level AEAD.** Candidates are AES-256-GCM and XChaCha20-Poly1305. With encryption on, the AEAD tag doubles as the page checksum.
+- **A data key wrapped by a key-encryption key.** The file stores the data key (DEK) encrypted under the key-encryption key (KEK), so changing a password or a key rewraps one small value rather than re-encrypting the file.
+- **A password becomes a key through a memory-hard KDF** (Argon2 or similar). A MAC keyed from a fast hash of a password can be brute-forced on GPUs, and unauthenticated modes such as CBC are not used at all.
+- **Operating-system keystores** (Keychain, Android Keystore, DPAPI) are worth offering as helpers in the bindings.
+- **Encryption and multi-process access do not conflict here**, because there is no shared memory and no mmap.
+
+### API and query model
+
+- **Query results are plain objects (snapshots).** No accessor objects tied to the database's lifetime, so there is no "used after the database was closed" crash to have.
+- **v1 queries**
+  - Primary keys.
+  - Secondary indexes: single-field and unique. Composite indexes come in v2.
+  - Comparisons: `== != < <= > >= between in`.
+  - Strings: `contains`, `startsWith`, `endsWith`.
+  - Null checks, `AND`, `OR`, `NOT`.
+  - `sort`, `limit` / `offset`, `count`.
+  - Links (to-one and to-many), backlinks, embedded objects, lists.
+- **Language APIs**
+  - Rust: typed schema and query builder in the crate itself.
+  - Dart: schema and a type-safe query builder generated with `build_runner`.
+  - TypeScript: a builder typed with generics.
+- **The language boundary costs more than it looks.** Real-world performance is often decided by the binding layer rather than the engine, so records cross as packed binary buffers in one call, and batch APIs are the default.
+- **Node.js**: a synchronous API, and an asynchronous one that runs on worker threads so the event loop is never blocked.
+- **Change detection**: reactive notifications are out of scope. If something is needed later, it is something small, such as reading a commit counter.
+
+### Errors
+
+- **Every failure has a stable code**, `Error::code` in `crates/darudb/src/error.rs`, in `SCREAMING_SNAKE_CASE`. Bindings pass it through unchanged (`error.code` in JavaScript). A code, once released, is not renamed; retiring one is a breaking change.
+- **A database file is untrusted input.** Anything read from disk is validated before it is used, and a damaged file produces an error, never a panic.
+
+### Bindings and distribution
+
+- **Node.js**: napi-rs. Node-API is ABI-stable, so a binary does not need rebuilding per Node.js version. Prebuilt binaries ship as per-platform optional npm packages.
+- **Dart**: `dart:ffi` with Dart build hooks (native assets), official from Dart 3.10 and Flutter 3.38. The Rust code is built with `native_toolchain_rust` or a similar package. The hook's imports belong in `dependencies`, not `dev_dependencies`, or the hook does not compile in consumer apps.
+- **Toolchain**: the Rust version is pinned in `rust-toolchain.toml` for reproducible builds, which `native_toolchain_rust` requires. `rust-version` in the workspace `Cargo.toml` is a separate promise: the oldest compiler a crate consumer may use.
+
+### Platform baseline (reference)
+
+|         | Rust Tier 1 minimum                                                         | Flutter minimum            |
+| ------- | --------------------------------------------------------------------------- | -------------------------- |
+| Windows | 10 (Windows 7 and 8 use the separate `*-win7-windows-msvc` targets, Tier 3) | 10 (from Flutter 3.19)     |
+| macOS   | 10.12                                                                       | 10.14                      |
+| iOS     | 10                                                                          | —                          |
+| Linux   | kernel 3.2, glibc 2.17                                                      | —                          |
+| Android | —                                                                           | API 21 (from Flutter 3.22) |
+
+- Rust is not the bottleneck: Flutter's own minimums are higher.
+- Android needs 16 KB page support, including 16 KB alignment of the native `.so` files.
+
+## Designs this project rejects
+
+Each of these was tried elsewhere and caused the problems this project exists to avoid. Changing one of them needs a reason written down beside it.
+
+| Rejected                                                | Why                                                                                     |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Live objects: accessors tied to the database's lifetime | Every access after a close is a crash waiting to happen, in every binding               |
+| Mutexes in a shared-memory lock file                    | A process that dies holding one wedges the rest; the layout breaks across architectures |
+| CBC with a separate MAC keyed from a weak password hash | Unauthenticated modes are fragile, and a fast-hash key falls to GPU brute force         |
+| Shipping without recovery tools                         | A damaged file with no way to check or salvage it is lost data                          |
+| A storage format entangled with sync                    | Sync is out of scope, and its needs would shape every page of the file                  |
+
+## Things that surprise
+
+- **The file format is a draft.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The header today holds only the magic bytes, the format version and the page size; the commit slots and checksums arrive with the storage kernel.
+- **`packages/node/index.js` and `index.d.ts` are generated** by `npm run build` from the `#[napi]` items in `src/lib.rs`, together with the `.node` addon, and all three are git-ignored. The TypeScript types a consumer sees are whatever the Rust source says.
+- **`npm test` in `packages/node` runs against the addon that is already built.** A change to the engine does not reach the Node.js tests until `npm run build` runs again.
+- **The workflows run only when started by hand** (`workflow_dispatch`), because the account's GitHub Actions minutes are short for now. Local runs are the normal check. Each workflow file says where the `push` and `pull_request` triggers go when that changes.
+- **`docs/*/changelog.md` is generated** from the packages' `CHANGELOG.md` files and git-ignored. Edit the package's changelog, never the page.
+
+## The documentation site
+
+- **Two locales, `docs/en` and `docs/ko`, that mirror each other page for page.** A page added to one is added to the other. Korean is written, not translated from the English, and the heading anchors in Korean pages are the Korean words.
+- **The sidebar is generated from the folder tree** by `vitepress-sidebar` and then reshaped in `.vitepress/config.ts`. Frontmatter `title` names a page and `order` places it.
+- **A page's `<meta name="description">` is its own first paragraph**, read out of the source. Open every page with one sentence that says what it is about.
+- **`robots.txt` and `llms.txt` are written at build time**, in `buildEnd`, from `packages/node/package.json`'s homepage and the pages that are actually there. Neither is committed.
+- **Documentation is written with the feature, not before it.** A page describes what the code does today. A goal the code has not reached yet is labelled as a goal.
+
+## Conventions
+
+- **Formatters and linters are gates.** `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` at the root; `npm run lint` and `npx prettier . --check` in `packages/node` and `docs`.
+- **Commits are `[scope] tag: message` in English**, with identifiers in backticks and one logical change each. The scopes are `[core]`, `[node]`, `[docs]` and `[common]`; the tags are in [CONTRIBUTING.md](CONTRIBUTING.md#write-a-commit-message).
+- **A library change gets a changelog entry** under `## vNext` in the package it landed in, unless nothing a consumer can see changed. The packages version independently.
+- **The two locales are updated together.** An API added and not documented in Korean is an unfinished change.
+- **Tests write only into temporary directories**, one per test, never into a fixed path.
+
+## References
+
+- Dart build hooks: https://dart.dev/tools/hooks
+- native_toolchain_rust: https://github.com/GregoryConrad/native_toolchain_rust
+- napi-rs: https://napi.rs/
+  - Support and compatibility: https://napi.rs/docs/more/support-compatibility
+- Rust platform support: https://doc.rust-lang.org/rustc/platform-support.html

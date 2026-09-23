@@ -1,0 +1,4 @@
+# Every text file is checked out with LF, on Windows as well. The formatters
+# (`cargo fmt`, Prettier) are CI gates, and a checkout that turned every line
+# ending into CRLF would fail them on a runner and nowhere else.
+* text=auto eol=lf

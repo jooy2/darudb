@@ -1,0 +1,99 @@
+name: 🐛 Bug report
+description: Something behaves differently from what the documentation says.
+title: 'fix: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this. Please write the issue in English so everyone can follow it.
+
+        **If the bug has a security impact — reading an encrypted file without its key, a crafted database file that crashes the process or reads memory it should not — do not file it here.** [SECURITY.md](https://github.com/jooy2/darudb/blob/main/SECURITY.md) has the private route.
+
+        **If a database file was damaged, keep a copy of it before you try anything else.** A damaged file is the most useful thing you can attach, and most attempts to repair one change it.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I am on the latest version of the package.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: The version of `darudb` you are on, or the commit if you are on a checkout.
+      placeholder: '0.1.0'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - Reading or writing data
+        - Queries
+        - Schema or migrations
+        - Encryption
+        - Several processes on one file
+        - A damaged file, or recovering one
+        - Rust API
+        - Node.js binding
+        - Build / packaging
+        - Documentation site
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happens
+    attributes:
+      label: What happens
+      description: What you see, and what you expected to see instead. Paste an error's message and its `code` as they were printed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: |
+        The steps, and the smallest program that shows it. A link to a runnable reproduction (a repository or a gist) is the single most useful thing you can attach.
+
+        If the bug depends on timing — several processes, a crash, a power cut — say how often it happens and what was running at the same time.
+      value: |
+        1.
+        2.
+        3.
+
+        Reproduction:
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Where you ran into it. The file system matters for a database, so please name it.
+      value: |
+        - OS and version:
+        - CPU architecture:
+        - File system:
+        - Rust version (for the Rust API):
+        - Node.js version (for the Node.js binding):
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, a backtrace, what you already tried.
+    validations:
+      required: false
