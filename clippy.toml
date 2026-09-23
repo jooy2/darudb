@@ -1,0 +1,5 @@
+# The engine denies `unwrap` and `expect` outside tests (see
+# `crates/darudb/Cargo.toml`). Inside a test, a panic is how a failure is
+# reported, so both are allowed there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

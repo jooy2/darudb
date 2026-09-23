@@ -1,0 +1,31 @@
+[package]
+name = "darudb"
+version = "0.1.0"
+description = "An embedded database that keeps an application's data in one local file."
+readme = "README.md"
+keywords = ["database", "embedded", "storage", "encryption"]
+categories = ["database-implementations"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lints.rust]
+# The engine is safe Rust. A module that genuinely needs `unsafe` (a file range
+# lock through the operating system, for instance) says why in the commit that
+# relaxes this, and keeps the `unsafe` inside that one module.
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+# A database file is untrusted input, and a damaged one must produce an error
+# rather than a panic. These two catch the easiest way to write a panic by
+# accident. Tests may still use both; see `clippy.toml` at the root.
+unwrap_used = "warn"
+expect_used = "warn"
+# Offsets and lengths move between `u64` (the file), `usize` (memory) and `u32`
+# (the header). A silent truncation between them is a corrupted file.
+cast_possible_truncation = "warn"

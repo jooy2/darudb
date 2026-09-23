@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/darudb"]
+
+# What every crate in the repository shares. The version is not here: each
+# package versions on its own, so each manifest carries its own number.
+[workspace.package]
+edition = "2024"
+# The oldest compiler a consumer of the published crates may build with. The
+# compiler this repository builds with is pinned separately, in
+# `rust-toolchain.toml`.
+rust-version = "1.85"
+license = "MIT"
+authors = ["CDGet <jooy2.contact@gmail.com>"]
+repository = "https://github.com/jooy2/darudb"
+homepage = "https://darudb.cdget.com"
+
+[workspace.dependencies]
+darudb = { path = "crates/darudb", version = "0.1.0" }

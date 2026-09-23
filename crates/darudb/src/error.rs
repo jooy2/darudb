@@ -1,0 +1,130 @@
+//! Every way an operation can fail, and the stable code each failure carries.
+//!
+//! The message of an error is for a person and may be reworded in any release.
+//! The code returned by [`Error::code`] is for a program: it is the same in
+//! every language binding, and once released it is never renamed. That is why
+//! a binding passes the code through untouched rather than inventing its own.
+
+use std::fmt;
+use std::io;
+use std::path::PathBuf;
+
+/// A [`Result`](std::result::Result) whose error is this crate's [`Error`].
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// A failed database operation.
+///
+/// New variants may be added in any release, so a `match` on this type needs a
+/// wildcard arm. Match on [`Error::code`] where a string is more convenient.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// The operating system failed an operation on the file or its directory.
+    Io {
+        /// The file or directory the operation was on.
+        path: PathBuf,
+        /// What the operating system reported.
+        source: io::Error,
+    },
+    /// No database exists at the path, and creating one was not allowed.
+    NotFound {
+        /// The path that was opened.
+        path: PathBuf,
+    },
+    /// The file exists but is not a DaruDB database: it is empty, too short to
+    /// hold a header, or starts with bytes that are not DaruDB's.
+    NotADatabase {
+        /// The file that was opened.
+        path: PathBuf,
+    },
+    /// The file is a DaruDB database in a file format version this build of
+    /// the library cannot read.
+    UnsupportedFormatVersion {
+        /// The file that was opened.
+        path: PathBuf,
+        /// The format version recorded in the file.
+        found: u32,
+        /// The format version this build reads and writes.
+        supported: u32,
+    },
+    /// The file is a DaruDB database, but what it records is impossible, so
+    /// part of it has been damaged.
+    Corrupted {
+        /// The file that was opened.
+        path: PathBuf,
+        /// What was found to be impossible.
+        reason: String,
+    },
+    /// The caller asked for something that cannot be done, such as a page size
+    /// that is not a power of two.
+    InvalidArgument {
+        /// What was wrong with the argument.
+        message: String,
+    },
+    /// The database was used after it was closed.
+    ///
+    /// The Rust API cannot produce this, because [`Database::close`] consumes
+    /// the handle. A language binding's handle outlives its close, and the
+    /// binding reports a use after that with this error, so that its code
+    /// comes from this list like every other.
+    ///
+    /// [`Database::close`]: crate::Database::close
+    Closed,
+}
+
+impl Error {
+    /// The stable, machine-readable name of this failure.
+    ///
+    /// It is the same string in every language binding, where it is exposed as
+    /// the error's `code`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Io { .. } => "IO",
+            Error::NotFound { .. } => "NOT_FOUND",
+            Error::NotADatabase { .. } => "NOT_A_DATABASE",
+            Error::UnsupportedFormatVersion { .. } => "UNSUPPORTED_FORMAT_VERSION",
+            Error::Corrupted { .. } => "CORRUPTED",
+            Error::InvalidArgument { .. } => "INVALID_ARGUMENT",
+            Error::Closed => "CLOSED",
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Io { path, source } => {
+                write!(f, "I/O error on `{}`: {source}", path.display())
+            }
+            Error::NotFound { path } => {
+                write!(f, "no database exists at `{}`", path.display())
+            }
+            Error::NotADatabase { path } => {
+                write!(f, "`{}` is not a DaruDB database", path.display())
+            }
+            Error::UnsupportedFormatVersion {
+                path,
+                found,
+                supported,
+            } => write!(
+                f,
+                "`{}` uses file format version {found}, and this build reads version {supported}",
+                path.display()
+            ),
+            Error::Corrupted { path, reason } => {
+                write!(f, "`{}` is damaged: {reason}", path.display())
+            }
+            Error::InvalidArgument { message } => f.write_str(message),
+            Error::Closed => f.write_str("the database has been closed"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}

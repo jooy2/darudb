@@ -1,0 +1,11 @@
+# The compiler this repository builds with, on every machine and every CI
+# runner. `rustup` installs it on the first `cargo` command run here.
+#
+# Pinned to an exact release rather than `stable` so that a build does not
+# change when a new compiler ships, and because the Dart build hooks that will
+# compile the engine for Flutter require a pinned toolchain. Raising it is a
+# change of its own, with the lints it brings fixed in the same commit.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
