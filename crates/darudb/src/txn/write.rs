@@ -51,8 +51,8 @@ pub struct WriteTransaction {
     pub(super) catalog: Option<Child>,
     pub(super) free_root: Option<Child>,
     pub(super) retained_root: Option<Child>,
-    /// The free runs as the free tree holds them, before this commit.
-    pub(super) free_view: BTreeMap<u64, u64>,
+    /// The transaction id of the published commit it started from.
+    pub(super) base_txn: u64,
     /// The retained groups this transaction reclaims, by key.
     pub(super) reclaimed: Vec<Vec<u8>>,
     pub(super) trees: BTreeMap<String, TreeState>,
@@ -91,13 +91,21 @@ impl WriteTransaction {
         let loader = &shared.loader;
         let free_root = root_child(base.free);
         let retained_root = root_child(base.retained);
-        let free_view = load_free(loader, free_root.as_ref(), base.page_count)?;
-        let mut space = Space::new(
-            Arc::clone(&shared.pager),
-            txn,
-            base.page_count,
-            free_view.clone(),
-        );
+        let free = match shared.take_free_runs(base.txn) {
+            Some(free) => {
+                // The crash suite runs through here thousands of times.
+                #[cfg(test)]
+                assert_eq!(
+                    free,
+                    load_free(loader, free_root.as_ref(), base.page_count)?,
+                    "the free runs left by the last transaction differ from the free tree"
+                );
+
+                free
+            }
+            None => load_free(loader, free_root.as_ref(), base.page_count)?,
+        };
+        let mut space = Space::new(Arc::clone(&shared.pager), txn, base.page_count, free);
 
         // Reclaim every retained group that no snapshot and no possible
         // recovery can still reach.
@@ -142,7 +150,7 @@ impl WriteTransaction {
             catalog: root_child(base.catalog),
             free_root,
             retained_root,
-            free_view,
+            base_txn: base.txn,
             reclaimed,
             trees: BTreeMap::new(),
             next_tree_id: base.next_tree_id,
@@ -404,6 +412,16 @@ impl WriteTransaction {
 
     fn check_open(&self) -> Result<()> {
         self.shared.check_usable()
+    }
+}
+
+impl Drop for WriteTransaction {
+    /// Leaves the free runs the transaction started from to the next one,
+    /// unless it committed, which leaves its own.
+    fn drop(&mut self) {
+        if let Some(free) = self.space.take_initial_free() {
+            self.shared.leave_free_runs(self.base_txn, free);
+        }
     }
 }
 

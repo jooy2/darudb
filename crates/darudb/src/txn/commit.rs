@@ -97,7 +97,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
         key_block: [0; KEY_BLOCK_LEN],
     };
 
-    write_and_publish(&txn, pages, &record, durability)
+    write_and_publish(&mut txn, pages, &record, durability)
 }
 
 /// Brings the free tree and the retained tree in line with the transaction's
@@ -129,22 +129,21 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
 
     for _ in 0..MAX_ROUNDS {
         let before = txn.space.changes();
-        let target = txn.space.free().clone();
+        let changes = txn.space.free_tree_changes();
 
-        for (start, len) in &txn.free_view {
-            if target.get(start) != Some(len) {
-                btree::remove(
-                    &loader,
-                    &mut txn.space,
-                    FREE_TREE,
-                    &mut txn.free_root,
-                    &free_key(*start),
-                )?;
-            }
+        // Removals first, as the free pages only shrink from here on.
+        for (start, _) in changes.iter().filter(|(_, len)| len.is_none()) {
+            btree::remove(
+                &loader,
+                &mut txn.space,
+                FREE_TREE,
+                &mut txn.free_root,
+                &free_key(*start),
+            )?;
         }
 
-        for (start, len) in &target {
-            if txn.free_view.get(start) != Some(len) {
+        for (start, len) in &changes {
+            if let Some(len) = len {
                 btree::insert(
                     &loader,
                     &mut txn.space,
@@ -155,8 +154,6 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
                 )?;
             }
         }
-
-        txn.free_view = target;
 
         let group: Vec<Vec<u8>> = txn
             .space
@@ -224,12 +221,12 @@ fn finish_root(
 /// Writes the pages and the record, issues the barrier if the commit is to
 /// be durable now, and publishes.
 fn write_and_publish(
-    txn: &WriteTransaction,
+    txn: &mut WriteTransaction,
     mut pages: Vec<FinishedPage>,
     record: &CommitRecord,
     durability: Durability,
 ) -> Result<()> {
-    let shared = &txn.shared;
+    let shared = Arc::clone(&txn.shared);
     let pager = &shared.pager;
     let written = pages.len() as u64;
     // A deferred commit that would take the window past its limits is made
@@ -295,6 +292,7 @@ fn write_and_publish(
 
     records[txn.slot] = Some(*record);
     shared.set_header(Header { selector, records });
+    shared.leave_free_runs(record.txn, txn.space.take_free());
 
     for page in pages {
         shared.cache.insert(

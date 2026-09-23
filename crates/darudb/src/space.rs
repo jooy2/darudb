@@ -1,12 +1,16 @@
 //! Free space during one write transaction.
 //!
 //! The free tree says which pages the commit a transaction starts from does
-//! not use. The transaction loads it into memory, adds the retained groups it
-//! may reclaim, and hands pages out from there, lowest first. A page it
-//! releases goes back to the free pages if the transaction allocated it
+//! not use. The transaction starts from its runs in memory, adds the retained
+//! groups it may reclaim, and hands pages out from there, lowest first. A page
+//! it releases goes back to the free pages if the transaction allocated it
 //! itself, and into this commit's retained group if it was committed: a reader
 //! or a recovery may still need it. `design/commits-and-recovery.md` is the
 //! specification.
+//!
+//! Every change to the free runs is noted with what the free tree held for
+//! that run before, so the commit rewrites only the runs that changed, and an
+//! aborted transaction can give the runs it started from back unchanged.
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;
@@ -27,6 +31,12 @@ pub(crate) struct Space {
     txn: u64,
     /// Runs of free pages: first page and length. Runs never overlap or touch.
     free: BTreeMap<u64, u64>,
+    /// For every run start changed since the free tree last matched `free`,
+    /// what the tree holds there: a length, or `None` for no run.
+    recorded: BTreeMap<u64, Option<u64>>,
+    /// Set once the free tree has been changed to match: `recorded` no
+    /// longer leads back to the runs the transaction started from.
+    diverged: bool,
     page_count: u64,
     max_page_count: u64,
     /// Pages this transaction allocated.
@@ -58,6 +68,8 @@ impl Space {
             pager,
             txn,
             free,
+            recorded: BTreeMap::new(),
+            diverged: false,
             page_count,
             max_page_count,
             fresh: HashSet::new(),
@@ -100,6 +112,17 @@ impl Space {
         true
     }
 
+    /// Sets the run starting at `start` to `len` pages, or removes it, and
+    /// notes what the free tree holds there.
+    fn set_run(&mut self, start: u64, len: Option<u64>) {
+        let before = match len {
+            Some(len) => self.free.insert(start, len),
+            None => self.free.remove(&start),
+        };
+
+        self.recorded.entry(start).or_insert(before);
+    }
+
     /// Makes a run of pages free, merging it with the runs it touches.
     pub(crate) fn add_free(&mut self, start: u64, len: u64) {
         let mut start = start;
@@ -107,18 +130,18 @@ impl Space {
 
         if let Some((&before, &before_len)) = self.free.range(..start).next_back() {
             if before + before_len == start {
-                self.free.remove(&before);
+                self.set_run(before, None);
                 start = before;
                 len += before_len;
             }
         }
 
         if let Some(&after_len) = self.free.get(&(start + len)) {
-            self.free.remove(&(start + len));
+            self.set_run(start + len, None);
             len += after_len;
         }
 
-        self.free.insert(start, len);
+        self.set_run(start, Some(len));
         self.changes += 1;
     }
 
@@ -155,14 +178,59 @@ impl Space {
                 break;
             }
 
-            self.free.remove(&start);
+            self.set_run(start, None);
             self.page_count = start;
             self.changes += 1;
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn free(&self) -> &BTreeMap<u64, u64> {
         &self.free
+    }
+
+    /// The runs whose entries in the free tree have to change for the tree to
+    /// match the free pages: each start with its new length, or `None` to
+    /// remove it. From here on the caller is taken to make those changes.
+    pub(crate) fn free_tree_changes(&mut self) -> Vec<(u64, Option<u64>)> {
+        self.diverged = true;
+
+        std::mem::take(&mut self.recorded)
+            .into_iter()
+            .filter_map(|(start, held)| {
+                let now = self.free.get(&start).copied();
+
+                (now != held).then_some((start, now))
+            })
+            .collect()
+    }
+
+    /// The free runs, once the free tree matches them: what the next
+    /// transaction starts from if this one commits.
+    pub(crate) fn take_free(&mut self) -> BTreeMap<u64, u64> {
+        self.diverged = true;
+
+        std::mem::take(&mut self.free)
+    }
+
+    /// The free runs the transaction started from, if they can still be told
+    /// apart from its changes: what the next transaction starts from if this
+    /// one is aborted.
+    pub(crate) fn take_initial_free(&mut self) -> Option<BTreeMap<u64, u64>> {
+        if self.diverged {
+            return None;
+        }
+
+        self.diverged = true;
+
+        for (start, held) in std::mem::take(&mut self.recorded) {
+            match held {
+                Some(len) => self.free.insert(start, len),
+                None => self.free.remove(&start),
+            };
+        }
+
+        Some(std::mem::take(&mut self.free))
     }
 
     pub(crate) fn page_count(&self) -> u64 {
@@ -218,10 +286,12 @@ impl Store for Space {
             return Ok(page);
         }
 
-        let page = match self.free.pop_first() {
-            Some((start, len)) => {
+        let page = match self.free.first_key_value() {
+            Some((&start, &len)) => {
+                self.set_run(start, None);
+
                 if len > 1 {
-                    self.free.insert(start + 1, len - 1);
+                    self.set_run(start + 1, Some(len - 1));
                 }
 
                 start
@@ -243,10 +313,10 @@ impl Store for Space {
             .map(|(start, len)| (*start, *len));
         let first = match found {
             Some((start, len)) => {
-                self.free.remove(&start);
+                self.set_run(start, None);
 
                 if len > pages {
-                    self.free.insert(start + pages, len - pages);
+                    self.set_run(start + pages, Some(len - pages));
                 }
 
                 start
@@ -375,6 +445,43 @@ mod tests {
         assert!(!space.retire_set_aside());
         assert_eq!(space.retired_runs(), [(page, 1)]);
         assert_eq!(space.free(), &[(6, 2)].into_iter().collect());
+    }
+
+    #[test]
+    fn the_free_tree_changes_are_the_runs_that_differ_from_it() {
+        let mut space = space(20, &[(3, 2), (10, 4)]);
+
+        space.allocate().unwrap();
+        space.add_free(8, 1);
+        space.add_free(5, 1);
+
+        // Page 3 went; 5 joined the run at 4; 8 is new; 10 to 13 are as they were.
+        assert_eq!(
+            space.free_tree_changes(),
+            [(3, None), (4, Some(2)), (8, Some(1))]
+        );
+        assert_eq!(space.free_tree_changes(), []);
+    }
+
+    #[test]
+    fn an_aborted_transaction_gives_back_the_runs_it_started_from() {
+        let mut aborted = space(20, &[(3, 2), (10, 4)]);
+
+        aborted.allocate().unwrap();
+        aborted.allocate_run(3).unwrap();
+        aborted.add_free(1, 1);
+        aborted.trim_tail();
+
+        assert_eq!(
+            aborted.take_initial_free(),
+            Some([(3, 2), (10, 4)].into_iter().collect())
+        );
+
+        let mut committed = space(20, &[(3, 2)]);
+
+        committed.free_tree_changes();
+
+        assert_eq!(committed.take_initial_free(), None);
     }
 
     #[test]

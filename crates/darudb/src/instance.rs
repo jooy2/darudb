@@ -81,6 +81,10 @@ pub(crate) struct Shared {
     /// process may have written the selector the file shows without one.
     last_barrier: Mutex<Option<Selector>>,
     unsynced: Mutex<Unsynced>,
+    /// The free runs of the commit with the given transaction id, which the
+    /// last write transaction left for the next, so that it need not read the
+    /// free tree again.
+    free_runs: Mutex<Option<(u64, BTreeMap<u64, u64>)>>,
     writer: Mutex<bool>,
     writer_free: Condvar,
     snapshots: Mutex<BTreeMap<u64, usize>>,
@@ -116,6 +120,7 @@ impl Shared {
             header: Mutex::new(header),
             last_barrier: Mutex::new(None),
             unsynced: Mutex::new(Unsynced::default()),
+            free_runs: Mutex::new(None),
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             snapshots: Mutex::new(BTreeMap::new()),
@@ -191,6 +196,19 @@ impl Shared {
     /// Records the selector recovery made durable when it opened the file.
     pub(crate) fn set_last_barrier(&self, selector: Option<Selector>) {
         *lock(&self.last_barrier) = selector;
+    }
+
+    /// The free runs of commit `txn`, if the last write transaction left
+    /// them. Runs left for any other commit are thrown away.
+    pub(crate) fn take_free_runs(&self, txn: u64) -> Option<BTreeMap<u64, u64>> {
+        lock(&self.free_runs)
+            .take()
+            .and_then(|(of, runs)| (of == txn).then_some(runs))
+    }
+
+    /// Leaves the free runs of commit `txn` for the next write transaction.
+    pub(crate) fn leave_free_runs(&self, txn: u64, runs: BTreeMap<u64, u64>) {
+        *lock(&self.free_runs) = Some((txn, runs));
     }
 
     /// Waits for this process's writer gate, up to the busy timeout.
