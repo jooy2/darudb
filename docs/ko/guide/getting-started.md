@@ -62,6 +62,36 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
+저장 커널은 이름 붙은 트리에 바이트 키와 바이트 값을 저장합니다. 모든 변경은 쓰기 트랜잭션 안에서 일어나고, `commit`이 반환될 때 한꺼번에 보이는 동시에 내구성을 갖습니다. 읽기 트랜잭션은 시작한 뒤에 무엇이 커밋되든, 살아 있는 동안 커밋 하나만 봅니다.
+
+```rust
+use darudb::Database;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = Database::open("app.darudb")?;
+
+    let mut txn = db.begin_write()?;
+    txn.insert("users", b"alice", b"admin")?;
+    txn.insert("users", b"bob", b"member")?;
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    assert_eq!(read.get("users", b"alice")?, Some(b"admin".to_vec()));
+
+    // Keys come back in byte order.
+    for entry in read.range("users", b"a".as_slice()..b"c".as_slice())? {
+        let (key, value) = entry?;
+        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
+    }
+
+    Ok(())
+}
+```
+
+`commit` 없이 버린 쓰기 트랜잭션은 취소되고, 그 안에서 한 일은 파일에 남지 않습니다. 쓰기 트랜잭션은 한 번에 하나뿐입니다. `begin_write`는 이미 실행 중인 트랜잭션을 바쁨 대기 시간만큼 기다리며, `OpenOptions::busy_timeout`으로 바꾸지 않으면 5초입니다.
+
+타입이 있는 레코드와 쿼리는 나중에 이 트리 위에 올라갑니다. 지금은 파일 하나를 한 번에 한 프로세스만 열 수 있습니다.
+
 ### Node.js
 
 ```js
@@ -73,7 +103,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를 정합니다.
+`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를 정합니다. Node.js 패키지에는 아직 트랜잭션이 없습니다. 엔진 API가 자리를 잡은 뒤에 들어갑니다.
 
 ## 오류
 
@@ -87,6 +117,9 @@ db.close();
 | `CORRUPTED` | DaruDB 데이터베이스지만 일부가 손상됐을 때 |
 | `INVALID_ARGUMENT` | 옵션 값이 허용 범위를 벗어났을 때. 예를 들어 페이지 크기가 2의 거듭제곱이 아닐 때 |
 | `CLOSED` | Node.js 데이터베이스 객체를 `close` 뒤에 다시 썼을 때 |
+| `BUSY` | 다른 쓰기 트랜잭션이 바쁨 대기 시간보다 오래 데이터베이스를 쥐고 있을 때 |
+| `SYNC_FAILED` | 파일 동기화가 실패했을 때. 마지막 커밋이 반영됐는지 알 수 없으니 파일을 다시 엽니다 |
+| `INTERNAL` | DaruDB의 버그로만 생길 수 있는 문제가 났을 때. 제보해 주세요 |
 | `IO` | 운영체제가 파일 작업에 실패했을 때. 메시지에 운영체제가 보고한 내용이 들어갑니다 |
 
 ```js

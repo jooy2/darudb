@@ -45,22 +45,30 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 `crates/darudb/src` is layered, and a module only uses the modules below it. Keeping that one-way is what lets a layer be read, tested and replaced on its own.
 
-| Module        | Owns                                                                 | State    |
-| ------------- | -------------------------------------------------------------------- | -------- |
-| `database.rs` | `Database`, the public handle: open, create, close                   | Skeleton |
-| `options.rs`  | `OpenOptions`, and validating what the caller asked for              | Skeleton |
-| `error.rs`    | `Error`, `Result`, and each failure's stable code                    | Skeleton |
-| `storage/`    | How bytes reach the disk: positional I/O, sync, later the page cache | Skeleton |
-| `format/`     | What bytes on disk mean: the file header, constants. No I/O at all   | Skeleton |
-| `btree/`      | The copy-on-write B+tree                                             | Planned  |
-| `txn/`        | Transactions, snapshots, the commit protocol                         | Planned  |
-| `lock/`       | Cross-process coordination through file range locks                  | Planned  |
-| `crypto/`     | Page encryption, key wrapping, key derivation                        | Planned  |
-| `schema/`     | Collections, fields, indexes, schema migrations                      | Planned  |
-| `query/`      | The query IR and its execution                                       | Planned  |
-| `tools/`      | Integrity check, salvage, backup, compact                            | Planned  |
+| Module        | Owns                                                                                     | State                     |
+| ------------- | ---------------------------------------------------------------------------------------- | ------------------------- |
+| `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1                   |
+| `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1                   |
+| `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1                   |
+| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1, sync commits     |
+| `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1                   |
+| `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1                   |
+| `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1                   |
+| `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1                   |
+| `format/`     | What bytes on disk mean: every layout of `design/file-format.md`. No I/O at all          | Phase 1, plain files only |
+| `lock/`       | Cross-process coordination through file range locks                                      | Planned, phase 3          |
+| `crypto/`     | Page encryption, key wrapping, key derivation                                            | Planned, phase 2          |
+| `schema/`     | Collections, fields, indexes, schema migrations                                          | Planned, phase 4          |
+| `query/`      | The query IR and its execution                                                           | Planned, phase 4          |
+| `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6          |
 
-From the bottom up: `format` and `crypto`, then `storage`, `btree`, `lock`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
+From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
+
+Tests sit beside what they test, plus three places that test the whole engine:
+
+- `src/crash.rs`: the phase 1 crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. `DARUDB_CRASH_SEEDS` makes it longer.
+- `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
+- `tests/transactions.rs` and `tests/open.rs`: the public API on real files.
 
 ## Scope **[Decided]**
 
@@ -200,6 +208,9 @@ Each of these was tried elsewhere and caused the problems this project exists to
 ## Things that surprise
 
 - **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
+- **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
+- **Only one process may have a file open until phase 3.** Handles within one process share one instance and are safe together; two processes are not coordinated yet, because the lock protocol of `design/locking.md` is not implemented.
+- **Only sync commits exist so far.** The format already carries everything deferred commits need, so adding them is code, not a format change.
 - **`packages/node/index.js` and `index.d.ts` are generated** by `npm run build` from the `#[napi]` items in `src/lib.rs`, together with the `.node` addon, and all three are git-ignored. The TypeScript types a consumer sees are whatever the Rust source says.
 - **`npm test` in `packages/node` runs against the addon that is already built.** A change to the engine does not reach the Node.js tests until `npm run build` runs again.
 - **The workflows run only when started by hand** (`workflow_dispatch`), because the account's GitHub Actions minutes are short for now. Local runs are the normal check. Each workflow file says where the `push` and `pull_request` triggers go when that changes.

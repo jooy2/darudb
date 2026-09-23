@@ -15,16 +15,20 @@ Tentative, like the architecture it builds. Each phase ends on a criterion a tes
 | Phase                   | Work                                                                                   | Done when                                                                                      |
 | ----------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | 0. Design spec          | Documents for the file format, the commit and recovery protocol, and the lock protocol | Written before the code they describe. This spec decides how stable the file is.               |
-| 1. Storage kernel       | Page file, copy-on-write B+tree, two commit slots with checksums; one process only     | No data lost across thousands of repeated `kill -9` and simulated power cuts                   |
+| 1. Storage kernel       | Page file, copy-on-write B+tree, three commit slots with checks; one process only      | No data lost across thousands of repeated `kill -9` and simulated power cuts                   |
 | 2. Encryption           | Page AEAD, DEK and KEK, KDF                                                            | The same suite passes with encryption on and off, and the slowdown is measured                 |
 | 3. Several processes    | The file range lock protocol, cache invalidation                                       | Fuzzing that mixes concurrent reads and writes from several processes with forced kills passes |
 | 4. Objects and queries  | Schema, indexes, query IR, migrations                                                  | Benchmarks against established embedded databases at the same durability settings              |
 | 5. Bindings and release | Dart build hooks, napi-rs, per-platform prebuilt binaries                              | A CI matrix that includes the oldest supported operating systems                               |
 | 6. Tools                | Integrity check, salvage, backup, compaction                                           | Data recovered from deliberately damaged files                                                 |
 
-Phase 0 is done: [design/](design/README.md) holds the accepted file format, commit and recovery protocol, and locking protocol. Phase 1 is in progress.
+Phase 0 is done: [design/](design/README.md) holds the accepted file format, commit and recovery protocol, and locking protocol.
 
-The skeleton that exists today sits before phase 1: a Cargo workspace, the engine's module layout, a file header that is written and validated, a Node.js binding that opens and closes a database, test suites in both languages, and the documentation site.
+Phase 1 is in progress. Done: the file format for plain files, the copy-on-write B+tree, sync commits, recovery, and the crash suites, which pass at thousands of simulated cuts and hundreds of real process kills. Left for phase 1:
+
+- **Deferred commits.** The format carries them; the commit, `sync` and the window limit do not exist yet.
+- **Batching and read-ahead.** Pages are written one call each, and an overflow run is read one page at a time. The benchmarks of phase 4 say how much that matters.
+- **The free tree is read whole at the start of every write transaction.** That costs time in proportion to how fragmented the free space is. Keeping it in memory between transactions of one process removes the cost; measure first.
 
 ## Open questions
 

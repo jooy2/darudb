@@ -62,6 +62,36 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
+The storage kernel stores named trees of byte keys and byte values. Every change goes through a write transaction and becomes visible, and durable, together when `commit` returns. A read transaction sees one commit for as long as it lives, whatever is committed after it began.
+
+```rust
+use darudb::Database;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = Database::open("app.darudb")?;
+
+    let mut txn = db.begin_write()?;
+    txn.insert("users", b"alice", b"admin")?;
+    txn.insert("users", b"bob", b"member")?;
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    assert_eq!(read.get("users", b"alice")?, Some(b"admin".to_vec()));
+
+    // Keys come back in byte order.
+    for entry in read.range("users", b"a".as_slice()..b"c".as_slice())? {
+        let (key, value) = entry?;
+        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
+    }
+
+    Ok(())
+}
+```
+
+A write transaction dropped without `commit` is aborted, and nothing it did reaches the file. There is one write transaction at a time; `begin_write` waits for the one already running for up to the busy timeout, five seconds unless `OpenOptions::busy_timeout` says otherwise.
+
+Typed records and queries come later, built on top of these trees. For now, only one process may have a file open at a time.
+
 ### Node.js
 
 ```js
@@ -73,7 +103,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, and `pageSize` sets the page size of a new one.
+`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, and `pageSize` sets the page size of a new one. Transactions are not in the Node.js package yet; they reach it once the engine's API has settled.
 
 ## Errors
 
@@ -87,6 +117,9 @@ Every error carries a `code` that names the failure. The code is the same in Rus
 | `CORRUPTED` | The file is a DaruDB database, but part of it has been damaged. |
 | `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two. |
 | `CLOSED` | A Node.js database object was used after `close`. |
+| `BUSY` | Another write transaction held the database for longer than the busy timeout. |
+| `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
+| `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |
 
 ```js

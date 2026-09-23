@@ -66,6 +66,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+The crash suites run a quick version by default. Before a change to the storage engine is merged, run them long, in release mode so that they finish in minutes:
+
+```bash
+DARUDB_CRASH_SEEDS=2000 cargo test -p darudb --release --lib crash
+DARUDB_KILL_ROUNDS=500 cargo test -p darudb --release --test process_kill
+```
+
 For the Node.js binding:
 
 ```bash

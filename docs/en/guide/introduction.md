@@ -39,15 +39,16 @@ The file is read and written at explicit offsets and never mapped into memory. M
 
 ## Where it stands
 
-The repository holds the skeleton the rest is built on:
+The storage kernel works, for one process at a time:
 
-- The Rust crate creates a database file, writes a header that records the file format version and the page size, and validates that header every time the file is opened again. A file that is not a database, is in another format version, or has a damaged header is refused with an error that says which.
-- The Node.js package opens and closes a database through that engine, and passes its errors on with the same codes.
-- Both have test suites, and this site is in place in English and Korean.
+- The Rust crate stores named trees of byte keys and byte values in read and write transactions. A commit is durable when it returns, and a file opened after a crash or a power cut holds the last commit that returned.
+- Every page is verified against the check its parent recorded before it is used, so a damaged page is reported rather than read.
+- The crash suites back this up: thousands of simulated power cuts, each keeping an arbitrary part of the writes in flight, and hundreds of real processes killed in the middle of a commit.
+- The Node.js package opens and closes a database through that engine, and passes its errors on with the same codes. Transactions reach it once the engine's API has settled.
 
-Nothing can be stored in a database yet. The work ahead, in order:
+The work ahead, in order:
 
-1. **Storage kernel**: the page file, the copy-on-write B+tree, and atomic commits, tested against thousands of forced kills and simulated power cuts.
+1. **Storage kernel**: deferred commits, which the file format already supports, and measuring the kernel before tuning it.
 1. **Encryption**: page encryption and key management, with the same test suite passing with encryption on and off.
 1. **Several processes**: the file lock protocol, tested by fuzzing concurrent processes that are killed at random.
 1. **Objects and queries**: schemas, indexes, queries and migrations, with benchmarks.
