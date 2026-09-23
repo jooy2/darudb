@@ -13,14 +13,31 @@
 
 mod check;
 mod header;
+mod node;
+mod page;
 mod pointer;
 mod record;
+mod system;
 
+pub(crate) use check::Check;
 pub(crate) use header::{
     HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector, StaticHeader,
     slot_offset,
 };
-pub(crate) use record::CommitRecord;
+pub(crate) use node::{
+    LeafEntry, OverflowRef, StoredValue, branch_key_len, branch_len, decode_branch, decode_leaf,
+    encode_branch, encode_leaf, inline_entry_len, inline_limit, max_key_len, overflow_pages,
+};
+pub(crate) use page::{
+    CONTENT_OFFSET, PageHeader, PageKind, content_len, page_check, seal, stored_check,
+};
+pub(crate) use pointer::{POINTER_LEN, Pointer};
+pub(crate) use record::{CommitRecord, KEY_BLOCK_LEN, RECORD_LEN};
+pub(crate) use system::{
+    CATALOG_TREE, FREE_TREE, RETAINED_TREE, TreeDescriptor, decode_free_key, decode_free_value,
+    decode_retained_key, decode_runs, encode_runs, free_key, free_value, retained_key,
+    runs_per_value,
+};
 
 /// The file format version this build of the library reads and writes.
 ///

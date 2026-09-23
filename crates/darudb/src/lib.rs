@@ -5,15 +5,23 @@
 //! bind this same engine to their languages, so a file written from one
 //! language reads the same from another.
 //!
-//! The engine is at an early stage. It creates a database file, writes a
-//! header into it, and validates that header when the file is opened again.
-//! Nothing can be stored in it yet, and the file format will change without a
-//! migration until the first release.
+//! The storage kernel stores named trees of byte keys and byte values, in
+//! transactions. A commit is durable when it returns, and a file opened after
+//! a crash or a power cut holds the last commit that returned. Typed records
+//! and queries come later, built on top. The file format will change without
+//! a migration until the first release, and only one process may have a file
+//! open at a time for now.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;
-//! println!("page size: {} bytes", db.page_size());
-//! db.close()?;
+//! let mut txn = db.begin_write()?;
+//!
+//! txn.insert("users", b"alice", b"admin")?;
+//! txn.commit()?;
+//!
+//! let read = db.begin_read()?;
+//!
+//! assert_eq!(read.get("users", b"alice")?, Some(b"admin".to_vec()));
 //! # Ok::<(), darudb::Error>(())
 //! ```
 //!
@@ -23,20 +31,28 @@
 //!
 //! - `format`: what the bytes of a file mean. Pure functions over bytes, with
 //!   no I/O, so every rule about the layout can be tested without a disk.
-//! - `storage`: how bytes reach the disk. Positional reads and writes, and
-//!   the syncs that make them durable.
-//! - [`Database`], [`OpenOptions`] and [`Error`]: the public surface, which
-//!   ties the two together and reports failures with a stable code.
+//! - `storage`: how bytes reach the disk: positional reads and writes, pages
+//!   verified against their checks, the page cache.
+//! - `btree`: copy-on-write B+trees over those pages.
+//! - `space`: which pages a write transaction may use, and which it gives back.
+//! - `instance` and `txn`: the shared state of an open file, transactions, the
+//!   commit and recovery.
+//! - [`Database`], [`OpenOptions`] and [`Error`]: the public surface.
 //!
-//! The transaction, B+tree, lock, encryption, schema and query layers are
-//! planned and will slot in between. `CLAUDE.md` at the repository root has
-//! the whole map.
+//! `design/` at the repository root specifies the file format and the commit
+//! protocol this crate implements, and `CLAUDE.md` has the whole map.
 
+mod btree;
 mod database;
 mod error;
 mod format;
+mod instance;
 mod options;
+mod space;
 mod storage;
+#[cfg(test)]
+mod testing;
+mod txn;
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("DaruDB runs on Unix-like systems and Windows only.");
@@ -45,6 +61,7 @@ pub use database::Database;
 pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use options::OpenOptions;
+pub use txn::{Range, ReadTransaction, WriteTransaction};
 
 /// The version of this crate, as written in its `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

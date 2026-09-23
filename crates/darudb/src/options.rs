@@ -1,6 +1,7 @@
 //! How a database is opened: [`OpenOptions`].
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::database::Database;
 use crate::error::{Error, Result};
@@ -18,6 +19,7 @@ use crate::format::{self, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 pub struct OpenOptions {
     create: bool,
     page_size: u32,
+    busy_timeout: Duration,
 }
 
 impl OpenOptions {
@@ -27,6 +29,7 @@ impl OpenOptions {
         Self {
             create: true,
             page_size: DEFAULT_PAGE_SIZE,
+            busy_timeout: Duration::from_secs(5),
         }
     }
 
@@ -49,6 +52,17 @@ impl OpenOptions {
         self
     }
 
+    /// How long [`Database::begin_write`] waits for a write transaction that
+    /// is already running before failing with [`Error::Busy`]. Five seconds by
+    /// default.
+    ///
+    /// Every handle to a file in one process shares one instance, and the
+    /// options of the handle that opened the file first apply to all of them.
+    pub fn busy_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.busy_timeout = timeout;
+        self
+    }
+
     /// Opens the database at `path` with these options.
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Database> {
         self.validate()?;
@@ -62,6 +76,10 @@ impl OpenOptions {
 
     pub(crate) fn new_page_size(&self) -> u32 {
         self.page_size
+    }
+
+    pub(crate) fn busy(&self) -> Duration {
+        self.busy_timeout
     }
 
     fn validate(&self) -> Result<()> {

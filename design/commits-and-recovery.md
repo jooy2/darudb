@@ -56,13 +56,17 @@ This order is a policy, not part of the format. It may change without a new form
 Changing the free and retained trees copies their pages too, which frees pages and needs new ones, which changes the trees again. The writer settles this in rounds before it writes the commit record:
 
 1. Finish every change to the user trees and the catalog.
+1. Delete the reclaimed groups from the retained tree.
+1. Cut off the free pages at the end of the file, lowering the page count.
+1. From here on, a page this transaction allocated and releases again joins this commit's retained group, instead of becoming free again.
 1. Repeat until a round neither allocates nor releases a page:
-   1. Delete the reclaimed groups from the retained tree.
-   1. Bring the free tree up to date: add the reclaimed runs and the pages released within this transaction, and remove the pages allocated by it.
+   1. Bring the free tree up to date with the transaction's free pages.
    1. Write this commit's group into the retained tree, listing every page it stopped using, including the allocator pages copied in the steps above.
 1. Compute every page's check from the leaves up, since each parent records its children's checks.
 
 The rounds end quickly because a round can copy an allocator page only the first time it touches it. After that, the page belongs to this transaction and is changed in place.
+
+Step 4 is what makes them end at all. Without it, a free tree could chase itself: when the only free page is the one its own root needs, emptying the tree releases the root's page, which makes a page free, which the tree then needs a root to record, which takes the page again. With step 4 the free pages only shrink while the rounds run, so the free tree can only catch up with them. The pages retained this way are reclaimed by a later commit, like any other retained page.
 
 ## Durability
 
@@ -111,6 +115,7 @@ The new transaction id `T` is one more than the largest transaction id in any va
 
 1. Finish the trees, so that every page's final content and check are known.
 1. Write every page of the transaction that is not on disk already.
+1. If the file is shorter than the page count, extend it. Pages at the end that were allocated and released again without being written still count, and recovery skips a record that counts more pages than the file holds.
 1. Write the commit record into the chosen slot, with `T`, the durable transaction id of `D`, the page count, the three roots and the key block.
 1. **Barrier.** This is the commit point: from here on, the commit survives a power cut whatever happens to the selector.
 1. Write the selector: the chosen slot, with the unsynced bit clear. The commit is now published.
@@ -122,7 +127,7 @@ There is no second barrier after the selector. If a power cut loses the selector
 ## A deferred commit
 
 1. Finish the trees.
-1. Write every page of the transaction that is not on disk already.
+1. Write every page of the transaction that is not on disk already, and extend the file to the page count if it is shorter.
 1. Write the commit record into the chosen slot, with `T` and the durable transaction id of `D`.
 1. Write the selector: the chosen slot, with the unsynced bit set. The commit is published but not yet durable.
 1. Return.

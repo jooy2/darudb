@@ -70,6 +70,27 @@ pub enum Error {
     ///
     /// [`Database::close`]: crate::Database::close
     Closed,
+    /// Another write transaction held the database for longer than the busy
+    /// timeout allows.
+    Busy {
+        /// The database's path.
+        path: PathBuf,
+    },
+    /// A barrier failed, so a commit's outcome is unknown. The database has to
+    /// be closed and opened again before it can be used.
+    SyncFailed {
+        /// The database's path.
+        path: PathBuf,
+        /// What the operating system reported, if this is the failure itself
+        /// rather than a later use of the database.
+        source: Option<io::Error>,
+    },
+    /// An invariant of the engine does not hold, which only a bug in DaruDB can
+    /// cause. Please report it.
+    Internal {
+        /// What went wrong.
+        message: String,
+    },
 }
 
 impl Error {
@@ -86,6 +107,9 @@ impl Error {
             Error::Corrupted { .. } => "CORRUPTED",
             Error::InvalidArgument { .. } => "INVALID_ARGUMENT",
             Error::Closed => "CLOSED",
+            Error::Busy { .. } => "BUSY",
+            Error::SyncFailed { .. } => "SYNC_FAILED",
+            Error::Internal { .. } => "INTERNAL",
         }
     }
 }
@@ -116,6 +140,26 @@ impl fmt::Display for Error {
             }
             Error::InvalidArgument { message } => f.write_str(message),
             Error::Closed => f.write_str("the database has been closed"),
+            Error::Busy { path } => write!(
+                f,
+                "another write transaction held `{}` for longer than the busy timeout",
+                path.display()
+            ),
+            Error::SyncFailed { path, source } => {
+                write!(
+                    f,
+                    "a sync of `{}` failed, so the last commit's outcome is unknown; open the database again",
+                    path.display()
+                )?;
+
+                match source {
+                    Some(source) => write!(f, ": {source}"),
+                    None => Ok(()),
+                }
+            }
+            Error::Internal { message } => {
+                write!(f, "internal error, which is a bug in DaruDB: {message}")
+            }
         }
     }
 }
@@ -124,6 +168,10 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io { source, .. } => Some(source),
+            Error::SyncFailed {
+                source: Some(source),
+                ..
+            } => Some(source),
             _ => None,
         }
     }
@@ -161,7 +209,7 @@ mod tests {
             ),
             (
                 Error::Corrupted {
-                    path,
+                    path: path.clone(),
                     reason: "a reason".to_owned(),
                 },
                 "CORRUPTED",
@@ -173,6 +221,20 @@ mod tests {
                 "INVALID_ARGUMENT",
             ),
             (Error::Closed, "CLOSED"),
+            (Error::Busy { path: path.clone() }, "BUSY"),
+            (
+                Error::SyncFailed {
+                    path: path.clone(),
+                    source: None,
+                },
+                "SYNC_FAILED",
+            ),
+            (
+                Error::Internal {
+                    message: "a message".to_owned(),
+                },
+                "INTERNAL",
+            ),
         ]
     }
 
@@ -209,6 +271,8 @@ mod tests {
                     | Error::NotADatabase { .. }
                     | Error::UnsupportedFormatVersion { .. }
                     | Error::Corrupted { .. }
+                    | Error::Busy { .. }
+                    | Error::SyncFailed { .. }
             );
 
             if named {

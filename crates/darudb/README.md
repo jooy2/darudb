@@ -4,26 +4,40 @@
 
 The engine of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file, and its Rust API.
 
-> DaruDB is in early development. The crate is not published yet, it cannot store data yet, and the file format will change without a migration path until the first release.
+> DaruDB is in early development. The crate is not published yet, and the file format will change without a migration path until the first release. Only one process may have a file open at a time for now.
 
 ## Usage
 
+The storage kernel stores named trees of byte keys and byte values. Typed records and queries come later, built on top of it.
+
 ```rust
-use darudb::{Database, OpenOptions};
+use darudb::Database;
 
 fn main() -> Result<(), darudb::Error> {
     // Opens the database, creating the file if it does not exist.
     let db = Database::open("app.darudb")?;
-    println!("page size: {} bytes", db.page_size());
-    db.close()?;
 
-    // Refuses to create a file, and fails with `NOT_FOUND` instead.
-    let db = OpenOptions::new().create(false).open("app.darudb")?;
-    db.close()
+    // Every change in a write transaction becomes visible, and durable,
+    // together when `commit` returns.
+    let mut txn = db.begin_write()?;
+    txn.insert("users", b"alice", b"admin")?;
+    txn.insert("users", b"bob", b"member")?;
+    txn.commit()?;
+
+    // A read transaction sees one commit for as long as it lives.
+    let read = db.begin_read()?;
+    assert_eq!(read.get("users", b"alice")?, Some(b"admin".to_vec()));
+
+    for entry in read.iter("users")? {
+        let (key, value) = entry?;
+        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
+    }
+
+    Ok(())
 }
 ```
 
-Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
+A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
 
 ## Requirements
 

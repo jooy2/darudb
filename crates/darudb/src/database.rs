@@ -2,23 +2,27 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, Weak};
 
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector,
-    StaticHeader, slot_offset,
+    CommitRecord, HEADER_LEN, HeaderError, SELECTOR_OFFSET, STATIC_LEN, Selector, StaticHeader,
+    slot_offset,
 };
+use crate::instance::{FileKey, Shared, registry};
 use crate::options::OpenOptions;
-use crate::storage::{self, DbFile};
+use crate::storage::{self, DbFile, FileIo, Pager};
+use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 
 /// An open database.
 ///
-/// Dropping the handle closes the file. Call [`Database::close`] instead where
-/// a failure to flush the file should be reported rather than ignored.
-#[derive(Debug)]
+/// Cloning a `Database`, or opening the same file again in the same process,
+/// gives another handle to one shared instance: one file handle, one page
+/// cache, and one writer at a time. The file is closed when the last handle
+/// is dropped.
+#[derive(Debug, Clone)]
 pub struct Database {
-    file: DbFile,
-    header: StaticHeader,
+    shared: Arc<Shared>,
 }
 
 impl Database {
@@ -31,12 +35,12 @@ impl Database {
 
     /// The path the database was opened at.
     pub fn path(&self) -> &Path {
-        self.file.path()
+        &self.shared.path
     }
 
     /// The size of every page in the file, in bytes.
     pub fn page_size(&self) -> u32 {
-        self.header.page_size
+        self.shared.static_header.page_size
     }
 
     /// The file format version of the file, which is the one this build reads
@@ -45,44 +49,105 @@ impl Database {
         crate::FORMAT_VERSION
     }
 
-    /// Flushes the file to the storage device and closes it.
+    /// Starts a read transaction: a consistent view of the database as of the
+    /// last commit.
+    pub fn begin_read(&self) -> Result<ReadTransaction> {
+        ReadTransaction::begin(&self.shared)
+    }
+
+    /// Starts the write transaction, waiting for one already running in
+    /// another thread for up to the busy timeout.
+    pub fn begin_write(&self) -> Result<WriteTransaction> {
+        WriteTransaction::begin(&self.shared)
+    }
+
+    /// Closes this handle.
+    ///
+    /// Every commit is durable when it returns, so closing never loses data.
+    /// It reports `SYNC_FAILED` if a commit through any handle to this file
+    /// failed its barrier, which is the last chance to notice.
     pub fn close(self) -> Result<()> {
-        self.file.sync_all().map_err(|source| Error::Io {
-            path: self.file.path().to_path_buf(),
-            source,
-        })
+        self.shared.check_usable()
     }
 
     /// Opens or creates the database, once the options are known to be valid.
     pub(crate) fn open_with(path: &Path, options: &OpenOptions) -> Result<Self> {
-        if options.creates() {
-            if let Some(database) = create(path, options.new_page_size())? {
-                return Ok(database);
-            }
+        let mut instances = registry();
+
+        instances.retain(|_, instance| instance.strong_count() > 0);
+
+        if let Some(shared) = FileKey::of(path)
+            .and_then(|key| instances.get(&key))
+            .and_then(Weak::upgrade)
+        {
+            return Ok(Self { shared });
         }
 
-        open_existing(path)
+        let created = if options.creates() {
+            create(path, options.new_page_size())?
+        } else {
+            None
+        };
+        let file = match created {
+            Some(file) => file,
+            None => open_file(path)?,
+        };
+        let shared = open_io(Arc::new(file), path, options)?;
+
+        if let Some(key) = FileKey::of(path) {
+            instances.insert(key, Arc::downgrade(&shared));
+        }
+
+        Ok(Self { shared })
     }
+}
+
+/// Reads the static fields of the file, runs recovery, and builds the shared
+/// instance.
+fn open_io(io: Arc<dyn FileIo>, path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
+    let len = io.len().map_err(|source| io_error(path, source))?;
+    let header_len = usize::try_from(len).map_or(HEADER_LEN, |len| len.min(HEADER_LEN));
+    let mut bytes = vec![0u8; header_len];
+
+    io.read_at(&mut bytes, 0)
+        .map_err(|source| io_error(path, source))?;
+
+    let static_header = StaticHeader::decode(&bytes).map_err(|error| header_error(path, error))?;
+
+    if len < u64::from(static_header.page_size) {
+        return Err(Error::Corrupted {
+            path: path.to_path_buf(),
+            reason: format!(
+                "the file is {len} bytes long, shorter than its first page of {} bytes",
+                static_header.page_size
+            ),
+        });
+    }
+
+    let pager = Arc::new(Pager::new(
+        io,
+        static_header.page_size as usize,
+        path.to_path_buf(),
+    ));
+    let shared = Shared::new(pager, path.to_path_buf(), static_header, options.busy());
+    let header = recovery::recover(&shared.pager, &shared.loader)?;
+
+    shared.set_header(header);
+
+    Ok(Arc::new(shared))
 }
 
 /// Creates a database at `path`, or returns `None` if a file is already there.
 ///
 /// See [`storage::create_file`] for why the path never holds half a database.
-fn create(path: &Path, page_size: u32) -> Result<Option<Database>> {
+fn create(path: &Path, page_size: u32) -> Result<Option<DbFile>> {
     let mut file_id = [0u8; 16];
 
     getrandom::fill(&mut file_id).map_err(|error| io_error(path, io::Error::other(error)))?;
 
-    let header = StaticHeader { page_size, file_id };
-    let published = CommitRecord::first();
-    let page = first_page(&header, &published);
+    let page = first_page(&StaticHeader { page_size, file_id }, &CommitRecord::first());
 
-    let Some(file) = storage::create_file(path, &page).map_err(|source| io_error(path, source))?
-    else {
-        return Ok(None);
-    };
-
-    Ok(Some(Database { file, header }))
+    storage::create_file(path, &page).map_err(|source| io_error(path, source))
 }
 
 /// Page 0 of a new database: the static fields, the selector pointing at
@@ -101,71 +166,20 @@ fn first_page(header: &StaticHeader, first: &CommitRecord) -> Vec<u8> {
     page
 }
 
-/// Opens the database file already at `path` and validates its header.
-fn open_existing(path: &Path) -> Result<Database> {
-    let file = match DbFile::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(Error::NotFound {
-                path: path.to_path_buf(),
-            });
-        }
-        Err(source) => return Err(io_error(path, source)),
-    };
-
-    let len = file.len().map_err(|source| io_error(path, source))?;
-    let header_len = usize::try_from(len).map_or(HEADER_LEN, |len| len.min(HEADER_LEN));
-    let mut bytes = vec![0u8; header_len];
-
-    file.read_exact_at(&mut bytes, 0)
-        .map_err(|source| io_error(path, source))?;
-
-    let header = StaticHeader::decode(&bytes).map_err(|error| header_error(path, error))?;
-
-    if len < u64::from(header.page_size) {
-        return Err(corrupted(
-            path,
-            format!(
-                "the file is {len} bytes long, shorter than its first page of {} bytes",
-                header.page_size
-            ),
-        ));
-    }
-
-    let selector =
-        Selector::decode(bytes[SELECTOR_OFFSET]).map_err(|reason| corrupted(path, reason))?;
-
-    debug_assert!(selector.slot < SLOT_COUNT);
-
-    let start = slot_offset(selector.slot);
-    let published = CommitRecord::decode(selector.slot, &bytes[start..])
-        .map_err(|reason| corrupted(path, format!("the published commit: {reason}")))?
-        .ok_or_else(|| corrupted(path, "the selector points at an empty slot"))?;
-
-    if published.page_count > len / u64::from(header.page_size) {
-        return Err(corrupted(
-            path,
-            format!(
-                "the published commit counts {} pages, more than the file holds",
-                published.page_count
-            ),
-        ));
-    }
-
-    Ok(Database { file, header })
+/// Opens the file already at `path`.
+fn open_file(path: &Path) -> Result<DbFile> {
+    DbFile::open(path).map_err(|error| match error.kind() {
+        io::ErrorKind::NotFound => Error::NotFound {
+            path: path.to_path_buf(),
+        },
+        _ => io_error(path, error),
+    })
 }
 
 fn io_error(path: &Path, source: io::Error) -> Error {
     Error::Io {
         path: path.to_path_buf(),
         source,
-    }
-}
-
-fn corrupted(path: &Path, reason: impl Into<String>) -> Error {
-    Error::Corrupted {
-        path: path.to_path_buf(),
-        reason: reason.into(),
     }
 }
 

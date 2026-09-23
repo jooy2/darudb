@@ -7,13 +7,12 @@
 
 use std::fs::{self, File};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// An open database file.
 #[derive(Debug)]
 pub(crate) struct DbFile {
     file: File,
-    path: PathBuf,
 }
 
 impl DbFile {
@@ -28,25 +27,14 @@ impl DbFile {
             .create_new(true)
             .open(path)?;
 
-        Ok(Self {
-            file,
-            path: path.to_path_buf(),
-        })
+        Ok(Self { file })
     }
 
     /// Opens the existing file at `path` for reading and writing.
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
 
-        Ok(Self {
-            file,
-            path: path.to_path_buf(),
-        })
-    }
-
-    /// The path the file was opened at.
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+        Ok(Self { file })
     }
 
     /// The length of the file, in bytes.
@@ -74,6 +62,33 @@ impl DbFile {
     /// drive's cache, which a power cut empties.
     pub(crate) fn sync_all(&self) -> io::Result<()> {
         self.file.sync_all()
+    }
+
+    /// Cuts the file to `len` bytes, or extends it with zeros.
+    pub(crate) fn set_len(&self, len: u64) -> io::Result<()> {
+        self.file.set_len(len)
+    }
+}
+
+impl super::FileIo for DbFile {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        self.read_exact_at(buf, offset)
+    }
+
+    fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<()> {
+        self.write_all_at(buf, offset)
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        self.sync_all()
+    }
+
+    fn len(&self) -> io::Result<u64> {
+        DbFile::len(self)
+    }
+
+    fn set_len(&self, len: u64) -> io::Result<()> {
+        DbFile::set_len(self, len)
     }
 }
 
