@@ -30,3 +30,13 @@ zeroize = "1.9.0"
 lto = true
 codegen-units = 1
 strip = "symbols"
+
+# Debug builds of the engine and its dependencies are optimized. The cipher's
+# generic code is compiled into the engine itself, and unoptimized it makes the
+# crash suites forty times slower. Debug assertions and overflow checks stay
+# on, as in any debug build.
+[profile.dev.package.darudb]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 2

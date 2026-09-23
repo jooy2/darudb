@@ -430,14 +430,14 @@ fn difference(expected: &State, found: &State) -> String {
     lines.join("; ")
 }
 
-/// Runs the suite with `DARUDB_CRASH_SEEDS` seeds, 150 by default: enough to
+/// Runs the suite with `DARUDB_CRASH_SEEDS` seeds, 400 by default: enough to
 /// be quick, and a longer run is one environment variable away.
 #[test]
 fn power_cuts_and_process_kills_never_lose_a_returned_commit() {
     let seeds = std::env::var("DARUDB_CRASH_SEEDS")
         .ok()
         .and_then(|seeds| seeds.parse().ok())
-        .unwrap_or(150);
+        .unwrap_or(400);
 
     for seed in 0..seeds {
         run(seed, if seed % 5 == 0 { 16384 } else { 4096 }, 60);
