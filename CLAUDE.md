@@ -50,7 +50,7 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1                   |
 | `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1                   |
 | `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1                   |
-| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1, sync commits     |
+| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1                   |
 | `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1                   |
 | `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1                   |
 | `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1                   |
@@ -118,7 +118,8 @@ Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 
 - **Five platform assumptions and no others**: a one-byte write is atomic, a write changes only the bytes it names, a successful sync makes earlier writes durable, byte-range locks work and die with their owner, and the file system is local. [design/README.md](design/README.md#what-the-engine-assumes-of-the-platform) states them exactly.
 - **A sync commit costs one barrier.** The barrier is the commit point; flipping the selector afterwards publishes a commit that is already durable, so readers never see one that a power cut could undo.
-- **Deferred commits** are published without a barrier and become durable at the next one. A power cut undoes them only from the newest backwards; a process crash loses none. The format supports them from the start, even if the kernel ships sync commits first.
+- **Deferred commits** are published without a barrier and become durable at the next one: the next sync commit, `Database::sync`, closing the database, or the window's limits on pages and time. A power cut undoes them only from the newest backwards; a process crash loses none.
+- **Three records protected at every commit**: the published one, the durable one, and the one a power cut would make recovery trust without checking. When no slot is left, the commit issues a barrier first.
 - **Recovery** runs in the first process to open the file. It adopts the newest commit that is either published with the unsynced bit clear or passes checking, where checking reads only the pages written since that commit's durable transaction id.
 - **A failed barrier is not retried.** The commit fails with `SYNC_FAILED`, and the handle is unusable until the file is reopened.
 - **A new database is written to a temporary file and moved into place without replacing anything**, so the path holds either nothing or a complete database.
@@ -210,7 +211,8 @@ Each of these was tried elsewhere and caused the problems this project exists to
 - **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
 - **Only one process may have a file open until phase 3.** Handles within one process share one instance and are safe together; two processes are not coordinated yet, because the lock protocol of `design/locking.md` is not implemented.
-- **Only sync commits exist so far.** The format already carries everything deferred commits need, so adding them is code, not a format change.
+- **An open unsynced window has a thread.** `instance.rs` starts `darudb-sync` when a deferred commit opens a window with a time limit, and the thread ends when the window does. The crash suite turns the time limit off, so its runs replay from their seed.
+- **The first commit after opening a file issues one extra barrier**, unless recovery issued one: until then the writer does not know which selector a power cut would bring back (`design/commits-and-recovery.md`, "Choosing the slot").
 - **`packages/node/index.js` and `index.d.ts` are generated** by `npm run build` from the `#[napi]` items in `src/lib.rs`, together with the `.node` addon, and all three are git-ignored. The TypeScript types a consumer sees are whatever the Rust source says.
 - **`npm test` in `packages/node` runs against the addon that is already built.** A change to the engine does not reach the Node.js tests until `npm run build` runs again.
 - **The workflows run only when started by hand** (`workflow_dispatch`), because the account's GitHub Actions minutes are short for now. Local runs are the normal check. Each workflow file says where the `push` and `pull_request` triggers go when that changes.

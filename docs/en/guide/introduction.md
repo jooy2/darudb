@@ -41,14 +41,14 @@ The file is read and written at explicit offsets and never mapped into memory. M
 
 The storage kernel works, for one process at a time:
 
-- The Rust crate stores named trees of byte keys and byte values in read and write transactions. A commit is durable when it returns, and a file opened after a crash or a power cut holds the last commit that returned.
+- The Rust crate stores named trees of byte keys and byte values in read and write transactions. A commit is durable when it returns, and a file opened after a crash or a power cut holds the last commit that returned. A deferred commit trades that for speed: it returns without waiting for the disk, survives a crash of the process, and reaches the disk within a second by default.
 - Every page is verified against the check its parent recorded before it is used, so a damaged page is reported rather than read.
 - The crash suites back this up: thousands of simulated power cuts, each keeping an arbitrary part of the writes in flight, and hundreds of real processes killed in the middle of a commit.
 - The Node.js package opens and closes a database through that engine, and passes its errors on with the same codes. Transactions reach it once the engine's API has settled.
 
 The work ahead, in order:
 
-1. **Storage kernel**: deferred commits, which the file format already supports, and measuring the kernel before tuning it.
+1. **Storage kernel**: measuring the kernel, then batching its disk access and keeping its free space in memory between transactions.
 1. **Encryption**: page encryption and key management, with the same test suite passing with encryption on and off.
 1. **Several processes**: the file lock protocol, tested by fuzzing concurrent processes that are killed at random.
 1. **Objects and queries**: schemas, indexes, queries and migrations, with benchmarks.

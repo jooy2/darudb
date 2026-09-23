@@ -1,9 +1,11 @@
 //! The commit: finishing the trees, settling the allocator trees, writing the
 //! pages and the record, the barrier, and publishing.
 //!
-//! This is a sync commit as `design/commits-and-recovery.md` specifies it:
-//! the barrier is the commit point, and the selector is written afterwards to
-//! publish a commit that is already durable.
+//! `design/commits-and-recovery.md` specifies both kinds. A sync commit's
+//! barrier is its commit point, and the selector is written afterwards to
+//! publish a commit that is already durable. A deferred commit is published
+//! without a barrier, with the selector's unsynced bit set, and becomes durable
+//! at the next barrier.
 
 use std::sync::Arc;
 
@@ -21,7 +23,16 @@ use crate::instance::Header;
 /// or three; running out means a bug.
 const MAX_ROUNDS: usize = 64;
 
-pub(super) fn commit(mut txn: WriteTransaction) -> Result<()> {
+/// How a commit is made durable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Durability {
+    /// Durable when the commit returns: one barrier.
+    Sync,
+    /// Published at once, durable at the next barrier.
+    Deferred,
+}
+
+pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Result<()> {
     txn.shared.check_usable()?;
 
     let loader = txn.shared.loader.clone();
@@ -86,7 +97,7 @@ pub(super) fn commit(mut txn: WriteTransaction) -> Result<()> {
         key_block: [0; KEY_BLOCK_LEN],
     };
 
-    write_and_publish(&txn, pages, &record)
+    write_and_publish(&txn, pages, &record, durability)
 }
 
 /// Brings the free tree and the retained tree in line with the transaction's
@@ -210,14 +221,20 @@ fn finish_root(
     }
 }
 
-/// Writes the pages and the record, issues the barrier, and publishes.
+/// Writes the pages and the record, issues the barrier if the commit is to
+/// be durable now, and publishes.
 fn write_and_publish(
     txn: &WriteTransaction,
     mut pages: Vec<FinishedPage>,
     record: &CommitRecord,
+    durability: Durability,
 ) -> Result<()> {
     let shared = &txn.shared;
     let pager = &shared.pager;
+    let written = pages.len() as u64;
+    // A deferred commit that would take the window past its limits is made
+    // durable instead.
+    let deferred = durability == Durability::Deferred && shared.may_defer(written);
 
     pages.sort_unstable_by_key(|page| page.page);
 
@@ -234,35 +251,44 @@ fn write_and_publish(
         pager.resize(record.page_count)?;
     }
 
+    if txn.barrier_first {
+        shared.barrier()?;
+    }
+
     pager.write_header(&record.encode(txn.slot), slot_offset(txn.slot))?;
 
-    // The commit point. From here on the commit survives a power cut.
-    if let Err(source) = pager.sync() {
-        shared.fail_sync();
-
-        return Err(Error::SyncFailed {
-            path: shared.path.clone(),
-            source: Some(source),
-        });
+    // The commit point of a sync commit. From here on it survives a power cut,
+    // and so does every deferred commit before it.
+    if !deferred {
+        shared.barrier()?;
     }
 
     let selector = Selector {
         slot: txn.slot,
-        unsynced: false,
+        unsynced: deferred,
     };
 
     if let Err(error) = pager.write_header(&[selector.encode()], SELECTOR_OFFSET) {
-        // The commit is durable, and recovery will publish it when the file is
-        // opened again; until then this process cannot tell other handles.
+        // After a barrier, the commit is durable, and recovery will publish it
+        // when the file is opened again; until then this process cannot tell
+        // other handles. Either way the file has to be opened again.
         shared.fail_sync();
 
         return Err(error);
     }
 
-    if pager.file_len()? > needed {
-        // Only free pages lie past the new end. Failing to cut them off costs
-        // space, nothing else, so the commit does not fail over it.
-        let _ = pager.resize(record.page_count);
+    if deferred {
+        shared.extend_window(written);
+    } else {
+        shared.close_window();
+
+        // A deferred commit never shortens the file: a power cut can take the
+        // file back to the durable commit, which may count more pages.
+        if pager.file_len()? > needed {
+            // Only free pages lie past the new end. Failing to cut them off
+            // costs space, nothing else, so the commit does not fail over it.
+            let _ = pager.resize(record.page_count);
+        }
     }
 
     let mut records = txn.header.records;

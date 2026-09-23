@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
+use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use crate::btree::{LoadedNode, Loader};
@@ -21,6 +22,33 @@ use crate::storage::{Cache, Pager};
 
 /// How many decoded pages each open file keeps in memory.
 const CACHE_PAGES: usize = 4096;
+
+/// How long the thread that ends a due window waits for a running writer
+/// before it looks at the window again.
+const FLUSH_WAIT: Duration = Duration::from_secs(1);
+
+/// The options every handle to one file shares: those of the handle that
+/// opened it first.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Settings {
+    pub(crate) busy_timeout: Duration,
+    pub(crate) max_unsynced_pages: u64,
+    pub(crate) max_unsynced_time: Duration,
+}
+
+/// The deferred commits since the last barrier.
+#[derive(Debug, Clone, Copy)]
+struct Window {
+    opened: Instant,
+    pages: u64,
+}
+
+/// The unsynced window, and the thread that ends it when it is due.
+#[derive(Debug, Default)]
+struct Unsynced {
+    window: Option<Window>,
+    flusher: Option<Thread>,
+}
 
 /// The committed state every transaction starts from.
 #[derive(Debug, Clone, Copy)]
@@ -46,8 +74,13 @@ pub(crate) struct Shared {
     pub(crate) pager: Arc<Pager>,
     pub(crate) loader: Loader,
     pub(crate) cache: Arc<Cache<LoadedNode>>,
-    pub(crate) busy_timeout: Duration,
+    pub(crate) settings: Settings,
     header: Mutex<Header>,
+    /// The last selector written before the last barrier, which a power cut
+    /// can bring back. `None` until this instance's first barrier: another
+    /// process may have written the selector the file shows without one.
+    last_barrier: Mutex<Option<Selector>>,
+    unsynced: Mutex<Unsynced>,
     writer: Mutex<bool>,
     writer_free: Condvar,
     snapshots: Mutex<BTreeMap<u64, usize>>,
@@ -61,7 +94,7 @@ impl Shared {
         pager: Arc<Pager>,
         path: PathBuf,
         static_header: StaticHeader,
-        busy_timeout: Duration,
+        settings: Settings,
     ) -> Self {
         let header = Header {
             selector: Selector {
@@ -79,8 +112,10 @@ impl Shared {
             pager,
             loader,
             cache,
-            busy_timeout,
+            settings,
             header: Mutex::new(header),
+            last_barrier: Mutex::new(None),
+            unsynced: Mutex::new(Unsynced::default()),
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             snapshots: Mutex::new(BTreeMap::new()),
@@ -129,14 +164,57 @@ impl Shared {
         lock(&self.snapshots).keys().next().copied()
     }
 
+    /// Issues a barrier, and records the selector it made durable. A failed
+    /// barrier makes the file unusable.
+    pub(crate) fn barrier(&self) -> Result<()> {
+        let selector = self.header().selector;
+
+        if let Err(source) = self.pager.sync() {
+            self.fail_sync();
+
+            return Err(Error::SyncFailed {
+                path: self.path.clone(),
+                source: Some(source),
+            });
+        }
+
+        *lock(&self.last_barrier) = Some(selector);
+
+        Ok(())
+    }
+
+    /// The selector a power cut can bring back, if this instance knows it.
+    pub(crate) fn last_barrier(&self) -> Option<Selector> {
+        *lock(&self.last_barrier)
+    }
+
+    /// Records the selector recovery made durable when it opened the file.
+    pub(crate) fn set_last_barrier(&self, selector: Option<Selector>) {
+        *lock(&self.last_barrier) = selector;
+    }
+
     /// Waits for this process's writer gate, up to the busy timeout.
     pub(crate) fn acquire_writer(self: &Arc<Self>) -> Result<WriterGuard> {
+        self.acquire_writer_within(self.settings.busy_timeout)
+    }
+
+    /// Waits for this process's writer gate, up to `timeout`.
+    fn acquire_writer_within(self: &Arc<Self>, timeout: Duration) -> Result<WriterGuard> {
         self.check_usable()?;
 
-        let deadline = Instant::now() + self.busy_timeout;
+        // A timeout too long to add up is as good as waiting for ever.
+        let deadline = Instant::now().checked_add(timeout);
         let mut busy = lock(&self.writer);
 
         while *busy {
+            let Some(deadline) = deadline else {
+                busy = self
+                    .writer_free
+                    .wait(busy)
+                    .unwrap_or_else(PoisonError::into_inner);
+
+                continue;
+            };
             let now = Instant::now();
 
             if now >= deadline {
@@ -159,6 +237,98 @@ impl Shared {
         })
     }
 
+    /// Whether a deferred commit writing `pages` pages may stay deferred, or
+    /// has to be made durable because the window would pass its limits.
+    pub(crate) fn may_defer(&self, pages: u64) -> bool {
+        let limits = &self.settings;
+
+        match lock(&self.unsynced).window {
+            None => pages <= limits.max_unsynced_pages,
+            Some(window) => {
+                window.pages + pages <= limits.max_unsynced_pages
+                    && window.opened.elapsed() < limits.max_unsynced_time
+            }
+        }
+    }
+
+    /// Records a deferred commit of `pages` pages in the window, and makes
+    /// sure a thread will end the window when it is due.
+    pub(crate) fn extend_window(self: &Arc<Self>, pages: u64) {
+        let mut unsynced = lock(&self.unsynced);
+        let window = unsynced.window.get_or_insert(Window {
+            opened: Instant::now(),
+            pages: 0,
+        });
+
+        window.pages += pages;
+
+        if unsynced.flusher.is_none() && self.window_due(&unsynced).is_some() {
+            let shared = Arc::downgrade(self);
+            let spawned = thread::Builder::new()
+                .name("darudb-sync".to_owned())
+                .spawn(move || flush_when_due(&shared));
+
+            // Without the thread, the next deferred commit after the time is
+            // up still ends the window; nothing else is lost.
+            if let Ok(handle) = spawned {
+                unsynced.flusher = Some(handle.thread().clone());
+            }
+        }
+    }
+
+    /// Records that a barrier made every commit so far durable.
+    pub(crate) fn close_window(&self) {
+        let mut unsynced = lock(&self.unsynced);
+
+        unsynced.window = None;
+
+        if let Some(flusher) = &unsynced.flusher {
+            flusher.unpark();
+        }
+    }
+
+    /// When the open window, if any, has to end. `None` also for a time limit
+    /// too long to reach.
+    fn window_due(&self, unsynced: &Unsynced) -> Option<Instant> {
+        unsynced
+            .window
+            .and_then(|window| window.opened.checked_add(self.settings.max_unsynced_time))
+    }
+
+    /// Makes the published commit durable if it is not: a barrier, then the
+    /// selector with the unsynced bit clear. The caller holds the writer gate.
+    pub(crate) fn sync_published(&self) -> Result<()> {
+        self.check_usable()?;
+
+        let mut header = self.header();
+
+        if !header.selector.unsynced {
+            self.close_window();
+
+            return Ok(());
+        }
+
+        self.barrier()?;
+
+        header.selector.unsynced = false;
+
+        if let Err(error) = self
+            .pager
+            .write_header(&[header.selector.encode()], crate::format::SELECTOR_OFFSET)
+        {
+            // The commits are durable already; only the flag saying so did not
+            // reach the file. Recovery finds out by checking them.
+            self.fail_sync();
+
+            return Err(error);
+        }
+
+        self.set_header(header);
+        self.close_window();
+
+        Ok(())
+    }
+
     /// Marks the file unusable after a failed barrier.
     pub(crate) fn fail_sync(&self) {
         self.sync_failed.store(true, Ordering::SeqCst);
@@ -174,6 +344,66 @@ impl Shared {
         }
 
         Ok(())
+    }
+}
+
+impl Drop for Shared {
+    /// The last handle to the file is gone. Deferred commits still waiting
+    /// for a barrier get one, on a best-effort basis: nothing is left to report
+    /// a failure to, and a failure costs nothing but what a power cut would.
+    fn drop(&mut self) {
+        let _ = self.sync_published();
+
+        if let Some(flusher) = lock(&self.unsynced).flusher.take() {
+            flusher.unpark();
+        }
+    }
+}
+
+/// The body of the thread that ends the unsynced window when it is due.
+///
+/// It holds the instance only while it works, so it never keeps a file open
+/// that every handle has let go of. It stops when there is no window left to
+/// end, the instance is gone, or the file became unusable.
+fn flush_when_due(shared: &Weak<Shared>) {
+    loop {
+        let Some(instance) = shared.upgrade() else {
+            return;
+        };
+        let due = {
+            let mut unsynced = lock(&instance.unsynced);
+
+            match instance.window_due(&unsynced) {
+                Some(due) => due,
+                None => {
+                    unsynced.flusher = None;
+
+                    return;
+                }
+            }
+        };
+        let now = Instant::now();
+
+        if now < due {
+            drop(instance);
+            thread::park_timeout(due - now);
+
+            continue;
+        }
+
+        let ended = match instance.acquire_writer_within(FLUSH_WAIT) {
+            Ok(_writer) => instance.sync_published(),
+            // A writer is still running. Its own commit may end the window;
+            // otherwise the next round tries again.
+            Err(Error::Busy { .. }) => Ok(()),
+            Err(error) => Err(error),
+        };
+
+        if ended.is_err() {
+            lock(&instance.unsynced).flusher = None;
+
+            return;
+        }
     }
 }
 

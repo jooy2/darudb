@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::database::Database;
 use crate::error::{Error, Result};
 use crate::format::{self, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
+use crate::instance::Settings;
 
 /// Options for opening a database, in the style of [`std::fs::OpenOptions`].
 ///
@@ -20,6 +21,8 @@ pub struct OpenOptions {
     create: bool,
     page_size: u32,
     busy_timeout: Duration,
+    max_unsynced_pages: u64,
+    max_unsynced_time: Duration,
 }
 
 impl OpenOptions {
@@ -30,6 +33,8 @@ impl OpenOptions {
             create: true,
             page_size: DEFAULT_PAGE_SIZE,
             busy_timeout: Duration::from_secs(5),
+            max_unsynced_pages: 16_384,
+            max_unsynced_time: Duration::from_secs(1),
         }
     }
 
@@ -63,6 +68,30 @@ impl OpenOptions {
         self
     }
 
+    /// How many pages deferred commits may write before one of them is made
+    /// durable anyway. 16384 by default: 64 MiB with 4096-byte pages.
+    ///
+    /// The limit bounds what a power cut can undo, and how much recovery has
+    /// to check after one. The default is provisional until the benchmarks
+    /// settle it.
+    pub fn max_unsynced_pages(&mut self, pages: u64) -> &mut Self {
+        self.max_unsynced_pages = pages;
+        self
+    }
+
+    /// How long deferred commits may go without a barrier. One second by
+    /// default.
+    ///
+    /// When the time is up, a thread the engine starts for the purpose makes
+    /// them durable, as [`Database::sync`] would. If a write transaction holds
+    /// the writer lock at that moment, the thread waits for it, and a deferred
+    /// commit made after the time is up is made durable itself. The thread
+    /// exists only while deferred commits are waiting.
+    pub fn max_unsynced_time(&mut self, time: Duration) -> &mut Self {
+        self.max_unsynced_time = time;
+        self
+    }
+
     /// Opens the database at `path` with these options.
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Database> {
         self.validate()?;
@@ -78,8 +107,12 @@ impl OpenOptions {
         self.page_size
     }
 
-    pub(crate) fn busy(&self) -> Duration {
-        self.busy_timeout
+    pub(crate) fn settings(&self) -> Settings {
+        Settings {
+            busy_timeout: self.busy_timeout,
+            max_unsynced_pages: self.max_unsynced_pages,
+            max_unsynced_time: self.max_unsynced_time,
+        }
     }
 
     fn validate(&self) -> Result<()> {

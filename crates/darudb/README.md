@@ -37,7 +37,7 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
+A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. `commit_deferred` returns without waiting for the disk: readers see the changes at once, a crash of the process loses none of them, and they become durable within a second, or sooner at the next `commit`, `Database::sync` or close. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
 
 ## Requirements
 

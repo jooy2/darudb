@@ -287,3 +287,129 @@ fn many_commits_leave_a_file_that_opens_with_all_of_them() {
     // Rounds 0, 7, 14 and so on up to 49 each removed one entry: eight in all.
     assert_eq!(read.len("log").unwrap(), 50 - 8);
 }
+
+/// The selector byte of the file at `path`: bit 2 is set while deferred
+/// commits wait for a barrier (`design/file-format.md`).
+fn unsynced(path: &std::path::Path) -> bool {
+    common::read(path)[64] & 0b100 != 0
+}
+
+#[test]
+fn a_deferred_commit_is_seen_at_once_and_made_durable_by_sync() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let db = OpenOptions::new()
+        .max_unsynced_time(Duration::from_secs(3600))
+        .open(&path)
+        .unwrap();
+
+    for round in 0..3u8 {
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("t", &[round], b"deferred").unwrap();
+        txn.commit_deferred().unwrap();
+    }
+
+    assert_eq!(entries(&db, "t").len(), 3, "readers see them at once");
+    assert!(unsynced(&path));
+
+    db.sync().unwrap();
+
+    assert!(!unsynced(&path));
+
+    db.close().unwrap();
+
+    let db = open(&dir);
+
+    assert_eq!(entries(&db, "t").len(), 3);
+}
+
+#[test]
+fn a_sync_commit_makes_the_deferred_ones_before_it_durable() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let db = OpenOptions::new()
+        .max_unsynced_time(Duration::from_secs(3600))
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"a", b"deferred").unwrap();
+    txn.commit_deferred().unwrap();
+
+    assert!(unsynced(&path));
+
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"b", b"sync").unwrap();
+    txn.commit().unwrap();
+
+    assert!(!unsynced(&path));
+}
+
+#[test]
+fn the_unsynced_window_ends_on_its_own_when_its_time_is_up() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let db = OpenOptions::new()
+        .max_unsynced_time(Duration::from_millis(20))
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"a", b"deferred").unwrap();
+    txn.commit_deferred().unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+
+    while unsynced(&path) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the window never ended"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(entries(&db, "t").len(), 1);
+}
+
+#[test]
+fn a_deferred_commit_past_the_page_limit_is_made_durable() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let db = OpenOptions::new()
+        .max_unsynced_pages(1)
+        .max_unsynced_time(Duration::from_secs(3600))
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    // A value this large spans pages of its own, so the commit writes more
+    // than one page.
+    txn.insert("t", b"big", &vec![1; 20_000]).unwrap();
+    txn.commit_deferred().unwrap();
+
+    assert!(!unsynced(&path));
+}
+
+#[test]
+fn dropping_the_last_handle_makes_deferred_commits_durable() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let db = OpenOptions::new()
+        .max_unsynced_time(Duration::from_secs(3600))
+        .open(&path)
+        .unwrap();
+    let other = db.clone();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"a", b"deferred").unwrap();
+    txn.commit_deferred().unwrap();
+    drop(db);
+
+    assert!(unsynced(&path), "another handle is still open");
+
+    drop(other);
+
+    assert!(!unsynced(&path));
+}

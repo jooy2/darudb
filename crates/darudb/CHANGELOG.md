@@ -13,4 +13,5 @@
 - A value too large to keep in a tree's pages is stored in pages of its own, up to 4 GiB.
 - `Database` handles to one file in a process share one instance, so they see the same commits and take turns writing. `OpenOptions::busy_timeout` sets how long `begin_write` waits for another writer.
 - `Error` reports every failure with a stable `code`: `IO`, `NOT_FOUND`, `NOT_A_DATABASE`, `UNSUPPORTED_FORMAT_VERSION`, `CORRUPTED`, `INVALID_ARGUMENT`, `CLOSED`, `BUSY`, `SYNC_FAILED` and `INTERNAL`. `CLOSED` is for a language binding's handle used after it was closed; `SYNC_FAILED` means a barrier failed, the last commit's outcome is unknown, and the file has to be opened again.
-- `Database::close` reports whether a barrier failed on any handle to the file.
+- `WriteTransaction::commit_deferred` publishes a commit without waiting for a barrier. Readers see it at once; it becomes durable at the next `commit`, at `Database::sync`, when the database is closed, or when `OpenOptions::max_unsynced_time` (one second by default) or `OpenOptions::max_unsynced_pages` runs out. A crash of the process loses no deferred commit, and a power cut undoes them only from the newest backwards.
+- `Database::close` makes deferred commits durable first, and reports whether a barrier failed on any handle to the file.

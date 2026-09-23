@@ -3,12 +3,15 @@
 //! again and compared with the history of commits.
 //!
 //! What must hold after every cut, as `design/commits-and-recovery.md` states
-//! it: the file opens; its contents are exactly the state after a commit no
-//! older than the last one that returned and no newer than the one in flight;
-//! and every page of the file is accounted for exactly once.
+//! it: the file opens; its contents are exactly the state after one commit;
+//! and every page of the file is accounted for exactly once. After a process
+//! dies, that commit is the last one that returned or the one in flight,
+//! deferred commits included. After a power cut, it may also be any deferred
+//! commit since the last barrier, or the durable commit before them.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::btree::{Load, Node};
 use crate::format::{
@@ -190,12 +193,13 @@ pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
 }
 
 /// One random write transaction: its operations applied to a copy of the
-/// model, and whether it ends in a commit.
+/// model, and whether it ends in a commit, deferred if `deferred` says so.
 fn random_transaction(
     rng: &mut Rng,
     db: &Database,
     model: &State,
     page_size: usize,
+    deferred: bool,
 ) -> (crate::Result<()>, State, bool) {
     let mut next = model.clone();
     let mut txn = match db.begin_write() {
@@ -242,30 +246,82 @@ fn random_transaction(
         return (Ok(()), model.clone(), false);
     }
 
-    (txn.commit(), next, true)
+    let result = if deferred {
+        txn.commit_deferred()
+    } else {
+        txn.commit()
+    };
+
+    (result, next, true)
+}
+
+/// What one step of a run does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Commit,
+    CommitDeferred,
+    Sync,
 }
 
 /// Runs random transactions, cutting power or killing the process every few,
 /// and checks what opening the file afterwards finds.
+///
+/// Some seeds commit only with sync commits, the others mostly with deferred
+/// ones, some of them under a window limit small enough to be reached often.
+/// The window's time limit is left out: it depends on the clock, and the run
+/// has to replay the same way from its seed.
 fn run(seed: u64, page_size: u32, steps: usize) {
     let mut rng = Rng::new(seed);
+    let mut options = OpenOptions::new();
+
+    options.max_unsynced_time(Duration::MAX);
+
+    if seed % 3 == 1 {
+        options.max_unsynced_pages(24);
+    }
+
+    let defers = seed % 4 != 0;
     let mut disk = Arc::new(SimDisk::default());
-    let mut db = Database::create_io(disk.clone(), page_size).unwrap();
+    let mut db = Database::create_io(disk.clone(), page_size, &options).unwrap();
     let mut model = State::new();
+    // The state after each commit since the last one known to be durable,
+    // that one first: what a power cut may go back to.
+    let mut history = vec![State::new()];
     let page_size = page_size as usize;
 
     for step in 0..steps {
         let crash = rng.below(6) == 0;
+        let action = match rng.below(12) {
+            0 if defers => Action::Sync,
+            1..=8 if defers => Action::CommitDeferred,
+            _ => Action::Commit,
+        };
 
         if crash {
-            // Let the next transaction get a random way through its writes.
+            // Let the next step get a random way through its writes.
             disk.stop_after(rng.index(60));
         }
 
-        let (result, attempted, committing) = random_transaction(&mut rng, &db, &model, page_size);
+        let (result, attempted, committing) = match action {
+            Action::Sync => (db.sync(), model.clone(), false),
+            _ => random_transaction(
+                &mut rng,
+                &db,
+                &model,
+                page_size,
+                action == Action::CommitDeferred,
+            ),
+        };
 
         if !crash {
             result.unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+            match action {
+                Action::Sync => history = vec![model.clone()],
+                Action::Commit if committing => history = vec![attempted.clone()],
+                Action::CommitDeferred if committing => history.push(attempted.clone()),
+                _ => {}
+            }
 
             if committing {
                 model = attempted;
@@ -279,9 +335,9 @@ fn run(seed: u64, page_size: u32, steps: usize) {
             continue;
         }
 
-        // The transaction either finished before the budget ran out, or
-        // stopped somewhere inside. Either way, the process is gone now.
-        let finished = result.is_ok() && committing;
+        // The step either finished before the budget ran out, or stopped
+        // somewhere inside. Either way, the process is gone now.
+        let finished = result.is_ok();
         let power_cut = rng.below(2) == 0;
         let image = if power_cut {
             disk.power_cut(&mut rng)
@@ -291,31 +347,46 @@ fn run(seed: u64, page_size: u32, steps: usize) {
 
         drop(db);
         disk = Arc::new(SimDisk::from_image(image));
-        db = Database::open_io(disk.clone(), &OpenOptions::new())
+        db = Database::open_io(disk.clone(), &options)
             .unwrap_or_else(|error| panic!("seed {seed} step {step}: reopening failed: {error}"));
 
         let found = contents(&db);
 
         check_integrity(&db).unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
 
-        if finished {
-            // A commit that returned is durable.
-            assert!(
-                found == attempted,
-                "seed {seed} step {step}: a returned commit was lost ({})",
-                difference(&attempted, &found)
-            );
-        } else if committing && found == attempted {
-            // The commit in flight made it: it was not reported, and it may.
+        // What the file may hold: the last state that returned, or the commit
+        // in flight. A barrier that returned makes the last state the only
+        // one; otherwise a power cut may go back into the history.
+        let latest = if finished && committing {
+            &attempted
         } else {
-            assert!(
-                found == model,
-                "seed {seed} step {step}: not the last commit ({})",
-                difference(&model, &found)
-            );
-        }
+            &model
+        };
+        let barrier_returned =
+            finished && (action == Action::Sync || (action == Action::Commit && committing));
+        let allowed = found == *latest
+            || (committing && !finished && found == attempted)
+            || (power_cut && !barrier_returned && history.contains(&found));
 
-        model = found;
+        assert!(
+            allowed,
+            "seed {seed} step {step}: {action:?} {} with a {}, and the file holds none of the \
+             states it may ({} against the last)",
+            if finished {
+                "returned"
+            } else {
+                "was cut short"
+            },
+            if power_cut {
+                "power cut"
+            } else {
+                "process kill"
+            },
+            difference(latest, &found)
+        );
+
+        model = found.clone();
+        history = vec![found];
     }
 }
 
@@ -368,7 +439,7 @@ fn power_cuts_and_process_kills_never_lose_a_returned_commit() {
 #[test]
 fn a_failed_barrier_makes_the_database_unusable_until_reopened() {
     let disk = Arc::new(SimDisk::default());
-    let db = Database::create_io(disk.clone(), 4096).unwrap();
+    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();
 
     txn.insert("t", b"before", b"1").unwrap();
@@ -401,7 +472,7 @@ fn a_failed_barrier_makes_the_database_unusable_until_reopened() {
 #[test]
 fn recovery_erases_a_newer_record_the_file_is_too_short_for() {
     let disk = Arc::new(SimDisk::default());
-    let db = Database::create_io(disk.clone(), 4096).unwrap();
+    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();
 
     txn.insert("t", b"key", b"value").unwrap();
@@ -440,7 +511,7 @@ fn recovery_erases_a_newer_record_the_file_is_too_short_for() {
 
 #[test]
 fn a_reader_keeps_its_snapshot_while_the_file_changes_under_it() {
-    let db = Database::create_io(Arc::new(SimDisk::default()), 4096).unwrap();
+    let db = Database::create_io(Arc::new(SimDisk::default()), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();
 
     for index in 0..500u32 {
@@ -485,7 +556,7 @@ fn a_reader_keeps_its_snapshot_while_the_file_changes_under_it() {
 #[test]
 fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
     let disk = Arc::new(SimDisk::default());
-    let db = Database::create_io(disk.clone(), 4096).unwrap();
+    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
     let write = |value: u8| {
         let mut txn = db.begin_write().unwrap();
 
@@ -517,7 +588,7 @@ fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
 #[test]
 fn a_damaged_page_is_reported_and_never_panics() {
     let disk = Arc::new(SimDisk::default());
-    let db = Database::create_io(disk.clone(), 4096).unwrap();
+    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();
 
     for index in 0..2000u32 {

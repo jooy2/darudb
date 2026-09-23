@@ -61,13 +61,25 @@ impl Database {
         WriteTransaction::begin(&self.shared)
     }
 
-    /// Closes this handle.
+    /// Makes every commit so far durable, deferred ones included.
     ///
-    /// Every commit is durable when it returns, so closing never loses data.
-    /// It reports `SYNC_FAILED` if a commit through any handle to this file
-    /// failed its barrier, which is the last chance to notice.
+    /// It waits for a write transaction that is running, up to the busy
+    /// timeout, and does nothing when there is no deferred commit to make
+    /// durable.
+    pub fn sync(&self) -> Result<()> {
+        let _writer = self.shared.acquire_writer()?;
+
+        self.shared.sync_published()
+    }
+
+    /// Closes this handle, making deferred commits durable first.
+    ///
+    /// It reports `SYNC_FAILED` if a barrier failed on any handle to this file,
+    /// which is the last chance to notice. Dropping the handle instead makes
+    /// deferred commits durable too, when it is the last one, but cannot report
+    /// a failure.
     pub fn close(self) -> Result<()> {
-        self.shared.check_usable()
+        self.sync()
     }
 
     /// Opens or creates the database, once the options are known to be valid.
@@ -112,7 +124,11 @@ impl Database {
 
     /// Writes a new database onto the empty `io` and opens it.
     #[cfg(test)]
-    pub(crate) fn create_io(io: Arc<dyn FileIo>, page_size: u32) -> Result<Self> {
+    pub(crate) fn create_io(
+        io: Arc<dyn FileIo>,
+        page_size: u32,
+        options: &OpenOptions,
+    ) -> Result<Self> {
         let header = StaticHeader {
             page_size,
             file_id: [7; 16],
@@ -124,7 +140,7 @@ impl Database {
             .map_err(|source| io_error(path, source))?;
         io.sync().map_err(|source| io_error(path, source))?;
 
-        Self::open_io(io, &OpenOptions::new())
+        Self::open_io(io, options)
     }
 
     /// The instance behind this handle, for the engine's own tests.
@@ -161,10 +177,11 @@ fn open_io(io: Arc<dyn FileIo>, path: &Path, options: &OpenOptions) -> Result<Ar
         static_header.page_size as usize,
         path.to_path_buf(),
     ));
-    let shared = Shared::new(pager, path.to_path_buf(), static_header, options.busy());
-    let header = recovery::recover(&shared.pager, &shared.loader)?;
+    let shared = Shared::new(pager, path.to_path_buf(), static_header, options.settings());
+    let (header, last_barrier) = recovery::recover(&shared.pager, &shared.loader)?;
 
     shared.set_header(header);
+    shared.set_last_barrier(last_barrier);
 
     Ok(Arc::new(shared))
 }

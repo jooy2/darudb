@@ -90,6 +90,8 @@ fn main() -> Result<(), darudb::Error> {
 
 A write transaction dropped without `commit` is aborted, and nothing it did reaches the file. There is one write transaction at a time; `begin_write` waits for the one already running for up to the busy timeout, five seconds unless `OpenOptions::busy_timeout` says otherwise.
 
+`commit` waits for the disk before it returns. `commit_deferred` does not: readers see the changes at once, and they reach the disk together with later commits, at the next `commit`, at `Database::sync`, when the database is closed, or once they have waited one second by default. A crash of the process loses none of them. A power cut can undo the newest ones, but never leaves a gap and never damages the file. `OpenOptions::max_unsynced_time` and `OpenOptions::max_unsynced_pages` set how much may wait.
+
 Typed records and queries come later, built on top of these trees. For now, only one process may have a file open at a time.
 
 ### Node.js

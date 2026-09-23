@@ -17,7 +17,10 @@ use crate::storage::Pager;
 
 /// Reads the selector and the three records, adopts the commit recovery
 /// chooses, and makes the file say so.
-pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
+///
+/// Also returns the selector a power cut can bring back, when recovery wrote
+/// it and issued a barrier after it; otherwise nobody knows which one it is.
+pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<(Header, Option<Selector>)> {
     let bytes = pager.read_header(HEADER_LEN)?;
     let selector = Selector::decode(bytes[SELECTOR_OFFSET])
         .map_err(|reason| pager.corrupted(reason.to_owned()))?;
@@ -60,6 +63,11 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
         return Err(pager.corrupted("no commit record in the header can be used".to_owned()));
     };
 
+    let adopted = Selector {
+        slot,
+        unsynced: false,
+    };
+
     // Every other record at least as new as the adopted one goes: those newer
     // lost the race to the disk, and one the file is too short for now would
     // look whole again once the file grows.
@@ -67,26 +75,29 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
         .filter(|other| *other != slot)
         .filter(|other| intact[*other].is_some_and(|stale| stale.txn >= record.txn))
         .collect();
-
-    if slot != selector.slot || selector.unsynced || !stale.is_empty() {
+    let last_barrier = if slot != selector.slot || selector.unsynced || !stale.is_empty() {
         publish_recovered(pager, &stale, slot)?;
 
         for other in stale {
             records[other] = None;
         }
-    }
+
+        Some(adopted)
+    } else {
+        None
+    };
 
     if pager.file_len()? > record.page_count * pager.page_size() as u64 {
         pager.resize(record.page_count)?;
     }
 
-    Ok(Header {
-        selector: Selector {
-            slot,
-            unsynced: false,
+    Ok((
+        Header {
+            selector: adopted,
+            records,
         },
-        records,
-    })
+        last_barrier,
+    ))
 }
 
 /// Makes the adopted commit the published and durable one: a barrier, the

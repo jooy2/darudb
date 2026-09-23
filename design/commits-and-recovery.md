@@ -74,7 +74,7 @@ Step 4 is what makes them end at all. A tree that gives a page back and needs on
 A commit is made in one of two ways:
 
 - **Sync**, the default: durable when the call returns. It costs one barrier.
-- **Deferred**: published at once, without a barrier. It becomes durable at the next barrier: the next sync commit, a call to `sync`, the close of the database handle that made it, or the engine's own limit on the unsynced window.
+- **Deferred**: published at once, without a barrier. It becomes durable at the next barrier: the next sync commit, a call to `sync`, closing the database, or the engine's own limits on the unsynced window.
 
 A power cut can undo deferred commits, but only from the newest backwards, never leaving a gap, and it never damages the file. A process that crashes loses nothing, because the operating system still holds everything the process wrote.
 
@@ -83,8 +83,6 @@ Deferred commits exist for the applications that would rather lose their last fe
 **Readers see a sync commit only once it is durable**, because it is published after its barrier. A deferred commit is seen before it is durable, which is the trade that mode makes.
 
 **The unsynced window is kept short.** The engine issues a barrier of its own once the window holds more than a set number of pages or has been open longer than a set time. That bounds how much a power cut can undo and how long recovery's check takes. The defaults come from the benchmarks.
-
-The storage kernel may ship sync commits first. The format supports deferred commits from the start, so adding them later needs no new format version.
 
 ## The durable commit
 
@@ -105,10 +103,15 @@ The transaction's base is the published commit.
 
 ## Choosing the slot
 
-The new record goes into a slot that holds neither the published commit nor the durable commit. So it never overwrites a record that a reader or a recovery may need.
+The new record never overwrites a record that a reader or a recovery may need, so its slot holds none of these:
 
-- With the unsynced bit set, exactly one slot qualifies.
-- With it clear, two do. The writer prefers one holding a record newer than the published commit, which a writer that died before publishing left behind. Otherwise it takes the older of the two, treating an empty slot as the oldest.
+- The published commit.
+- The durable commit.
+- The commit a power cut would make recovery trust without checking it. A power cut can bring back the last selector written before the last barrier, and when that selector's unsynced bit is clear, recovery adopts the record in its slot as it finds it. The writer knows that selector from the order of its own writes. After opening a file, or after another process has committed, it does not know it until its next barrier, because another process may have written the selector the file shows with no barrier after it. Recovery's own barriers count.
+
+Of the slots that qualify, the writer prefers one holding a record newer than the published commit, which a writer that died before publishing left behind. Otherwise it takes the oldest, treating an empty slot as the oldest.
+
+When no slot qualifies, or the writer does not know which selector a power cut would bring back, the commit issues a barrier before it writes its record. That makes the published commit's selector the one a power cut brings back, which leaves only the published and durable commits to avoid, and a slot always qualifies. It costs one barrier on the first commit after the file is opened, unless recovery issued one, and one on the second deferred commit after a sync commit that was made with no unsynced window open.
 
 The new transaction id `T` is one more than the largest transaction id in any valid record, not in the published one only. That way a record left behind by a dead writer never shares an id with a new commit.
 
@@ -117,6 +120,7 @@ The new transaction id `T` is one more than the largest transaction id in any va
 1. Finish the trees, so that every page's final content and check are known.
 1. Write every page of the transaction that is not on disk already.
 1. If the file is shorter than the page count, extend it. Pages at the end that were allocated and released again without being written still count, and recovery skips a record that counts more pages than the file holds.
+1. If choosing the slot asked for a barrier first, issue it.
 1. Write the commit record into the chosen slot, with `T`, the durable transaction id of `D`, the page count, the three roots and the key block.
 1. **Barrier.** This is the commit point: from here on, the commit survives a power cut whatever happens to the selector.
 1. Write the selector: the chosen slot, with the unsynced bit clear. The commit is now published.
@@ -129,6 +133,7 @@ There is no second barrier after the selector. If a power cut loses the selector
 
 1. Finish the trees.
 1. Write every page of the transaction that is not on disk already, and extend the file to the page count if it is shorter.
+1. If choosing the slot asked for a barrier first, issue it.
 1. Write the commit record into the chosen slot, with `T` and the durable transaction id of `D`.
 1. Write the selector: the chosen slot, with the unsynced bit set. The commit is published but not yet durable.
 1. Return.
@@ -137,7 +142,14 @@ The record's durable transaction id keeps pointing at `D`, which keeps `D`'s slo
 
 ## Ending the unsynced window
 
-A barrier, followed by writing the selector with the unsynced bit clear, makes the published commit the durable one. Four things do this: a sync commit, whose own barrier covers the whole window; a call to `sync`; closing a database handle that made deferred commits; and the engine's window limit. Only the writer writes the selector, so `sync` takes the writer lock first.
+A barrier, followed by writing the selector with the unsynced bit clear, makes the published commit the durable one. These do it:
+
+- A sync commit, whose own barrier covers the whole window.
+- A call to `sync`, and closing the database, which calls it. The last handle to the file going away in a process does the same, without a way to report a failure.
+- The page limit. A deferred commit that would take the window past it is made a sync commit instead.
+- The time limit. While a window is open, a thread of the engine's waits for the time to run out and then does what `sync` does, after any write transaction that is running. A deferred commit made after the time is up is made a sync commit too, in case that thread could not run.
+
+Only the writer writes the selector, so `sync` and the engine's thread take the writer lock first.
 
 ## When a barrier fails
 

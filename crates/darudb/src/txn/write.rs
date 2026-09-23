@@ -8,8 +8,8 @@ use super::{Range, catalog_names, check_key, check_value, find_tree, root_child,
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, FREE_TREE, RETAINED_TREE, SLOT_COUNT, decode_free_key, decode_free_value,
-    decode_retained_key, decode_runs,
+    CommitRecord, FREE_TREE, RETAINED_TREE, SLOT_COUNT, Selector, decode_free_key,
+    decode_free_value, decode_retained_key, decode_runs,
 };
 use crate::instance::{Header, Shared, WriterGuard};
 use crate::space::Space;
@@ -43,6 +43,9 @@ pub struct WriteTransaction {
     pub(super) durable: CommitRecord,
     /// The slot the new record goes into.
     pub(super) slot: usize,
+    /// Whether the commit has to issue a barrier before it writes its record,
+    /// because the slot may be one a power cut would make recovery trust.
+    pub(super) barrier_first: bool,
     pub(super) txn: u64,
     pub(super) space: Space,
     pub(super) catalog: Option<Child>,
@@ -84,7 +87,7 @@ impl WriteTransaction {
             .map(|record| record.txn)
             .max()
             .unwrap_or(0);
-        let slot = choose_slot(&header, &base, &durable);
+        let (slot, barrier_first) = choose_slot(&header, &base, &durable, shared.last_barrier());
         let loader = &shared.loader;
         let free_root = root_child(base.free);
         let retained_root = root_child(base.retained);
@@ -133,6 +136,7 @@ impl WriteTransaction {
             header,
             durable,
             slot,
+            barrier_first,
             txn,
             space,
             catalog: root_child(base.catalog),
@@ -370,7 +374,29 @@ impl WriteTransaction {
             });
         }
 
-        super::commit::commit(self)
+        super::commit::commit(self, super::commit::Durability::Sync)
+    }
+
+    /// Makes every change of this transaction visible together, without
+    /// waiting for it to be durable.
+    ///
+    /// Readers see the changes as soon as it returns. They become durable at
+    /// the next barrier: the next [`commit`](Self::commit), a call to
+    /// [`Database::sync`](crate::Database::sync), closing the database, or the
+    /// engine's own limits on how much may wait (see
+    /// [`OpenOptions::max_unsynced_pages`](crate::OpenOptions::max_unsynced_pages)).
+    /// A crash of the process loses none of them. A power cut may undo deferred
+    /// commits, newest first and never leaving a gap, and never damages the
+    /// file.
+    pub fn commit_deferred(self) -> Result<()> {
+        if self.failed {
+            return Err(Error::InvalidArgument {
+                message: "an operation in this write transaction failed, so it can only be aborted"
+                    .to_owned(),
+            });
+        }
+
+        super::commit::commit(self, super::commit::Durability::Deferred)
     }
 
     /// Throws away every change of this transaction. The same as dropping it.
@@ -442,11 +468,22 @@ fn open_tree<'t>(
     Ok(Some(state))
 }
 
-/// The slot for the new record: neither the published commit's nor the
-/// durable commit's. Of two candidates, one holding a record newer than the
-/// published commit, which a writer that died before publishing left behind,
-/// goes first; otherwise the older.
-fn choose_slot(header: &Header, base: &CommitRecord, durable: &CommitRecord) -> usize {
+/// The slot for the new record, and whether a barrier has to come before it.
+///
+/// The slot holds neither the published commit nor the durable commit, nor
+/// the commit that `last_barrier`, the selector a power cut can bring back,
+/// names with its unsynced bit clear: recovery would trust that record
+/// without checking it. When no slot qualifies, or `last_barrier` is unknown,
+/// the commit issues a barrier first, which makes the published commit's
+/// selector the one a power cut brings back. Of two candidates, one holding a
+/// record newer than the published commit, which a writer that died before
+/// publishing left behind, goes first; otherwise the older.
+fn choose_slot(
+    header: &Header,
+    base: &CommitRecord,
+    durable: &CommitRecord,
+    last_barrier: Option<Selector>,
+) -> (usize, bool) {
     let mut candidates: Vec<usize> = (0..SLOT_COUNT)
         .filter(|slot| *slot != header.selector.slot)
         .filter(|slot| header.records[*slot].is_none_or(|record| record.txn != durable.txn))
@@ -459,7 +496,16 @@ fn choose_slot(header: &Header, base: &CommitRecord, durable: &CommitRecord) -> 
         (txn <= base.txn, txn)
     });
 
-    candidates[0]
+    let trusted = match last_barrier {
+        Some(selector) if selector.unsynced => None,
+        Some(selector) => Some(selector.slot),
+        None => return (candidates[0], true),
+    };
+
+    match candidates.iter().find(|slot| Some(**slot) != trusted) {
+        Some(slot) => (*slot, false),
+        None => (candidates[0], true),
+    }
 }
 
 /// The free runs of the free tree rooted at `root`.

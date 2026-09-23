@@ -1,11 +1,12 @@
 //! Real processes killed while they write: `SIGKILL` on Unix-like systems,
 //! `TerminateProcess` on Windows.
 //!
-//! The test binary runs itself as the child. The child commits in a loop and
-//! prints each transaction id it has committed; the parent kills it at a
-//! random moment, opens the file, and checks that every commit the child
-//! reported is there. Without a power cut, the operating system still holds
-//! everything the child wrote, so not even the commit in flight may be torn.
+//! The test binary runs itself as the child. The child commits in a loop,
+//! sync and deferred commits in turn, and prints each round it has committed;
+//! the parent kills it at a random moment, opens the file, and checks that
+//! every commit the child reported is there. Without a power cut, the
+//! operating system still holds everything the child wrote, so neither a
+//! deferred commit nor the commit in flight may be lost or torn.
 //!
 //! `DARUDB_KILL_ROUNDS` sets how many times the child is killed; the default
 //! keeps the suite quick, and a longer run is one environment variable away.
@@ -59,7 +60,12 @@ fn child_writer() {
             txn.remove("log", &(round - 1).to_be_bytes()).unwrap();
         }
 
-        txn.commit().unwrap();
+        if round % 2 == 0 {
+            txn.commit_deferred().unwrap();
+        } else {
+            txn.commit().unwrap();
+        }
+
         println!("{round}");
         round += 1;
     }
