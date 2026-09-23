@@ -24,9 +24,7 @@ Tentative, like the architecture it builds. Each phase ends on a criterion a tes
 
 Phase 0 is done: [design/](design/README.md) holds the accepted file format, commit and recovery protocol, and locking protocol.
 
-Phase 1 is in progress. Done: the file format for plain files, the copy-on-write B+tree, sync and deferred commits, recovery, and the crash suites, which pass at thousands of simulated cuts and hundreds of real process kills. Left for phase 1:
-
-- **Batching and read-ahead.** Pages are written one call each, and an overflow run is read one page at a time. The benchmarks of phase 4 say how much that matters.
+Phase 1 is done: the file format for plain files, the copy-on-write B+tree, sync and deferred commits, recovery, and the crash suites, which pass at thousands of simulated cuts and hundreds of real process kills. `examples/kernel_bench.rs` measures the kernel.
 
 ## Open questions
 

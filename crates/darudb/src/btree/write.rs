@@ -488,25 +488,32 @@ fn store_value<S: Store>(
     let len = value.len() as u64;
     let pages = overflow_pages(page_size, len);
     let first = store.allocate_run(pages)?;
-    let mut checks = Vec::with_capacity(16 * value.len().div_ceil(content_len(page_size)));
+    let chunk = content_len(page_size);
+    let mut checks = Vec::with_capacity(16 * value.len().div_ceil(chunk));
+    let mut index = 0u64;
 
-    for (index, part) in value.chunks(content_len(page_size)).enumerate() {
-        let mut bytes = vec![0u8; page_size];
+    // A run of pages at a time, each written with one call.
+    for parts in value.chunks(chunk * store.run_pages()) {
+        let run_first = first + index;
+        let mut bytes = vec![0u8; parts.len().div_ceil(chunk) * page_size];
 
-        PageHeader {
-            kind: PageKind::Overflow,
-            level: 0,
-            count: 0,
-            txn: store.txn(),
-            tree,
-            index: index as u64,
+        for (part, page) in parts.chunks(chunk).zip(bytes.chunks_mut(page_size)) {
+            PageHeader {
+                kind: PageKind::Overflow,
+                level: 0,
+                count: 0,
+                txn: store.txn(),
+                tree,
+                index,
+            }
+            .write(page);
+            page[CONTENT_OFFSET..CONTENT_OFFSET + part.len()].copy_from_slice(part);
+            index += 1;
         }
-        .write(&mut bytes);
-        bytes[CONTENT_OFFSET..CONTENT_OFFSET + part.len()].copy_from_slice(part);
 
-        let check = store.write_page(first + index as u64, &mut bytes)?;
-
-        checks.extend_from_slice(&check.0);
+        for check in store.write_run(run_first, &mut bytes)? {
+            checks.extend_from_slice(&check.0);
+        }
     }
 
     Ok(StoredValue::Overflow(OverflowRef {

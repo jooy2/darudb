@@ -235,8 +235,19 @@ fn write_and_publish(
 
     pages.sort_unstable_by_key(|page| page.page);
 
-    for page in &pages {
-        pager.write_sealed(page.page, &page.bytes)?;
+    // Consecutive pages go out together, a run at a time.
+    for run in pages
+        .chunk_by(|before, after| after.page == before.page + 1)
+        .flat_map(|run| run.chunks(pager.run_pages()))
+    {
+        match run {
+            [page] => pager.write_sealed_run(page.page, &page.bytes)?,
+            _ => {
+                let bytes: Vec<&[u8]> = run.iter().map(|page| page.bytes.as_slice()).collect();
+
+                pager.write_sealed_run(run[0].page, &bytes.concat())?;
+            }
+        }
     }
 
     // The file has to hold every page the record counts, including pages at

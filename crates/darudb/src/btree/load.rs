@@ -91,26 +91,39 @@ impl Load for Loader {
         let chunk = content_len(self.pager.page_size());
         let len = usize::try_from(reference.len)
             .map_err(|_| self.corrupted(reference.first, "holds a value too large for memory"))?;
+        let page_size = self.pager.page_size();
         let mut value = Vec::with_capacity(len);
         let mut checks = Vec::with_capacity(reference.pages as usize * 16);
+        let mut index = 0u64;
 
-        for index in 0..u64::from(reference.pages) {
-            let page = reference.first + index;
-            let (bytes, check) = self.pager.read_self_checked(page)?;
-            let header = PageHeader::read(&bytes).map_err(|reason| self.corrupted(page, reason))?;
+        // A run of pages at a time, each read with one call.
+        while index < u64::from(reference.pages) {
+            let left = usize::try_from(u64::from(reference.pages) - index).unwrap_or(usize::MAX);
+            let (bytes, run_checks) = self
+                .pager
+                .read_run_self_checked(reference.first + index, left.min(self.pager.run_pages()))?;
 
-            if header.kind != PageKind::Overflow
-                || header.tree != tree
-                || header.txn != reference.txn
-                || header.index != index
-            {
-                return Err(self.corrupted(page, "is not the overflow page its reference names"));
+            for (bytes, check) in bytes.chunks(page_size).zip(run_checks) {
+                let page = reference.first + index;
+                let header =
+                    PageHeader::read(bytes).map_err(|reason| self.corrupted(page, reason))?;
+
+                if header.kind != PageKind::Overflow
+                    || header.tree != tree
+                    || header.txn != reference.txn
+                    || header.index != index
+                {
+                    return Err(
+                        self.corrupted(page, "is not the overflow page its reference names")
+                    );
+                }
+
+                let take = chunk.min(len - value.len());
+
+                value.extend_from_slice(&bytes[CONTENT_OFFSET..CONTENT_OFFSET + take]);
+                checks.extend_from_slice(&check.0);
+                index += 1;
             }
-
-            let take = chunk.min(len - value.len());
-
-            value.extend_from_slice(&bytes[CONTENT_OFFSET..CONTENT_OFFSET + take]);
-            checks.extend_from_slice(&check.0);
         }
 
         if Check::of(&[&checks]) != reference.check {

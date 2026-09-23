@@ -350,8 +350,12 @@ impl Store for Space {
         }
     }
 
-    fn write_page(&mut self, page: u64, bytes: &mut [u8]) -> Result<Check> {
-        self.pager.write(page, bytes)
+    fn write_run(&mut self, first: u64, bytes: &mut [u8]) -> Result<Vec<Check>> {
+        self.pager.write_run(first, bytes)
+    }
+
+    fn run_pages(&self) -> usize {
+        self.pager.run_pages()
     }
 }
 

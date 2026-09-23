@@ -13,6 +13,11 @@ use super::FileIo;
 use crate::error::{Error, Result};
 use crate::format::{Check, page_check, seal, stored_check};
 
+/// The most bytes one read or write of consecutive pages moves at once: few
+/// enough calls into the operating system for a long run, and a bounded
+/// buffer for a large value.
+const RUN_BYTES: usize = 1 << 20;
+
 /// Page-sized reads and writes on one database file.
 #[derive(Debug)]
 pub(crate) struct Pager {
@@ -40,6 +45,11 @@ impl Pager {
         &self.path
     }
 
+    /// How many consecutive pages one read or write moves at most.
+    pub(crate) fn run_pages(&self) -> usize {
+        (RUN_BYTES / self.page_size).max(1)
+    }
+
     /// Reads page `page` and verifies it against `expected`.
     pub(crate) fn read(&self, page: u64, expected: &Check) -> Result<Vec<u8>> {
         let bytes = self.read_unverified(page)?;
@@ -51,54 +61,83 @@ impl Pager {
         Ok(bytes)
     }
 
-    /// Reads page `page` and verifies it against the check stored in the page
-    /// itself, which it returns. For overflow pages, whose parent keeps one
+    /// Reads `count` consecutive pages from `first` on, in one call, and
+    /// verifies each against the check stored in the page itself. Returns the
+    /// bytes and each page's check. For overflow pages, whose parent keeps one
     /// check for the whole run.
-    pub(crate) fn read_self_checked(&self, page: u64) -> Result<(Vec<u8>, Check)> {
-        let bytes = self.read_unverified(page)?;
-        let check = stored_check(&bytes);
+    pub(crate) fn read_run_self_checked(
+        &self,
+        first: u64,
+        count: usize,
+    ) -> Result<(Vec<u8>, Vec<Check>)> {
+        let mut bytes = vec![0u8; count * self.page_size];
 
-        if page_check(page, &bytes) != check {
-            return Err(self.corrupted(format!("page {page} fails its check")));
+        self.read_into(first, &mut bytes)?;
+
+        let mut checks = Vec::with_capacity(count);
+
+        for (page, content) in (first..).zip(bytes.chunks(self.page_size)) {
+            let check = stored_check(content);
+
+            if page_check(page, content) != check {
+                return Err(self.corrupted(format!("page {page} fails its check")));
+            }
+
+            checks.push(check);
         }
 
-        Ok((bytes, check))
+        Ok((bytes, checks))
     }
 
     fn read_unverified(&self, page: u64) -> Result<Vec<u8>> {
         let mut bytes = vec![0u8; self.page_size];
-        let offset = self.offset(page)?;
 
-        match self.io.read_at(&mut bytes, offset) {
-            Ok(()) => Ok(bytes),
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                Err(self.corrupted(format!("page {page} lies past the end of the file")))
-            }
+        self.read_into(page, &mut bytes)?;
+
+        Ok(bytes)
+    }
+
+    /// Fills `bytes` with the pages from `first` on.
+    fn read_into(&self, first: u64, bytes: &mut [u8]) -> Result<()> {
+        match self.io.read_at(bytes, self.offset(first)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Err(self.corrupted(
+                format!("a read from page {first} on runs past the end of the file"),
+            )),
             Err(source) => Err(self.io_error(source)),
         }
     }
 
-    /// Seals `bytes` with its check and writes it as page `page`. Returns the
-    /// check, which the page's parent records.
-    pub(crate) fn write(&self, page: u64, bytes: &mut [u8]) -> Result<Check> {
-        debug_assert_eq!(bytes.len(), self.page_size);
+    /// Seals each page of `bytes`, consecutive pages from `first` on, with its
+    /// check, and writes them in one call. Returns the checks, which the
+    /// pages' parents record.
+    pub(crate) fn write_run(&self, first: u64, bytes: &mut [u8]) -> Result<Vec<Check>> {
+        debug_assert_eq!(bytes.len() % self.page_size, 0);
 
-        let check = seal(page, bytes);
+        let checks = (first..)
+            .zip(bytes.chunks_mut(self.page_size))
+            .map(|(page, content)| seal(page, content))
+            .collect();
 
         self.io
-            .write_at(bytes, self.offset(page)?)
+            .write_at(bytes, self.offset(first)?)
             .map_err(|source| self.io_error(source))?;
 
-        Ok(check)
+        Ok(checks)
     }
 
-    /// Writes page `page`, already sealed with its check.
-    pub(crate) fn write_sealed(&self, page: u64, bytes: &[u8]) -> Result<()> {
-        debug_assert_eq!(bytes.len(), self.page_size);
-        debug_assert_eq!(page_check(page, bytes), stored_check(bytes));
+    /// Writes consecutive pages from `first` on, each already sealed with its
+    /// check, in one call.
+    pub(crate) fn write_sealed_run(&self, first: u64, bytes: &[u8]) -> Result<()> {
+        debug_assert_eq!(bytes.len() % self.page_size, 0);
+        debug_assert!(
+            (first..)
+                .zip(bytes.chunks(self.page_size))
+                .all(|(page, content)| page_check(page, content) == stored_check(content))
+        );
 
         self.io
-            .write_at(bytes, self.offset(page)?)
+            .write_at(bytes, self.offset(first)?)
             .map_err(|source| self.io_error(source))
     }
 

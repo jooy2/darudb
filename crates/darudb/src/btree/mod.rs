@@ -59,7 +59,11 @@ pub(crate) trait Store {
     /// reader and no recovery can need it.
     fn release(&mut self, page: u64);
 
-    /// Seals and writes page `page` right away. Used for overflow runs, whose
-    /// content is final as soon as it is known.
-    fn write_page(&mut self, page: u64, bytes: &mut [u8]) -> Result<Check>;
+    /// Seals and writes consecutive pages from `first` on right away, in one
+    /// call, and returns their checks. Used for overflow runs, whose content
+    /// is final as soon as it is known.
+    fn write_run(&mut self, first: u64, bytes: &mut [u8]) -> Result<Vec<Check>>;
+
+    /// How many pages [`write_run`](Self::write_run) should get at most.
+    fn run_pages(&self) -> usize;
 }

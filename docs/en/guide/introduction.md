@@ -48,7 +48,6 @@ The storage kernel works, for one process at a time:
 
 The work ahead, in order:
 
-1. **Storage kernel**: measuring the kernel, then batching its disk access and keeping its free space in memory between transactions.
 1. **Encryption**: page encryption and key management, with the same test suite passing with encryption on and off.
 1. **Several processes**: the file lock protocol, tested by fuzzing concurrent processes that are killed at random.
 1. **Objects and queries**: schemas, indexes, queries and migrations, with benchmarks.

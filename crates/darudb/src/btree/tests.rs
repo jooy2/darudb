@@ -65,8 +65,13 @@ impl Store for TestStore {
         }
     }
 
-    fn write_page(&mut self, page: u64, bytes: &mut [u8]) -> Result<Check> {
-        self.pager.write(page, bytes)
+    fn write_run(&mut self, first: u64, bytes: &mut [u8]) -> Result<Vec<Check>> {
+        self.pager.write_run(first, bytes)
+    }
+
+    fn run_pages(&self) -> usize {
+        // Short runs, so that a value of a few pages takes several writes.
+        2
     }
 }
 
@@ -128,9 +133,13 @@ impl Harness {
         }
 
         for mut page in pages {
-            let check = self.store.pager.write(page.page, &mut page.bytes).unwrap();
+            let checks = self
+                .store
+                .pager
+                .write_run(page.page, &mut page.bytes)
+                .unwrap();
 
-            assert_eq!(check, page.pointer.check);
+            assert_eq!(checks, [page.pointer.check]);
         }
 
         self.store.txn += 1;
