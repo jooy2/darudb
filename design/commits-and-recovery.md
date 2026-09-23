@@ -157,12 +157,12 @@ Recovery runs when a process opens the file and finds that no other process has 
 
 ### Choosing the commit
 
-1. Read the static fields, the selector and the three records. Keep the valid records whose page count fits in the file.
+1. Read the static fields, the selector and the three records. Keep the valid records whose page count fits in the file. A record that counts more pages than the file holds is not a candidate: the writes that grew the file did not all survive.
 1. Go through them from the newest transaction id to the oldest, and adopt the first one that is either
    - the published commit, with the unsynced bit clear, which is known to be durable; or
    - a commit that passes [checking](#checking-a-commit).
 1. If none qualifies, the file is damaged beyond what recovery repairs: `CORRUPTED`.
-1. If the adopted commit is not the published one, or the unsynced bit was set: issue a barrier, erase every record newer than the adopted one, write the selector with the adopted slot and the unsynced bit clear, and issue another barrier.
+1. Every other valid record whose transaction id is not below the adopted one's is stale, including one the file is too short for: once the file grows again, it would look whole. If the adopted commit is not the published one, the unsynced bit was set, or a record is stale: issue a barrier, erase the stale records, write the selector with the adopted slot and the unsynced bit clear, and issue another barrier.
 1. If the file is longer than the adopted commit's page count, truncate it.
 
 Recovery always finds a commit, because the durable commit always qualifies. Its record is never overwritten, since its slot is never chosen. Its pages are never reused, since `R` is never above it. And it is either published with the unsynced bit clear, or it passes checking: the pages its own window wrote are live in it and therefore intact, and every older page it reaches was durable before it was written.

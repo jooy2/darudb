@@ -399,6 +399,46 @@ fn a_failed_barrier_makes_the_database_unusable_until_reopened() {
 }
 
 #[test]
+fn recovery_erases_a_newer_record_the_file_is_too_short_for() {
+    let disk = Arc::new(SimDisk::default());
+    let db = Database::create_io(disk.clone(), 4096).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"key", b"value").unwrap();
+    txn.commit().unwrap();
+
+    let header = db.shared().header();
+    let published = header.published().unwrap();
+    let slot = (header.selector.slot + 1) % crate::format::SLOT_COUNT;
+
+    drop(db);
+
+    // What a power cut can leave: a whole record of a later commit, whose
+    // writes that grew the file were lost.
+    let mut image = disk.current();
+    let pages = image.len() as u64 / 4096;
+    let stale = crate::format::CommitRecord {
+        txn: published.txn + 1,
+        page_count: pages + 3,
+        ..published
+    };
+    let at = crate::format::slot_offset(slot);
+
+    image[at..at + crate::format::RECORD_LEN].copy_from_slice(&stale.encode(slot));
+
+    let disk = Arc::new(SimDisk::from_image(image));
+    let db = Database::open_io(disk.clone(), &OpenOptions::new()).unwrap();
+
+    assert_eq!(db.shared().header().records[slot], None);
+    assert_eq!(
+        crate::format::CommitRecord::decode(slot, &disk.current()[at..]).ok(),
+        Some(None),
+        "the record is erased, not just skipped, so a longer file cannot revive it"
+    );
+    assert_eq!(contents(&db)["t"].len(), 1);
+}
+
+#[test]
 fn a_reader_keeps_its_snapshot_while_the_file_changes_under_it() {
     let db = Database::create_io(Arc::new(SimDisk::default()), 4096).unwrap();
     let mut txn = db.begin_write().unwrap();

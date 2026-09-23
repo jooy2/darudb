@@ -22,18 +22,19 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
     let selector = Selector::decode(bytes[SELECTOR_OFFSET])
         .map_err(|reason| pager.corrupted(reason.to_owned()))?;
     let file_pages = pager.file_len()? / pager.page_size() as u64;
-    let mut records = [None; SLOT_COUNT];
+    let mut intact = [None; SLOT_COUNT];
 
-    for (slot, record) in records.iter_mut().enumerate() {
-        let start = slot_offset(slot);
-
-        // A record that fails its check or does not fit in the file is not a
-        // candidate. That is what a torn or lost write of a record looks like.
-        *record = CommitRecord::decode(slot, &bytes[start..])
+    for (slot, record) in intact.iter_mut().enumerate() {
+        // A record that fails its check is what a torn or lost write of a
+        // record looks like.
+        *record = CommitRecord::decode(slot, &bytes[slot_offset(slot)..])
             .ok()
-            .flatten()
-            .filter(|record| record.page_count <= file_pages);
+            .flatten();
     }
+
+    // Nor is a record that counts more pages than the file holds a candidate:
+    // the writes that grew the file did not all survive.
+    let mut records = intact.map(|record| record.filter(|record| record.page_count <= file_pages));
 
     let mut candidates: Vec<(usize, CommitRecord)> = records
         .iter()
@@ -59,8 +60,20 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
         return Err(pager.corrupted("no commit record in the header can be used".to_owned()));
     };
 
-    if slot != selector.slot || selector.unsynced {
-        publish_recovered(pager, &mut records, slot, &record)?;
+    // Every other record at least as new as the adopted one goes: those newer
+    // lost the race to the disk, and one the file is too short for now would
+    // look whole again once the file grows.
+    let stale: Vec<usize> = (0..SLOT_COUNT)
+        .filter(|other| *other != slot)
+        .filter(|other| intact[*other].is_some_and(|stale| stale.txn >= record.txn))
+        .collect();
+
+    if slot != selector.slot || selector.unsynced || !stale.is_empty() {
+        publish_recovered(pager, &stale, slot)?;
+
+        for other in stale {
+            records[other] = None;
+        }
     }
 
     if pager.file_len()? > record.page_count * pager.page_size() as u64 {
@@ -77,13 +90,8 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<Header> {
 }
 
 /// Makes the adopted commit the published and durable one: a barrier, the
-/// records newer than it erased, the selector written, another barrier.
-fn publish_recovered(
-    pager: &Pager,
-    records: &mut [Option<CommitRecord>; SLOT_COUNT],
-    slot: usize,
-    record: &CommitRecord,
-) -> Result<()> {
+/// stale records erased, the selector written, another barrier.
+fn publish_recovered(pager: &Pager, stale: &[usize], slot: usize) -> Result<()> {
     let sync = |pager: &Pager| {
         pager.sync().map_err(|source| Error::SyncFailed {
             path: pager.path().to_path_buf(),
@@ -93,11 +101,8 @@ fn publish_recovered(
 
     sync(pager)?;
 
-    for (other, candidate) in records.iter_mut().enumerate() {
-        if other != slot && candidate.is_some_and(|candidate| candidate.txn > record.txn) {
-            pager.write_header(&[0u8; crate::format::RECORD_LEN], slot_offset(other))?;
-            *candidate = None;
-        }
+    for other in stale {
+        pager.write_header(&[0u8; crate::format::RECORD_LEN], slot_offset(*other))?;
     }
 
     let selector = Selector {
