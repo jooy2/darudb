@@ -66,11 +66,11 @@ From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lo
 
 Tests sit beside what they test, plus three places that test the whole engine:
 
-- `src/crash.rs`: the phase 1 crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. `DARUDB_CRASH_SEEDS` makes it longer.
+- `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. Half the runs use an encrypted file. `DARUDB_CRASH_SEEDS` makes it longer.
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
 - `tests/transactions.rs` and `tests/open.rs`: the public API on real files.
 
-`examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
+`examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
 
 ## Scope **[Decided]**
 

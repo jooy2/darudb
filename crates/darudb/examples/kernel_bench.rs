@@ -1,5 +1,6 @@
 //! Measures the storage kernel on this machine: commits, bulk writes, reads,
-//! large values, and commits over fragmented free space.
+//! large values, and commits over fragmented free space, on a plain file and
+//! on an encrypted one, and the cost of opening a file with a password.
 //!
 //! ```text
 //! cargo run -p darudb --release --example kernel_bench [directory]
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
-use darudb::{Database, OpenOptions};
+use darudb::OpenOptions;
 
 /// Keys in the bulk and read workloads.
 const KEYS: u64 = 200_000;
@@ -31,17 +32,25 @@ fn main() -> Outcome {
 
     fs::create_dir_all(&directory)?;
 
-    let outcome = run(&directory);
+    let mut encrypted = OpenOptions::new();
+
+    encrypted.key([0x42; 32]);
+
+    let outcome = run(&directory.join("plain"), "plain file", &OpenOptions::new())
+        .and_then(|()| run(&directory.join("encrypted"), "encrypted file", &encrypted))
+        .and_then(|()| password(&directory.join("password")));
 
     fs::remove_dir_all(&directory)?;
 
     outcome
 }
 
-fn run(directory: &Path) -> Outcome {
-    println!("{:<44} {:>12} {:>14}", "workload", "per second", "each");
+fn run(directory: &Path, label: &str, options: &OpenOptions) -> Outcome {
+    fs::create_dir_all(directory)?;
+    println!("\n{label:<44} {:>12} {:>14}", "per second", "each");
 
-    let db = open(directory, "commits.darudb")?;
+    let open = |name: &str| options.open(directory.join(name));
+    let db = open("commits.darudb")?;
 
     measure("sync commit, one 100-byte value", 500, |round| {
         let mut txn = db.begin_write()?;
@@ -57,7 +66,7 @@ fn run(directory: &Path) -> Outcome {
     })?;
     db.close()?;
 
-    let db = open(directory, "bulk.darudb")?;
+    let db = open("bulk.darudb")?;
     let mut bulk = Some(db.begin_write()?);
 
     measure(
@@ -110,7 +119,7 @@ fn run(directory: &Path) -> Outcome {
     )?;
     db.close()?;
 
-    let db = open(directory, "large.darudb")?;
+    let db = open("large.darudb")?;
     let large = vec![3u8; 256 * 1024];
 
     measure("deferred commit, one 256 KiB value", 400, |round| {
@@ -129,8 +138,21 @@ fn run(directory: &Path) -> Outcome {
     Ok(())
 }
 
-fn open(directory: &Path, name: &str) -> Result<Database, darudb::Error> {
-    OpenOptions::new().open(directory.join(name))
+/// Opening a file with a password, at the default hashing cost.
+fn password(directory: &Path) -> Outcome {
+    fs::create_dir_all(directory)?;
+    println!("\n{:<44} {:>12} {:>14}", "password", "per second", "each");
+
+    let path = directory.join("password.darudb");
+    let mut options = OpenOptions::new();
+
+    options.password("a password of reasonable length");
+    options.open(&path)?.close()?;
+    measure("open, Argon2id at the default cost", 5, |_| {
+        options.open(&path)?.close()
+    })?;
+
+    Ok(())
 }
 
 /// Runs `step` `count` times and prints how fast it went.
