@@ -1,0 +1,39 @@
+{
+  "name": "darudb-docs",
+  "version": "0.0.1",
+  "description": "The documentation site for DaruDB, shared by every language the database ships for.",
+  "private": true,
+  "type": "module",
+  "author": "CDGet <jooy2.contact@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "changelog": "node scripts/copy-changelog.mjs",
+    "dev": "npm run changelog && vitepress dev",
+    "build": "npm run changelog && vitepress build",
+    "serve": "npm run build && vitepress serve",
+    "lint": "eslint . --report-unused-disable-directives",
+    "lint:fix": "eslint . --report-unused-disable-directives --fix",
+    "format": "prettier .",
+    "format:fix": "prettier . --write",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.2",
+    "@typescript-eslint/parser": "^8.70.1",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-n": "^18.3.0",
+    "globals": "^17.12.0",
+    "jiti": "^2.7.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitepress": "^1.6.4",
+    "vitepress-i18n": "^1.4.0",
+    "vitepress-sidebar": "^1.40.0"
+  }
+}
