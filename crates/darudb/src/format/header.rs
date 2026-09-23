@@ -1,74 +1,88 @@
-//! The file header, which opens page 0 of every database file.
+//! Page 0: the static fields, the selector and the three commit slots.
 //!
-//! The header says what the file is and how to read the rest of it. Today it
-//! holds three fields, all little-endian:
+//! | Offset | Size | Content                                  |
+//! | ------ | ---- | ---------------------------------------- |
+//! | 0      | 64   | Static fields, written once              |
+//! | 64     | 1    | Selector                                 |
+//! | 512    | 512  | Slot 0                                   |
+//! | 1024   | 512  | Slot 1                                   |
+//! | 1536   | 512  | Slot 2                                   |
 //!
-//! | Offset | Size | Field                                              |
-//! | ------ | ---- | -------------------------------------------------- |
-//! | 0      | 8    | [`MAGIC`](super::MAGIC)                            |
-//! | 8      | 4    | The file format version                            |
-//! | 12     | 4    | The page size, in bytes                            |
-//!
-//! The rest of page 0 is reserved and written as zeros. The two commit slots,
-//! the flag byte that picks between them, and the header's own checksum come
-//! with the storage kernel, together with the format version that describes
-//! them.
+//! The rest of page 0 is reserved. Each part sits in a 512-byte sector of its
+//! own, so that on a disk with 512-byte sectors a write to one slot cannot
+//! damage another. `design/file-format.md` is the specification.
 
-use super::{FORMAT_VERSION, MAGIC, is_valid_page_size};
+use super::check::{CHECK_LEN, Check};
+use super::{FORMAT_VERSION, MAGIC, is_valid_page_size, le_u32};
 
-/// The number of bytes of page 0 the header occupies.
-pub(crate) const HEADER_LEN: usize = 16;
+/// The size of the static fields, in bytes.
+pub(crate) const STATIC_LEN: usize = 64;
 
-/// The fields of a file header, decoded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FileHeader {
-    /// The file format version the file was written in.
-    pub(crate) format_version: u32,
-    /// The size of every page in the file, in bytes.
-    pub(crate) page_size: u32,
+/// Where the selector byte is.
+pub(crate) const SELECTOR_OFFSET: usize = 64;
+
+/// The number of commit slots.
+pub(crate) const SLOT_COUNT: usize = 3;
+
+/// The size of one commit slot, in bytes.
+pub(crate) const SLOT_LEN: usize = 512;
+
+/// How many bytes at the start of page 0 mean anything: the static fields, the
+/// selector and the slots.
+pub(crate) const HEADER_LEN: usize = 2048;
+
+/// Where the static check starts: it covers every byte before it.
+const STATIC_CHECK_OFFSET: usize = STATIC_LEN - CHECK_LEN;
+
+/// Where slot `slot` starts in the file.
+pub(crate) fn slot_offset(slot: usize) -> usize {
+    SLOT_LEN * (slot + 1)
 }
 
-/// Why a run of bytes is not a header this build can use.
-///
-/// This module knows nothing about paths, so the caller turns each of these
-/// into an [`Error`](crate::Error) that names the file.
+/// The fields written once, when the file is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StaticHeader {
+    /// The size of every page, in bytes.
+    pub(crate) page_size: u32,
+    /// 16 random bytes that identify the file.
+    pub(crate) file_id: [u8; 16],
+}
+
+/// Why the bytes at the start of a file are not a header this build can use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HeaderError {
-    /// Too short to be a header, or not starting with [`MAGIC`](super::MAGIC).
+    /// Too short to hold the static fields, or not starting with the magic.
     NotADatabase,
-    /// A DaruDB header in another format version, whose layout past the
-    /// version field this build cannot know.
+    /// A DaruDB header in another format version.
     UnsupportedVersion(u32),
-    /// A page size no DaruDB file can have, so the header has been damaged.
-    InvalidPageSize(u32),
+    /// A header of this version whose content is impossible.
+    Damaged(&'static str),
 }
 
-impl FileHeader {
-    /// The header of a new file in this build's format version.
-    pub(crate) fn new(page_size: u32) -> Self {
-        Self {
-            format_version: FORMAT_VERSION,
-            page_size,
-        }
-    }
-
-    /// The header as the bytes written at offset 0 of the file.
-    pub(crate) fn encode(&self) -> [u8; HEADER_LEN] {
-        let mut bytes = [0u8; HEADER_LEN];
+impl StaticHeader {
+    /// The static fields as the first 64 bytes of the file.
+    pub(crate) fn encode(&self) -> [u8; STATIC_LEN] {
+        let mut bytes = [0u8; STATIC_LEN];
 
         bytes[0..8].copy_from_slice(&MAGIC);
-        bytes[8..12].copy_from_slice(&self.format_version.to_le_bytes());
+        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
         bytes[12..16].copy_from_slice(&self.page_size.to_le_bytes());
+        bytes[16..32].copy_from_slice(&self.file_id);
+        // Byte 32 is the cipher: 0, a plain file. Encryption arrives in phase 2.
+
+        let check = Check::of(&[&bytes[..STATIC_CHECK_OFFSET]]);
+
+        check.write(&mut bytes[STATIC_CHECK_OFFSET..]);
 
         bytes
     }
 
-    /// Reads a header from the bytes at offset 0 of a file.
+    /// Reads the static fields from the start of a file.
     ///
-    /// The version is checked before anything after it, because a header in
-    /// another version may lay out the rest differently.
+    /// The magic and the version are checked before the static check, because
+    /// a file in another version may not have one where this version does.
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, HeaderError> {
-        let Some(bytes) = bytes.get(..HEADER_LEN) else {
+        let Some(bytes) = bytes.get(..STATIC_LEN) else {
             return Err(HeaderError::NotADatabase);
         };
 
@@ -76,124 +90,190 @@ impl FileHeader {
             return Err(HeaderError::NotADatabase);
         }
 
-        let format_version = read_u32(bytes, 8);
+        let format_version = le_u32(bytes, 8);
 
         if format_version != FORMAT_VERSION {
             return Err(HeaderError::UnsupportedVersion(format_version));
         }
 
-        let page_size = read_u32(bytes, 12);
-
-        if !is_valid_page_size(page_size) {
-            return Err(HeaderError::InvalidPageSize(page_size));
+        if Check::of(&[&bytes[..STATIC_CHECK_OFFSET]]) != Check::read(&bytes[STATIC_CHECK_OFFSET..])
+        {
+            return Err(HeaderError::Damaged("the static fields fail their check"));
         }
 
-        Ok(Self {
-            format_version,
-            page_size,
-        })
+        let page_size = le_u32(bytes, 12);
+
+        if !is_valid_page_size(page_size) {
+            return Err(HeaderError::Damaged("the page size is not a valid one"));
+        }
+
+        if bytes[32] != 0 {
+            return Err(HeaderError::Damaged(
+                "the file is encrypted, which this build cannot read yet",
+            ));
+        }
+
+        let mut file_id = [0u8; 16];
+
+        file_id.copy_from_slice(&bytes[16..32]);
+
+        Ok(Self { page_size, file_id })
     }
 }
 
-/// The little-endian `u32` at `offset`. The caller has checked the length.
-fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    let mut field = [0u8; 4];
+/// The selector byte: which slot holds the published commit, and whether that
+/// commit may not be durable yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Selector {
+    /// The slot holding the published commit: 0, 1 or 2.
+    pub(crate) slot: usize,
+    /// Set while the published commit is a deferred commit that no barrier has
+    /// confirmed yet.
+    pub(crate) unsynced: bool,
+}
 
-    field.copy_from_slice(&bytes[offset..offset + 4]);
+impl Selector {
+    /// The selector as its byte.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a slot number is 0, 1 or 2"
+    )]
+    pub(crate) fn encode(&self) -> u8 {
+        debug_assert!(self.slot < SLOT_COUNT);
 
-    u32::from_le_bytes(field)
+        let slot = self.slot as u8;
+
+        if self.unsynced { slot | 0b100 } else { slot }
+    }
+
+    /// Reads the selector byte.
+    pub(crate) fn decode(byte: u8) -> Result<Self, &'static str> {
+        if byte & !0b111 != 0 {
+            return Err("the selector has a reserved bit set");
+        }
+
+        let slot = usize::from(byte & 0b11);
+
+        if slot >= SLOT_COUNT {
+            return Err("the selector names a slot that does not exist");
+        }
+
+        Ok(Self {
+            slot,
+            unsynced: byte & 0b100 != 0,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 
-    #[test]
-    fn a_header_reads_back_as_it_was_written() {
-        for page_size in [MIN_PAGE_SIZE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE] {
-            let header = FileHeader::new(page_size);
-
-            assert_eq!(FileHeader::decode(&header.encode()), Ok(header));
+    fn header() -> StaticHeader {
+        StaticHeader {
+            page_size: 4096,
+            file_id: *b"0123456789abcdef",
         }
     }
 
     #[test]
-    fn the_layout_is_the_documented_one() {
-        let bytes = FileHeader::new(4096).encode();
+    fn the_static_fields_read_back_as_they_were_written() {
+        assert_eq!(StaticHeader::decode(&header().encode()), Ok(header()));
+    }
+
+    #[test]
+    fn the_static_layout_is_the_documented_one() {
+        let bytes = header().encode();
 
         assert_eq!(&bytes[0..8], b"\x89DaruDB\n");
-        assert_eq!(&bytes[8..12], &FORMAT_VERSION.to_le_bytes());
-        assert_eq!(&bytes[12..16], &[0x00, 0x10, 0x00, 0x00]);
+        assert_eq!(&bytes[8..12], &2u32.to_le_bytes());
+        assert_eq!(&bytes[12..16], &4096u32.to_le_bytes());
+        assert_eq!(&bytes[16..32], b"0123456789abcdef");
+        assert_eq!(bytes[32], 0, "the cipher of a plain file");
+        assert_eq!(&bytes[33..48], &[0; 15]);
+        assert_eq!(Check::read(&bytes[48..]), Check::of(&[&bytes[..48]]));
     }
 
     #[test]
-    fn bytes_after_the_header_are_ignored() {
-        let mut page = vec![0xAB; 4096];
-
-        page[..HEADER_LEN].copy_from_slice(&FileHeader::new(4096).encode());
-
-        assert_eq!(FileHeader::decode(&page), Ok(FileHeader::new(4096)));
-    }
-
-    #[test]
-    fn too_few_bytes_are_not_a_database() {
-        let bytes = FileHeader::new(4096).encode();
-
-        assert_eq!(FileHeader::decode(&[]), Err(HeaderError::NotADatabase));
+    fn the_parts_of_page_zero_sit_where_the_specification_puts_them() {
+        assert_eq!(SELECTOR_OFFSET, 64);
         assert_eq!(
-            FileHeader::decode(&bytes[..HEADER_LEN - 1]),
+            (0..SLOT_COUNT).map(slot_offset).collect::<Vec<_>>(),
+            [512, 1024, 1536]
+        );
+        assert_eq!(slot_offset(SLOT_COUNT - 1) + SLOT_LEN, HEADER_LEN);
+    }
+
+    #[test]
+    fn too_few_bytes_or_other_leading_bytes_are_not_a_database() {
+        let bytes = header().encode();
+        let mut other = bytes;
+
+        other[0] = b'D';
+
+        assert_eq!(
+            StaticHeader::decode(&bytes[..63]),
             Err(HeaderError::NotADatabase)
         );
+        assert_eq!(StaticHeader::decode(&other), Err(HeaderError::NotADatabase));
     }
 
     #[test]
-    fn other_leading_bytes_are_not_a_database() {
-        let mut bytes = FileHeader::new(4096).encode();
+    fn another_version_is_reported_before_anything_else_is_judged() {
+        let mut bytes = header().encode();
 
-        bytes[0] = b'D';
-
-        assert_eq!(FileHeader::decode(&bytes), Err(HeaderError::NotADatabase));
-    }
-
-    #[test]
-    fn another_format_version_is_reported_with_its_number() {
-        let mut bytes = FileHeader::new(4096).encode();
-
-        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+        // Format version 1 had no static check, so it must not be the reason.
+        bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
 
         assert_eq!(
-            FileHeader::decode(&bytes),
-            Err(HeaderError::UnsupportedVersion(FORMAT_VERSION + 1))
+            StaticHeader::decode(&bytes),
+            Err(HeaderError::UnsupportedVersion(1))
         );
     }
 
     #[test]
-    fn the_version_is_checked_before_the_page_size() {
-        // A header in another version may keep something else where this one
-        // keeps the page size, so that field must not be judged first.
-        let mut bytes = FileHeader::new(4096).encode();
+    fn a_changed_static_byte_fails_the_check() {
+        let mut bytes = header().encode();
 
-        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
-        bytes[12..16].copy_from_slice(&3u32.to_le_bytes());
+        bytes[20] ^= 1;
 
-        assert_eq!(
-            FileHeader::decode(&bytes),
-            Err(HeaderError::UnsupportedVersion(FORMAT_VERSION + 1))
-        );
+        assert!(matches!(
+            StaticHeader::decode(&bytes),
+            Err(HeaderError::Damaged(_))
+        ));
     }
 
     #[test]
-    fn an_impossible_page_size_is_reported() {
-        for page_size in [0, 3, 4095, MIN_PAGE_SIZE / 2, MAX_PAGE_SIZE * 2] {
-            let mut bytes = FileHeader::new(4096).encode();
+    fn page_sizes_below_4096_are_refused() {
+        let mut header = header();
 
-            bytes[12..16].copy_from_slice(&page_size.to_le_bytes());
+        header.page_size = 2048;
 
-            assert_eq!(
-                FileHeader::decode(&bytes),
-                Err(HeaderError::InvalidPageSize(page_size))
-            );
+        assert!(matches!(
+            StaticHeader::decode(&header.encode()),
+            Err(HeaderError::Damaged(_))
+        ));
+    }
+
+    #[test]
+    fn the_selector_reads_back_and_refuses_what_it_cannot_mean() {
+        for slot in 0..SLOT_COUNT {
+            for unsynced in [false, true] {
+                let selector = Selector { slot, unsynced };
+
+                assert_eq!(Selector::decode(selector.encode()), Ok(selector));
+            }
         }
+
+        assert_eq!(
+            Selector {
+                slot: 2,
+                unsynced: true
+            }
+            .encode(),
+            0b110
+        );
+        assert!(Selector::decode(0b011).is_err(), "slot 3");
+        assert!(Selector::decode(0b1000).is_err(), "a reserved bit");
     }
 }

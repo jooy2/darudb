@@ -85,7 +85,7 @@ describe('Database.open', () => {
   it('refuses a page size that is not a power of two in range', (context) => {
     const dir = tempDir(context);
 
-    for (const pageSize of [0, 256, 1000, 131072]) {
+    for (const pageSize of [0, 512, 2048, 1000, 131072]) {
       assertCode(
         () => Database.open(join(dir, `app-${pageSize}.darudb`), { pageSize }),
         'INVALID_ARGUMENT'

@@ -12,6 +12,14 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[dependencies]
+# XXH3-128, the check of a plain page. MIT, and with these features it pulls in
+# nothing else.
+twox-hash.workspace = true
+# Random file ids and temporary file names, from the operating system.
+# MIT OR Apache-2.0.
+getrandom.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 

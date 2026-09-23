@@ -199,7 +199,7 @@ Each of these was tried elsewhere and caused the problems this project exists to
 
 ## Things that surprise
 
-- **The file format is a draft.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The header today holds only the magic bytes, the format version and the page size; the commit slots and checksums arrive with the storage kernel.
+- **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
 - **`packages/node/index.js` and `index.d.ts` are generated** by `npm run build` from the `#[napi]` items in `src/lib.rs`, together with the `.node` addon, and all three are git-ignored. The TypeScript types a consumer sees are whatever the Rust source says.
 - **`npm test` in `packages/node` runs against the addon that is already built.** A change to the engine does not reach the Node.js tests until `npm run build` runs again.
 - **The workflows run only when started by hand** (`workflow_dispatch`), because the account's GitHub Actions minutes are short for now. Local runs are the normal check. Each workflow file says where the `push` and `pull_request` triggers go when that changes.

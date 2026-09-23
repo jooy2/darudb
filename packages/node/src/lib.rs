@@ -42,7 +42,7 @@ pub struct OpenOptions {
     /// error whose `code` is `NOT_FOUND`. An existing file is never replaced.
     pub create: Option<bool>,
     /// The page size of a newly created database, in bytes: a power of two
-    /// from 512 to 65536. Defaults to 4096. An existing database keeps the page
+    /// from 4096 to 65536. Defaults to 4096. An existing database keeps the page
     /// size recorded in its file.
     pub page_size: Option<u32>,
 }

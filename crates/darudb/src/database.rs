@@ -4,7 +4,10 @@ use std::io;
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::format::{FileHeader, HEADER_LEN, HeaderError};
+use crate::format::{
+    CommitRecord, HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector,
+    StaticHeader, slot_offset,
+};
 use crate::options::OpenOptions;
 use crate::storage::{self, DbFile};
 
@@ -15,7 +18,7 @@ use crate::storage::{self, DbFile};
 #[derive(Debug)]
 pub struct Database {
     file: DbFile,
-    header: FileHeader,
+    header: StaticHeader,
 }
 
 impl Database {
@@ -36,9 +39,10 @@ impl Database {
         self.header.page_size
     }
 
-    /// The file format version recorded in the file.
+    /// The file format version of the file, which is the one this build reads
+    /// and writes: a file in any other version is refused when it is opened.
     pub fn format_version(&self) -> u32 {
-        self.header.format_version
+        crate::FORMAT_VERSION
     }
 
     /// Flushes the file to the storage device and closes it.
@@ -63,44 +67,38 @@ impl Database {
 
 /// Creates a database at `path`, or returns `None` if a file is already there.
 ///
-/// The file is created with `create_new`, so an existing file is never
-/// truncated, and page 0 is synced before anything else can rely on it.
-///
-/// Two processes creating the same database at once can still collide: one
-/// may open the file between the other's creating it and writing its header,
-/// find it empty, and be refused with `NOT_A_DATABASE`. The file is not damaged
-/// and a retry succeeds. The lock protocol closes this by writing the header
-/// under the writer lock.
+/// See [`storage::create_file`] for why the path never holds half a database.
 fn create(path: &Path, page_size: u32) -> Result<Option<Database>> {
-    let file = match DbFile::create_new(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
-        Err(source) => return Err(io_error(path, source)),
+    let mut file_id = [0u8; 16];
+
+    getrandom::fill(&mut file_id).map_err(|error| io_error(path, io::Error::other(error)))?;
+
+    let header = StaticHeader { page_size, file_id };
+    let published = CommitRecord::first();
+    let page = first_page(&header, &published);
+
+    let Some(file) = storage::create_file(path, &page).map_err(|source| io_error(path, source))?
+    else {
+        return Ok(None);
     };
-
-    let header = FileHeader::new(page_size);
-
-    if let Err(source) = write_first_page(&file, &header) {
-        // Leave nothing behind that a later open would refuse as damaged, so
-        // that the caller can simply try again.
-        drop(file);
-        let _ = std::fs::remove_file(path);
-
-        return Err(io_error(path, source));
-    }
-
-    storage::sync_parent_dir(path).map_err(|source| io_error(path, source))?;
 
     Ok(Some(Database { file, header }))
 }
 
-/// Writes page 0, the header followed by zeros, and syncs it.
-fn write_first_page(file: &DbFile, header: &FileHeader) -> io::Result<()> {
+/// Page 0 of a new database: the static fields, the selector pointing at
+/// slot 0, and the first commit in slot 0.
+fn first_page(header: &StaticHeader, first: &CommitRecord) -> Vec<u8> {
     let mut page = vec![0u8; header.page_size as usize];
+    let selector = Selector {
+        slot: 0,
+        unsynced: false,
+    };
 
-    page[..HEADER_LEN].copy_from_slice(&header.encode());
-    file.write_all_at(&page, 0)?;
-    file.sync_all()
+    page[..STATIC_LEN].copy_from_slice(&header.encode());
+    page[SELECTOR_OFFSET] = selector.encode();
+    page[slot_offset(0)..slot_offset(1)].copy_from_slice(&first.encode(0));
+
+    page
 }
 
 /// Opens the database file already at `path` and validates its header.
@@ -116,28 +114,42 @@ fn open_existing(path: &Path) -> Result<Database> {
     };
 
     let len = file.len().map_err(|source| io_error(path, source))?;
-
-    if len < HEADER_LEN as u64 {
-        return Err(Error::NotADatabase {
-            path: path.to_path_buf(),
-        });
-    }
-
-    let mut bytes = [0u8; HEADER_LEN];
+    let header_len = usize::try_from(len).map_or(HEADER_LEN, |len| len.min(HEADER_LEN));
+    let mut bytes = vec![0u8; header_len];
 
     file.read_exact_at(&mut bytes, 0)
         .map_err(|source| io_error(path, source))?;
 
-    let header = FileHeader::decode(&bytes).map_err(|error| header_error(path, error))?;
+    let header = StaticHeader::decode(&bytes).map_err(|error| header_error(path, error))?;
 
     if len < u64::from(header.page_size) {
-        return Err(Error::Corrupted {
-            path: path.to_path_buf(),
-            reason: format!(
+        return Err(corrupted(
+            path,
+            format!(
                 "the file is {len} bytes long, shorter than its first page of {} bytes",
                 header.page_size
             ),
-        });
+        ));
+    }
+
+    let selector =
+        Selector::decode(bytes[SELECTOR_OFFSET]).map_err(|reason| corrupted(path, reason))?;
+
+    debug_assert!(selector.slot < SLOT_COUNT);
+
+    let start = slot_offset(selector.slot);
+    let published = CommitRecord::decode(selector.slot, &bytes[start..])
+        .map_err(|reason| corrupted(path, format!("the published commit: {reason}")))?
+        .ok_or_else(|| corrupted(path, "the selector points at an empty slot"))?;
+
+    if published.page_count > len / u64::from(header.page_size) {
+        return Err(corrupted(
+            path,
+            format!(
+                "the published commit counts {} pages, more than the file holds",
+                published.page_count
+            ),
+        ));
     }
 
     Ok(Database { file, header })
@@ -147,6 +159,13 @@ fn io_error(path: &Path, source: io::Error) -> Error {
     Error::Io {
         path: path.to_path_buf(),
         source,
+    }
+}
+
+fn corrupted(path: &Path, reason: impl Into<String>) -> Error {
+    Error::Corrupted {
+        path: path.to_path_buf(),
+        reason: reason.into(),
     }
 }
 
@@ -160,9 +179,9 @@ fn header_error(path: &Path, error: HeaderError) -> Error {
             found,
             supported: crate::FORMAT_VERSION,
         },
-        HeaderError::InvalidPageSize(size) => Error::Corrupted {
+        HeaderError::Damaged(reason) => Error::Corrupted {
             path,
-            reason: format!("the header records a page size of {size} bytes"),
+            reason: reason.to_owned(),
         },
     }
 }

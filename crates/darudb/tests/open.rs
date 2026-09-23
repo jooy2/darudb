@@ -69,7 +69,7 @@ fn a_missing_database_is_not_created_when_creating_is_off() {
 fn a_page_size_that_is_not_a_power_of_two_in_range_is_refused() {
     let dir = TestDir::new();
 
-    for page_size in [0, 256, 1000, 131072] {
+    for page_size in [0, 512, 2048, 1000, 131072] {
         let path = dir.path(&format!("app-{page_size}.darudb"));
         let error = OpenOptions::new()
             .page_size(page_size)

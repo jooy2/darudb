@@ -41,7 +41,3 @@ The skeleton that exists today sits before phase 1: a Cargo workspace, the engin
 - **Performance goal**: the benchmark workloads, and the durability settings to compare at.
 - **Default page size.** 4096 bytes today, which is a placeholder rather than a measured choice.
 - **Minimum supported Rust version.** `rust-version` is 1.85 today, the first release with the 2024 edition. Whether to hold it there is open.
-
-## Confirmed
-
-- **Two processes creating the same new database at once can collide.** `create` in `crates/darudb/src/database.rs` makes the file with `create_new` and then writes the header, so a second process that opens the file between those two steps finds it empty and is refused with `NOT_A_DATABASE`. The file is not damaged, and a retry succeeds. The accepted design closes it by writing a new database to a temporary file and moving it into place without replacing anything.

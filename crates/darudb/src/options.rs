@@ -41,7 +41,7 @@ impl OpenOptions {
 
     /// The page size of a newly created database, in bytes.
     ///
-    /// A power of two from 512 to 65536. It only applies when the database is
+    /// A power of two from 4096 to 65536. It only applies when the database is
     /// created: an existing file keeps the page size recorded in its header.
     /// The default, 4096, is provisional until the benchmarks settle it.
     pub fn page_size(&mut self, bytes: u32) -> &mut Self {

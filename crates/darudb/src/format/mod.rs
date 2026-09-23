@@ -3,21 +3,30 @@
 //! Everything in this module is a pure function over bytes: nothing here opens
 //! a file or knows a path. That keeps every rule about the on-disk layout
 //! testable without a disk, and keeps the layout in one place, where a change
-//! to it is easy to see in review.
+//! to it is easy to see in review. `design/file-format.md` is the
+//! specification this module implements, and its tests pin the offsets the
+//! specification documents.
 //!
 //! Any change to what is written to disk changes [`FORMAT_VERSION`]. Until the
 //! first release there are no migrations between versions: a file in another
 //! version is refused when it is opened.
 
+mod check;
 mod header;
+mod pointer;
+mod record;
 
-pub(crate) use header::{FileHeader, HEADER_LEN, HeaderError};
+pub(crate) use header::{
+    HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector, StaticHeader,
+    slot_offset,
+};
+pub(crate) use record::CommitRecord;
 
 /// The file format version this build of the library reads and writes.
 ///
 /// It is recorded in every file's header. A file with another version is
 /// refused with [`Error::UnsupportedFormatVersion`](crate::Error::UnsupportedFormatVersion).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The first eight bytes of every DaruDB file.
 ///
@@ -34,16 +43,39 @@ pub(crate) const MAGIC: [u8; 8] = *b"\x89DaruDB\n";
 /// mapping it into memory.
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 4096;
 
-/// The smallest page size a database may use.
-pub(crate) const MIN_PAGE_SIZE: u32 = 512;
+/// The smallest page size a database may use. Page 0 needs 2048 bytes, and
+/// smaller pages would save nothing on storage whose sectors are 4096 bytes.
+pub(crate) const MIN_PAGE_SIZE: u32 = 4096;
 
 /// The largest page size a database may use.
 pub(crate) const MAX_PAGE_SIZE: u32 = 65536;
+
+/// The id of the first tree created by the layers above the storage kernel.
+/// Ids below it belong to the engine.
+pub(crate) const FIRST_USER_TREE: u64 = 16;
 
 /// Whether `size` can be a database's page size: a power of two between
 /// [`MIN_PAGE_SIZE`] and [`MAX_PAGE_SIZE`], inclusive.
 pub(crate) fn is_valid_page_size(size: u32) -> bool {
     size.is_power_of_two() && (MIN_PAGE_SIZE..=MAX_PAGE_SIZE).contains(&size)
+}
+
+/// The little-endian `u32` at `offset`. The caller has checked the length.
+pub(crate) fn le_u32(bytes: &[u8], offset: usize) -> u32 {
+    let mut field = [0u8; 4];
+
+    field.copy_from_slice(&bytes[offset..offset + 4]);
+
+    u32::from_le_bytes(field)
+}
+
+/// The little-endian `u64` at `offset`. The caller has checked the length.
+pub(crate) fn le_u64(bytes: &[u8], offset: usize) -> u64 {
+    let mut field = [0u8; 8];
+
+    field.copy_from_slice(&bytes[offset..offset + 8]);
+
+    u64::from_le_bytes(field)
 }
 
 #[cfg(test)]
@@ -58,6 +90,7 @@ mod tests {
         assert!(is_valid_page_size(MAX_PAGE_SIZE));
 
         assert!(!is_valid_page_size(0));
+        assert!(!is_valid_page_size(512));
         assert!(!is_valid_page_size(MIN_PAGE_SIZE / 2));
         assert!(!is_valid_page_size(MAX_PAGE_SIZE * 2));
         assert!(!is_valid_page_size(4097));
