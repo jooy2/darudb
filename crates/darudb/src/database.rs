@@ -100,6 +100,38 @@ impl Database {
 
         Ok(Self { shared })
     }
+
+    /// Opens a database whose file is `io`, bypassing the file system: the
+    /// crash tests open their simulated disks with it.
+    #[cfg(test)]
+    pub(crate) fn open_io(io: Arc<dyn FileIo>, options: &OpenOptions) -> Result<Self> {
+        Ok(Self {
+            shared: open_io(io, Path::new("simulated.darudb"), options)?,
+        })
+    }
+
+    /// Writes a new database onto the empty `io` and opens it.
+    #[cfg(test)]
+    pub(crate) fn create_io(io: Arc<dyn FileIo>, page_size: u32) -> Result<Self> {
+        let header = StaticHeader {
+            page_size,
+            file_id: [7; 16],
+        };
+        let page = first_page(&header, &CommitRecord::first());
+        let path = Path::new("simulated.darudb");
+
+        io.write_at(&page, 0)
+            .map_err(|source| io_error(path, source))?;
+        io.sync().map_err(|source| io_error(path, source))?;
+
+        Self::open_io(io, &OpenOptions::new())
+    }
+
+    /// The instance behind this handle, for the engine's own tests.
+    #[cfg(test)]
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        &self.shared
+    }
 }
 
 /// Reads the static fields of the file, runs recovery, and builds the shared

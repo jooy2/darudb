@@ -26,6 +26,8 @@ struct State {
     durable: Vec<u8>,
     current: Vec<u8>,
     pending: Vec<Pending>,
+    fail_syncs: bool,
+    budget: Option<usize>,
 }
 
 /// A file that lives in memory and can lose power.
@@ -42,12 +44,45 @@ impl SimDisk {
                 durable: image.clone(),
                 current: image,
                 pending: Vec::new(),
+                fail_syncs: false,
+                budget: None,
             }),
         }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// What the operating system holds: the file a process sees, and what
+    /// survives when only the process dies.
+    pub(crate) fn current(&self) -> Vec<u8> {
+        self.state().current.clone()
+    }
+
+    /// Makes every later barrier fail, the way a disk that stopped accepting
+    /// writes would.
+    pub(crate) fn fail_syncs(&self) {
+        self.state().fail_syncs = true;
+    }
+
+    /// Lets `operations` more writes, barriers and length changes through,
+    /// then fails every one after them: the process stopped there.
+    pub(crate) fn stop_after(&self, operations: usize) {
+        self.state().budget = Some(operations);
+    }
+
+    /// Takes one operation from the budget, failing once it is spent.
+    fn spend(state: &mut State) -> io::Result<()> {
+        match &mut state.budget {
+            None => Ok(()),
+            Some(0) => Err(io::Error::other("the simulated process has stopped")),
+            Some(left) => {
+                *left -= 1;
+
+                Ok(())
+            }
+        }
     }
 
     /// What a power cut right now could leave on the disk.
@@ -104,6 +139,8 @@ impl FileIo for SimDisk {
         let mut state = self.state();
         let offset = usize::try_from(offset).map_err(io::Error::other)?;
 
+        Self::spend(&mut state)?;
+
         if state.current.len() < offset + buf.len() {
             state.current.resize(offset + buf.len(), 0);
         }
@@ -120,6 +157,12 @@ impl FileIo for SimDisk {
     fn sync(&self) -> io::Result<()> {
         let mut state = self.state();
 
+        Self::spend(&mut state)?;
+
+        if state.fail_syncs {
+            return Err(io::Error::other("the simulated disk refused to sync"));
+        }
+
         state.durable = state.current.clone();
         state.pending.clear();
 
@@ -134,6 +177,7 @@ impl FileIo for SimDisk {
         let mut state = self.state();
         let len = usize::try_from(len).map_err(io::Error::other)?;
 
+        Self::spend(&mut state)?;
         state.current.resize(len, 0);
         state.pending.push(Pending::SetLen(len));
 

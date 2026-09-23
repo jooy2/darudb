@@ -43,6 +43,8 @@
 //! protocol this crate implements, and `CLAUDE.md` has the whole map.
 
 mod btree;
+#[cfg(test)]
+mod crash;
 mod database;
 mod error;
 mod format;
