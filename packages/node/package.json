@@ -1,0 +1,85 @@
+{
+  "name": "darudb",
+  "version": "0.1.0",
+  "description": "An embedded database that keeps an application's data in one local file. The Node.js binding of the DaruDB engine.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "author": "CDGet <jooy2.contact@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://darudb.cdget.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jooy2/darudb",
+    "directory": "packages/node"
+  },
+  "bugs": {
+    "url": "https://github.com/jooy2/darudb/issues"
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "lint": "eslint . --report-unused-disable-directives",
+    "lint:fix": "eslint . --report-unused-disable-directives --fix",
+    "format": "prettier .",
+    "format:fix": "prettier . --write",
+    "prepublishOnly": "napi prepublish -t npm",
+    "version": "napi version"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "napi": {
+    "binaryName": "darudb",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "i686-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "armv7-unknown-linux-gnueabihf",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-unknown-freebsd",
+      "aarch64-linux-android",
+      "armv7-linux-androideabi"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "darudb",
+    "database",
+    "embedded-database",
+    "local-database",
+    "file-database",
+    "storage",
+    "encryption",
+    "encrypted-database",
+    "offline",
+    "native",
+    "napi",
+    "rust",
+    "typescript"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@napi-rs/cli": "^3.10.5",
+    "@types/node": "^26.5.1",
+    "@typescript-eslint/parser": "^8.70.0",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-n": "^18.3.0",
+    "globals": "^17.12.0",
+    "jiti": "^2.7.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.0"
+  }
+}

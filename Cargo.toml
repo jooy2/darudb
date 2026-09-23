@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/darudb"]
+members = ["crates/darudb", "packages/node"]
 
 # What every crate in the repository shares. The version is not here: each
 # package versions on its own, so each manifest carries its own number.
@@ -17,3 +17,10 @@ homepage = "https://darudb.cdget.com"
 
 [workspace.dependencies]
 darudb = { path = "crates/darudb", version = "0.1.0" }
+
+# Applies to what this workspace builds, which in practice means the Node.js
+# addon: a consumer of the `darudb` crate builds with its own profile.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"

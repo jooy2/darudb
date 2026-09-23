@@ -1,0 +1,21 @@
+[package]
+name = "darudb-node"
+version = "0.1.0"
+description = "The Node.js binding of DaruDB. Published to npm as `darudb`, never to crates.io."
+publish = false
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+darudb.workspace = true
+napi = "3.13.0"
+napi-derive = "3.6.9"
+
+[build-dependencies]
+napi-build = "2.5.0"
