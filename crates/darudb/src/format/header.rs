@@ -103,3 +103,97 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 
     u32::from_le_bytes(field)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::{DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
+
+    #[test]
+    fn a_header_reads_back_as_it_was_written() {
+        for page_size in [MIN_PAGE_SIZE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE] {
+            let header = FileHeader::new(page_size);
+
+            assert_eq!(FileHeader::decode(&header.encode()), Ok(header));
+        }
+    }
+
+    #[test]
+    fn the_layout_is_the_documented_one() {
+        let bytes = FileHeader::new(4096).encode();
+
+        assert_eq!(&bytes[0..8], b"\x89DaruDB\n");
+        assert_eq!(&bytes[8..12], &FORMAT_VERSION.to_le_bytes());
+        assert_eq!(&bytes[12..16], &[0x00, 0x10, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn bytes_after_the_header_are_ignored() {
+        let mut page = vec![0xAB; 4096];
+
+        page[..HEADER_LEN].copy_from_slice(&FileHeader::new(4096).encode());
+
+        assert_eq!(FileHeader::decode(&page), Ok(FileHeader::new(4096)));
+    }
+
+    #[test]
+    fn too_few_bytes_are_not_a_database() {
+        let bytes = FileHeader::new(4096).encode();
+
+        assert_eq!(FileHeader::decode(&[]), Err(HeaderError::NotADatabase));
+        assert_eq!(
+            FileHeader::decode(&bytes[..HEADER_LEN - 1]),
+            Err(HeaderError::NotADatabase)
+        );
+    }
+
+    #[test]
+    fn other_leading_bytes_are_not_a_database() {
+        let mut bytes = FileHeader::new(4096).encode();
+
+        bytes[0] = b'D';
+
+        assert_eq!(FileHeader::decode(&bytes), Err(HeaderError::NotADatabase));
+    }
+
+    #[test]
+    fn another_format_version_is_reported_with_its_number() {
+        let mut bytes = FileHeader::new(4096).encode();
+
+        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+
+        assert_eq!(
+            FileHeader::decode(&bytes),
+            Err(HeaderError::UnsupportedVersion(FORMAT_VERSION + 1))
+        );
+    }
+
+    #[test]
+    fn the_version_is_checked_before_the_page_size() {
+        // A header in another version may keep something else where this one
+        // keeps the page size, so that field must not be judged first.
+        let mut bytes = FileHeader::new(4096).encode();
+
+        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+        bytes[12..16].copy_from_slice(&3u32.to_le_bytes());
+
+        assert_eq!(
+            FileHeader::decode(&bytes),
+            Err(HeaderError::UnsupportedVersion(FORMAT_VERSION + 1))
+        );
+    }
+
+    #[test]
+    fn an_impossible_page_size_is_reported() {
+        for page_size in [0, 3, 4095, MIN_PAGE_SIZE / 2, MAX_PAGE_SIZE * 2] {
+            let mut bytes = FileHeader::new(4096).encode();
+
+            bytes[12..16].copy_from_slice(&page_size.to_le_bytes());
+
+            assert_eq!(
+                FileHeader::decode(&bytes),
+                Err(HeaderError::InvalidPageSize(page_size))
+            );
+        }
+    }
+}

@@ -128,3 +128,107 @@ impl std::error::Error for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every variant once, with the code it has to keep.
+    ///
+    /// The codes are a contract with every language binding and every program
+    /// that matches on them, so this list changes only by adding to it. A new
+    /// variant belongs here too.
+    fn every_error() -> Vec<(Error, &'static str)> {
+        let path = PathBuf::from("app.darudb");
+
+        vec![
+            (
+                Error::Io {
+                    path: path.clone(),
+                    source: io::Error::other("disk on fire"),
+                },
+                "IO",
+            ),
+            (Error::NotFound { path: path.clone() }, "NOT_FOUND"),
+            (Error::NotADatabase { path: path.clone() }, "NOT_A_DATABASE"),
+            (
+                Error::UnsupportedFormatVersion {
+                    path: path.clone(),
+                    found: 2,
+                    supported: 1,
+                },
+                "UNSUPPORTED_FORMAT_VERSION",
+            ),
+            (
+                Error::Corrupted {
+                    path,
+                    reason: "a reason".to_owned(),
+                },
+                "CORRUPTED",
+            ),
+            (
+                Error::InvalidArgument {
+                    message: "a message".to_owned(),
+                },
+                "INVALID_ARGUMENT",
+            ),
+            (Error::Closed, "CLOSED"),
+        ]
+    }
+
+    #[test]
+    fn every_error_keeps_its_released_code() {
+        for (error, code) in every_error() {
+            assert_eq!(error.code(), code, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn codes_are_unique_and_screaming_snake_case() {
+        let codes: Vec<_> = every_error()
+            .iter()
+            .map(|(error, _)| error.code())
+            .collect();
+
+        for (index, code) in codes.iter().enumerate() {
+            assert!(!codes[..index].contains(code), "`{code}` is used twice");
+            assert!(
+                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+                "`{code}` is not SCREAMING_SNAKE_CASE"
+            );
+        }
+    }
+
+    #[test]
+    fn a_message_names_the_file() {
+        for (error, _) in every_error() {
+            let named = matches!(
+                error,
+                Error::Io { .. }
+                    | Error::NotFound { .. }
+                    | Error::NotADatabase { .. }
+                    | Error::UnsupportedFormatVersion { .. }
+                    | Error::Corrupted { .. }
+            );
+
+            if named {
+                assert!(error.to_string().contains("app.darudb"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_io_error_keeps_what_the_system_reported_as_its_source() {
+        use std::error::Error as _;
+
+        let error = Error::Io {
+            path: PathBuf::from("app.darudb"),
+            source: io::Error::other("disk on fire"),
+        };
+
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("disk on fire")
+        );
+    }
+}

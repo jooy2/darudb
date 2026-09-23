@@ -45,3 +45,27 @@ pub(crate) const MAX_PAGE_SIZE: u32 = 65536;
 pub(crate) fn is_valid_page_size(size: u32) -> bool {
     size.is_power_of_two() && (MIN_PAGE_SIZE..=MAX_PAGE_SIZE).contains(&size)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_sizes_are_powers_of_two_within_the_bounds() {
+        assert!(is_valid_page_size(MIN_PAGE_SIZE));
+        assert!(is_valid_page_size(DEFAULT_PAGE_SIZE));
+        assert!(is_valid_page_size(16384));
+        assert!(is_valid_page_size(MAX_PAGE_SIZE));
+
+        assert!(!is_valid_page_size(0));
+        assert!(!is_valid_page_size(MIN_PAGE_SIZE / 2));
+        assert!(!is_valid_page_size(MAX_PAGE_SIZE * 2));
+        assert!(!is_valid_page_size(4097));
+        assert!(!is_valid_page_size(12288));
+    }
+
+    #[test]
+    fn the_default_page_size_is_a_valid_one() {
+        assert!(is_valid_page_size(DEFAULT_PAGE_SIZE));
+    }
+}

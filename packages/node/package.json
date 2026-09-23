@@ -22,6 +22,7 @@
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "test": "node --test",
     "lint": "eslint . --report-unused-disable-directives",
     "lint:fix": "eslint . --report-unused-disable-directives --fix",
     "format": "prettier .",

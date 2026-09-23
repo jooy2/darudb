@@ -1,0 +1,68 @@
+name: run-test-rust
+
+on:
+  # Started by hand only, for now: the account's GitHub Actions minutes are
+  # short, and the same checks run locally (see CONTRIBUTING.md). To run this on
+  # every change, add the triggers below back in.
+  #
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - crates/**
+  #     - packages/*/src/**
+  #     - Cargo.toml
+  #     - Cargo.lock
+  #     - rust-toolchain.toml
+  #     - clippy.toml
+  #     - .github/workflows/run-test-rust.yml
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Format and lint
+
+    steps:
+      - uses: actions/checkout@v5
+      # `rustup` is on every runner, and the first `cargo` command installs the
+      # toolchain `rust-toolchain.toml` pins, with rustfmt and clippy.
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  msrv:
+    runs-on: ubuntu-latest
+    name: The oldest supported Rust
+
+    # `rust-version` in the root `Cargo.toml` is a promise to anyone depending
+    # on the crate, and nothing else in CI builds with that compiler. Only the
+    # engine is checked: the Node.js binding is built with the pinned toolchain
+    # and never by a consumer's compiler.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust 1.85
+        run: rustup toolchain install 1.85 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the engine with Rust 1.85
+        run: cargo +1.85 test -p darudb
+
+  run-test-rust:
+    runs-on: ${{ matrix.os }}
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace

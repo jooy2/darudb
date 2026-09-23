@@ -1,0 +1,81 @@
+name: run-test-node
+
+on:
+  # Started by hand only, for now: the account's GitHub Actions minutes are
+  # short, and the same checks run locally (see CONTRIBUTING.md). To run this on
+  # every change, add the triggers below back in.
+  #
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     # The addon is the engine compiled in, so a change to either is a change
+  #     # to what these tests load.
+  #     - crates/**
+  #     - packages/node/**
+  #     - Cargo.toml
+  #     - Cargo.lock
+  #     - rust-toolchain.toml
+  #     - .github/workflows/run-test-node.yml
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: ./packages/node
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: Lint
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        name: Setup Node.js
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/node/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Check formatting
+        run: npx prettier . --check
+
+  run-test-node:
+    runs-on: ${{ matrix.os }}
+    name: Test Node.js ${{ matrix.node_version }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Node.js line on Linux, and the active LTS on the other
+        # two. Node-API is ABI-stable, so a line that passes on one operating
+        # system is not expected to fail on another; the operating systems are
+        # here for the engine's file handling, which is what differs.
+        include:
+          - { os: ubuntu-latest, node_version: '20' }
+          - { os: ubuntu-latest, node_version: '22' }
+          - { os: ubuntu-latest, node_version: '24' }
+          - { os: ubuntu-latest, node_version: '26' }
+          - { os: windows-latest, node_version: '24' }
+          - { os: macos-latest, node_version: '24' }
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        name: Setup Node.js ${{ matrix.node_version }}
+        with:
+          node-version: ${{ matrix.node_version }}
+          cache: npm
+          cache-dependency-path: packages/node/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      # The release build, which is what would be published.
+      - name: Build the addon
+        run: npm run build
+      - name: Test
+        run: npm test

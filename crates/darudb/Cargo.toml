@@ -12,6 +12,9 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints.rust]
 # The engine is safe Rust. A module that genuinely needs `unsafe` (a file range
 # lock through the operating system, for instance) says why in the commit that

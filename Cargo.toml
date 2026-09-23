@@ -17,6 +17,7 @@ homepage = "https://darudb.cdget.com"
 
 [workspace.dependencies]
 darudb = { path = "crates/darudb", version = "0.1.0" }
+tempfile = "3.27.0"
 
 # Applies to what this workspace builds, which in practice means the Node.js
 # addon: a consumer of the `darudb` crate builds with its own profile.
