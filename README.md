@@ -42,6 +42,7 @@ The Rust crate is the engine itself. The other packages bind it to their languag
 | `crates/darudb` | The engine and the Rust API                     | `cargo test -p darudb` from the repository root                        |
 | `packages/node` | The Node.js binding                             | `cd packages/node && npm install`, then `npm run build` and `npm test` |
 | `docs`          | The documentation site, shared by every package | `cd docs && npm install`, then `npm run dev`                           |
+| `design`        | The engine's specifications                     | Read, in English                                                       |
 
 The root holds the Cargo workspace and no JavaScript manifest. Each JavaScript folder is entered and run on its own. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 

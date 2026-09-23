@@ -22,6 +22,8 @@ Tentative, like the architecture it builds. Each phase ends on a criterion a tes
 | 5. Bindings and release | Dart build hooks, napi-rs, per-platform prebuilt binaries                              | A CI matrix that includes the oldest supported operating systems                               |
 | 6. Tools                | Integrity check, salvage, backup, compaction                                           | Data recovered from deliberately damaged files                                                 |
 
+Phase 0 is drafted: [design/](design/README.md) holds the file format, the commit and recovery protocol and the locking protocol, awaiting review.
+
 The skeleton that exists today sits before phase 1: a Cargo workspace, the engine's module layout, a file header that is written and validated, a Node.js binding that opens and closes a database, test suites in both languages, and the documentation site.
 
 ## Open questions
@@ -29,15 +31,18 @@ The skeleton that exists today sits before phase 1: a Cargo workspace, the engin
 - **Final minimum OS and runtime versions.** If Windows 7 and 8 are needed, the Tier 3 Rust targets have to be built by us.
 - **JavaScript runtimes beyond Node.js**: Electron (whose main and renderer are themselves several processes), React Native, Bun, Deno.
 - **Minimum Dart and Flutter versions.** Build hooks need Dart 3.10 or Flutter 3.38 at least.
-- **Encryption**: the final cipher and KDF, and the shape of the key-management API.
-- **Several processes in v1**: several writing processes, or one writer and many readers first?
+- **Encryption**: the final cipher and KDF, and the shape of the key-management API. The file format draft proposes XChaCha20-Poly1305 and Argon2id.
+- **Several processes in v1**: several writing processes, or one writer and many readers first? The locking draft lets any process write, one at a time.
 - **Query API form**: string queries, a builder, or both.
 - **Schema migrations**: how they are declared and when they run.
-- **File format versioning**: the forward and backward compatibility policy, and whether an older file is upgraded on open or by an explicit call.
+- **File format versioning**: the forward and backward compatibility policy, and whether an older file is upgraded on open or by an explicit call. The drafts settle only the pre-release rule: no migrations until the first release.
+- **Busy timeout**: how long opening and writing wait for another process by default before failing with `BUSY`.
+- **Unsynced window limits**: how many pages and how much time deferred commits may accumulate before the engine issues a barrier of its own.
+- **iOS App Group containers**: iOS terminates a suspended app that holds a file lock in one, and the open lock is held while a database is open. Whether to offer a mode for such apps that does without it.
 - **Performance goal**: the benchmark workloads, and the durability settings to compare at.
 - **Default page size.** 4096 bytes today, which is a placeholder rather than a measured choice.
 - **Minimum supported Rust version.** `rust-version` is 1.85 today, the first release with the 2024 edition. Whether to hold it there is open.
 
 ## Confirmed
 
-- **Two processes creating the same new database at once can collide.** `create` in `crates/darudb/src/database.rs` makes the file with `create_new` and then writes the header, so a second process that opens the file between those two steps finds it empty and is refused with `NOT_A_DATABASE`. The file is not damaged, and a retry succeeds. Phase 3 closes this by writing the header under the writer lock.
+- **Two processes creating the same new database at once can collide.** `create` in `crates/darudb/src/database.rs` makes the file with `create_new` and then writes the header, so a second process that opens the file between those two steps finds it empty and is refused with `NOT_A_DATABASE`. The file is not damaged, and a retry succeeds. The commits draft closes it by writing a new database to a temporary file and moving it into place without replacing anything.

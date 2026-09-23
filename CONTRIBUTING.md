@@ -30,10 +30,13 @@ The repository holds one database engine, written in Rust, the bindings that shi
 | `crates/darudb` | The engine and the Rust API, the crate `darudb`  | `cargo test -p darudb` from the repository root                        |
 | `packages/node` | The Node.js binding, the npm package `darudb`    | `cd packages/node && npm install`, then `npm run build` and `npm test` |
 | `docs`          | The documentation site, shared by every language | `cd docs && npm install`, then `npm run dev`                           |
+| `design`        | The engine's specifications, in English only     | Read before changing the file format, commits, recovery or locking     |
 
 The repository root holds the Cargo workspace (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`) and nothing for JavaScript. There is no root `package.json` and no npm workspace: each JavaScript folder is entered and installed on its own.
 
 A Dart binding is planned and will live in `packages/dart`.
+
+`design/` specifies the file format, the commit and recovery protocol and the locking protocol. A change to any of them updates the matching document in the same commit.
 
 ## One engine, thin bindings
 

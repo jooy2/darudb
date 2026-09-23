@@ -1,6 +1,6 @@
 # Working in this repository
 
-What a reader has to know before changing anything here, and where to find the rest. [CONTRIBUTING.md](CONTRIBUTING.md) has the full procedure and every command; this file is the map, the requirements and the design decisions. [TODO.md](TODO.md) is the roadmap, the open questions and the work that outlived a session.
+What a reader has to know before changing anything here, and where to find the rest. [CONTRIBUTING.md](CONTRIBUTING.md) has the full procedure and every command; this file is the map, the requirements and the design decisions. [TODO.md](TODO.md) is the roadmap, the open questions and the work that outlived a session. [design/](design/README.md) holds the specifications of the file format, the commit and recovery protocol, and the locking protocol.
 
 Decisions below carry one of two marks:
 
@@ -35,6 +35,7 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `crates/darudb` | The engine and the Rust API, the crate `darudb`         | `cargo test -p darudb` from the root                            |
 | `packages/node` | The Node.js binding, the npm package `darudb` (napi-rs) | `npm install`, then `npm run build`, `npm test`, `npm run lint` |
 | `docs`          | The VitePress site, shared by every package             | `npm install`, then `npm run dev`                               |
+| `design`        | The engine's specifications, in English only            | Read before changing `format`, `storage`, `txn` or `lock`       |
 
 **The root is a Cargo workspace and nothing else.** `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml` are there; there is no root `package.json` and no npm workspace. Each JavaScript folder installs and runs on its own, so check which folder a command belongs to before running it. `packages/node` is both an npm package and a member of the Cargo workspace.
 
@@ -75,6 +76,8 @@ From the bottom up: `format` and `crypto`, then `storage`, `btree`, `lock`, `txn
 - **Several processes on one file must be stable.** Designs that coordinate processes through shared memory have been effectively limited to one process at a time, and fixing that is one of DaruDB's central tasks.
 
 ## Architecture **[Tentative]**
+
+The drafts in [design/](design/README.md) pin down and in places change the items below. Until the maintainer accepts them, the items here stand; [Awaiting review](design/README.md#awaiting-review) lists every difference.
 
 ```text
 Rust API         Node.js binding (napi-rs)         Dart binding (dart:ffi + build hooks)
@@ -196,6 +199,7 @@ Each of these was tried elsewhere and caused the problems this project exists to
 
 ## Conventions
 
+- **The specifications change with the code.** A change to what is written to disk, or to how commits, recovery or locks work, updates the matching document in `design/` in the same commit.
 - **Formatters and linters are gates.** `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` at the root; `npm run lint` and `npx prettier . --check` in `packages/node` and `docs`.
 - **Commits are `[scope] tag: message` in English**, with identifiers in backticks and one logical change each. The scopes are `[core]`, `[node]`, `[docs]` and `[common]`; the tags are in [CONTRIBUTING.md](CONTRIBUTING.md#write-a-commit-message).
 - **A library change gets a changelog entry** under `## vNext` in the package it landed in, unless nothing a consumer can see changed. The packages version independently.
