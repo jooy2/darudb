@@ -8,7 +8,7 @@ use super::{Range, catalog_names, check_key, check_value, find_tree, root_child,
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, FREE_TREE, RETAINED_TREE, SLOT_COUNT, Selector, decode_free_key,
+    CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, decode_free_key,
     decode_free_value, decode_retained_key, decode_runs,
 };
 use crate::instance::{Header, Shared, WriterGuard};
@@ -53,6 +53,9 @@ pub struct WriteTransaction {
     pub(super) retained_root: Option<Child>,
     /// The transaction id of the published commit it started from.
     pub(super) base_txn: u64,
+    /// The key block the commit record gets: the base commit's, unless the
+    /// key is being changed.
+    pub(super) key_block: [u8; KEY_BLOCK_LEN],
     /// The retained groups this transaction reclaims, by key.
     pub(super) reclaimed: Vec<Vec<u8>>,
     pub(super) trees: BTreeMap<String, TreeState>,
@@ -151,6 +154,7 @@ impl WriteTransaction {
             free_root,
             retained_root,
             base_txn: base.txn,
+            key_block: base.key_block,
             reclaimed,
             trees: BTreeMap::new(),
             next_tree_id: base.next_tree_id,
@@ -409,6 +413,11 @@ impl WriteTransaction {
 
     /// Throws away every change of this transaction. The same as dropping it.
     pub fn abort(self) {}
+
+    /// Makes the commit write `block` as its key block, to change the key.
+    pub(crate) fn replace_key_block(&mut self, block: [u8; KEY_BLOCK_LEN]) {
+        self.key_block = block;
+    }
 
     fn check_open(&self) -> Result<()> {
         self.shared.check_usable()

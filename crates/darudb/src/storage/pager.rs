@@ -4,12 +4,17 @@
 //! Nothing above this layer ever sees a page that has not been verified. A
 //! page is read only through a pointer, which carries the page's check, and a
 //! page whose bytes do not produce that check is reported as damaged.
+//!
+//! In an encrypted file the pager is also where pages are encrypted and
+//! decrypted: the check is the page's tag, and the layers above see only
+//! plaintext.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::FileIo;
+use crate::crypto::PageCipher;
 use crate::error::{Error, Result};
 use crate::format::{Check, page_check, seal, stored_check};
 
@@ -24,14 +29,22 @@ pub(crate) struct Pager {
     io: Arc<dyn FileIo>,
     page_size: usize,
     path: PathBuf,
+    /// The page cipher of an encrypted file, `None` for a plain one.
+    cipher: Option<PageCipher>,
 }
 
 impl Pager {
-    pub(crate) fn new(io: Arc<dyn FileIo>, page_size: usize, path: PathBuf) -> Self {
+    pub(crate) fn new(
+        io: Arc<dyn FileIo>,
+        page_size: usize,
+        path: PathBuf,
+        cipher: Option<PageCipher>,
+    ) -> Self {
         Self {
             io,
             page_size,
             path,
+            cipher,
         }
     }
 
@@ -52,13 +65,65 @@ impl Pager {
 
     /// Reads page `page` and verifies it against `expected`.
     pub(crate) fn read(&self, page: u64, expected: &Check) -> Result<Vec<u8>> {
-        let bytes = self.read_unverified(page)?;
+        let mut bytes = self.read_unverified(page)?;
 
-        if page_check(page, &bytes) != *expected {
+        if self.open(page, &mut bytes) != Some(*expected) {
             return Err(self.corrupted(format!("page {page} fails its check")));
         }
 
         Ok(bytes)
+    }
+
+    /// Verifies page `page` against the check stored in it, decrypting it in
+    /// an encrypted file, and returns that check if the page is intact.
+    fn open(&self, page: u64, bytes: &mut [u8]) -> Option<Check> {
+        match &self.cipher {
+            None => {
+                let check = stored_check(bytes);
+
+                (page_check(page, bytes) == check).then_some(check)
+            }
+            // The stored tag is compared with the expected check by the
+            // caller: the parent's copy is what an attacker cannot replace.
+            Some(cipher) => cipher.open(page, bytes),
+        }
+    }
+
+    /// Stores page `page`'s check at its end, encrypting it first in an
+    /// encrypted file, and returns the check.
+    pub(crate) fn seal(&self, page: u64, bytes: &mut [u8]) -> Result<Check> {
+        let mut checks = Vec::with_capacity(1);
+
+        self.seal_run(page, bytes, &mut checks)?;
+
+        Ok(checks[0])
+    }
+
+    /// [`seal`](Self::seal) for each page of `bytes`, consecutive pages from
+    /// `first` on, pushing the checks to `checks`.
+    fn seal_run(&self, first: u64, bytes: &mut [u8], checks: &mut Vec<Check>) -> Result<()> {
+        let count = bytes.len() / self.page_size;
+        let pages = (first..).zip(bytes.chunks_mut(self.page_size));
+
+        match &self.cipher {
+            None => checks.extend(pages.map(|(page, content)| seal(page, content))),
+            Some(cipher) => {
+                // Fresh nonces for the whole run in one request.
+                let mut nonces = vec![0u8; 24 * count];
+
+                getrandom::fill(&mut nonces)
+                    .map_err(|error| self.io_error(io::Error::other(error)))?;
+
+                for ((page, content), nonce) in pages.zip(nonces.chunks_exact(24)) {
+                    let mut fresh = [0u8; 24];
+
+                    fresh.copy_from_slice(nonce);
+                    checks.push(cipher.seal(page, content, fresh));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Reads `count` consecutive pages from `first` on, in one call, and
@@ -76,14 +141,11 @@ impl Pager {
 
         let mut checks = Vec::with_capacity(count);
 
-        for (page, content) in (first..).zip(bytes.chunks(self.page_size)) {
-            let check = stored_check(content);
-
-            if page_check(page, content) != check {
-                return Err(self.corrupted(format!("page {page} fails its check")));
+        for (page, content) in (first..).zip(bytes.chunks_mut(self.page_size)) {
+            match self.open(page, content) {
+                Some(check) => checks.push(check),
+                None => return Err(self.corrupted(format!("page {page} fails its check"))),
             }
-
-            checks.push(check);
         }
 
         Ok((bytes, checks))
@@ -114,11 +176,9 @@ impl Pager {
     pub(crate) fn write_run(&self, first: u64, bytes: &mut [u8]) -> Result<Vec<Check>> {
         debug_assert_eq!(bytes.len() % self.page_size, 0);
 
-        let checks = (first..)
-            .zip(bytes.chunks_mut(self.page_size))
-            .map(|(page, content)| seal(page, content))
-            .collect();
+        let mut checks = Vec::with_capacity(bytes.len() / self.page_size);
 
+        self.seal_run(first, bytes, &mut checks)?;
         self.io
             .write_at(bytes, self.offset(first)?)
             .map_err(|source| self.io_error(source))?;
@@ -131,9 +191,10 @@ impl Pager {
     pub(crate) fn write_sealed_run(&self, first: u64, bytes: &[u8]) -> Result<()> {
         debug_assert_eq!(bytes.len() % self.page_size, 0);
         debug_assert!(
-            (first..)
-                .zip(bytes.chunks(self.page_size))
-                .all(|(page, content)| page_check(page, content) == stored_check(content))
+            self.cipher.is_some()
+                || (first..)
+                    .zip(bytes.chunks(self.page_size))
+                    .all(|(page, content)| page_check(page, content) == stored_check(content))
         );
 
         self.io

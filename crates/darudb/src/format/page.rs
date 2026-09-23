@@ -13,7 +13,8 @@
 use super::check::{CHECK_LEN, Check};
 use super::le_u64;
 
-/// Where the page header starts.
+/// Where the page header starts, after the prefix that holds an encrypted
+/// page's nonce.
 pub(crate) const PAGE_HEADER_OFFSET: usize = 24;
 
 /// Where the content area starts.

@@ -94,6 +94,25 @@ fn main() -> Result<(), darudb::Error> {
 
 타입이 있는 레코드와 쿼리는 나중에 이 트리 위에 올라갑니다. 지금은 파일 하나를 한 번에 한 프로세스만 열 수 있습니다.
 
+#### 암호화
+
+키나 비밀번호로 만든 데이터베이스는 암호화됩니다. 키와 값, 트리 이름까지 모든 페이지가 암호화되고, 모든 페이지가 인증되므로 바이트 하나라도 바뀌면 그대로 읽지 않고 `CORRUPTED`로 알립니다.
+
+```rust
+use darudb::OpenOptions;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = OpenOptions::new()
+        .password("correct horse battery staple")
+        .open("secret.darudb")?;
+
+    db.set_password("a new password")?;
+    db.close()
+}
+```
+
+비밀번호 대신 32바이트 키를 쓰려면 `OpenOptions::key`를 씁니다. 운영체제의 키 저장소에 보관한 키가 그런 예입니다. 비밀번호는 Argon2id로 해시하며, 기본 비용으로 수십 밀리초가 걸립니다. 이 비용은 `OpenOptions::password_hashing`으로 올리거나 내릴 수 있습니다. 키나 비밀번호를 바꿔도 페이지를 다시 암호화하지 않고, 바꾸기가 끝나면 이전 것으로는 파일을 열 수 없습니다. 평문 데이터베이스는 평문으로 남고, 암호화한 데이터베이스는 키 없이 열 수 없습니다. 키를 잃어버리지 않을 곳에 보관하세요.
+
 ### Node.js
 
 ```js
@@ -121,6 +140,8 @@ db.close();
 | `CLOSED` | Node.js 데이터베이스 객체를 `close` 뒤에 다시 썼을 때 |
 | `BUSY` | 다른 쓰기 트랜잭션이 바쁨 대기 시간보다 오래 데이터베이스를 쥐고 있을 때 |
 | `SYNC_FAILED` | 파일 동기화가 실패했을 때. 마지막 커밋이 반영됐는지 알 수 없으니 파일을 다시 엽니다 |
+| `KEY_REQUIRED` | 암호화한 데이터베이스를 키나 비밀번호 없이 열었을 때 |
+| `WRONG_KEY` | 키나 비밀번호로 데이터베이스를 열 수 없을 때 |
 | `INTERNAL` | DaruDB의 버그로만 생길 수 있는 문제가 났을 때. 제보해 주세요 |
 | `IO` | 운영체제가 파일 작업에 실패했을 때. 메시지에 운영체제가 보고한 내용이 들어갑니다 |
 

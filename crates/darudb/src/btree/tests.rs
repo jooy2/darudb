@@ -78,7 +78,12 @@ impl Store for TestStore {
 impl Harness {
     fn new(page_size: usize) -> Self {
         let disk: Arc<dyn crate::storage::FileIo> = Arc::new(SimDisk::default());
-        let pager = Arc::new(Pager::new(disk, page_size, PathBuf::from("test.darudb")));
+        let pager = Arc::new(Pager::new(
+            disk,
+            page_size,
+            PathBuf::from("test.darudb"),
+            None,
+        ));
 
         Self {
             loader: Loader::new(Arc::clone(&pager), Arc::new(Cache::new(64))),
@@ -123,23 +128,20 @@ impl Harness {
 
     /// Writes every page the transaction changed and starts the next one.
     fn commit(&mut self) {
-        let page_size = self.loader.page_size();
         let mut pages = Vec::new();
 
         if let Some(root) = self.root.take() {
-            let pointer = finish(page_size, self.store.txn, TREE, root, &mut pages).unwrap();
+            let pointer =
+                finish(&self.store.pager, self.store.txn, TREE, root, &mut pages).unwrap();
 
             self.root = Some(Child::Clean(pointer));
         }
 
-        for mut page in pages {
-            let checks = self
-                .store
+        for page in pages {
+            self.store
                 .pager
-                .write_run(page.page, &mut page.bytes)
+                .write_sealed_run(page.page, &page.bytes)
                 .unwrap();
-
-            assert_eq!(checks, [page.pointer.check]);
         }
 
         self.store.txn += 1;

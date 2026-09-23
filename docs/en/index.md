@@ -26,9 +26,9 @@ features:
     link: /guide/introduction
     linkText: How it is built
   - title: Encryption of the whole file
-    details: Every page of the file is to be encrypted and authenticated, so a file read without its key shows nothing and a file changed without it is detected. Changing a password will not rewrite the file.
+    details: Every page of the file is encrypted and authenticated, so a file read without its key shows nothing and a file changed without it is detected. Changing a password does not rewrite the file.
   - title: A file that survives a crash
-    details: A committed page is never overwritten in place, and a commit becomes visible by flipping a single byte. A process killed mid-write, or a power cut, is to leave the last commit intact.
+    details: A committed page is never overwritten in place, and a commit becomes visible by flipping a single byte. A process killed mid-write, or a power cut, leaves the last commit intact.
   - title: Several processes on one file
     details: Processes coordinate through operating-system file locks alone, never shared memory, so a process that dies holding a lock cannot leave the others stuck.
 ---

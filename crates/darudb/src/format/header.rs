@@ -39,6 +39,15 @@ pub(crate) fn slot_offset(slot: usize) -> usize {
     SLOT_LEN * (slot + 1)
 }
 
+/// How the pages of a file are protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Cipher {
+    /// Not encrypted: each page's check is a hash of it.
+    Plain,
+    /// Each page encrypted with XChaCha20-Poly1305: its check is its tag.
+    XChaCha20Poly1305,
+}
+
 /// The fields written once, when the file is created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StaticHeader {
@@ -46,6 +55,7 @@ pub(crate) struct StaticHeader {
     pub(crate) page_size: u32,
     /// 16 random bytes that identify the file.
     pub(crate) file_id: [u8; 16],
+    pub(crate) cipher: Cipher,
 }
 
 /// Why the bytes at the start of a file are not a header this build can use.
@@ -68,7 +78,10 @@ impl StaticHeader {
         bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
         bytes[12..16].copy_from_slice(&self.page_size.to_le_bytes());
         bytes[16..32].copy_from_slice(&self.file_id);
-        // Byte 32 is the cipher: 0, a plain file. Encryption arrives in phase 2.
+        bytes[32] = match self.cipher {
+            Cipher::Plain => 0,
+            Cipher::XChaCha20Poly1305 => 1,
+        };
 
         let check = Check::of(&[&bytes[..STATIC_CHECK_OFFSET]]);
 
@@ -107,17 +120,20 @@ impl StaticHeader {
             return Err(HeaderError::Damaged("the page size is not a valid one"));
         }
 
-        if bytes[32] != 0 {
-            return Err(HeaderError::Damaged(
-                "the file is encrypted, which this build cannot read yet",
-            ));
-        }
-
+        let cipher = match bytes[32] {
+            0 => Cipher::Plain,
+            1 => Cipher::XChaCha20Poly1305,
+            _ => return Err(HeaderError::Damaged("the cipher is not a known one")),
+        };
         let mut file_id = [0u8; 16];
 
         file_id.copy_from_slice(&bytes[16..32]);
 
-        Ok(Self { page_size, file_id })
+        Ok(Self {
+            page_size,
+            file_id,
+            cipher,
+        })
     }
 }
 
@@ -173,7 +189,31 @@ mod tests {
         StaticHeader {
             page_size: 4096,
             file_id: *b"0123456789abcdef",
+            cipher: Cipher::Plain,
         }
+    }
+
+    #[test]
+    fn the_cipher_is_byte_32_and_an_unknown_one_is_refused() {
+        let encrypted = StaticHeader {
+            cipher: Cipher::XChaCha20Poly1305,
+            ..header()
+        };
+        let mut bytes = encrypted.encode();
+
+        assert_eq!(bytes[32], 1);
+        assert_eq!(StaticHeader::decode(&bytes), Ok(encrypted));
+
+        bytes[32] = 2;
+
+        let check = Check::of(&[&bytes[..48]]);
+
+        check.write(&mut bytes[48..]);
+
+        assert!(matches!(
+            StaticHeader::decode(&bytes),
+            Err(HeaderError::Damaged(_))
+        ));
     }
 
     #[test]

@@ -16,8 +16,9 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use crate::btree::{LoadedNode, Loader};
+use crate::crypto::{DataKey, PasswordCost, Secret, Unlocker};
 use crate::error::{Error, Result};
-use crate::format::{CommitRecord, SLOT_COUNT, Selector, StaticHeader};
+use crate::format::{CommitRecord, KeyBlock, SLOT_COUNT, Selector, StaticHeader};
 use crate::storage::{Cache, Pager};
 
 /// How many decoded pages each open file keeps in memory.
@@ -34,6 +35,7 @@ pub(crate) struct Settings {
     pub(crate) busy_timeout: Duration,
     pub(crate) max_unsynced_pages: u64,
     pub(crate) max_unsynced_time: Duration,
+    pub(crate) password_cost: PasswordCost,
 }
 
 /// The deferred commits since the last barrier.
@@ -75,6 +77,8 @@ pub(crate) struct Shared {
     pub(crate) loader: Loader,
     pub(crate) cache: Arc<Cache<LoadedNode>>,
     pub(crate) settings: Settings,
+    /// The data key of an encrypted file, for wrapping it under a new key.
+    pub(crate) data_key: Option<DataKey>,
     header: Mutex<Header>,
     /// The last selector written before the last barrier, which a power cut
     /// can bring back. `None` until this instance's first barrier: another
@@ -99,6 +103,7 @@ impl Shared {
         path: PathBuf,
         static_header: StaticHeader,
         settings: Settings,
+        data_key: Option<DataKey>,
     ) -> Self {
         let header = Header {
             selector: Selector {
@@ -117,6 +122,7 @@ impl Shared {
             loader,
             cache,
             settings,
+            data_key,
             header: Mutex::new(header),
             last_barrier: Mutex::new(None),
             unsynced: Mutex::new(Unsynced::default()),
@@ -125,6 +131,40 @@ impl Shared {
             writer_free: Condvar::new(),
             snapshots: Mutex::new(BTreeMap::new()),
             sync_failed: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether `secret` is what opening this file takes: nothing for a plain
+    /// file, and a key or password that unwraps a key block of the file's
+    /// records for an encrypted one. Another handle to an open file is let in
+    /// on the same terms as the first.
+    pub(crate) fn admit(&self, secret: Option<&Secret>) -> Result<()> {
+        let path = self.path.clone();
+
+        match (secret, self.data_key.is_some()) {
+            (None, false) => Ok(()),
+            (Some(_), false) => Err(Error::InvalidArgument {
+                message: format!(
+                    "`{}` is not encrypted, so it cannot be opened with a key",
+                    path.display()
+                ),
+            }),
+            (None, true) => Err(Error::KeyRequired { path }),
+            (Some(secret), true) => {
+                let mut unlocker = Unlocker::new(secret);
+
+                for record in self.header().records.iter().flatten() {
+                    let Ok(Some(block)) = KeyBlock::decode(&record.key_block) else {
+                        continue;
+                    };
+
+                    if let Ok(Some(_)) = unlocker.unlock(&block, &self.static_header.file_id) {
+                        return Ok(());
+                    }
+                }
+
+                Err(Error::WrongKey { path })
+            }
         }
     }
 

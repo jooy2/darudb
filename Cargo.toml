@@ -20,6 +20,9 @@ darudb = { path = "crates/darudb", version = "0.1.0" }
 tempfile = "3.27.0"
 twox-hash = { version = "2.1.4", default-features = false, features = ["std", "xxhash3_128"] }
 getrandom = "0.4.3"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+zeroize = "1.9.0"
 
 # Applies to what this workspace builds, which in practice means the Node.js
 # addon: a consumer of the `darudb` crate builds with its own profile.

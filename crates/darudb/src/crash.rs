@@ -1,6 +1,7 @@
-//! The phase 1 crash suite: random transactions on a simulated disk, cut at
-//! random points by a power failure or by the process dying, then opened
-//! again and compared with the history of commits.
+//! The crash suite: random transactions on a simulated disk, cut at random
+//! points by a power failure or by the process dying, then opened again and
+//! compared with the history of commits. Half the runs use an encrypted file,
+//! so every rule below holds with encryption on and off.
 //!
 //! What must hold after every cut, as `design/commits-and-recovery.md` states
 //! it: the file opens; its contents are exactly the state after one commit;
@@ -268,6 +269,7 @@ enum Action {
 ///
 /// Some seeds commit only with sync commits, the others mostly with deferred
 /// ones, some of them under a window limit small enough to be reached often.
+/// Odd seeds encrypt the file, with a key or, now and then, with a password.
 /// The window's time limit is left out: it depends on the clock, and the run
 /// has to replay the same way from its seed.
 fn run(seed: u64, page_size: u32, steps: usize) {
@@ -279,6 +281,12 @@ fn run(seed: u64, page_size: u32, steps: usize) {
     if seed % 3 == 1 {
         options.max_unsynced_pages(24);
     }
+
+    match seed % 10 {
+        3 => options.password("crash suite").password_hashing(8, 1, 1),
+        1 | 5 | 7 | 9 => options.key([u8::try_from(seed % 251).unwrap(); 32]),
+        _ => &mut options,
+    };
 
     let defers = seed % 4 != 0;
     let mut disk = Arc::new(SimDisk::default());
@@ -510,6 +518,54 @@ fn recovery_erases_a_newer_record_the_file_is_too_short_for() {
 }
 
 #[test]
+fn a_power_cut_while_the_key_changes_leaves_the_old_key_or_the_new_one() {
+    let mut old = OpenOptions::new();
+    let mut new = OpenOptions::new();
+
+    old.key([1; 32]);
+    new.key([2; 32]);
+
+    for budget in 0..40 {
+        let disk = Arc::new(SimDisk::default());
+        let db = Database::create_io(disk.clone(), 4096, &old).unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("t", b"key", b"value").unwrap();
+        txn.commit().unwrap();
+        disk.stop_after(budget);
+
+        let changed = db.set_key([2; 32]).is_ok();
+        let mut rng = Rng::new(budget as u64);
+
+        for cut in 0..8 {
+            let image = if cut == 0 {
+                disk.current()
+            } else {
+                disk.power_cut(&mut rng)
+            };
+            let opened_old = Database::open_io(Arc::new(SimDisk::from_image(image.clone())), &old);
+            let opened_new = Database::open_io(Arc::new(SimDisk::from_image(image)), &new);
+
+            if changed && cut == 0 {
+                assert_eq!(
+                    opened_old.as_ref().err().map(Error::code),
+                    Some("WRONG_KEY"),
+                    "budget {budget}: the old key still opens the file"
+                );
+            }
+
+            let db = match (opened_old, opened_new) {
+                (Ok(db), _) | (_, Ok(db)) => db,
+                (Err(old), Err(new)) => panic!("budget {budget}: neither key opens: {old}, {new}"),
+            };
+
+            assert_eq!(contents(&db)["t"].len(), 1, "budget {budget}");
+            check_integrity(&db).unwrap();
+        }
+    }
+}
+
+#[test]
 fn a_reader_keeps_its_snapshot_while_the_file_changes_under_it() {
     let db = Database::create_io(Arc::new(SimDisk::default()), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();
@@ -587,8 +643,18 @@ fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
 
 #[test]
 fn a_damaged_page_is_reported_and_never_panics() {
+    let mut encrypted = OpenOptions::new();
+
+    encrypted.key([9; 32]);
+
+    for options in [OpenOptions::new(), encrypted] {
+        damage_pages(&options);
+    }
+}
+
+fn damage_pages(options: &OpenOptions) {
     let disk = Arc::new(SimDisk::default());
-    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
+    let db = Database::create_io(disk.clone(), 4096, options).unwrap();
     let mut txn = db.begin_write().unwrap();
 
     for index in 0..2000u32 {
@@ -610,7 +676,7 @@ fn a_damaged_page_is_reported_and_never_panics() {
 
         // Opening may or may not touch the page; reading everything must
         // either succeed or say the file is damaged.
-        match Database::open_io(Arc::new(SimDisk::from_image(damaged)), &OpenOptions::new()) {
+        match Database::open_io(Arc::new(SimDisk::from_image(damaged)), options) {
             Ok(db) => {
                 let read = db.begin_read().unwrap();
                 let walked: Result<Vec<_>, Error> = match read.iter("t") {

@@ -4,10 +4,13 @@ use std::io;
 use std::path::Path;
 use std::sync::{Arc, Weak};
 
+use zeroize::Zeroizing;
+
+use crate::crypto::{self, DataKey, PageCipher, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, HEADER_LEN, HeaderError, SELECTOR_OFFSET, STATIC_LEN, Selector, StaticHeader,
-    slot_offset,
+    Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
+    STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
 use crate::instance::{FileKey, Shared, registry};
 use crate::options::OpenOptions;
@@ -72,6 +75,83 @@ impl Database {
         self.shared.sync_published()
     }
 
+    /// Whether the database is encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.shared.data_key.is_some()
+    }
+
+    /// Changes the key of an encrypted database to `key`.
+    ///
+    /// The data key is wrapped anew and no page is encrypted again, so it
+    /// takes three sync commits whatever the size of the database: one that
+    /// writes the new key block, and two that overwrite the old one in the
+    /// other commit slots. When it returns, the old key or password no longer
+    /// opens the file. A plain database fails with [`Error::InvalidArgument`].
+    pub fn set_key(&self, key: [u8; 32]) -> Result<()> {
+        self.rekey(&Secret::Key(Zeroizing::new(key)))
+    }
+
+    /// Changes the key of an encrypted database to one derived from
+    /// `password`, at the cost of the options the file was opened with; see
+    /// [`set_key`](Self::set_key).
+    pub fn set_password(&self, password: impl AsRef<[u8]>) -> Result<()> {
+        if password.as_ref().is_empty() {
+            return Err(Error::InvalidArgument {
+                message: "the password is empty".to_owned(),
+            });
+        }
+
+        self.rekey(&Secret::Password(Zeroizing::new(
+            password.as_ref().to_vec(),
+        )))
+    }
+
+    fn rekey(&self, secret: &Secret) -> Result<()> {
+        let Some(data_key) = &self.shared.data_key else {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "`{}` is not encrypted; copying it into an encrypted database is the way to encrypt it",
+                    self.path().display()
+                ),
+            });
+        };
+        let file_id = self.shared.static_header.file_id;
+        let block = wrap_key(
+            self.path(),
+            secret,
+            self.shared.settings.password_cost,
+            data_key,
+            &file_id,
+        )?
+        .encode();
+        let mut txn = self.begin_write()?;
+
+        txn.replace_key_block(block);
+        txn.commit()?;
+
+        // Every commit copies the key block of the one before it, so a few
+        // empty commits carry the new block into the other slots.
+        for _ in 0..2 * SLOT_COUNT {
+            let stale = self
+                .shared
+                .header()
+                .records
+                .iter()
+                .flatten()
+                .any(|record| record.key_block != block);
+
+            if !stale {
+                return Ok(());
+            }
+
+            self.begin_write()?.commit()?;
+        }
+
+        Err(Error::Internal {
+            message: "the old key block outlived the commits meant to replace it".to_owned(),
+        })
+    }
+
     /// Closes this handle, making deferred commits durable first.
     ///
     /// It reports `SYNC_FAILED` if a barrier failed on any handle to this file,
@@ -92,19 +172,21 @@ impl Database {
             .and_then(|key| instances.get(&key))
             .and_then(Weak::upgrade)
         {
+            shared.admit(options.secret())?;
+
             return Ok(Self { shared });
         }
 
         let created = if options.creates() {
-            create(path, options.new_page_size())?
+            create(path, options)?
         } else {
             None
         };
-        let file = match created {
-            Some(file) => file,
-            None => open_file(path)?,
+        let (file, data_key) = match created {
+            Some((file, data_key)) => (file, data_key),
+            None => (open_file(path)?, None),
         };
-        let shared = open_io(Arc::new(file), path, options)?;
+        let shared = open_io(Arc::new(file), path, options, data_key)?;
 
         if let Some(key) = FileKey::of(path) {
             instances.insert(key, Arc::downgrade(&shared));
@@ -118,7 +200,7 @@ impl Database {
     #[cfg(test)]
     pub(crate) fn open_io(io: Arc<dyn FileIo>, options: &OpenOptions) -> Result<Self> {
         Ok(Self {
-            shared: open_io(io, Path::new("simulated.darudb"), options)?,
+            shared: open_io(io, Path::new("simulated.darudb"), options, None)?,
         })
     }
 
@@ -129,18 +211,16 @@ impl Database {
         page_size: u32,
         options: &OpenOptions,
     ) -> Result<Self> {
-        let header = StaticHeader {
-            page_size,
-            file_id: [7; 16],
-        };
-        let page = first_page(&header, &CommitRecord::first());
         let path = Path::new("simulated.darudb");
+        let (page, data_key) = new_file(path, page_size, options)?;
 
         io.write_at(&page, 0)
             .map_err(|source| io_error(path, source))?;
         io.sync().map_err(|source| io_error(path, source))?;
 
-        Self::open_io(io, options)
+        Ok(Self {
+            shared: open_io(io, path, options, data_key)?,
+        })
     }
 
     /// The instance behind this handle, for the engine's own tests.
@@ -150,9 +230,15 @@ impl Database {
     }
 }
 
-/// Reads the static fields of the file, runs recovery, and builds the shared
-/// instance.
-fn open_io(io: Arc<dyn FileIo>, path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
+/// Reads the static fields of the file, unlocks an encrypted one, runs
+/// recovery, and builds the shared instance. `data_key` is the key of a file
+/// this process has just created, which need not be unwrapped again.
+fn open_io(
+    io: Arc<dyn FileIo>,
+    path: &Path,
+    options: &OpenOptions,
+    data_key: Option<DataKey>,
+) -> Result<Arc<Shared>> {
     let len = io.len().map_err(|source| io_error(path, source))?;
     let header_len = usize::try_from(len).map_or(HEADER_LEN, |len| len.min(HEADER_LEN));
     let mut bytes = vec![0u8; header_len];
@@ -172,12 +258,32 @@ fn open_io(io: Arc<dyn FileIo>, path: &Path, options: &OpenOptions) -> Result<Ar
         });
     }
 
+    let data_key = match (static_header.cipher, data_key) {
+        (Cipher::Plain, _) if options.secret().is_some() => {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "`{}` is not encrypted, so it cannot be opened with a key",
+                    path.display()
+                ),
+            });
+        }
+        (Cipher::Plain, _) => None,
+        (Cipher::XChaCha20Poly1305, Some(data_key)) => Some(data_key),
+        (Cipher::XChaCha20Poly1305, None) => Some(unlock(path, &static_header, &bytes, options)?),
+    };
     let pager = Arc::new(Pager::new(
         io,
         static_header.page_size as usize,
         path.to_path_buf(),
+        data_key.as_ref().map(PageCipher::new),
     ));
-    let shared = Shared::new(pager, path.to_path_buf(), static_header, options.settings());
+    let shared = Shared::new(
+        pager,
+        path.to_path_buf(),
+        static_header,
+        options.settings(),
+        data_key,
+    );
     let (header, last_barrier) = recovery::recover(&shared.pager, &shared.loader)?;
 
     shared.set_header(header);
@@ -186,17 +292,137 @@ fn open_io(io: Arc<dyn FileIo>, path: &Path, options: &OpenOptions) -> Result<Ar
     Ok(Arc::new(shared))
 }
 
+/// The data key of an encrypted file, from the key block of the first record
+/// that `options`' secret unwraps, newest first. The records of a file share
+/// one data key, and an older record may still hold a key block from before
+/// the key was changed.
+fn unlock(
+    path: &Path,
+    header: &StaticHeader,
+    bytes: &[u8],
+    options: &OpenOptions,
+) -> Result<DataKey> {
+    let Some(secret) = options.secret() else {
+        return Err(Error::KeyRequired {
+            path: path.to_path_buf(),
+        });
+    };
+    let mut records: Vec<CommitRecord> = (0..SLOT_COUNT)
+        .filter_map(|slot| {
+            CommitRecord::decode(slot, &bytes[slot_offset(slot)..])
+                .ok()
+                .flatten()
+        })
+        .collect();
+    let mut unlocker = Unlocker::new(secret);
+    let mut damage = None;
+
+    records.sort_by_key(|record| std::cmp::Reverse(record.txn));
+
+    for record in records {
+        let block = match KeyBlock::decode(&record.key_block) {
+            Ok(Some(block)) => block,
+            Ok(None) => {
+                damage = Some("an encrypted file's commit record has no key block");
+
+                continue;
+            }
+            Err(reason) => {
+                damage = Some(reason);
+
+                continue;
+            }
+        };
+
+        match unlocker.unlock(&block, &header.file_id) {
+            Ok(Some(data_key)) => return Ok(data_key),
+            Ok(None) => {}
+            Err(reason) => damage = Some(reason),
+        }
+    }
+
+    Err(match damage {
+        Some(reason) => Error::Corrupted {
+            path: path.to_path_buf(),
+            reason: reason.to_owned(),
+        },
+        None => Error::WrongKey {
+            path: path.to_path_buf(),
+        },
+    })
+}
+
 /// Creates a database at `path`, or returns `None` if a file is already there.
+/// Returns the data key of an encrypted one along with the file.
 ///
 /// See [`storage::create_file`] for why the path never holds half a database.
-fn create(path: &Path, page_size: u32) -> Result<Option<DbFile>> {
+fn create(path: &Path, options: &OpenOptions) -> Result<Option<(DbFile, Option<DataKey>)>> {
+    let (page, data_key) = new_file(path, options.new_page_size(), options)?;
+
+    Ok(storage::create_file(path, &page)
+        .map_err(|source| io_error(path, source))?
+        .map(|file| (file, data_key)))
+}
+
+/// Page 0 of a new database, and the data key if `options` encrypt it.
+fn new_file(
+    path: &Path,
+    page_size: u32,
+    options: &OpenOptions,
+) -> Result<(Vec<u8>, Option<DataKey>)> {
+    let random = |bytes: &mut [u8]| {
+        getrandom::fill(bytes).map_err(|error| io_error(path, io::Error::other(error)))
+    };
     let mut file_id = [0u8; 16];
+    let mut first = CommitRecord::first();
 
-    getrandom::fill(&mut file_id).map_err(|error| io_error(path, io::Error::other(error)))?;
+    random(&mut file_id)?;
 
-    let page = first_page(&StaticHeader { page_size, file_id }, &CommitRecord::first());
+    let (cipher, data_key) = match options.secret() {
+        None => (Cipher::Plain, None),
+        Some(secret) => {
+            let mut bytes = Zeroizing::new([0u8; 32]);
 
-    storage::create_file(path, &page).map_err(|source| io_error(path, source))
+            random(bytes.as_mut_slice())?;
+
+            let data_key = DataKey::from_bytes(*bytes);
+
+            first.key_block = wrap_key(
+                path,
+                secret,
+                options.settings().password_cost,
+                &data_key,
+                &file_id,
+            )?
+            .encode();
+
+            (Cipher::XChaCha20Poly1305, Some(data_key))
+        }
+    };
+    let header = StaticHeader {
+        page_size,
+        file_id,
+        cipher,
+    };
+
+    Ok((first_page(&header, &first), data_key))
+}
+
+/// Wraps `data_key` under `secret`, with fresh randomness.
+fn wrap_key(
+    path: &Path,
+    secret: &Secret,
+    cost: crypto::PasswordCost,
+    data_key: &DataKey,
+    file_id: &[u8; 16],
+) -> Result<KeyBlock> {
+    let mut random = [0u8; 40];
+
+    getrandom::fill(&mut random).map_err(|error| io_error(path, io::Error::other(error)))?;
+
+    crypto::wrap(secret, cost, data_key, file_id, &random).map_err(|reason| Error::Internal {
+        message: reason.to_owned(),
+    })
 }
 
 /// Page 0 of a new database: the static fields, the selector pointing at

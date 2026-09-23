@@ -246,7 +246,9 @@ The key limit guarantees that four entries always fit in a node, whatever their 
 
 ## Encryption
 
-The cipher is chosen when the file is created and recorded in the static fields; a file does not change between plain and encrypted except by being rewritten into a new file. ### Pages
+The cipher is chosen when the file is created and recorded in the static fields; a file does not change between plain and encrypted except by being rewritten into a new file.
+
+### Pages
 
 Each page is encrypted with **XChaCha20-Poly1305** under the file's data key (DEK), which is 32 random bytes generated when the file is created.
 
@@ -277,9 +279,11 @@ The DEK is stored wrapped under a key-encryption key (KEK) in every commit recor
 
 The KEK is either the caller's 32-byte key or the Argon2id hash of the caller's password under the stored salt and parameters. The DEK is wrapped with XChaCha20-Poly1305 under the KEK, with the file id as associated data, so a wrapped key copied into another file does not unwrap there. A wrong password or key fails the wrapping tag, and nothing else is tried.
 
-Argon2id is memory-hard, which is what makes guessing passwords on GPUs expensive; the parameters are stored per record so that they can be raised later without a format change. Their defaults are decided with the encryption phase.
+Argon2id is memory-hard, which is what makes guessing passwords on GPUs expensive; the parameters are stored per record so that they can be raised later without a format change. The default is 19 MiB of memory, 2 iterations and 1 lane: the lowest Argon2id setting in the OWASP password storage guidance. The memory is what decides it, because a mobile app extension may be allowed little more for its whole process. An application can ask for more when it creates a file or changes its password. A key block that asks for more than 1 GiB of memory, 1024 iterations or 64 lanes is refused as `CORRUPTED` before anything is hashed, since the hash allocates its memory at once.
 
-The older records keep the old key block until their slots are overwritten, and until then the old password still opens the file. Changing the key is therefore three sync commits: the one that writes the new key block, and two empty ones that overwrite the other two slots. Rotating the DEK itself means rewriting every page, which is done by compacting into a new file.
+Every commit copies the key block of the commit it started from, except the one that changes the key. The older records keep the old key block until their slots are overwritten, and until then the old password still opens the file. Changing the key is therefore a sync commit that writes the new key block, followed by empty sync commits until no slot holds the old one, which takes two when nothing else commits in between. Rotating the DEK itself means rewriting every page, which is done by compacting into a new file.
+
+Opening an encrypted file tries the caller's key or password on the key block of each valid record, newest first, and uses the first that unwraps. Every record wraps the same DEK, so which one unwraps it does not matter, and records that share a key block cost one derivation.
 
 ### What stays visible
 
@@ -291,19 +295,21 @@ Replacing the whole file with an older copy of itself cannot be detected from in
 
 Anything read from the file is untrusted input. A reader checks everything below before using it, and reports a failure as the error named, never as a panic.
 
-| Step                                                                               | On failure                   |
-| ---------------------------------------------------------------------------------- | ---------------------------- |
-| The file holds at least 64 bytes, and they start with the magic                    | `NOT_A_DATABASE`             |
-| The format version is 2                                                            | `UNSUPPORTED_FORMAT_VERSION` |
-| The static check matches                                                           | `CORRUPTED`                  |
-| The page size is a power of two from 4096 to 65536, and the cipher is known        | `CORRUPTED`                  |
-| The file holds at least one whole page                                             | `CORRUPTED`                  |
-| The selector's reserved bits are clear and its slot number is not 3                | `CORRUPTED`                  |
-| Each record used is valid ([Commit slots](#commit-slots))                          | `CORRUPTED`                  |
-| Each page read lies below the page count and inside the file                       | `CORRUPTED`                  |
-| Each page's check and transaction id match the pointer that led to it              | `CORRUPTED`                  |
-| Each page's kind, level and tree id are what its parent expects                    | `CORRUPTED`                  |
-| Every offset and length inside a page stays inside the page, and keys are in order | `CORRUPTED`                  |
+| Step                                                                               | On failure                         |
+| ---------------------------------------------------------------------------------- | ---------------------------------- |
+| The file holds at least 64 bytes, and they start with the magic                    | `NOT_A_DATABASE`                   |
+| The format version is 2                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
+| The static check matches                                                           | `CORRUPTED`                        |
+| The page size is a power of two from 4096 to 65536, and the cipher is known        | `CORRUPTED`                        |
+| The file holds at least one whole page                                             | `CORRUPTED`                        |
+| An encrypted file is opened with a key or password, and a plain one without        | `KEY_REQUIRED`, `INVALID_ARGUMENT` |
+| The key or password unwraps a record's key block                                   | `WRONG_KEY`                        |
+| The selector's reserved bits are clear and its slot number is not 3                | `CORRUPTED`                        |
+| Each record used is valid ([Commit slots](#commit-slots))                          | `CORRUPTED`                        |
+| Each page read lies below the page count and inside the file                       | `CORRUPTED`                        |
+| Each page's check and transaction id match the pointer that led to it              | `CORRUPTED`                        |
+| Each page's kind, level and tree id are what its parent expects                    | `CORRUPTED`                        |
+| Every offset and length inside a page stays inside the page, and keys are in order | `CORRUPTED`                        |
 
 Checks that span pages, such as whether every key in a child lies between its parent's separators, belong to the integrity check rather than to every read ([Commits and recovery](commits-and-recovery.md#checking-and-salvaging)).
 

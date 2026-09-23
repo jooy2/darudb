@@ -13,9 +13,8 @@ use super::write::WriteTransaction;
 use crate::btree::{self, FinishedPage, Load, LoadedNode};
 use crate::error::{Error, Result};
 use crate::format::{
-    CATALOG_TREE, CommitRecord, FREE_TREE, KEY_BLOCK_LEN, Pointer, RETAINED_TREE, SELECTOR_OFFSET,
-    Selector, TreeDescriptor, encode_runs, free_key, free_value, retained_key, runs_per_value,
-    slot_offset,
+    CATALOG_TREE, CommitRecord, FREE_TREE, Pointer, RETAINED_TREE, SELECTOR_OFFSET, Selector,
+    TreeDescriptor, encode_runs, free_key, free_value, retained_key, runs_per_value, slot_offset,
 };
 use crate::instance::Header;
 
@@ -36,7 +35,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
     txn.shared.check_usable()?;
 
     let loader = txn.shared.loader.clone();
-    let page_size = loader.page_size();
+    let pager = Arc::clone(&txn.shared.pager);
     let mut pages = Vec::new();
 
     // The user trees first: each root pointer goes into the catalog.
@@ -60,7 +59,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
         }
 
         let root = match state.root {
-            Some(root) => btree::finish(page_size, txn.txn, state.id, root, &mut pages)?,
+            Some(root) => btree::finish(&pager, txn.txn, state.id, root, &mut pages)?,
             None => Pointer::NULL,
         };
         let descriptor = TreeDescriptor {
@@ -94,7 +93,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
         catalog,
         free,
         retained,
-        key_block: [0; KEY_BLOCK_LEN],
+        key_block: txn.key_block,
     };
 
     write_and_publish(&mut txn, pages, &record, durability)
@@ -210,10 +209,10 @@ fn finish_root(
     pages: &mut Vec<FinishedPage>,
     take: impl FnOnce(&mut WriteTransaction) -> Option<btree::Child>,
 ) -> Result<Pointer> {
-    let page_size = txn.shared.loader.page_size();
+    let pager = Arc::clone(&txn.shared.pager);
 
     match take(txn) {
-        Some(root) => btree::finish(page_size, txn.txn, tree, root, pages),
+        Some(root) => btree::finish(&pager, txn.txn, tree, root, pages),
         None => Ok(Pointer::NULL),
     }
 }

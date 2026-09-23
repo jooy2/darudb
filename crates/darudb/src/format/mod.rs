@@ -13,6 +13,7 @@
 
 mod check;
 mod header;
+mod key_block;
 mod node;
 mod page;
 mod pointer;
@@ -21,15 +22,17 @@ mod system;
 
 pub(crate) use check::Check;
 pub(crate) use header::{
-    HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector, StaticHeader,
-    slot_offset,
+    Cipher, HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector,
+    StaticHeader, slot_offset,
 };
+pub(crate) use key_block::{Kdf, KeyBlock};
 pub(crate) use node::{
     LeafEntry, OverflowRef, StoredValue, branch_key_len, branch_len, decode_branch, decode_leaf,
     encode_branch, encode_leaf, inline_entry_len, inline_limit, max_key_len, overflow_pages,
 };
 pub(crate) use page::{
-    CONTENT_OFFSET, PageHeader, PageKind, content_len, page_check, seal, stored_check,
+    CONTENT_OFFSET, PAGE_HEADER_OFFSET, PageHeader, PageKind, check_offset, content_len,
+    page_check, seal, stored_check,
 };
 pub(crate) use pointer::{POINTER_LEN, Pointer};
 pub(crate) use record::{CommitRecord, KEY_BLOCK_LEN, RECORD_LEN};

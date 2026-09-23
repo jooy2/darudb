@@ -371,6 +371,7 @@ mod tests {
             Arc::new(SimDisk::default()),
             4096,
             PathBuf::from("test.darudb"),
+            None,
         ));
 
         Space::new(pager, 2, page_count, free.iter().copied().collect())

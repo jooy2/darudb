@@ -94,6 +94,25 @@ A write transaction dropped without `commit` is aborted, and nothing it did reac
 
 Typed records and queries come later, built on top of these trees. For now, only one process may have a file open at a time.
 
+#### Encryption
+
+A database created with a key or a password is encrypted: every page, keys, values and tree names included, and every page is authenticated, so a changed byte is reported as `CORRUPTED` rather than read.
+
+```rust
+use darudb::OpenOptions;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = OpenOptions::new()
+        .password("correct horse battery staple")
+        .open("secret.darudb")?;
+
+    db.set_password("a new password")?;
+    db.close()
+}
+```
+
+`OpenOptions::key` takes a 32-byte key instead of a password, such as one kept in the operating system's keystore. A password is hashed with Argon2id, which takes tens of milliseconds by default; `OpenOptions::password_hashing` raises or lowers that cost. Changing the key or the password re-encrypts nothing, and once it returns, the old one no longer opens the file. A plain database stays plain, and an encrypted one cannot be opened without its key: keep it where it cannot be lost.
+
 ### Node.js
 
 ```js
@@ -121,6 +140,8 @@ Every error carries a `code` that names the failure. The code is the same in Rus
 | `CLOSED` | A Node.js database object was used after `close`. |
 | `BUSY` | Another write transaction held the database for longer than the busy timeout. |
 | `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
+| `KEY_REQUIRED` | The database is encrypted, and it was opened without a key or password. |
+| `WRONG_KEY` | The key or password does not open the database. |
 | `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |
 

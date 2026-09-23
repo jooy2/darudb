@@ -85,6 +85,17 @@ pub enum Error {
         /// rather than a later use of the database.
         source: Option<io::Error>,
     },
+    /// The database is encrypted, and it was opened without a key or a
+    /// password.
+    KeyRequired {
+        /// The database's path.
+        path: PathBuf,
+    },
+    /// The key or password does not open the database.
+    WrongKey {
+        /// The database's path.
+        path: PathBuf,
+    },
     /// An invariant of the engine does not hold, which only a bug in DaruDB can
     /// cause. Please report it.
     Internal {
@@ -109,6 +120,8 @@ impl Error {
             Error::Closed => "CLOSED",
             Error::Busy { .. } => "BUSY",
             Error::SyncFailed { .. } => "SYNC_FAILED",
+            Error::KeyRequired { .. } => "KEY_REQUIRED",
+            Error::WrongKey { .. } => "WRONG_KEY",
             Error::Internal { .. } => "INTERNAL",
         }
     }
@@ -156,6 +169,14 @@ impl fmt::Display for Error {
                     Some(source) => write!(f, ": {source}"),
                     None => Ok(()),
                 }
+            }
+            Error::KeyRequired { path } => write!(
+                f,
+                "`{}` is encrypted; open it with its key or password",
+                path.display()
+            ),
+            Error::WrongKey { path } => {
+                write!(f, "the key or password does not open `{}`", path.display())
             }
             Error::Internal { message } => {
                 write!(f, "internal error, which is a bug in DaruDB: {message}")
@@ -229,6 +250,8 @@ mod tests {
                 },
                 "SYNC_FAILED",
             ),
+            (Error::KeyRequired { path: path.clone() }, "KEY_REQUIRED"),
+            (Error::WrongKey { path: path.clone() }, "WRONG_KEY"),
             (
                 Error::Internal {
                     message: "a message".to_owned(),

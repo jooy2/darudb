@@ -7,10 +7,12 @@
 //!
 //! The storage kernel stores named trees of byte keys and byte values, in
 //! transactions. A commit is durable when it returns, and a file opened after
-//! a crash or a power cut holds the last commit that returned. Typed records
-//! and queries come later, built on top. The file format will change without
-//! a migration until the first release, and only one process may have a file
-//! open at a time for now.
+//! a crash or a power cut holds the last commit that returned. A database
+//! created with a key or a password ([`OpenOptions::key`],
+//! [`OpenOptions::password`]) is encrypted and authenticated, every page of
+//! it. Typed records and queries come later, built on top. The file format
+//! will change without a migration until the first release, and only one
+//! process may have a file open at a time for now.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;
@@ -31,6 +33,7 @@
 //!
 //! - `format`: what the bytes of a file mean. Pure functions over bytes, with
 //!   no I/O, so every rule about the layout can be tested without a disk.
+//! - `crypto`: encrypting pages and wrapping the data key, also without I/O.
 //! - `storage`: how bytes reach the disk: positional reads and writes, pages
 //!   verified against their checks, the page cache.
 //! - `btree`: copy-on-write B+trees over those pages.
@@ -45,6 +48,7 @@
 mod btree;
 #[cfg(test)]
 mod crash;
+mod crypto;
 mod database;
 mod error;
 mod format;

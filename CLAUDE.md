@@ -45,22 +45,22 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 `crates/darudb/src` is layered, and a module only uses the modules below it. Keeping that one-way is what lets a layer be read, tested and replaced on its own.
 
-| Module        | Owns                                                                                     | State                     |
-| ------------- | ---------------------------------------------------------------------------------------- | ------------------------- |
-| `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1                   |
-| `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1                   |
-| `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1                   |
-| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1                   |
-| `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1                   |
-| `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1                   |
-| `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1                   |
-| `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1                   |
-| `format/`     | What bytes on disk mean: every layout of `design/file-format.md`. No I/O at all          | Phase 1, plain files only |
-| `lock/`       | Cross-process coordination through file range locks                                      | Planned, phase 3          |
-| `crypto/`     | Page encryption, key wrapping, key derivation                                            | Planned, phase 2          |
-| `schema/`     | Collections, fields, indexes, schema migrations                                          | Planned, phase 4          |
-| `query/`      | The query IR and its execution                                                           | Planned, phase 4          |
-| `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6          |
+| Module        | Owns                                                                                     | State            |
+| ------------- | ---------------------------------------------------------------------------------------- | ---------------- |
+| `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1          |
+| `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1          |
+| `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1          |
+| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1          |
+| `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1          |
+| `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1          |
+| `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1          |
+| `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1          |
+| `format/`     | What bytes on disk mean: every layout of `design/file-format.md`. No I/O at all          | Phase 2          |
+| `lock/`       | Cross-process coordination through file range locks                                      | Planned, phase 3 |
+| `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
+| `schema/`     | Collections, fields, indexes, schema migrations                                          | Planned, phase 4 |
+| `query/`      | The query IR and its execution                                                           | Planned, phase 4 |
+| `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6 |
 
 From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
 
@@ -147,8 +147,10 @@ Specified in [design/locking.md](design/locking.md).
 Specified in [design/file-format.md](design/file-format.md#encryption).
 
 - **Page-level AEAD with XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer.
-- **A data key wrapped by a key-encryption key**, stored in every commit record. Changing a password is an ordinary commit that rewraps the key, followed by two empty sync commits that overwrite the old key block in the other slots.
-- **A password becomes a key through Argon2id**, with its parameters stored in the key block. Unauthenticated modes such as CBC are not used at all.
+- **A data key wrapped by a key-encryption key**, stored in every commit record. Every commit copies the key block of the commit before it. Changing a password is a sync commit that rewraps the key, followed by empty sync commits until no slot holds the old key block.
+- **A password becomes a key through Argon2id**, with its parameters stored in the key block: 19 MiB, 2 iterations and 1 lane by default, which fits a mobile app extension's memory. Unauthenticated modes such as CBC are not used at all.
+- **The pager encrypts and decrypts.** `storage/pager.rs` seals every page it writes and opens every page it reads, so the layers above see plaintext and never know which kind of file they are in. The commit's tree pages are sealed in `btree/finish.rs` through the pager, since a parent records its children's tags.
+- **Rust API**: `OpenOptions::key`, `OpenOptions::password`, `OpenOptions::password_hashing`, `Database::set_key`, `Database::set_password`, `Database::is_encrypted`, and the errors `KEY_REQUIRED` and `WRONG_KEY`. Another handle to a file already open in the process has to present the key too.
 - **Operating-system keystores** (Keychain, Android Keystore, DPAPI) are worth offering as helpers in the bindings.
 - **Encryption and multi-process access do not conflict here**, because there is no shared memory and no mmap.
 - **The header stays plain**, so page size, transaction ids and file size are visible; everything inside a page is not.
@@ -214,6 +216,7 @@ Each of these was tried elsewhere and caused the problems this project exists to
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
 - **Only one process may have a file open until phase 3.** Handles within one process share one instance and are safe together; two processes are not coordinated yet, because the lock protocol of `design/locking.md` is not implemented.
 - **An open unsynced window has a thread.** `instance.rs` starts `darudb-sync` when a deferred commit opens a window with a time limit, and the thread ends when the window does. The crash suite turns the time limit off, so its runs replay from their seed.
+- **Half the crash suite's runs, and every other process-kill round, use an encrypted file.** A test that builds a database for the engine's internals should say which kind it uses.
 - **The free runs outlive the write transaction.** The instance keeps the last commit's free runs in memory, tagged with its transaction id, and the next write transaction starts from them instead of reading the free tree. The commit rewrites only the runs that changed. The unit tests compare the kept runs with the free tree every time they are used.
 - **The first commit after opening a file issues one extra barrier**, unless recovery issued one: until then the writer does not know which selector a power cut would bring back (`design/commits-and-recovery.md`, "Choosing the slot").
 - **`packages/node/index.js` and `index.d.ts` are generated** by `npm run build` from the `#[napi]` items in `src/lib.rs`, together with the `.node` addon, and all three are git-ignored. The TypeScript types a consumer sees are whatever the Rust source says.

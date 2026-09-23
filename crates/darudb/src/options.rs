@@ -3,6 +3,9 @@
 use std::path::Path;
 use std::time::Duration;
 
+use zeroize::Zeroizing;
+
+use crate::crypto::{PasswordCost, Secret};
 use crate::database::Database;
 use crate::error::{Error, Result};
 use crate::format::{self, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
@@ -23,6 +26,8 @@ pub struct OpenOptions {
     busy_timeout: Duration,
     max_unsynced_pages: u64,
     max_unsynced_time: Duration,
+    secret: Option<Secret>,
+    password_cost: PasswordCost,
 }
 
 impl OpenOptions {
@@ -35,6 +40,8 @@ impl OpenOptions {
             busy_timeout: Duration::from_secs(5),
             max_unsynced_pages: 16_384,
             max_unsynced_time: Duration::from_secs(1),
+            secret: None,
+            password_cost: PasswordCost::DEFAULT,
         }
     }
 
@@ -92,6 +99,56 @@ impl OpenOptions {
         self
     }
 
+    /// Encrypts a new database with `key`, or opens an encrypted one with it.
+    ///
+    /// Every page of an encrypted database is encrypted and authenticated with
+    /// XChaCha20-Poly1305 under a random data key, which `key` wraps. Opening
+    /// it without a key or password fails with [`Error::KeyRequired`], and with
+    /// another one with [`Error::WrongKey`]. A plain database cannot be opened
+    /// with a key, and does not become encrypted: that takes a new file.
+    ///
+    /// Keep the key somewhere safe, such as the operating system's keystore.
+    /// Without it, the data cannot be recovered.
+    pub fn key(&mut self, key: [u8; 32]) -> &mut Self {
+        self.secret = Some(Secret::Key(Zeroizing::new(key)));
+        self
+    }
+
+    /// Encrypts a new database with a key derived from `password`, or opens
+    /// an encrypted one with it.
+    ///
+    /// The password is hashed with Argon2id, at the cost that
+    /// [`password_hashing`](Self::password_hashing) sets, into the key that
+    /// wraps the data key; otherwise it is the same as [`key`](Self::key).
+    pub fn password(&mut self, password: impl AsRef<[u8]>) -> &mut Self {
+        self.secret = Some(Secret::Password(Zeroizing::new(password.as_ref().to_vec())));
+        self
+    }
+
+    /// How much work hashing a password takes, when a new database is
+    /// encrypted with one or [`Database::set_password`] changes it: Argon2id
+    /// memory in KiB, iterations, and parallelism.
+    ///
+    /// 19 MiB (19456 KiB), 2 and 1 by default, which takes tens of
+    /// milliseconds on a current computer and fits the memory limits of mobile
+    /// app extensions. More makes guessing the password slower for an attacker
+    /// and opening the database slower for everyone. A file records the cost it
+    /// was made with, so opening it takes that cost whatever these options say.
+    /// Memory is limited to 1 GiB.
+    pub fn password_hashing(
+        &mut self,
+        memory_kib: u32,
+        iterations: u32,
+        parallelism: u32,
+    ) -> &mut Self {
+        self.password_cost = PasswordCost {
+            memory_kib,
+            iterations,
+            parallelism,
+        };
+        self
+    }
+
     /// Opens the database at `path` with these options.
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Database> {
         self.validate()?;
@@ -112,7 +169,12 @@ impl OpenOptions {
             busy_timeout: self.busy_timeout,
             max_unsynced_pages: self.max_unsynced_pages,
             max_unsynced_time: self.max_unsynced_time,
+            password_cost: self.password_cost,
         }
+    }
+
+    pub(crate) fn secret(&self) -> Option<&Secret> {
+        self.secret.as_ref()
     }
 
     fn validate(&self) -> Result<()> {
@@ -125,7 +187,19 @@ impl OpenOptions {
             });
         }
 
-        Ok(())
+        if let Some(Secret::Password(password)) = &self.secret {
+            if password.is_empty() {
+                return Err(Error::InvalidArgument {
+                    message: "the password is empty".to_owned(),
+                });
+            }
+        }
+
+        self.password_cost
+            .check()
+            .map_err(|reason| Error::InvalidArgument {
+                message: reason.to_owned(),
+            })
     }
 }
 

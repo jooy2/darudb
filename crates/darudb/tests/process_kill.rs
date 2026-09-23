@@ -8,6 +8,9 @@
 //! operating system still holds everything the child wrote, so neither a
 //! deferred commit nor the commit in flight may be lost or torn.
 //!
+//! Every other round uses an encrypted file, so the suite runs with
+//! encryption on and off.
+//!
 //! `DARUDB_KILL_ROUNDS` sets how many times the child is killed; the default
 //! keeps the suite quick, and a longer run is one environment variable away.
 
@@ -24,9 +27,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::TestDir;
-use darudb::Database;
+use darudb::{Database, OpenOptions};
 
 const CHILD_PATH: &str = "DARUDB_KILL_CHILD_PATH";
+const CHILD_ENCRYPTED: &str = "DARUDB_KILL_CHILD_ENCRYPTED";
+
+/// The file of the encrypted rounds, or the plain one.
+fn open(path: &str, encrypted: bool) -> darudb::Result<Database> {
+    let mut options = OpenOptions::new();
+
+    if encrypted {
+        options.key([0x4B; 32]);
+    }
+
+    options.open(path)
+}
 
 /// The child: commits forever, printing the round of each commit.
 #[test]
@@ -35,7 +50,7 @@ fn child_writer() {
         // Run as an ordinary test, it has nothing to do.
         return;
     };
-    let db = Database::open(&path).unwrap();
+    let db = open(&path, env::var(CHILD_ENCRYPTED).is_ok()).unwrap();
     let start = db
         .begin_read()
         .unwrap()
@@ -78,10 +93,21 @@ fn a_killed_writer_never_loses_a_commit_it_reported() {
         .and_then(|rounds| rounds.parse().ok())
         .unwrap_or(12);
     let dir = TestDir::new();
-    let path = dir.path("killed.darudb");
 
     for iteration in 0..rounds {
-        let mut child = Command::new(env::current_exe().unwrap())
+        let encrypted = iteration % 2 == 1;
+        let path = dir.path(if encrypted {
+            "encrypted.darudb"
+        } else {
+            "plain.darudb"
+        });
+        let mut command = Command::new(env::current_exe().unwrap());
+
+        if encrypted {
+            command.env(CHILD_ENCRYPTED, "1");
+        }
+
+        let mut child = command
             .args([
                 "--exact",
                 "child_writer",
@@ -128,7 +154,7 @@ fn a_killed_writer_never_loses_a_commit_it_reported() {
             reported = round;
         }
 
-        let db = Database::open(&path).unwrap();
+        let db = open(path.to_str().unwrap(), encrypted).unwrap();
         let read = db.begin_read().unwrap();
         let found = read
             .get("counter", b"round")

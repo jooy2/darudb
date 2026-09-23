@@ -14,7 +14,7 @@ These documents are for the people and agents who build the engine. The document
 
 All three documents were accepted by the maintainer on 2026-09-23, at the end of phase 0 of the roadmap, and `CLAUDE.md` summarises them. They describe file format version 2, the first that stores data.
 
-Phase 1 implements them for a single process: the file format, sync commits and recovery. Deferred commits, encryption and the lock protocol follow in later phases, on the same format.
+Phases 1 and 2 implement them for a single process: the file format, sync and deferred commits, recovery, and encryption. The lock protocol follows in phase 3, on the same format.
 
 ## What the engine assumes of the platform
 

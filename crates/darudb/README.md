@@ -39,6 +39,27 @@ fn main() -> Result<(), darudb::Error> {
 
 A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. `commit_deferred` returns without waiting for the disk: readers see the changes at once, a crash of the process loses none of them, and they become durable within a second, or sooner at the next `commit`, `Database::sync` or close. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
 
+### Encryption
+
+A database created with a key or a password is encrypted, every page of it, and cannot be opened without it:
+
+```rust
+use darudb::OpenOptions;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = OpenOptions::new()
+        .password("correct horse battery staple")
+        .open("secret.darudb")?;
+
+    // Changing the password encrypts no page again.
+    db.set_password("a new password")?;
+
+    Ok(())
+}
+```
+
+Opening it without a password fails with the code `KEY_REQUIRED`, and with the wrong one with `WRONG_KEY`. `OpenOptions::key` takes a 32-byte key instead, for one kept in the operating system's keystore.
+
 ## Requirements
 
 Rust 1.85 or later, on a Unix-like system or Windows.

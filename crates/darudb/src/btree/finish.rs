@@ -7,7 +7,8 @@
 use super::node::{Branch, Child, Node};
 use super::read::internal;
 use crate::error::Result;
-use crate::format::{PageHeader, PageKind, Pointer, encode_branch, encode_leaf, seal};
+use crate::format::{PageHeader, PageKind, Pointer, encode_branch, encode_leaf};
+use crate::storage::Pager;
 
 /// One encoded page of a commit, ready to write.
 #[derive(Debug)]
@@ -21,9 +22,10 @@ pub(crate) struct FinishedPage {
 }
 
 /// Encodes every page of `child` this transaction holds, children first, and
-/// returns the pointer its parent records.
+/// returns the pointer its parent records. `pager` seals each page, which in
+/// an encrypted file means encrypting it: the check is the tag.
 pub(crate) fn finish(
-    page_size: usize,
+    pager: &Pager,
     txn: u64,
     tree: u64,
     child: Child,
@@ -33,7 +35,7 @@ pub(crate) fn finish(
         Child::Clean(pointer) => return Ok(pointer),
         Child::Dirty { page, node } => (page, *node),
     };
-    let mut bytes = vec![0u8; page_size];
+    let mut bytes = vec![0u8; pager.page_size()];
     let (header, node) = match node {
         Node::Leaf(entries) => {
             encode_leaf(&entries, &mut bytes);
@@ -51,7 +53,7 @@ pub(crate) fn finish(
             let mut pointers = Vec::with_capacity(children.len());
 
             for child in children {
-                pointers.push(finish(page_size, txn, tree, child, out)?);
+                pointers.push(finish(pager, txn, tree, child, out)?);
             }
 
             encode_branch(&keys, &pointers, &mut bytes);
@@ -69,7 +71,7 @@ pub(crate) fn finish(
 
     header.write(&mut bytes);
 
-    let check = seal(page, &mut bytes);
+    let check = pager.seal(page, &mut bytes)?;
     let pointer = Pointer { page, txn, check };
 
     out.push(FinishedPage {
