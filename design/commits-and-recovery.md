@@ -58,15 +58,16 @@ Changing the free and retained trees copies their pages too, which frees pages a
 1. Finish every change to the user trees and the catalog.
 1. Delete the reclaimed groups from the retained tree.
 1. Cut off the free pages at the end of the file, lowering the page count.
-1. From here on, a page this transaction allocated and releases again joins this commit's retained group, instead of becoming free again.
-1. Repeat until a round neither allocates nor releases a page:
+1. From here on, a page this transaction allocated and releases again is set aside instead of becoming free again, and the allocator takes set-aside pages before free ones.
+1. Repeat until a round changes neither the free pages nor this commit's retained group:
    1. Bring the free tree up to date with the transaction's free pages.
    1. Write this commit's group into the retained tree, listing every page it stopped using, including the allocator pages copied in the steps above.
+   1. If the round changed nothing else and pages are set aside, move them into this commit's retained group.
 1. Compute every page's check from the leaves up, since each parent records its children's checks.
 
 The rounds end quickly because a round can copy an allocator page only the first time it touches it. After that, the page belongs to this transaction and is changed in place.
 
-Step 4 is what makes them end at all. Without it, a free tree could chase itself: when the only free page is the one its own root needs, emptying the tree releases the root's page, which makes a page free, which the tree then needs a root to record, which takes the page again. With step 4 the free pages only shrink while the rounds run, so the free tree can only catch up with them. The pages retained this way are reclaimed by a later commit, like any other retained page.
+Step 4 is what makes them end at all. A tree that gives a page back and needs one again in the same round, because it was emptied and refilled or merged and split, gets its own page back without touching the free pages. Freeing the page instead would let the free tree chase itself, recording the page as free and then taking it again, and retaining it would make the tree take a new free page every round, which changes the free tree again. With step 4 the free pages shrink only when a tree grows, so the free tree can only catch up with them. The pages set aside and retained this way are reclaimed by a later commit, like any other retained page.
 
 ## Durability
 

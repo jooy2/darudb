@@ -179,7 +179,7 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
             written_group = group;
         }
 
-        if txn.space.changes() == before {
+        if txn.space.changes() == before && !txn.space.retire_set_aside() {
             return Ok(());
         }
     }

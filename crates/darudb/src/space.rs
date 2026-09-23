@@ -33,10 +33,13 @@ pub(crate) struct Space {
     fresh: HashSet<u64>,
     /// Committed pages this transaction stopped using: its retained group.
     retired: Vec<u64>,
-    /// Counts every allocation and release, so the commit can tell when its
-    /// changes to the allocator trees have stopped moving pages.
+    /// Pages this transaction allocated and released while settling, to be
+    /// handed out again first; see [`Space::settle`].
+    set_aside: Vec<u64>,
+    /// Counts every change to the free pages, the page count and the retained
+    /// group, so the commit can tell when the allocator trees stop changing.
     changes: u64,
-    /// Set while the commit settles the allocator trees; see [`Space::settle`].
+    /// Set while the commit settles the allocator trees.
     settling: bool,
 }
 
@@ -59,22 +62,42 @@ impl Space {
             max_page_count,
             fresh: HashSet::new(),
             retired: Vec::new(),
+            set_aside: Vec::new(),
             changes: 0,
             settling: false,
         }
     }
 
     /// Switches to how the commit settles the allocator trees: from here on,
-    /// a page this transaction allocated and then released joins the retained
-    /// group instead of becoming free again.
+    /// a page this transaction allocated and then releases is set aside
+    /// instead of becoming free again, and allocations take set-aside pages
+    /// before free ones.
     ///
-    /// That keeps the free pages from growing while the free tree is being
-    /// written to match them. A free tree that both needs pages and records
-    /// them would otherwise chase itself: emptied, it gives its page back;
-    /// given that page back, it needs a page to record it in. The pages retained
-    /// this way are reclaimed by a later commit like any other.
+    /// Neither changes the free pages, so a tree that gives a page back and
+    /// needs one again in the same round, emptied and refilled or merged and
+    /// split, leaves the free tree as it was. Were the page freed instead, the
+    /// free tree would chase itself: it would record the page, then take it
+    /// again, one round after another.
     pub(crate) fn settle(&mut self) {
         self.settling = true;
+    }
+
+    /// Moves the set-aside pages into the retained group, once a round has
+    /// changed nothing else, and says whether there were any. Nothing reaches
+    /// them, and a later commit reclaims them like any other retained page.
+    pub(crate) fn retire_set_aside(&mut self) -> bool {
+        if self.set_aside.is_empty() {
+            return false;
+        }
+
+        for page in self.set_aside.drain(..) {
+            self.fresh.remove(&page);
+            self.retired.push(page);
+        }
+
+        self.changes += 1;
+
+        true
     }
 
     /// Makes a run of pages free, merging it with the runs it touches.
@@ -190,6 +213,11 @@ impl Store for Space {
     }
 
     fn allocate(&mut self) -> Result<u64> {
+        // Still in `fresh`, and taking it changes nothing the trees record.
+        if let Some(page) = self.set_aside.pop() {
+            return Ok(page);
+        }
+
         let page = match self.free.pop_first() {
             Some((start, len)) => {
                 if len > 1 {
@@ -233,15 +261,22 @@ impl Store for Space {
     }
 
     fn release(&mut self, page: u64) {
-        if self.fresh.remove(&page) && !self.settling {
-            self.add_free(page, 1);
-        } else {
+        if !self.fresh.contains(&page) {
             debug_assert!(!self.retired.contains(&page), "page {page} released twice");
 
-            // A page of this transaction released while settling, or a
-            // committed page: either way, retained.
+            // A committed page: a reader or a recovery may still need it.
             self.retired.push(page);
             self.changes += 1;
+        } else if self.settling {
+            debug_assert!(
+                !self.set_aside.contains(&page),
+                "page {page} released twice"
+            );
+
+            self.set_aside.push(page);
+        } else {
+            self.fresh.remove(&page);
+            self.add_free(page, 1);
         }
     }
 
@@ -315,6 +350,31 @@ mod tests {
 
         assert_eq!(space.page_count(), 6);
         assert!(space.free().is_empty());
+    }
+
+    #[test]
+    fn while_settling_a_released_page_is_reused_before_the_free_pages_change() {
+        let mut space = space(10, &[(5, 3)]);
+        let page = space.allocate().unwrap();
+
+        space.settle();
+
+        let before = space.changes();
+
+        // A tree emptied and refilled in one round gets its own page back.
+        space.release(page);
+
+        assert_eq!(space.allocate().unwrap(), page);
+        assert_eq!(space.changes(), before);
+        assert_eq!(space.free(), &[(6, 2)].into_iter().collect());
+
+        // What is left over when the round ends joins the retained group.
+        space.release(page);
+
+        assert!(space.retire_set_aside());
+        assert!(!space.retire_set_aside());
+        assert_eq!(space.retired_runs(), [(page, 1)]);
+        assert_eq!(space.free(), &[(6, 2)].into_iter().collect());
     }
 
     #[test]
