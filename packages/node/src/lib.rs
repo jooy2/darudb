@@ -421,19 +421,29 @@ impl Txn {
         .map_err(to_js_error)
     }
 
+    /// The records `query` finds, each after its length, copied once each
+    /// from where the engine lends them.
     fn find(&mut self, collection: &str, query: &darudb::Query) -> Result<Vec<u8>> {
-        let records = match self {
+        let mut out = Vec::new();
+        let mut push = |record: &[u8]| {
+            push_varint(&mut out, record.len());
+            out.extend_from_slice(record);
+
+            Ok(())
+        };
+
+        match self {
             Txn::Read(txn) => txn
                 .collection(collection)
-                .and_then(|collection| collection.query_records(query)),
+                .and_then(|collection| collection.query_records_with(query, &mut push)),
             _ => self
                 .writing()?
                 .collection(collection)
-                .and_then(|collection| collection.query_records(query)),
+                .and_then(|collection| collection.query_records_with(query, &mut push)),
         }
         .map_err(to_js_error)?;
 
-        Ok(concatenate(records))
+        Ok(out)
     }
 
     fn count(&mut self, collection: &str, query: &darudb::Query) -> Result<f64> {
@@ -1064,18 +1074,6 @@ fn request_of(ir: &[u8], first: bool) -> Result<darudb::QueryRequest> {
     }
 
     Ok(request)
-}
-
-/// Records one after another, each after its length as a varint.
-fn concatenate(records: Vec<Vec<u8>>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(records.iter().map(|record| record.len() + 3).sum());
-
-    for record in records {
-        push_varint(&mut out, record.len());
-        out.extend_from_slice(&record);
-    }
-
-    out
 }
 
 /// Appends `value` as a varint: seven bits a byte, low bits first.
