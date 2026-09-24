@@ -1,9 +1,7 @@
-'use strict';
-
 /**
  * The database and its transactions: `Database`, the read and write
  * transactions a function runs in, the collections they reach, and
- * `Migrating`, which a migration function gets. `lib/async.js` has the
+ * `Migrating`, which a migration function gets. `lib/async.ts` has the
  * asynchronous API's transactions, which `Database` begins too.
  *
  * Transactions are scoped to a function: `read` and `write` begin one, run
@@ -13,19 +11,21 @@
  * and so hold the writer lock, by forgetting it.
  */
 
-const { realpathSync, statSync } = require('node:fs');
-const { resolve } = require('node:path');
+import { realpathSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 
-const native = require('../native.js');
-const {
+import native = require('../native.js');
+import {
   codeError,
   invalid,
   encodeRecords,
   decodeRecord,
   decodeRecords,
   encodeSchema
-} = require('./codec');
-const {
+} from './codec.js';
+import type { CollectionLayout, SchemaLayout } from './codec.js';
+import type { DeclaredSchema } from './schema.js';
+import {
   toBuffer,
   scratch,
   delivered,
@@ -39,8 +39,9 @@ const {
   layoutOf,
   looseLayoutOf,
   collectionOf
-} = require('./shared');
-const {
+} from './shared.js';
+import type { Migration, QueryInput } from './shared.js';
+import {
   settle,
   hold,
   holdForSync,
@@ -50,7 +51,26 @@ const {
   AsyncReadTransaction,
   AsyncWriteTransaction,
   AsyncMigrating
-} = require('./async');
+} from './async.js';
+
+/**
+ * The options `open` and `openAsync` take, as `OpenOptions` and
+ * `AsyncOpenOptions` in `index.d.ts` declare them. A migration's function
+ * gets `M`.
+ */
+interface OpenOptions<M> {
+  create?: boolean;
+  pageSize?: number;
+  busyTimeout?: number;
+  cacheSize?: number;
+  schema?: DeclaredSchema;
+  migrations?: Migration<M>[];
+}
+
+/** How a write commits, as `write` and `writeAsync` take it. */
+interface WriteOptions {
+  durability?: 'sync' | 'deferred';
+}
 
 /** Kept from users, so that a `Database` comes only from `Database.open`. */
 const CREATE = Symbol('create');
@@ -61,38 +81,38 @@ const LAYOUT = Symbol('layout');
 
 /** A collection of a transaction, for reading its objects. */
 class ReadCollection {
-  #txn;
-  #layout;
+  #txn: native.NativeTransaction;
+  #layout: CollectionLayout;
 
-  constructor(txn, layout) {
+  constructor(txn: native.NativeTransaction, layout: CollectionLayout) {
     this.#txn = txn;
     this.#layout = layout;
   }
 
   /** The collection's name. */
-  get name() {
+  get name(): string {
     return this.#layout.name;
   }
 
   /** The object whose primary key is `key`, or `null`. */
-  get(key) {
+  get(key: unknown): Record<string, unknown> | null {
     const record = this.#txn.getRecord(this.#layout.name, keyOf(key), scratch);
 
     return record === null ? null : decodeRecord(this.#layout, delivered(record));
   }
 
   /** The objects a query finds, in its order; every object without one. */
-  find(query, parameters) {
+  find(query: QueryInput, parameters?: unknown): Record<string, unknown>[] {
     return decodeRecords(this.#layout, this.#find(query, parameters, false));
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
-  findOne(query, parameters) {
+  findOne(query: QueryInput, parameters?: unknown): Record<string, unknown> | null {
     return decodeRecords(this.#layout, this.#find(query, parameters, true))[0] ?? null;
   }
 
   /** How many objects a query finds, after its offset and within its limit. */
-  count(query, parameters) {
+  count(query: QueryInput, parameters?: unknown): number {
     const name = this.#layout.name;
     const prepared = preparedOf(name, query);
 
@@ -104,7 +124,7 @@ class ReadCollection {
   }
 
   /** The records a query finds; only the first with `first`. */
-  #find(query, parameters, first) {
+  #find(query: QueryInput, parameters: unknown, first: boolean): Buffer {
     const name = this.#layout.name;
     const prepared = preparedOf(name, query);
 
@@ -118,11 +138,11 @@ class ReadCollection {
     );
   }
 
-  get [TXN]() {
+  get [TXN](): native.NativeTransaction {
     return this.#txn;
   }
 
-  get [LAYOUT]() {
+  get [LAYOUT](): CollectionLayout {
     return this.#layout;
   }
 }
@@ -130,7 +150,7 @@ class ReadCollection {
 /** A collection of a write transaction, for reading and writing its objects. */
 class WriteCollection extends ReadCollection {
   /** Inserts `object` and returns its primary key. */
-  insert(object) {
+  insert(object: unknown) {
     return this.insertMany([object])[0];
   }
 
@@ -139,26 +159,26 @@ class WriteCollection extends ReadCollection {
    * A refused object stops the batch with its error, and the objects before
    * it stay inserted in the transaction.
    */
-  insertMany(objects) {
+  insertMany(objects: unknown) {
     return this.#write(objects, false);
   }
 
   /** Inserts `object`, or replaces the object with its key. */
-  put(object) {
+  put(object: unknown) {
     return this.putMany([object])[0];
   }
 
   /** Inserts or replaces `objects`; see `insertMany`. */
-  putMany(objects) {
+  putMany(objects: unknown) {
     return this.#write(objects, true);
   }
 
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
-  delete(key) {
+  delete(key: unknown): boolean {
     return this[TXN].delete(this[LAYOUT].name, keyOf(key));
   }
 
-  #write(objects, replace) {
+  #write(objects: unknown, replace: boolean) {
     if (!Array.isArray(objects)) {
       throw invalid('a batch of objects is an array');
     }
@@ -175,32 +195,32 @@ class WriteCollection extends ReadCollection {
 
 /** A read transaction: one commit, for as long as its function runs. */
 class ReadTransaction {
-  #txn;
-  #layout;
+  #txn: native.NativeTransaction;
+  #layout: SchemaLayout | null;
 
-  constructor(txn, layout) {
+  constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
     this.#txn = txn;
     this.#layout = layout;
   }
 
   /** Collection `name` of the schema, for reading. */
-  collection(name) {
+  collection(name: string): ReadCollection {
     return new ReadCollection(this.#txn, collectionOf(this.#layout, name));
   }
 }
 
 /** A write transaction: changes that commit together when its function returns. */
 class WriteTransaction {
-  #txn;
-  #layout;
+  #txn: native.NativeTransaction;
+  #layout: SchemaLayout | null;
 
-  constructor(txn, layout) {
+  constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
     this.#txn = txn;
     this.#layout = layout;
   }
 
   /** Collection `name` of the schema, for reading and writing. */
-  collection(name) {
+  collection(name: string): WriteCollection {
     return new WriteCollection(this.#txn, collectionOf(this.#layout, name));
   }
 }
@@ -211,12 +231,17 @@ class WriteTransaction {
  * them.
  */
 class Migrating {
-  #txn;
-  #layout;
-  #previous;
-  #version;
+  #txn: native.NativeTransaction;
+  #layout: SchemaLayout;
+  #previous: SchemaLayout;
+  #version: number;
 
-  constructor(txn, layout, previous, version) {
+  constructor(
+    txn: native.NativeTransaction,
+    layout: SchemaLayout,
+    previous: SchemaLayout,
+    version: number
+  ) {
     this.#txn = txn;
     this.#layout = layout;
     this.#previous = previous;
@@ -224,17 +249,17 @@ class Migrating {
   }
 
   /** The schema version the file held before the migration. */
-  get previousVersion() {
+  get previousVersion(): number {
     return this.#txn.previousVersion;
   }
 
   /** The version this step migrates to. */
-  get version() {
+  get version(): number {
     return this.#version;
   }
 
   /** Collection `name` of the new schema, for reading and writing. */
-  collection(name) {
+  collection(name: string): WriteCollection {
     return new WriteCollection(this.#txn, collectionOf(this.#layout, name));
   }
 
@@ -244,7 +269,7 @@ class Migrating {
    * migration removed or replaced. Read an object this way before writing it:
    * a written object keeps only the new schema's fields.
    */
-  previous(collection, key) {
+  previous(collection: string, key: unknown): Record<string, unknown> | null {
     const layout = collectionOf(this.#previous, collection);
     const record = this.#txn.previousRecord(collection, keyOf(key));
 
@@ -252,7 +277,7 @@ class Migrating {
   }
 
   /** The keys of every object of `collection`, named as before the migration. */
-  previousKeys(collection) {
+  previousKeys(collection: string) {
     collectionOf(this.#previous, collection);
 
     return this.#txn.previousKeys(collection);
@@ -260,7 +285,7 @@ class Migrating {
 }
 
 /** What `open` and `openAsync` pass to the native layer, checked. */
-function nativeOptions(options) {
+function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
   const { create, pageSize, busyTimeout, cacheSize, schema, migrations = [] } = options;
 
   if (!Array.isArray(migrations)) {
@@ -282,7 +307,7 @@ function nativeOptions(options) {
 }
 
 /** The migration functions of `options`, by the version they migrate to. */
-function runsOf(options) {
+function runsOf<M>(options: OpenOptions<M>): Map<number, Migration<M>['run']> {
   return new Map(
     (options.migrations ?? [])
       .filter((migration) => migration.run !== undefined)
@@ -295,7 +320,7 @@ function runsOf(options) {
  * device and inode, or on Windows by its real path. Two handles to one file
  * get the same key however each named it, so their writes queue together.
  */
-function fileKeyOf(path) {
+function fileKeyOf(path: string): string {
   try {
     if (process.platform === 'win32') {
       return realpathSync.native(path);
@@ -311,12 +336,17 @@ function fileKeyOf(path) {
 
 /** An open database. Created with `Database.open` or `Database.openAsync`. */
 class Database {
-  #native;
-  #path;
-  #layout;
-  #file;
+  #native: native.NativeDatabase | null;
+  #path: string;
+  #layout: SchemaLayout | null;
+  #file: string;
 
-  constructor(token, database, path, layout) {
+  constructor(
+    token: symbol,
+    database: native.NativeDatabase,
+    path: string,
+    layout: SchemaLayout | null
+  ) {
     if (token !== CREATE) {
       throw invalid('a database is opened with `Database.open` or `Database.openAsync`');
     }
@@ -332,9 +362,9 @@ class Database {
    * stores, checks or migrates its schema. Migration functions run
    * synchronously.
    */
-  static open(path, options = {}) {
+  static open(path: string, options: OpenOptions<Migrating> = {}): Database {
     const opening = native.NativeOpening.open(path, nativeOptions(options));
-    let database;
+    let database: native.NativeDatabase;
 
     if (opening.isMigrating) {
       const txn = opening.migration();
@@ -346,7 +376,7 @@ class Database {
         const layout = layoutOf(txn.schemaRecord, options.schema);
         const previous = looseLayoutOf(txn.previousSchemaRecord);
         const runs = runsOf(options);
-        let version;
+        let version: number | null;
 
         while ((version = txn.nextStep()) !== null) {
           const run = runs.get(version);
@@ -375,9 +405,12 @@ class Database {
    * resolves to it. Migration functions may be asynchronous, and get the
    * asynchronous API.
    */
-  static async openAsync(path, options = {}) {
+  static async openAsync(
+    path: string,
+    options: OpenOptions<AsyncMigrating> = {}
+  ): Promise<Database> {
     const opening = settle(await native.NativeOpening.openAsync(path, nativeOptions(options)));
-    let database;
+    let database: native.NativeDatabase;
 
     if (opening.isMigrating) {
       const txn = opening.migration();
@@ -390,7 +423,7 @@ class Database {
         const previous = looseLayoutOf(txn.previousSchemaRecord);
         const previousVersion = txn.previousVersion;
         const runs = runsOf(options);
-        let version;
+        let version: number | null;
 
         // Every operation has settled whenever `nextStep` runs, so it never
         // waits on the event loop for the transaction.
@@ -398,8 +431,10 @@ class Database {
           const run = runs.get(version);
 
           if (run !== undefined) {
+            // `inside` calls the function at once, while `version` is still
+            // this step's, and not null.
             await inside(file, () =>
-              run(new AsyncMigrating(serial, layout, previous, previousVersion, version))
+              run(new AsyncMigrating(serial, layout, previous, previousVersion, version!))
             );
             await serial.drain();
           }
@@ -421,34 +456,38 @@ class Database {
     return Database.#of(database, path, options.schema);
   }
 
-  static #of(database, path, schema) {
+  static #of(
+    database: native.NativeDatabase,
+    path: string,
+    schema: DeclaredSchema | undefined
+  ): Database {
     const record = database.schemaRecord;
 
     return new Database(CREATE, database, path, record === null ? null : layoutOf(record, schema));
   }
 
   /** The path the database was opened at. Still readable after `close`. */
-  get path() {
+  get path(): string {
     return this.#path;
   }
 
   /** Whether `close` has not been called. */
-  get isOpen() {
+  get isOpen(): boolean {
     return this.#native !== null;
   }
 
   /** The size of every page in the file, in bytes. */
-  get pageSize() {
+  get pageSize(): number {
     return this.#database().pageSize;
   }
 
   /** The file format version recorded in the file. */
-  get formatVersion() {
+  get formatVersion(): number {
     return this.#database().formatVersion;
   }
 
   /** The schema version the file holds, or `null` without a schema. */
-  get schemaVersion() {
+  get schemaVersion(): number | bigint | null {
     this.#database();
 
     return this.#layout === null ? null : this.#layout.version;
@@ -459,7 +498,7 @@ class Database {
    * query language, or a query built with `param` in place of its values.
    * It is parsed once here, and each run gives values for its parameters.
    */
-  prepare(collection, query) {
+  prepare(collection: string, query: QueryInput) {
     this.#database();
     collectionOf(this.#layout, collection);
 
@@ -470,7 +509,7 @@ class Database {
    * Runs `fn` in a read transaction, which sees one commit for as long as
    * `fn` runs, and returns what `fn` returns.
    */
-  read(fn) {
+  read<R>(fn: (txn: ReadTransaction) => R): R {
     const txn = this.#database().beginRead();
 
     try {
@@ -489,7 +528,7 @@ class Database {
    * aborts it when `fn` throws. With `durability: 'deferred'`, the commit
    * returns without waiting for the disk.
    */
-  write(fn, options = {}) {
+  write<R>(fn: (txn: WriteTransaction) => R, options: WriteOptions = {}): R {
     const deferred = deferredOf(options);
     const database = this.#database();
 
@@ -518,7 +557,7 @@ class Database {
    * operations run on the thread pool, and resolves to what `fn` resolves
    * to. The transaction sees one commit until `fn` settles.
    */
-  async readAsync(fn) {
+  async readAsync<R>(fn: (txn: AsyncReadTransaction) => R): Promise<Awaited<R>> {
     // Begun here rather than on the pool: a read waits for no writer, and
     // takes about as long as the trip there would, once the file's header
     // is in the operating system's cache.
@@ -539,7 +578,10 @@ class Database {
    * aborts it when `fn` rejects. This process's asynchronous writes on one
    * file run one after another.
    */
-  async writeAsync(fn, options = {}) {
+  async writeAsync<R>(
+    fn: (txn: AsyncWriteTransaction) => R,
+    options: WriteOptions = {}
+  ): Promise<Awaited<R>> {
     const deferred = deferredOf(options);
     const database = this.#database();
     const release = await turn(this.#file);
@@ -547,7 +589,7 @@ class Database {
     try {
       const txn = settle(await database.beginWriteAsync());
       const serial = new Serial(txn);
-      let result;
+      let result: Awaited<R>;
 
       try {
         result = await inside(this.#file, () =>
@@ -574,14 +616,14 @@ class Database {
   // ones wait their turn after this process's writes.
 
   /** Makes every commit durable, deferred ones included. */
-  sync() {
+  sync(): void {
     const database = this.#database();
 
     holdForSync(this.#file, '`sync`', () => database.sync());
   }
 
   /** `sync` on the thread pool, after this process's writes on the file. */
-  async syncAsync() {
+  async syncAsync(): Promise<void> {
     const database = this.#database();
     const release = await turn(this.#file);
 
@@ -596,7 +638,7 @@ class Database {
    * Makes deferred commits durable and closes the database. Closing one that
    * is closed does nothing.
    */
-  close() {
+  close(): void {
     if (this.#native !== null) {
       const database = this.#native;
 
@@ -611,7 +653,7 @@ class Database {
    * `close` on the thread pool, after this process's writes on the file.
    * The database is closed to new work at once.
    */
-  async closeAsync() {
+  async closeAsync(): Promise<void> {
     if (this.#native !== null) {
       const database = this.#native;
       // Taken before the database closes to new work, so that a call from
@@ -630,7 +672,7 @@ class Database {
     }
   }
 
-  #database() {
+  #database(): native.NativeDatabase {
     if (this.#native === null) {
       throw codeError('CLOSED', 'the database has been closed');
     }
@@ -640,7 +682,7 @@ class Database {
 }
 
 /** Whether a write's options ask for a deferred commit. */
-function deferredOf(options) {
+function deferredOf(options: WriteOptions): boolean {
   const durability = options.durability ?? 'sync';
 
   if (durability !== 'sync' && durability !== 'deferred') {
@@ -650,4 +692,4 @@ function deferredOf(options) {
   return durability === 'deferred';
 }
 
-module.exports = { Database };
+export { Database };
