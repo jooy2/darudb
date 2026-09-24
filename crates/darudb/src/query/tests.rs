@@ -510,6 +510,14 @@ fn queries_follow_the_documented_rules() {
     assert_eq!(players.count(&q(Filter::eq("score", 3))).unwrap(), 2);
     assert_eq!(players.count(&Query::new().offset(1).limit(2)).unwrap(), 2);
     assert_eq!(players.count(&Query::new().offset(9)).unwrap(), 0);
+    assert_eq!(players.count(&Query::new().first()).unwrap(), 1);
+    assert_eq!(players.count(&Query::new().limit(0).first()).unwrap(), 0);
+    assert_eq!(
+        ids(&players
+            .query(&Query::new().sort_by_desc("score").first())
+            .unwrap()),
+        [1]
+    );
 
     for broken in [
         q(Filter::eq("score", "three")),

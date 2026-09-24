@@ -228,6 +228,14 @@ impl Query {
         self
     }
 
+    /// Returns at most the first object: a limit of one, or of none if the
+    /// query's own limit is zero. A lookup of one object stops reading there.
+    #[must_use]
+    pub fn first(mut self) -> Self {
+        self.ir.limit = Some(self.ir.limit.map_or(1, |limit| limit.min(1)));
+        self
+    }
+
     /// Parses `text` in the query language, with `parameters` for `$0`, `$1`
     /// and on. It builds the same query the builder methods would.
     ///
