@@ -133,6 +133,88 @@ pub(crate) fn object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'stati
     Ok(object)
 }
 
+/// The order of the fields of `Fields` by name: `ranked[rank]` is the
+/// position in the list of the field whose name comes `rank`th in byte
+/// order.
+///
+/// An object keeps its fields sorted by name, and a record holds them by
+/// id, so each object read was sorted. A caller that reads many objects of
+/// one collection works the order out once, with this, and each object read
+/// with [`object_in_order`] has its fields put in their places rather than
+/// compared. The order is worked out from the same fields the objects are
+/// read with, and kept no longer than the caller keeps them.
+pub(crate) struct NameOrder {
+    ranked: Vec<usize>,
+}
+
+impl NameOrder {
+    pub(crate) fn of(fields: &Fields) -> Self {
+        let mut ranked: Vec<usize> = (0..fields.list.len()).collect();
+
+        ranked.sort_unstable_by(|&a, &b| {
+            fields.list[a]
+                .name
+                .as_bytes()
+                .cmp(fields.list[b].name.as_bytes())
+        });
+
+        Self { ranked }
+    }
+}
+
+/// [`object_of`], with the fields put in name order by `order`, which was
+/// worked out from `fields`.
+pub(crate) fn object_in_order(
+    bytes: &[u8],
+    fields: &Fields,
+    order: &NameOrder,
+) -> Result<Object, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let mut object = reader.object_fields(fields, 0)?;
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
+    }
+
+    Ok(if rank(&mut object, &order.ranked) {
+        Object::from_sorted(object)
+    } else {
+        Object::from_fields(object)
+    })
+}
+
+/// Moves `fields`, in the order of their schema's list, to the places
+/// `ranked` gives them, by swapping them along the cycles of the order.
+/// Returns false, having moved nothing, when it cannot: the order is not
+/// one of as many fields, or there are more than 64 of them.
+fn rank(fields: &mut [(Name, Value)], ranked: &[usize]) -> bool {
+    if ranked.len() != fields.len() || fields.len() > 64 {
+        return false;
+    }
+
+    // `placed` has a bit for each position whose field is where it goes.
+    let mut placed = 0u64;
+
+    for start in 0..fields.len() {
+        let mut at = start;
+
+        while placed & (1 << at) == 0 {
+            placed |= 1 << at;
+
+            let from = ranked[at];
+
+            if from == start {
+                break;
+            }
+
+            fields.swap(at, from);
+            at = from;
+        }
+    }
+
+    true
+}
+
 /// The value of a field the record leaves out: its default, or null.
 fn absent(field: &FieldDef) -> Result<Value, &'static str> {
     match &field.default {
@@ -320,6 +402,17 @@ impl<'a> Reader<'a> {
 
     /// The fields of a record under `fields`, as [`object_of`] reads them.
     fn object(&mut self, fields: &Fields, depth: usize) -> Result<Object, &'static str> {
+        self.object_fields(fields, depth).map(Object::from_fields)
+    }
+
+    /// The fields of an object, one for each field of `fields` and in the
+    /// order of their list, a field the record leaves out holding its
+    /// default.
+    fn object_fields(
+        &mut self,
+        fields: &Fields,
+        depth: usize,
+    ) -> Result<Vec<(Name, Value)>, &'static str> {
         let count = self.count(2)?;
         let mut object = Vec::with_capacity(fields.list.len());
         let mut schema = fields.list.iter().peekable();
@@ -356,7 +449,7 @@ impl<'a> Reader<'a> {
             object.push((Name::from(field.name.as_str()), absent(field)?));
         }
 
-        Ok(Object::from_fields(object))
+        Ok(object)
     }
 
     /// A value of kind `kind`, read straight into one where the kind is a
@@ -698,6 +791,52 @@ mod tests {
                 field(10, "admin", Kind::Bool, true),
             ],
             next_id: 11,
+        }
+    }
+
+    /// Objects read with their fields put in name order by a `NameOrder`
+    /// are the objects read and sorted, for schemas of every size up to
+    /// past the 64 fields the order handles, fields left out of the record
+    /// among them.
+    #[test]
+    fn an_object_read_in_a_worked_out_order_is_the_sorted_one() {
+        let mut rng = Rng::new(11);
+
+        for round in 0..400 {
+            let count = round % 71;
+            let mut names: Vec<String> = Vec::new();
+
+            while names.len() < count {
+                let name: String = (0..1 + rng.index(4))
+                    .map(|_| char::from(b"abz_"[rng.index(4)]))
+                    .collect();
+
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+
+            let fields = Fields {
+                list: names
+                    .iter()
+                    .enumerate()
+                    .map(|(at, name)| field(at as u64 + 1, name, Kind::Int, true))
+                    .collect(),
+                next_id: count as u64 + 1,
+            };
+            let record = write(
+                &(1..=count as u64)
+                    .filter(|_| rng.below(3) != 0)
+                    .map(|id| (id, Raw::Int(i64::try_from(id).unwrap() * 3)))
+                    .collect::<Vec<_>>(),
+            );
+            let order = NameOrder::of(&fields);
+
+            assert_eq!(
+                object_in_order(&record, &fields, &order),
+                object_of(&record, &fields),
+                "{names:?}"
+            );
         }
     }
 

@@ -198,6 +198,17 @@ impl Object {
         Self { fields }
     }
 
+    /// The object with these fields, which are sorted by name already.
+    pub(crate) fn from_sorted(fields: Vec<(Name, Value)>) -> Self {
+        debug_assert!(
+            fields
+                .windows(2)
+                .all(|pair| pair[0].0.as_bytes() < pair[1].0.as_bytes())
+        );
+
+        Self { fields }
+    }
+
     /// This object with field `name` set to `value`.
     #[must_use]
     pub fn with(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {

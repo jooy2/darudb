@@ -593,9 +593,10 @@ struct Found {
 /// objects in the result are decoded whole.
 pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object>> {
     let mut objects = Vec::new();
+    let mut decoder = objects::Decoder::new(plan.collection);
 
     found(source, plan, &mut |record| {
-        objects.push(objects::decode(source, plan.collection, &record)?);
+        objects.push(decoder.decode(source, &record)?);
 
         Ok(())
     })?;

@@ -258,6 +258,42 @@ pub(crate) fn decode(
         .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
 }
 
+/// Decodes objects of one collection read one after another: the first as
+/// [`decode`] does, and from the second on with the order of the fields by
+/// name worked out once for the rest, which working out for one object alone
+/// would cost more than it saves.
+pub(crate) struct Decoder<'a> {
+    collection: &'a CollectionDef,
+    order: Option<codec::NameOrder>,
+    first: bool,
+}
+
+impl<'a> Decoder<'a> {
+    pub(crate) fn new(collection: &'a CollectionDef) -> Self {
+        Self {
+            collection,
+            order: None,
+            first: true,
+        }
+    }
+
+    pub(crate) fn decode(&mut self, source: &dyn Source, bytes: &[u8]) -> Result<Object> {
+        let collection = self.collection;
+
+        if std::mem::take(&mut self.first) {
+            return decode(source, collection, bytes);
+        }
+
+        let order = self
+            .order
+            .get_or_insert_with(|| codec::NameOrder::of(&collection.fields));
+
+        codec::object_in_order(bytes, &collection.fields, order).map_err(|reason| {
+            source.corrupted(format!("an object of `{}`: {reason}", collection.name))
+        })
+    }
+}
+
 /// The object of `collection` whose primary key is `key`, if there is one,
 /// decoded from its record where the record lies.
 pub(crate) fn get(
@@ -302,7 +338,9 @@ pub(crate) fn scan<'a>(
         backward,
     )?;
 
-    Ok(range.map(move |entry| entry.and_then(|(_, bytes)| decode(source, collection, &bytes))))
+    let mut decoder = Decoder::new(collection);
+
+    Ok(range.map(move |entry| entry.and_then(|(_, bytes)| decoder.decode(source, &bytes))))
 }
 
 /// The entries that `object`, whose primary key encodes as `key`, has in
