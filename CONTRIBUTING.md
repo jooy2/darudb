@@ -108,7 +108,7 @@ npm run typecheck
 
 The engine is the part of an application that holds its data, so what it depends on is held to a high standard. Every crate it pulls in is code that runs with access to that data and a line in the application's own licence review.
 
-`crates/darudb` has **no** runtime dependency today. A runtime dependency is added only where writing the code ourselves would be worse: a cryptographic primitive is the standing example, because a hand-written cipher is a vulnerability waiting for a reviewer. It has to be permissively licensed.
+`crates/darudb` depends at run time only on what would be worse to write ourselves: the XXH3 hash, the operating system's random numbers, the ciphers, Argon2id and BLAKE2b, key wiping, and the C library and Windows API calls for file locks. `crates/darudb/Cargo.toml` says beside each one what it does, what licence it has and what it brings along. A cryptographic primitive is the standing example of a dependency worth having, because a hand-written cipher is a vulnerability waiting for a reviewer. Every one has to be permissively licensed.
 
 A pull request that adds a runtime dependency to the engine or to a binding should say, in the description:
 
