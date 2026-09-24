@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use super::write::WriteTransaction;
-use crate::btree::{self, FinishedPage, Load, LoadedNode};
+use crate::btree::{self, FinishedPage, Load};
 use crate::error::{Error, Result};
 use crate::format::{
     CATALOG_TREE, CommitRecord, FREE_TREE, Pointer, RECORD_MAC_LEN, RETAINED_TREE, SELECTOR_OFFSET,
@@ -310,15 +310,9 @@ fn write_and_publish(
     shared.leave_free_runs(record.txn, txn.space.take_free());
 
     for page in pages {
-        shared.cache.insert(
-            page.page,
-            page.pointer.check,
-            Arc::new(LoadedNode {
-                tree: page.tree,
-                txn: record.txn,
-                node: page.node,
-            }),
-        );
+        shared
+            .cache
+            .insert(page.page, page.pointer.check, Arc::new(page.loaded));
     }
 
     Ok(())

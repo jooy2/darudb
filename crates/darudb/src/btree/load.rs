@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::Load;
-use super::node::{LoadedNode, Node};
+use super::node::LoadedNode;
 use crate::error::{Error, Result};
 use crate::format::{
     CONTENT_OFFSET, Check, OverflowRef, PageHeader, PageKind, Pointer, content_len,
@@ -50,7 +50,7 @@ impl Loader {
             return Err(self.corrupted(page, "belongs to another tree than its parent's"));
         }
 
-        if level.is_some_and(|level| level != loaded.node.level()) {
+        if level.is_some_and(|level| level != loaded.level()) {
             return Err(self.corrupted(page, "sits at another level than its parent expects"));
         }
 
@@ -74,12 +74,9 @@ impl Load for Loader {
 
         let bytes = self.pager.read(page, &pointer.check)?;
         let header = PageHeader::read(&bytes).map_err(|reason| self.corrupted(page, reason))?;
-        let node = Node::decode(&bytes, &header).map_err(|reason| self.corrupted(page, reason))?;
-        let loaded = Arc::new(LoadedNode {
-            tree: header.tree,
-            txn: header.txn,
-            node,
-        });
+        let loaded = Arc::new(
+            LoadedNode::read(bytes, &header).map_err(|reason| self.corrupted(page, reason))?,
+        );
 
         self.check_expected(page, &loaded, pointer, tree, level)?;
         self.cache.insert(page, pointer.check, Arc::clone(&loaded));

@@ -32,8 +32,10 @@ pub(crate) use header::{
 };
 pub(crate) use key_block::{Kdf, KeyBlock};
 pub(crate) use node::{
-    LeafEntry, OverflowRef, StoredValue, branch_key_len, branch_len, decode_branch, decode_leaf,
-    encode_branch, encode_leaf, inline_entry_len, inline_limit, max_key_len, overflow_pages,
+    LeafEntry, OverflowRef, StoredRef, StoredValue, branch_child, branch_key, branch_key_len,
+    branch_len, branch_size, check_branch, check_leaf, decode_branch, decode_leaf, encode_branch,
+    encode_leaf, inline_entry_len, inline_limit, leaf_entry, leaf_inline, leaf_key, leaf_size,
+    leaf_value, max_key_len, overflow_pages,
 };
 pub(crate) use page::{
     CONTENT_OFFSET, PAGE_HEADER_OFFSET, PageHeader, PageKind, check_offset, content_len,

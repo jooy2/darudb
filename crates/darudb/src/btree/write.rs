@@ -269,8 +269,8 @@ fn rebalance<L: Load, S: Store>(
     let separator = branch.keys[left].clone();
     let (before, after) = branch.children.split_at_mut(right);
     let (left_child, right_child) = (&mut before[left], &mut after[0]);
-    let left_len = super::resolve(load, left_child, tree, child_level)?.len();
-    let right_len = super::resolve(load, right_child, tree, child_level)?.len();
+    let left_len = super::resolve(load, left_child, tree, child_level)?.size();
+    let right_len = super::resolve(load, right_child, tree, child_level)?.size();
 
     // Both neighbours' content goes into the left one. If it fits, the right
     // one is gone; otherwise the combined node is split again, evenly.
@@ -336,7 +336,7 @@ fn make_dirty<'c, L: Load, S: Store>(
         let page = store.allocate()?;
 
         store.release(pointer.page);
-        *child = Child::dirty(page, loaded.node.clone());
+        *child = Child::dirty(page, loaded.to_node()?);
     }
 
     match child {
@@ -359,7 +359,7 @@ fn take_node<L: Load, S: Store>(
 
             store.release(pointer.page);
 
-            Ok(loaded.node.clone())
+            loaded.to_node()
         }
         Child::Dirty { page, node } => {
             store.release(page);
@@ -552,7 +552,7 @@ pub(crate) fn delete_tree<L: Load, S: Store>(
                 let loaded = load.load(&pointer, tree, level)?;
 
                 store.release(pointer.page);
-                loaded.node.clone()
+                loaded.to_node()?
             }
             Child::Dirty { page, node } => {
                 store.release(page);

@@ -120,6 +120,8 @@ A Windows probe can make a reader's snapshot lock wait for an instant. The reade
 
 Each process caches the pages it reads, keyed by page number **and** check. A reader always knows the check it expects, from the pointer that led it to the page. So a cached copy of an older page at the same number never matches, and it is never used.
 
+A cached page is kept as its bytes, checked once when it is read, and its keys and values are read in place; a write transaction that changes a node decodes its own copy of it. A decoded node would cost an allocation for every key and value, both when a page is read and when the cache lets it go.
+
 Nothing is invalidated when another process publishes a commit: entries that no longer match anything simply age out. That keeps the cache useful when several processes write in turn, where dropping it on every new commit would empty it each time another process committed. In an encrypted file the check is the tag, and every write of a page draws a fresh nonce, so two versions of a page never share a key.
 
 ## When a process dies

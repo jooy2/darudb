@@ -107,6 +107,23 @@ pub(crate) enum StoredValue {
     Overflow(OverflowRef),
 }
 
+/// A value as a leaf stores it, read in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredRef<'a> {
+    Inline(&'a [u8]),
+    Overflow(OverflowRef),
+}
+
+impl StoredValue {
+    /// The value, borrowed.
+    pub(crate) fn as_stored(&self) -> StoredRef<'_> {
+        match self {
+            StoredValue::Inline(value) => StoredRef::Inline(value),
+            StoredValue::Overflow(reference) => StoredRef::Overflow(*reference),
+        }
+    }
+}
+
 /// One entry of a leaf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LeafEntry {
@@ -198,8 +215,10 @@ pub(crate) fn encode_leaf(entries: &[LeafEntry], page: &mut [u8]) {
     debug_assert!(cursor >= CONTENT_OFFSET + 2 * entries.len());
 }
 
-/// Reads the `count` entries of a leaf.
-pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &'static str> {
+/// Checks every offset, length and value kind of a leaf with `count`
+/// entries against the page, and the order of its keys, so that
+/// [`leaf_key`] and [`leaf_value`] can read it in place.
+pub(crate) fn check_leaf(page: &[u8], count: usize) -> Result<(), &'static str> {
     let page_size = page.len();
     let end = check_offset(page_size);
     let slots_end = CONTENT_OFFSET + 2 * count;
@@ -213,7 +232,7 @@ pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &
         return Err("a leaf's slots run past its content");
     }
 
-    let mut entries: Vec<LeafEntry> = Vec::with_capacity(count);
+    let mut previous: Option<&[u8]> = None;
 
     for index in 0..count {
         let at = read_u16(page, CONTENT_OFFSET + 2 * index);
@@ -228,54 +247,122 @@ pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &
             return Err("a leaf key is longer than the page allows");
         }
 
-        let entry = match page[at + 2] {
+        match page[at + 2] {
             0 => {
-                if at + 5 > end {
+                if at + 5 > end || at + 5 + key_len + read_u16(page, at + 3) > end {
                     return Err("a leaf entry lies outside the page");
-                }
-
-                let value_len = read_u16(page, at + 3);
-                let key_start = at + 5;
-                let value_start = key_start + key_len;
-
-                if value_start + value_len > end {
-                    return Err("a leaf entry lies outside the page");
-                }
-
-                LeafEntry {
-                    key: page[key_start..value_start].to_vec(),
-                    value: StoredValue::Inline(page[value_start..value_start + value_len].to_vec()),
                 }
             }
             1 => {
-                let key_start = at + 3;
-                let reference_start = key_start + key_len;
-
-                if reference_start + OVERFLOW_REF_LEN > end {
+                if at + 3 + key_len + OVERFLOW_REF_LEN > end {
                     return Err("a leaf entry lies outside the page");
                 }
 
-                LeafEntry {
-                    key: page[key_start..reference_start].to_vec(),
-                    value: StoredValue::Overflow(OverflowRef::read(
-                        &page[reference_start..],
-                        page_size,
-                    )?),
-                }
+                OverflowRef::read(&page[at + 3 + key_len..], page_size)?;
             }
             _ => return Err("a leaf entry's value is of no known kind"),
-        };
-
-        if let Some(previous) = entries.last() {
-            if previous.key.cmp(&entry.key) != Ordering::Less {
-                return Err("a leaf's keys are out of order");
-            }
         }
 
-        entries.push(entry);
+        let key = leaf_key(page, index);
+
+        if previous.is_some_and(|previous| previous.cmp(key) != Ordering::Less) {
+            return Err("a leaf's keys are out of order");
+        }
+
+        previous = Some(key);
     }
 
-    Ok(entries)
+    Ok(())
+}
+
+/// The key of entry `index` of a leaf that [`check_leaf`] passed.
+pub(crate) fn leaf_key(page: &[u8], index: usize) -> &[u8] {
+    let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+    let key_len = read_u16(page, at);
+    let start = if page[at + 2] == 0 { at + 5 } else { at + 3 };
+
+    &page[start..start + key_len]
+}
+
+/// The value of entry `index` of a leaf that [`check_leaf`] passed.
+pub(crate) fn leaf_value(page: &[u8], index: usize) -> Result<StoredRef<'_>, &'static str> {
+    leaf_entry(page, index).map(|(_, value)| value)
+}
+
+/// The key and the value of entry `index` of a leaf that [`check_leaf`]
+/// passed, if the value is inline: nearly every value, in a return small
+/// enough to pass in registers.
+pub(crate) fn leaf_inline(page: &[u8], index: usize) -> Option<(&[u8], &[u8])> {
+    let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+
+    if page[at + 2] != 0 {
+        return None;
+    }
+
+    let key_end = at + 5 + read_u16(page, at);
+
+    Some((
+        &page[at + 5..key_end],
+        &page[key_end..key_end + read_u16(page, at + 3)],
+    ))
+}
+
+/// The key and the value of entry `index` of a leaf that [`check_leaf`]
+/// passed, read together.
+pub(crate) fn leaf_entry(
+    page: &[u8],
+    index: usize,
+) -> Result<(&[u8], StoredRef<'_>), &'static str> {
+    let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+    let key_len = read_u16(page, at);
+
+    Ok(if page[at + 2] == 0 {
+        let start = at + 5 + key_len;
+
+        (
+            &page[at + 5..start],
+            StoredRef::Inline(&page[start..start + read_u16(page, at + 3)]),
+        )
+    } else {
+        (
+            &page[at + 3..at + 3 + key_len],
+            StoredRef::Overflow(OverflowRef::read(&page[at + 3 + key_len..], page.len())?),
+        )
+    })
+}
+
+/// The bytes the `count` entries of a leaf that [`check_leaf`] passed take,
+/// slots included, as [`LeafEntry::len`] counts them.
+pub(crate) fn leaf_size(page: &[u8], count: usize) -> usize {
+    (0..count)
+        .map(|index| {
+            let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+            let key_len = read_u16(page, at);
+
+            if page[at + 2] == 0 {
+                inline_entry_len(key_len, read_u16(page, at + 3))
+            } else {
+                LEAF_OVERHEAD + key_len
+            }
+        })
+        .sum()
+}
+
+/// Reads the `count` entries of a leaf.
+pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &'static str> {
+    check_leaf(page, count)?;
+
+    (0..count)
+        .map(|index| {
+            Ok(LeafEntry {
+                key: leaf_key(page, index).to_vec(),
+                value: match leaf_value(page, index)? {
+                    StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
+                    StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
+                },
+            })
+        })
+        .collect()
 }
 
 /// Writes a branch's keys and children as its content. There is one more
@@ -305,11 +392,10 @@ pub(crate) fn encode_branch<K: AsRef<[u8]>>(keys: &[K], children: &[Pointer], pa
     debug_assert!(cursor >= slots + 2 * keys.len());
 }
 
-/// Reads the `count` keys and `count + 1` children of a branch.
-pub(crate) fn decode_branch(
-    page: &[u8],
-    count: usize,
-) -> Result<(Vec<Vec<u8>>, Vec<Pointer>), &'static str> {
+/// Checks the children, the key offsets and lengths of a branch with
+/// `count` keys against the page, and the order of its keys, so that
+/// [`branch_key`] and [`branch_child`] can read it in place.
+pub(crate) fn check_branch(page: &[u8], count: usize) -> Result<(), &'static str> {
     let end = check_offset(page.len());
     let slots = CONTENT_OFFSET + POINTER_LEN * (count + 1);
     let slots_end = slots + 2 * count;
@@ -323,19 +409,15 @@ pub(crate) fn decode_branch(
         return Err("a branch's children run past its content");
     }
 
-    let mut children = Vec::with_capacity(count + 1);
-
     for index in 0..=count {
-        let child = Pointer::read(&page[CONTENT_OFFSET + POINTER_LEN * index..]);
+        let child = branch_child(page, index);
 
         if child.page == 0 || child.txn == 0 {
             return Err("a branch points at no page");
         }
-
-        children.push(child);
     }
 
-    let mut keys: Vec<Vec<u8>> = Vec::with_capacity(count);
+    let mut previous: Option<&[u8]> = None;
 
     for index in 0..count {
         let at = read_u16(page, slots + 2 * index);
@@ -350,18 +432,52 @@ pub(crate) fn decode_branch(
             return Err("a branch key lies outside the page");
         }
 
-        let key = page[at + 2..at + 2 + key_len].to_vec();
+        let key = &page[at + 2..at + 2 + key_len];
 
-        if let Some(previous) = keys.last() {
-            if previous.as_slice() >= key.as_slice() {
-                return Err("a branch's keys are out of order");
-            }
+        if previous.is_some_and(|previous| previous >= key) {
+            return Err("a branch's keys are out of order");
         }
 
-        keys.push(key);
+        previous = Some(key);
     }
 
-    Ok((keys, children))
+    Ok(())
+}
+
+/// Key `index` of a branch with `count` keys that [`check_branch`] passed.
+pub(crate) fn branch_key(page: &[u8], count: usize, index: usize) -> &[u8] {
+    let at = read_u16(page, CONTENT_OFFSET + POINTER_LEN * (count + 1) + 2 * index);
+
+    &page[at + 2..at + 2 + read_u16(page, at)]
+}
+
+/// Child `index` of a branch.
+pub(crate) fn branch_child(page: &[u8], index: usize) -> Pointer {
+    Pointer::read(&page[CONTENT_OFFSET + POINTER_LEN * index..])
+}
+
+/// The bytes a branch with `count` keys that [`check_branch`] passed takes,
+/// as [`branch_len`] counts them.
+pub(crate) fn branch_size(page: &[u8], count: usize) -> usize {
+    POINTER_LEN
+        + (0..count)
+            .map(|index| branch_key_len(branch_key(page, count, index).len()))
+            .sum::<usize>()
+}
+
+/// Reads the `count` keys and `count + 1` children of a branch.
+pub(crate) fn decode_branch(
+    page: &[u8],
+    count: usize,
+) -> Result<(Vec<Vec<u8>>, Vec<Pointer>), &'static str> {
+    check_branch(page, count)?;
+
+    Ok((
+        (0..count)
+            .map(|index| branch_key(page, count, index).to_vec())
+            .collect(),
+        (0..=count).map(|index| branch_child(page, index)).collect(),
+    ))
 }
 
 #[cfg(test)]

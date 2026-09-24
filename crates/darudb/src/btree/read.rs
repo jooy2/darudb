@@ -3,9 +3,9 @@
 use std::ops::Bound;
 
 use super::Load;
-use super::node::{Child, Node, NodeRef, child_index};
+use super::node::{Child, Node, NodeRef};
 use crate::error::{Error, Result};
-use crate::format::{Pointer, StoredValue};
+use crate::format::{Pointer, StoredRef, StoredValue};
 
 /// The node `child` refers to: borrowed if this transaction holds it, loaded
 /// and verified otherwise.
@@ -29,23 +29,15 @@ fn descend<'a, L: Load>(
     index: usize,
 ) -> Result<NodeRef<'a>> {
     match node {
-        NodeRef::Borrowed(node) => match node {
-            Node::Branch(branch) => {
-                resolve(load, &branch.children[index], tree, Some(branch.level - 1))
-            }
-            Node::Leaf(_) => Err(internal("descended into a leaf")),
-        },
-        NodeRef::Loaded(loaded) => match &loaded.node {
-            Node::Branch(branch) => match &branch.children[index] {
-                Child::Clean(pointer) => Ok(NodeRef::Loaded(load.load(
-                    pointer,
-                    tree,
-                    Some(branch.level - 1),
-                )?)),
-                Child::Dirty { .. } => Err(internal("a committed node holds a dirty child")),
-            },
-            Node::Leaf(_) => Err(internal("descended into a leaf")),
-        },
+        NodeRef::Borrowed(Node::Branch(branch)) => {
+            resolve(load, &branch.children[index], tree, Some(branch.level - 1))
+        }
+        NodeRef::Loaded(loaded) if !node.is_leaf() => Ok(NodeRef::Loaded(load.load(
+            &loaded.child(index),
+            tree,
+            Some(loaded.level() - 1),
+        )?)),
+        _ => Err(internal("descended into a leaf")),
     }
 }
 
@@ -69,15 +61,20 @@ pub(crate) fn get_stored<L: Load>(
     let mut node = resolve(load, root, tree, None)?;
 
     loop {
-        let index = match &*node {
-            Node::Leaf(entries) => {
-                return Ok(entries
-                    .binary_search_by(|entry| entry.key.as_slice().cmp(key))
-                    .ok()
-                    .map(|index| entries[index].value.clone()));
+        if node.is_leaf() {
+            let index = node.rank(key, false);
+
+            if index == node.count() || node.key(index) != key {
+                return Ok(None);
             }
-            Node::Branch(branch) => child_index(&branch.keys, key),
-        };
+
+            return Ok(Some(match node.value(index)? {
+                StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
+                StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
+            }));
+        }
+
+        let index = node.rank(key, true);
 
         node = descend(load, &node, tree, index)?;
     }
@@ -238,35 +235,26 @@ impl<'a, L: Load> Range<'a, L> {
         let tree = self.tree;
 
         loop {
-            match &*node {
-                Node::Branch(branch) => {
-                    let index = match start {
-                        Bound::Unbounded => 0,
-                        Bound::Included(key) | Bound::Excluded(key) => {
-                            child_index(&branch.keys, key)
-                        }
-                    };
-                    let child = descend(load, &node, tree, index)?;
+            if node.is_leaf() {
+                let index = match start {
+                    Bound::Unbounded => 0,
+                    Bound::Included(key) => node.rank(key, false),
+                    Bound::Excluded(key) => node.rank(key, true),
+                };
 
-                    self.stack.push((node, index));
-                    node = child;
-                }
-                Node::Leaf(entries) => {
-                    let index = match start {
-                        Bound::Unbounded => 0,
-                        Bound::Included(key) => {
-                            entries.partition_point(|entry| entry.key.as_slice() < key)
-                        }
-                        Bound::Excluded(key) => {
-                            entries.partition_point(|entry| entry.key.as_slice() <= key)
-                        }
-                    };
+                self.stack.push((node, index));
 
-                    self.stack.push((node, index));
-
-                    return Ok(());
-                }
+                return Ok(());
             }
+
+            let index = match start {
+                Bound::Unbounded => 0,
+                Bound::Included(key) | Bound::Excluded(key) => node.rank(key, true),
+            };
+            let child = descend(load, &node, tree, index)?;
+
+            self.stack.push((node, index));
+            node = child;
         }
     }
 
@@ -276,35 +264,27 @@ impl<'a, L: Load> Range<'a, L> {
         let tree = self.tree;
 
         loop {
-            match &*node {
-                Node::Branch(branch) => {
-                    let index = match end {
-                        Bound::Unbounded => branch.children.len() - 1,
-                        Bound::Included(key) | Bound::Excluded(key) => {
-                            child_index(&branch.keys, key)
-                        }
-                    };
-                    let child = descend(load, &node, tree, index)?;
+            if node.is_leaf() {
+                let index = match end {
+                    Bound::Unbounded => node.count(),
+                    Bound::Included(key) => node.rank(key, true),
+                    Bound::Excluded(key) => node.rank(key, false),
+                };
 
-                    self.stack.push((node, index));
-                    node = child;
-                }
-                Node::Leaf(entries) => {
-                    let index = match end {
-                        Bound::Unbounded => entries.len(),
-                        Bound::Included(key) => {
-                            entries.partition_point(|entry| entry.key.as_slice() <= key)
-                        }
-                        Bound::Excluded(key) => {
-                            entries.partition_point(|entry| entry.key.as_slice() < key)
-                        }
-                    };
+                self.stack.push((node, index));
 
-                    self.stack.push((node, index));
-
-                    return Ok(());
-                }
+                return Ok(());
             }
+
+            // A branch has one more child than keys.
+            let index = match end {
+                Bound::Unbounded => node.count(),
+                Bound::Included(key) | Bound::Excluded(key) => node.rank(key, true),
+            };
+            let child = descend(load, &node, tree, index)?;
+
+            self.stack.push((node, index));
+            node = child;
         }
     }
 
@@ -314,7 +294,7 @@ impl<'a, L: Load> Range<'a, L> {
         self.stack.pop();
 
         while let Some((node, index)) = self.stack.last_mut() {
-            if !matches!(&**node, Node::Branch(_)) {
+            if node.is_leaf() {
                 return Err(internal("a leaf above a leaf"));
             }
 
@@ -330,16 +310,16 @@ impl<'a, L: Load> Range<'a, L> {
             let mut child = descend(self.load, &parent, self.tree, index)?;
 
             loop {
-                let last = match &*child {
-                    Node::Branch(branch) => branch.children.len() - 1,
-                    Node::Leaf(entries) => {
-                        let past = entries.len();
+                // The last child of a branch, or just past a leaf's last
+                // entry: one past the last key either way.
+                let last = child.count();
 
-                        self.stack.push((child, past));
+                if child.is_leaf() {
+                    self.stack.push((child, last));
 
-                        return Ok(());
-                    }
-                };
+                    return Ok(());
+                }
+
                 let next = descend(self.load, &child, self.tree, last)?;
 
                 self.stack.push((child, last));
@@ -355,11 +335,11 @@ impl<'a, L: Load> Range<'a, L> {
         self.stack.pop();
 
         while let Some((node, index)) = self.stack.last_mut() {
-            let Node::Branch(branch) = &**node else {
+            if node.is_leaf() {
                 return Err(internal("a leaf above a leaf"));
-            };
+            }
 
-            if *index + 1 >= branch.children.len() {
+            if *index + 1 > node.count() {
                 self.stack.pop();
 
                 continue;
@@ -371,9 +351,7 @@ impl<'a, L: Load> Range<'a, L> {
             let mut child = descend(self.load, &parent, self.tree, index)?;
 
             loop {
-                let is_branch = matches!(&*child, Node::Branch(_));
-
-                if !is_branch {
+                if child.is_leaf() {
                     self.stack.push((child, 0));
 
                     return Ok(());
@@ -394,10 +372,12 @@ impl<'a, L: Load> Range<'a, L> {
             let Some((node, index)) = self.stack.last_mut() else {
                 return Ok(None);
             };
-            let Node::Leaf(entries) = &**node else {
+
+            if !node.is_leaf() {
                 return Err(internal("a range stopped on a branch"));
-            };
-            let entry = if self.backward {
+            }
+
+            let at = if self.backward {
                 if *index == 0 {
                     self.previous_leaf()?;
 
@@ -405,33 +385,76 @@ impl<'a, L: Load> Range<'a, L> {
                 }
 
                 *index -= 1;
-                entries[*index].clone()
+                *index
             } else {
-                if *index == entries.len() {
+                if *index == node.count() {
                     self.next_leaf()?;
 
                     continue;
                 }
 
                 *index += 1;
-                entries[*index - 1].clone()
+                *index - 1
             };
+            let node = node.clone();
+            let (key, value) = node.entry(at)?;
 
-            if self.beyond_stop(&entry.key) {
+            if self.beyond_stop(key) {
                 self.stack.clear();
 
                 return Ok(None);
             }
 
-            let value = match entry.value {
-                StoredValue::Inline(value) => value,
-                StoredValue::Overflow(reference) => {
-                    self.load.read_overflow(&reference, self.tree)?
-                }
+            let value = match value {
+                StoredRef::Inline(value) => value.to_vec(),
+                StoredRef::Overflow(reference) => self.load.read_overflow(&reference, self.tree)?,
             };
 
-            return Ok(Some((entry.key, value)));
+            return Ok(Some((key.to_vec(), value)));
         }
+    }
+
+    /// The entries of the leaf on top of the stack that the walk has left,
+    /// as the range of their indexes, and whether the walk stops within the
+    /// leaf. The keys are in order, so the ones past the stop are at one end
+    /// of the leaf, where a binary search finds them.
+    fn left_in_leaf(&self) -> Result<Option<(NodeRef<'a>, usize, usize, bool)>> {
+        let Some((node, index)) = self.stack.last() else {
+            return Ok(None);
+        };
+
+        if !node.is_leaf() {
+            return Err(internal("a range stopped on a branch"));
+        }
+
+        let (from, to) = if self.backward {
+            (0, *index)
+        } else {
+            (*index, node.count())
+        };
+        let (mut low, mut high) = (from, to);
+
+        if !matches!(self.stop, Bound::Unbounded) {
+            while low < high {
+                let middle = low + (high - low) / 2;
+
+                if self.beyond_stop(node.key(middle)) == self.backward {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+        } else if self.backward {
+            low = from;
+        } else {
+            low = to;
+        }
+
+        Ok(Some(if self.backward {
+            (node.clone(), low, to, low > from)
+        } else {
+            (node.clone(), from, low, low < to)
+        }))
     }
 
     /// The number of entries the walk has left, counted a leaf at a time
@@ -439,32 +462,11 @@ impl<'a, L: Load> Range<'a, L> {
     pub(crate) fn count_entries(mut self) -> Result<u64> {
         let mut count = 0u64;
 
-        loop {
-            let (within, done) = {
-                let Some((node, index)) = self.stack.last() else {
-                    return Ok(count);
-                };
-                let Node::Leaf(entries) = &**node else {
-                    return Err(internal("a range stopped on a branch"));
-                };
-
-                if self.backward {
-                    let before = &entries[..*index];
-                    let first = before.partition_point(|entry| self.beyond_stop(&entry.key));
-
-                    (before.len() - first, first > 0)
-                } else {
-                    let after = &entries[*index..];
-                    let within = after.partition_point(|entry| !self.beyond_stop(&entry.key));
-
-                    (within, within < after.len())
-                }
-            };
-
-            count += within as u64;
+        while let Some((_, from, to, done)) = self.left_in_leaf()? {
+            count += (to - from) as u64;
 
             if done {
-                return Ok(count);
+                break;
             }
 
             if self.backward {
@@ -473,43 +475,44 @@ impl<'a, L: Load> Range<'a, L> {
                 self.next_leaf()?;
             }
         }
+
+        Ok(count)
     }
 
     /// Gives each entry the walk has left to `visit`, borrowed from its leaf,
     /// until `visit` returns true. Nothing is copied out of a leaf, except a
     /// value kept in overflow pages, which is read.
     pub(crate) fn for_each(mut self, visit: &mut Visit<'_>) -> Result<()> {
-        loop {
-            let Some((node, index)) = self.stack.last() else {
-                return Ok(());
-            };
-            let (node, index) = (node.clone(), *index);
-            let Node::Leaf(entries) = &*node else {
-                return Err(internal("a range stopped on a branch"));
-            };
-            let order: Box<dyn Iterator<Item = usize>> = if self.backward {
-                Box::new((0..index).rev())
-            } else {
-                Box::new(index..entries.len())
-            };
-
-            for at in order {
-                let entry = &entries[at];
-
-                if self.beyond_stop(&entry.key) {
-                    return Ok(());
+        while let Some((node, from, to, done)) = self.left_in_leaf()? {
+            let mut give = |at: usize| -> Result<bool> {
+                if let Some((key, value)) = node.inline_entry(at) {
+                    return visit(key, value);
                 }
 
-                let stop = match &entry.value {
-                    StoredValue::Inline(value) => visit(&entry.key, value)?,
-                    StoredValue::Overflow(reference) => {
-                        visit(&entry.key, &self.load.read_overflow(reference, self.tree)?)?
+                match node.entry(at)? {
+                    (key, StoredRef::Inline(value)) => visit(key, value),
+                    (key, StoredRef::Overflow(reference)) => {
+                        visit(key, &self.load.read_overflow(&reference, self.tree)?)
                     }
-                };
-
-                if stop {
-                    return Ok(());
                 }
+            };
+
+            if self.backward {
+                for at in (from..to).rev() {
+                    if give(at)? {
+                        return Ok(());
+                    }
+                }
+            } else {
+                for at in from..to {
+                    if give(at)? {
+                        return Ok(());
+                    }
+                }
+            }
+
+            if done {
+                return Ok(());
             }
 
             if self.backward {
@@ -518,6 +521,8 @@ impl<'a, L: Load> Range<'a, L> {
                 self.next_leaf()?;
             }
         }
+
+        Ok(())
     }
 
     /// Whether `key` lies past the bound the walk stops at: beyond the end

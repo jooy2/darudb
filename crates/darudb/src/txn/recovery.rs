@@ -173,7 +173,7 @@ pub(crate) fn check_commit(loader: &Loader, record: &CommitRecord) -> Result<boo
             Err(error) => return Err(error),
         };
 
-        match &loaded.node {
+        match &loaded.to_node()? {
             Node::Branch(branch) => {
                 for child in &branch.children {
                     if let crate::btree::Child::Clean(child) = child {

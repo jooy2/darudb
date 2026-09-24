@@ -101,7 +101,7 @@ pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
                 .load(&pointer, tree, level)
                 .map_err(|error| error.to_string())?;
 
-            match &loaded.node {
+            match &loaded.to_node().map_err(|error| error.to_string())? {
                 Node::Branch(branch) => {
                     for child in &branch.children {
                         if let crate::btree::Child::Clean(child) = child {

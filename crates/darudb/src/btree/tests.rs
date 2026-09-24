@@ -133,6 +133,29 @@ impl Harness {
             .unwrap()
     }
 
+    fn lent(
+        &self,
+        start: Bound<&[u8]>,
+        end: Bound<&[u8]>,
+        backward: bool,
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let range = if backward {
+            Range::new_backward(&self.loader, TREE, self.root.as_ref(), start, end)
+        } else {
+            Range::new(&self.loader, TREE, self.root.as_ref(), start, end)
+        };
+        let mut entries = Vec::new();
+
+        range
+            .unwrap()
+            .for_each(&mut |key, value| {
+                entries.push((key.to_vec(), value.to_vec()));
+                Ok(false)
+            })
+            .unwrap();
+        entries
+    }
+
     fn count(&self, start: Bound<&[u8]>, end: Bound<&[u8]>, backward: bool) -> u64 {
         let range = if backward {
             Range::new_backward(&self.loader, TREE, self.root.as_ref(), start, end)
@@ -194,14 +217,14 @@ impl Harness {
 
             let node = resolve(&self.loader, &child, TREE, level).unwrap();
 
-            assert!(node.len() <= capacity, "a node larger than its page");
+            assert!(node.size() <= capacity, "a node larger than its page");
 
             let in_bounds = |key: &[u8]| {
                 low.as_deref().is_none_or(|low| key >= low)
                     && high.as_deref().is_none_or(|high| key < high)
             };
 
-            match &*node {
+            match &node.to_node().unwrap() {
                 Node::Leaf(entries) => {
                     assert!(
                         is_root || !entries.is_empty(),
@@ -450,7 +473,11 @@ fn collect_pages(harness: &Harness) -> HashSet<u64> {
             pages.insert(pointer.page);
         }
 
-        if let Node::Branch(branch) = &*resolve(&harness.loader, &child, TREE, level).unwrap() {
+        if let Node::Branch(branch) = &resolve(&harness.loader, &child, TREE, level)
+            .unwrap()
+            .to_node()
+            .unwrap()
+        {
             pending.extend(
                 branch
                     .children
@@ -487,7 +514,7 @@ fn a_value_just_past_the_inline_limit_goes_to_an_overflow_run() {
 }
 
 /// Also: counting the entries of a range a leaf at a time gives the number
-/// a walk gives, both ways.
+/// a walk gives, and lending them gives the same entries, both ways.
 #[test]
 fn a_backward_walk_gives_the_forward_walk_in_reverse() {
     let mut rng = Rng::new(11);
@@ -535,7 +562,19 @@ fn a_backward_walk_gives_the_forward_walk_in_reverse() {
                     );
                 }
 
+                assert_eq!(
+                    harness.lent(as_slice(&start), as_slice(&end), false),
+                    forward,
+                    "page size {page_size}, {start:?} to {end:?}"
+                );
+
                 forward.reverse();
+
+                assert_eq!(
+                    harness.lent(as_slice(&start), as_slice(&end), true),
+                    forward,
+                    "page size {page_size}, {start:?} to {end:?}, backward"
+                );
 
                 assert_eq!(
                     harness.entries_backward(as_slice(&start), as_slice(&end)),

@@ -4,7 +4,7 @@
 //! leaves up. The pages are not written here: the commit writes all of them
 //! together, in page order, before its barrier.
 
-use super::node::{Branch, Child, Node};
+use super::node::{Branch, Child, LoadedNode, Node};
 use super::read::internal;
 use crate::error::Result;
 use crate::format::{PageHeader, PageKind, Pointer, encode_branch, encode_leaf};
@@ -14,11 +14,11 @@ use crate::storage::Pager;
 #[derive(Debug)]
 pub(crate) struct FinishedPage {
     pub(crate) page: u64,
-    pub(crate) tree: u64,
     pub(crate) bytes: Vec<u8>,
     pub(crate) pointer: Pointer,
-    /// The node, with every child committed, for the page cache.
-    pub(crate) node: Node,
+    /// The node as the page cache keeps it, from the page before sealing,
+    /// which in an encrypted file is the last time it is plain.
+    pub(crate) loaded: LoadedNode,
 }
 
 /// Encodes every page of `child` this transaction holds, children first, and
@@ -36,14 +36,11 @@ pub(crate) fn finish(
         Child::Dirty { page, node } => (page, *node),
     };
     let mut bytes = vec![0u8; pager.page_size()];
-    let (header, node) = match node {
+    let header = match node {
         Node::Leaf(entries) => {
             encode_leaf(&entries, &mut bytes);
 
-            (
-                header(PageKind::Leaf, 0, entries.len(), txn, tree)?,
-                Node::Leaf(entries),
-            )
+            header(PageKind::Leaf, 0, entries.len(), txn, tree)?
         }
         Node::Branch(Branch {
             level,
@@ -58,28 +55,21 @@ pub(crate) fn finish(
 
             encode_branch(&keys, &pointers, &mut bytes);
 
-            (
-                header(PageKind::Branch, level, keys.len(), txn, tree)?,
-                Node::Branch(Branch {
-                    level,
-                    keys,
-                    children: pointers.into_iter().map(Child::Clean).collect(),
-                }),
-            )
+            header(PageKind::Branch, level, keys.len(), txn, tree)?
         }
     };
 
     header.write(&mut bytes);
 
+    let loaded = LoadedNode::encoded(bytes.clone(), &header);
     let check = pager.seal(page, &mut bytes)?;
     let pointer = Pointer { page, txn, check };
 
     out.push(FinishedPage {
         page,
-        tree,
         bytes,
         pointer,
-        node,
+        loaded,
     });
 
     Ok(pointer)
