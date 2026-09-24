@@ -267,9 +267,33 @@ fn check_fields(fields: &Fields, schema: &StoredSchema) -> Result<(), &'static s
 
         ids.push(field.id);
         check_kind(&field.kind, schema)?;
+
+        if field
+            .default
+            .as_ref()
+            .is_some_and(|default| !default_fits(default, &field.kind))
+        {
+            return Err("a field's default does not have the field's type");
+        }
     }
 
     Ok(())
+}
+
+/// Whether `value` can be the default of a field of `kind`: a scalar of that
+/// type, or a list of them.
+fn default_fits(value: &Value, kind: &Kind) -> bool {
+    match (kind, value) {
+        (Kind::Bool, Value::Bool(_))
+        | (Kind::Int, Value::Int(_))
+        | (Kind::Float, Value::Float(_))
+        | (Kind::String, Value::String(_))
+        | (Kind::Bytes, Value::Bytes(_)) => true,
+        (Kind::List(element), Value::List(values)) => {
+            values.iter().all(|value| default_fits(value, element))
+        }
+        _ => false,
+    }
 }
 
 fn check_kind(kind: &Kind, schema: &StoredSchema) -> Result<(), &'static str> {
@@ -609,6 +633,10 @@ mod tests {
 
         let mut schema = sample();
         schema.next_collection = 4;
+        broken.push(schema);
+
+        let mut schema = sample();
+        schema.collections[0].fields.list[1].default = Some(Value::List(vec![Value::Int(1)]));
         broken.push(schema);
 
         let mut schema = sample();

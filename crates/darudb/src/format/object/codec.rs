@@ -24,6 +24,12 @@ const LINK: u8 = 0x0A;
 /// the stack.
 const MAX_DEPTH: usize = 64;
 
+/// How many fields or elements reading a record reserves room for before it
+/// has read them. A count is bounded by the bytes left in the record, but a
+/// value in memory is many times the size of its smallest encoding, so a
+/// damaged count would otherwise reserve far more than the record holds.
+const RESERVE: usize = 256;
+
 /// A value as a record holds it, before any schema says what it means.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Raw {
@@ -178,7 +184,7 @@ impl Reader<'_> {
 
     fn fields(&mut self, depth: usize) -> Result<Vec<(u64, Raw)>, &'static str> {
         let count = self.count(2)?;
-        let mut fields = Vec::with_capacity(count);
+        let mut fields = Vec::with_capacity(count.min(RESERVE));
 
         for _ in 0..count {
             let id = self.varint()?;
@@ -225,7 +231,7 @@ impl Reader<'_> {
             }
             LIST => {
                 let count = self.count(1)?;
-                let mut values = Vec::with_capacity(count);
+                let mut values = Vec::with_capacity(count.min(RESERVE));
 
                 for _ in 0..count {
                     values.push(self.value(depth + 1)?);
