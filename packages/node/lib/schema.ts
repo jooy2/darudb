@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Declaring a schema: `t` for the types of fields, `collection` and
  * `schema`. A declaration is data; `codec.encodeSchema` turns it into the
@@ -7,7 +5,43 @@
  * a schema may hold live in one place.
  */
 
-const { invalid } = require('./codec');
+import { invalid } from './codec.js';
+
+/**
+ * A declared field's type and how the field holds it, as `t` and the
+ * methods of `FieldType` make it.
+ */
+export type Spec = (
+  | { type: 'bool' }
+  | { type: 'int'; big?: boolean }
+  | { type: 'float' }
+  | { type: 'string' }
+  | { type: 'bytes' }
+  | { type: 'link'; target: string }
+  | { type: 'list'; element: Spec }
+  | { type: 'object'; fields: DeclaredFields }
+) & {
+  optional?: boolean;
+  default?: unknown;
+  index?: boolean;
+  unique?: boolean;
+  primaryKey?: boolean;
+};
+
+/** The declared fields of a collection or an embedded object, by name. */
+export type DeclaredFields = Readonly<Record<string, FieldType>>;
+
+/** A declared collection, as `collection` makes it. */
+export interface DeclaredCollection {
+  readonly fields: DeclaredFields;
+  readonly [COLLECTION]: boolean;
+}
+
+/** A declared schema, as `schema` makes it. */
+export interface DeclaredSchema {
+  readonly version: number;
+  readonly collections: Readonly<Record<string, DeclaredCollection>>;
+}
 
 /** The types a primary key can have. */
 const KEY_TYPES = new Set(['int', 'string', 'bytes']);
@@ -17,13 +51,15 @@ const KEY_TYPES = new Set(['int', 'string', 'bytes']);
  * and refuses at once what the engine would refuse when the file opens.
  */
 class FieldType {
-  constructor(spec) {
+  declare readonly spec: Spec;
+
+  constructor(spec: Spec) {
     this.spec = Object.freeze(spec);
     Object.freeze(this);
   }
 
   /** The field may be null, and is null when left out. */
-  optional() {
+  optional(): FieldType {
     if (this.spec.primaryKey) {
       throw invalid('a primary key is required, never optional');
     }
@@ -32,7 +68,7 @@ class FieldType {
   }
 
   /** The field is required, and holds `value` when left out. */
-  default(value) {
+  default(value: unknown): FieldType {
     if (this.spec.type === 'link' || this.spec.type === 'object') {
       throw invalid(`a field of type ${this.spec.type} has no default`);
     }
@@ -45,17 +81,17 @@ class FieldType {
   }
 
   /** Queries on the field read an index rather than every object. */
-  index() {
+  index(): FieldType {
     return new FieldType({ ...this.spec, index: true });
   }
 
   /** An index that also refuses two objects with the same value. */
-  unique() {
+  unique(): FieldType {
     return new FieldType({ ...this.spec, unique: true });
   }
 
   /** The field is the collection's primary key: an int, a string or bytes. */
-  primaryKey() {
+  primaryKey(): FieldType {
     if (!KEY_TYPES.has(this.spec.type)) {
       throw invalid(`a primary key is an int, a string or bytes, not a ${this.spec.type}`);
     }
@@ -68,7 +104,7 @@ class FieldType {
   }
 }
 
-function fieldTypes(fields, where) {
+function fieldTypes(fields: Record<string, FieldType>, where: string): DeclaredFields {
   if (typeof fields !== 'object' || fields === null) {
     throw invalid(`${where} takes an object of field types`);
   }
@@ -92,9 +128,9 @@ const t = Object.freeze({
   string: () => new FieldType({ type: 'string' }),
   bytes: () => new FieldType({ type: 'bytes' }),
   /** The primary key of an object of collection `collection`. */
-  link: (collection) => new FieldType({ type: 'link', target: collection }),
+  link: (collection: string) => new FieldType({ type: 'link', target: collection }),
   /** A list of values of `element`, a scalar type or a link. */
-  list: (element) => {
+  list: (element: FieldType) => {
     if (!(element instanceof FieldType)) {
       throw invalid('`t.list` takes a type from `t`');
     }
@@ -102,7 +138,8 @@ const t = Object.freeze({
     return new FieldType({ type: 'list', element: element.spec });
   },
   /** An embedded object with fields of its own. */
-  object: (fields) => new FieldType({ type: 'object', fields: fieldTypes(fields, '`t.object`') })
+  object: (fields: Record<string, FieldType>) =>
+    new FieldType({ type: 'object', fields: fieldTypes(fields, '`t.object`') })
 });
 
 /** Marks what `collection` made, so that `schema` takes nothing else. */
@@ -112,12 +149,12 @@ const COLLECTION = Symbol('collection');
  * A collection: its fields by name. A field marked `primaryKey()` is the
  * key; without one, the collection gets an `id` that the engine numbers.
  */
-function collection(fields) {
+function collection(fields: Record<string, FieldType>): DeclaredCollection {
   return Object.freeze({ fields: fieldTypes(fields, '`collection`'), [COLLECTION]: true });
 }
 
 /** The collections of a database, at `version`, from 1 up. */
-function schema(version, collections) {
+function schema(version: number, collections: Record<string, DeclaredCollection>): DeclaredSchema {
   if (!Number.isSafeInteger(version) || version < 1) {
     throw invalid('a schema version is a whole number from 1 up');
   }
@@ -135,4 +172,4 @@ function schema(version, collections) {
   return Object.freeze({ version, collections: Object.freeze({ ...collections }) });
 }
 
-module.exports = { t, collection, schema, FieldType };
+export { t, collection, schema, FieldType };

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * The byte formats this package exchanges with the engine, written and read
  * in JavaScript: varints, records, the IR of a query and the stored schema,
@@ -12,6 +10,8 @@
  * from the engine comes from the file and is treated as untrusted: anything
  * that does not fit throws an error whose `code` is `CORRUPTED`.
  */
+
+import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
 
 const FALSE = 0x02;
 const TRUE = 0x03;
@@ -150,41 +150,6 @@ export type AnyRecord = Map<number | bigint, Tagged>;
 
 /** The value a `Tagged` of tag `T` holds. */
 type TaggedValue<T extends Tagged['tag']> = Extract<Tagged, { tag: T }>['value'];
-
-/**
- * A declared field's type and how the field holds it, as `t` and the
- * modifiers of a field type make it.
- */
-export type Spec = (
-  | { type: 'bool' }
-  | { type: 'int'; big?: boolean }
-  | { type: 'float' }
-  | { type: 'string' }
-  | { type: 'bytes' }
-  | { type: 'link'; target: string }
-  | { type: 'list'; element: Spec }
-  | { type: 'object'; fields: DeclaredFields }
-) & {
-  optional?: boolean;
-  default?: unknown;
-  index?: boolean;
-  unique?: boolean;
-  primaryKey?: boolean;
-};
-
-/** The declared fields of a collection or an embedded object, by name. */
-export type DeclaredFields = Readonly<Record<string, { readonly spec: Spec }>>;
-
-/** A declared collection, as `collection` makes it. */
-export interface DeclaredCollection {
-  readonly fields: DeclaredFields;
-}
-
-/** A declared schema, as `schema` makes it. */
-export interface DeclaredSchema {
-  readonly version: number;
-  readonly collections: Readonly<Record<string, DeclaredCollection>>;
-}
 
 /**
  * A node of a query's filter: a test of a field, with its operator's number
