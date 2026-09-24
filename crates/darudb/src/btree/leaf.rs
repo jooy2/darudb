@@ -154,6 +154,31 @@ impl Leaf {
         true
     }
 
+    /// The bytes entry `index` takes, its slot included.
+    pub(crate) fn entry_size(&self, index: usize) -> usize {
+        leaf_cell(&self.page, index).1 + 2
+    }
+
+    /// Moves the entries from `at` on into a new leaf, which it returns.
+    pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
+        let mut right = Leaf::new(self.page.len());
+
+        for index in at..self.count {
+            let (cell, len) = leaf_cell(&self.page, index);
+
+            right.low -= len;
+            right.page[right.low..right.low + len].copy_from_slice(&self.page[cell..cell + len]);
+            set_slot(&mut right.page, index - at, right.low);
+            self.garbage += len;
+        }
+
+        right.count = self.count - at;
+        self.page[CONTENT_OFFSET + 2 * at..CONTENT_OFFSET + 2 * self.count].fill(0);
+        self.count = at;
+
+        right
+    }
+
     /// Removes entry `index`, and returns the overflow run of its value, if
     /// it had one, for the caller to give back.
     pub(crate) fn remove(&mut self, index: usize) -> Result<Option<OverflowRef>, &'static str> {
@@ -343,6 +368,65 @@ mod tests {
                 decode_leaf(&Leaf::from_entries(PAGE, &model).into_page(), model.len()).unwrap(),
                 model
             );
+        }
+    }
+
+    #[test]
+    fn a_split_leaf_keeps_its_entries_in_two_pages() {
+        let mut rng = Rng::new(5);
+
+        for _ in 0..100 {
+            let mut leaf = Leaf::new(PAGE);
+            let mut model: Vec<LeafEntry> = Vec::new();
+
+            for _ in 0..60 {
+                let key: Vec<u8> = (0..1 + rng.below(8))
+                    .map(|_| b"abcd"[rng.index(4)])
+                    .collect();
+
+                if let Err(at) = leaf.search(&key) {
+                    let entry = LeafEntry {
+                        key,
+                        value: value_of(&mut rng),
+                    };
+
+                    if leaf.insert(at, &entry.key, entry.value.as_stored()) {
+                        model.insert(at, entry);
+                    }
+                }
+            }
+
+            let at = rng.index(model.len() + 1);
+            let right = leaf.split_off(at);
+            let (left_model, right_model) = model.split_at(at);
+
+            assert_eq!(leaf.to_entries().unwrap(), left_model);
+            assert_eq!(right.to_entries().unwrap(), right_model);
+            assert_eq!(
+                leaf.size(),
+                left_model.iter().map(LeafEntry::len).sum::<usize>()
+            );
+            assert_eq!(
+                right.size(),
+                right_model.iter().map(LeafEntry::len).sum::<usize>()
+            );
+
+            // The left page reclaims what moved out when it next needs room.
+            let mut left_model = left_model.to_vec();
+
+            // A key above every other keeps the leaf's keys in order.
+            if leaf.insert(left_model.len(), b"\xff\xff", StoredRef::Inline(&[1; 100])) {
+                left_model.push(LeafEntry {
+                    key: b"\xff\xff".to_vec(),
+                    value: StoredValue::Inline(vec![1; 100]),
+                });
+            }
+
+            assert_eq!(leaf.to_entries().unwrap(), left_model);
+
+            if !left_model.is_empty() {
+                check_leaf(&leaf.clone().into_page(), left_model.len()).unwrap();
+            }
         }
     }
 

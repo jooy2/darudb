@@ -16,8 +16,8 @@ use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
     CONTENT_OFFSET, Check, LeafEntry, OverflowRef, POINTER_LEN, PageHeader, PageKind, Pointer,
-    StoredRef, StoredValue, branch_key_len, branch_len, content_len, inline_entry_len,
-    inline_limit, overflow_pages,
+    StoredRef, branch_key_len, branch_len, cell_len, content_len, inline_entry_len, inline_limit,
+    overflow_pages,
 };
 
 /// A node split in two: the separator and the new right-hand node.
@@ -152,22 +152,38 @@ fn insert_into<L: Load, S: Store>(
                 return Ok((replaced, None));
             }
 
-            // The page is full: the entries, the new one among them, are
-            // shared out between it and a new one.
-            let mut entries = leaf.to_entries().map_err(internal)?;
+            // The page is full: its entries and the new one are shared out
+            // between it and a new leaf, as evenly as their sizes allow.
+            let mut sizes: Vec<usize> = (0..leaf.len())
+                .map(|index| leaf.entry_size(index))
+                .collect();
 
-            entries.insert(
-                at,
-                LeafEntry {
-                    key: key.to_vec(),
-                    value: owned(value),
-                },
-            );
+            sizes.insert(at, cell_len(key.len(), value) + 2);
 
-            let (left, separator, right) = split_leaf(entries, page_size)?;
+            // An entry after every other, as keys that only grow bring, goes
+            // alone into the new leaf: the full one stays as it is, and a run
+            // of such inserts fills its leaves rather than leaving each half
+            // empty.
+            let middle = if at == leaf.len() {
+                at
+            } else {
+                split_point(&sizes, capacity)
+                    .ok_or_else(|| internal("a leaf that cannot be split"))?
+            };
+            let fits = if middle <= at {
+                let mut right = leaf.split_off(middle);
+                let fits = right.insert(at - middle, key, value);
 
-            *leaf = left;
+                (fits, right)
+            } else {
+                let right = leaf.split_off(middle - 1);
 
+                (leaf.insert(at, key, value), right)
+            };
+            let (true, right) = fits else {
+                return Err(internal("a split leaf's entry does not fit"));
+            };
+            let separator = right.key(0).to_vec();
             let page = store.allocate()?;
 
             Ok((
@@ -458,22 +474,12 @@ fn release_child<S: Store>(store: &mut S, child: &Child) {
     }
 }
 
-/// A value as its entry keeps it.
-fn owned(value: StoredRef<'_>) -> StoredValue {
-    match value {
-        StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
-        StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
-    }
-}
-
-/// Shares out the entries of an overflowing leaf, in order, between two
-/// leaves as evenly as their sizes allow. Returns the left leaf, the
-/// separator, which is the first key of the right one, and the right leaf.
-fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Vec<u8>, Leaf)> {
-    let capacity = content_len(page_size);
-    let sizes: Vec<usize> = entries.iter().map(LeafEntry::len).collect();
+/// Where to cut a sequence of entries of `sizes` bytes so that both parts
+/// fit in `capacity` and differ in size as little as they can: the index of
+/// the first entry of the second part.
+fn split_point(sizes: &[usize], capacity: usize) -> Option<usize> {
     let total: usize = sizes.iter().sum();
-    let mut best = None;
+    let mut best: Option<(usize, usize)> = None;
     let mut left = 0;
 
     for at in 1..sizes.len() {
@@ -488,7 +494,16 @@ fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Ve
         }
     }
 
-    let (at, _) = best.ok_or_else(|| internal("a leaf that cannot be split"))?;
+    best.map(|(at, _)| at)
+}
+
+/// Shares out the entries of an overflowing leaf, in order, between two
+/// leaves as evenly as their sizes allow. Returns the left leaf, the
+/// separator, which is the first key of the right one, and the right leaf.
+fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Vec<u8>, Leaf)> {
+    let sizes: Vec<usize> = entries.iter().map(LeafEntry::len).collect();
+    let at = split_point(&sizes, content_len(page_size))
+        .ok_or_else(|| internal("a leaf that cannot be split"))?;
     let right = entries.split_off(at);
     let separator = right[0].key.clone();
 
