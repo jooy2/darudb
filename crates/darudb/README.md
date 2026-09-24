@@ -8,7 +8,7 @@ The engine of [DaruDB](https://darudb.cdget.com), an embedded database that keep
 
 ## Usage
 
-The storage kernel stores named trees of byte keys and byte values. Typed records and queries come later, built on top of it.
+The storage kernel stores named trees of byte keys and byte values, and a database opened with a schema also holds collections of typed objects with indexes, queries and migrations ([below](#collections-and-queries)).
 
 ```rust
 use darudb::Database;
@@ -40,6 +40,43 @@ fn main() -> Result<(), darudb::Error> {
 A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. `commit_deferred` returns without waiting for the disk: readers see the changes at once, a crash of the process loses none of them, and they become durable within a second, or sooner at the next `commit`, `Database::sync` or close. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
 
 Several processes can open the same file at once. One writes at a time, readers never wait for it, and a process that dies at any moment leaves nothing for the others to clean up. A process that has a database open must not open the file any other way, not even to copy it: on Unix-like systems, closing that second handle drops the locks the database holds.
+
+### Collections and queries
+
+A schema declares collections, their fields, their primary keys and their indexes, at a version. The engine stores it in the file, keeps every index in step with the objects in the same transaction, and migrates the file when the version rises.
+
+```rust
+use darudb::{Collection, Filter, Object, OpenOptions, Query, Schema, Type};
+
+fn main() -> Result<(), darudb::Error> {
+    let schema = Schema::new(1).collection(
+        Collection::new("users")
+            .field("name", Type::String)
+            .optional("email", Type::String)
+            .with_default("age", Type::Int, 0)
+            .unique("email")
+            .index("age"),
+    );
+    let db = OpenOptions::new().schema(schema).open("app.darudb")?;
+
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection("users")?;
+    users.insert(Object::new().with("name", "Alice").with("age", 31))?;
+    users.insert(Object::new().with("name", "Bob").with("email", "bob@example.com"))?;
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    let adults = read.collection("users")?.query(
+        &Query::new().filter(Filter::ge("age", 18)).sort_by_desc("age").limit(10),
+    )?;
+    let same = Query::parse("age >= $0 SORT BY age DESC LIMIT 10", &[18.into()])?;
+
+    assert_eq!(read.collection("users")?.query(&same)?, adults);
+    Ok(())
+}
+```
+
+A query reads through the primary key or an index when a condition of its filter allows it, and gives the same objects either way. Results are plain objects that outlive the transaction.
 
 ### Encryption
 
