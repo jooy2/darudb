@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Building a query: `Query`, which a collection's `find` and `count` hand to
  * a function, and the conditions a filter is made of. A query becomes the IR
@@ -7,7 +5,32 @@
  * language parses into, and the engine checks it against the schema.
  */
 
-const { Param, codeError } = require('./codec');
+import { Param, codeError } from './codec.js';
+import type { CodeError } from './codec.js';
+
+/**
+ * A node of a query's filter: a test of a field, with its operator's number
+ * and the values it compares with, or `and`, `or` or `not` of other nodes.
+ */
+export type FilterNode =
+  | { kind: 'test'; op: number; path: string[]; values: unknown[] }
+  | { kind: 'and' | 'or'; terms: FilterNode[] }
+  | { kind: 'not'; term: FilterNode };
+
+/**
+ * A query as `Query.parts` gives it and `codec.encodeQuery` takes it: its
+ * filter, its sort as paths each with whether it descends, its offset, and
+ * its limit, `null` for none.
+ */
+export interface QueryParts {
+  filter: FilterNode | null;
+  sort: [string[], boolean][];
+  offset: number;
+  limit: number | null;
+}
+
+/** The conditions a filter is made of, as a function given to `where` gets them. */
+export type Conditions = typeof conditions;
 
 const OPS = Object.freeze({
   '==': 4,
@@ -24,12 +47,12 @@ const OPS = Object.freeze({
 });
 const IS_NULL = 15;
 
-function invalidQuery(message) {
+function invalidQuery(message: string): CodeError {
   return codeError('INVALID_QUERY', message);
 }
 
 /** A field's path: its name, or names joined by `.`, or an array of names. */
-function pathOf(field) {
+function pathOf(field: unknown): string[] {
   if (typeof field === 'string') {
     return field.split('.');
   }
@@ -45,7 +68,7 @@ function pathOf(field) {
  * A parameter in place of a value, for a query that `Database.prepare`
  * prepares once and each run gives values: `param(0)` is the first.
  */
-function param(index) {
+function param(index: number): Param {
   if (!Number.isSafeInteger(index) || index < 0) {
     throw invalidQuery("a parameter's number is a whole number from 0 up");
   }
@@ -55,18 +78,20 @@ function param(index) {
 
 /** A condition, as the filter holds it. */
 class Condition {
-  constructor(node) {
+  declare readonly node: FilterNode;
+
+  constructor(node: FilterNode) {
     this.node = node;
     Object.freeze(this);
   }
 }
 
-function test(op, field, values) {
+function test(op: number, field: unknown, values: unknown[]): Condition {
   const path = pathOf(field);
 
   // Equal to null is a null test, and so is different from null.
   if ((op === OPS['=='] || op === OPS['!=']) && values[0] === null) {
-    const isNull = { kind: 'test', op: IS_NULL, path, values: [] };
+    const isNull: FilterNode = { kind: 'test', op: IS_NULL, path, values: [] };
 
     return new Condition(op === OPS['=='] ? isNull : { kind: 'not', term: isNull });
   }
@@ -74,7 +99,7 @@ function test(op, field, values) {
   return new Condition({ kind: 'test', op, path, values });
 }
 
-function nodeOf(condition) {
+function nodeOf(condition: unknown): FilterNode {
   if (!(condition instanceof Condition)) {
     throw invalidQuery('a filter is made of conditions');
   }
@@ -83,8 +108,8 @@ function nodeOf(condition) {
 }
 
 /** Terms of an `and` or an `or`, with nested ones of the same kind taken apart. */
-function flatten(kind, conditions) {
-  const terms = [];
+function flatten(kind: 'and' | 'or', conditions: readonly unknown[]): Condition {
+  const terms: FilterNode[] = [];
 
   for (const condition of conditions) {
     const node = nodeOf(condition);
@@ -101,32 +126,33 @@ function flatten(kind, conditions) {
 
 /** The conditions a filter is made of. */
 const conditions = Object.freeze({
-  eq: (field, value) => test(OPS['=='], field, [value]),
-  ne: (field, value) => test(OPS['!='], field, [value]),
-  lt: (field, value) => test(OPS['<'], field, [value]),
-  le: (field, value) => test(OPS['<='], field, [value]),
-  gt: (field, value) => test(OPS['>'], field, [value]),
-  ge: (field, value) => test(OPS['>='], field, [value]),
-  between: (field, low, high) => test(OPS.between, field, [low, high]),
-  in: (field, values) => {
+  eq: (field: unknown, value: unknown) => test(OPS['=='], field, [value]),
+  ne: (field: unknown, value: unknown) => test(OPS['!='], field, [value]),
+  lt: (field: unknown, value: unknown) => test(OPS['<'], field, [value]),
+  le: (field: unknown, value: unknown) => test(OPS['<='], field, [value]),
+  gt: (field: unknown, value: unknown) => test(OPS['>'], field, [value]),
+  ge: (field: unknown, value: unknown) => test(OPS['>='], field, [value]),
+  between: (field: unknown, low: unknown, high: unknown) => test(OPS.between, field, [low, high]),
+  in: (field: unknown, values: unknown) => {
     if (!Array.isArray(values)) {
       throw invalidQuery('`in` takes an array of values');
     }
 
     return test(OPS.in, field, values.slice());
   },
-  contains: (field, value) => test(OPS.contains, field, [value]),
-  startsWith: (field, value) => test(OPS.startsWith, field, [value]),
-  endsWith: (field, value) => test(OPS.endsWith, field, [value]),
-  isNull: (field) => test(IS_NULL, field, []),
-  isNotNull: (field) => new Condition({ kind: 'not', term: test(IS_NULL, field, []).node }),
-  and: (...terms) => flatten('and', terms),
-  or: (...terms) => flatten('or', terms),
-  not: (condition) => new Condition({ kind: 'not', term: nodeOf(condition) })
+  contains: (field: unknown, value: unknown) => test(OPS.contains, field, [value]),
+  startsWith: (field: unknown, value: unknown) => test(OPS.startsWith, field, [value]),
+  endsWith: (field: unknown, value: unknown) => test(OPS.endsWith, field, [value]),
+  isNull: (field: unknown) => test(IS_NULL, field, []),
+  isNotNull: (field: unknown) =>
+    new Condition({ kind: 'not', term: test(IS_NULL, field, []).node }),
+  and: (...terms: unknown[]) => flatten('and', terms),
+  or: (...terms: unknown[]) => flatten('or', terms),
+  not: (condition: unknown) => new Condition({ kind: 'not', term: nodeOf(condition) })
 });
 
 /** The condition `where` describes: a field, an operator and a value. */
-function conditionOf(field, op, value) {
+function conditionOf(field: unknown, op: unknown, value: unknown): Condition {
   switch (op) {
     case 'between':
       if (!Array.isArray(value) || value.length !== 2) {
@@ -137,11 +163,13 @@ function conditionOf(field, op, value) {
     case 'in':
       return conditions.in(field, value);
     default:
-      if (!Object.hasOwn(OPS, op)) {
+      // `hasOwn` takes any value as a name, as reading a property does.
+      if (!Object.hasOwn(OPS, op as PropertyKey)) {
         throw invalidQuery(`\`${String(op)}\` is not an operator`);
       }
 
-      return test(OPS[op], field, [value]);
+      // `hasOwn` above holds it to a name of `OPS`.
+      return test(OPS[op as keyof typeof OPS], field, [value]);
   }
 }
 
@@ -150,18 +178,22 @@ function conditionOf(field, op, value) {
  * and returns it.
  */
 class Query {
-  #filter = null;
-  #sort = [];
+  #filter: FilterNode | null = null;
+  #sort: [string[], boolean][] = [];
   #offset = 0;
-  #limit = null;
+  #limit: number | null = null;
 
   /**
    * Keeps the objects that meet a condition, and every condition given
    * before: `where('age', '>=', 18)`, a condition, or a function that makes
    * one from `conditions`.
    */
-  where(field, op, value) {
-    let condition;
+  where(
+    field: string | readonly string[] | Condition | ((conditions: Conditions) => unknown),
+    op?: unknown,
+    value?: unknown
+  ): this {
+    let condition: unknown;
 
     if (typeof field === 'function') {
       condition = field(conditions);
@@ -180,7 +212,7 @@ class Query {
   }
 
   /** Sorts by `field`, `'asc'` or `'desc'`, after any sort given before. */
-  sortBy(field, direction = 'asc') {
+  sortBy(field: unknown, direction: unknown = 'asc'): this {
     if (direction !== 'asc' && direction !== 'desc') {
       throw invalidQuery('a sort is `asc` or `desc`');
     }
@@ -191,25 +223,25 @@ class Query {
   }
 
   /** Returns at most `count` objects. */
-  limit(count) {
+  limit(count: number): this {
     this.#limit = count;
 
     return this;
   }
 
   /** Skips the first `count` objects. */
-  offset(count) {
+  offset(count: number): this {
     this.#offset = count;
 
     return this;
   }
 
   /** The query as `codec.encodeQuery` takes it. */
-  parts() {
+  parts(): QueryParts {
     for (const [name, value] of [
       ['offset', this.#offset],
       ['limit', this.#limit ?? 0]
-    ]) {
+    ] as const) {
       if (!Number.isSafeInteger(value) || value < 0) {
         throw invalidQuery(`a query's ${name} is a whole number from 0 up`);
       }
@@ -219,4 +251,4 @@ class Query {
   }
 }
 
-module.exports = { Query, Condition, Param, conditions, param };
+export { Query, Condition, Param, conditions, param };

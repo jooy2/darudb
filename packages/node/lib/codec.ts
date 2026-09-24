@@ -12,6 +12,7 @@
  */
 
 import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
+import type { FilterNode, QueryParts } from './query.js';
 
 const FALSE = 0x02;
 const TRUE = 0x03;
@@ -150,26 +151,6 @@ export type AnyRecord = Map<number | bigint, Tagged>;
 
 /** The value a `Tagged` of tag `T` holds. */
 type TaggedValue<T extends Tagged['tag']> = Extract<Tagged, { tag: T }>['value'];
-
-/**
- * A node of a query's filter: a test of a field, with its operator's number
- * and the values it compares with, or `and`, `or` or `not` of other nodes.
- */
-export type FilterNode =
-  | { kind: 'test'; op: number; path: string[]; values: unknown[] }
-  | { kind: 'and' | 'or'; terms: FilterNode[] }
-  | { kind: 'not'; term: FilterNode };
-
-/**
- * A query as `encodeQuery` takes it: its filter, its sort as paths each with
- * whether it descends, its offset, and its limit, `null` for none.
- */
-export interface QueryParts {
-  filter: FilterNode | null;
-  sort: [string[], boolean][];
-  offset: number;
-  limit: number | null;
-}
 
 /** An `Error` with a `code`, as every error the package throws has. */
 function codeError(code: string, message: string): CodeError {
