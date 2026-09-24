@@ -94,6 +94,31 @@ impl ReadTransaction {
         )
     }
 
+    /// [`get_in`](Self::get_in), giving `visit` the value borrowed where it
+    /// lies rather than copied, and returning whether there was one.
+    pub(crate) fn get_in_with(
+        &self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        let loader = &self.shared.loader;
+        let name = tree_key(tree, loader.page_size())?;
+        let catalog = root_child(self.record.catalog);
+
+        let Some(descriptor) = self.descriptors.find(loader, catalog.as_ref(), name)? else {
+            return Ok(false);
+        };
+
+        btree::get_with(
+            loader,
+            descriptor.id,
+            root_child(descriptor.root).as_ref(),
+            key,
+            visit,
+        )
+    }
+
     /// Every entry of tree `tree`, in key order.
     pub fn iter(&self, tree: &str) -> Result<Range<'_>> {
         self.range::<&[u8]>(tree, ..)

@@ -2,6 +2,7 @@
 //! sorting, and skipping and stopping (`design/objects.md`, "Running a
 //! query").
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -585,20 +586,35 @@ struct Found {
 /// Runs `plan` and returns the objects it finds, in its order. Only the
 /// objects in the result are decoded whole.
 pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object>> {
-    found(source, plan)?
-        .into_iter()
-        .map(|found| objects::decode(source, plan.collection, &found.record))
-        .collect()
+    let mut objects = Vec::new();
+
+    found(source, plan, &mut |record| {
+        objects.push(objects::decode(source, plan.collection, &record)?);
+
+        Ok(())
+    })?;
+
+    Ok(objects)
 }
 
 /// Runs `plan` and returns the records of the objects it finds, in its
 /// order, as the collection's tree holds them.
 pub(crate) fn stored(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Vec<u8>>> {
-    Ok(found(source, plan)?
-        .into_iter()
-        .map(|found| found.record)
-        .collect())
+    let mut records = Vec::new();
+
+    found(source, plan, &mut |record| {
+        records.push(record.into_owned());
+
+        Ok(())
+    })?;
+
+    Ok(records)
 }
+
+/// What [`found`] gives the record of each object in the result to, in the
+/// result's order: borrowed from the walk, or owned when it was read
+/// alone.
+type Take<'t> = dyn FnMut(Cow<'_, [u8]>) -> Result<()> + 't;
 
 #[cfg(test)]
 thread_local! {
@@ -619,8 +635,13 @@ pub(crate) fn whole<T>(run: impl FnOnce() -> T) -> T {
     result
 }
 
-/// What `plan` finds, in its order.
-fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
+/// Gives `take` the record of each object `plan` finds, in its order.
+///
+/// When the walk delivers the objects in the query's order, each is given
+/// as the walk finds it, with the record the walk lent or the one read for
+/// it, and nothing of it is copied. Otherwise the objects are gathered and
+/// sorted first.
+fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()> {
     let reader = Reader {
         source,
         links: RefCell::new(HashMap::new()),
@@ -631,30 +652,38 @@ fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
     let offset = usize::try_from(plan.offset).unwrap_or(usize::MAX);
 
     if limit == 0 {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     if plan.ordered {
         let mut skipped = 0;
-        let mut found = Vec::new();
+        let mut taken = 0;
 
-        walk(source, plan, &mut |key, record| {
-            let Some(hit) = read(&reader, plan, key, record, None)? else {
-                return Ok(false);
-            };
+        walk(source, plan, &mut |key, walked| {
+            let mut stop = false;
 
-            if skipped < offset {
-                skipped += 1;
+            with_record(source, plan, key, walked, &mut |record| {
+                if meets(&reader, plan, Some(record), false)?.is_none() {
+                    return Ok(());
+                }
 
-                return Ok(false);
-            }
+                if skipped < offset {
+                    skipped += 1;
 
-            found.push(hit);
+                    return Ok(());
+                }
 
-            Ok(found.len() >= limit)
+                take(Cow::Borrowed(record))?;
+                taken += 1;
+                stop = taken >= limit;
+
+                Ok(())
+            })?;
+
+            Ok(stop)
         })?;
 
-        return Ok(found);
+        return Ok(());
     }
 
     let keep = offset.saturating_add(limit);
@@ -690,7 +719,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
                     order_of(plan, (values, key), (&bound.sort, &bound.key)).is_lt()
                 })
             };
-            let Some(hit) = read(&reader, plan, key, record, Some(&admit))? else {
+            let Some(hit) = read(&reader, plan, key, record, &admit)? else {
                 return Ok(false);
             };
 
@@ -712,15 +741,17 @@ fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
 
     found.sort_by(compare);
 
-    let mut result: Vec<Found> = found.into_iter().skip(offset).take(limit).collect();
-
-    if deferred {
-        for hit in &mut result {
-            hit.record = record_of(source, plan, &hit.key)?;
+    for hit in found.into_iter().skip(offset).take(limit) {
+        if deferred {
+            with_record(source, plan, &hit.key, None, &mut |record| {
+                take(Cow::Borrowed(record))
+            })?;
+        } else {
+            take(Cow::Owned(hit.record))?;
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// The order of the result: the sort keys, then the primary key.
@@ -747,51 +778,60 @@ fn order_of(plan: &Plan<'_>, a: (&[Value], &[u8]), b: (&[Value], &[u8])) -> Orde
 type Admit<'a> = dyn Fn(&[Value], &[u8]) -> bool + 'a;
 
 /// The object with primary key `key`, whose record the walk may have lent
-/// already, if it meets the plan's filter. With `sort`, it comes with the
-/// values it sorts by, and only if `sort` says an object with those values
-/// and that key may be in the result. The filter and the sort read the
-/// fields they need from the record; the key and the record are copied only
-/// for an object that is kept.
+/// already, if it meets the plan's filter, with the values it sorts by, and
+/// only if `admit` says an object with those values and that key may be in
+/// the result. The filter and the sort read the fields they need from the
+/// record; the key and the record are copied only for an object that is
+/// kept.
 fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
     walked: Option<&[u8]>,
-    sort: Option<&Admit<'_>>,
+    admit: &Admit<'_>,
 ) -> Result<Option<Found>> {
-    let fetched = match walked {
-        Some(_) => None,
-        None => Some(record_of(reader.source, plan, key)?),
-    };
-    let Some(values) = meets(reader, plan, walked.or(fetched.as_deref()), sort.is_some())? else {
-        return Ok(None);
-    };
+    let mut hit = None;
 
-    if sort.is_some_and(|admit| !admit(&values, key)) {
-        return Ok(None);
-    }
+    with_record(reader.source, plan, key, walked, &mut |record| {
+        if let Some(values) = meets(reader, plan, Some(record), true)? {
+            if admit(&values, key) {
+                hit = Some(Found {
+                    sort: values,
+                    key: key.to_vec(),
+                    record: record.to_vec(),
+                });
+            }
+        }
 
-    Ok(Some(Found {
-        sort: values,
-        key: key.to_vec(),
-        // A record read here is the object's already; one the walk lent is
-        // copied.
-        record: fetched
-            .or_else(|| walked.map(<[u8]>::to_vec))
-            .unwrap_or_default(),
-    }))
+        Ok(())
+    })?;
+
+    Ok(hit)
 }
 
-/// The record of the object with primary key `key`, which an index named.
-fn record_of(source: &dyn Source, plan: &Plan<'_>, key: &[u8]) -> Result<Vec<u8>> {
-    source
-        .get_in(&records(plan.collection.id), key)?
-        .ok_or_else(|| {
-            source.corrupted(format!(
-                "an index of `{}` names an object that is not there",
-                plan.collection.name
-            ))
-        })
+/// Gives `visit` the record of the object with primary key `key`: the one
+/// the walk lent, or else the object's record, read where it lies. Either
+/// way it is borrowed, so that a record the query does not keep is never
+/// copied.
+fn with_record(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    key: &[u8],
+    walked: Option<&[u8]>,
+    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    if let Some(record) = walked {
+        return visit(record);
+    }
+
+    if source.get_in_with(&records(plan.collection.id), key, visit)? {
+        Ok(())
+    } else {
+        Err(source.corrupted(format!(
+            "an index of `{}` names an object that is not there",
+            plan.collection.name
+        )))
+    }
 }
 
 /// Whether the object whose record is `record` meets the plan's filter, with
@@ -901,10 +941,12 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
         };
         let mut found = 0u64;
 
-        walk(source, plan, &mut |key, record| {
-            if read(&reader, plan, key, record, None)?.is_some() {
-                found += 1;
-            }
+        walk(source, plan, &mut |key, walked| {
+            with_record(source, plan, key, walked, &mut |record| {
+                found += u64::from(meets(&reader, plan, Some(record), false)?.is_some());
+
+                Ok(())
+            })?;
 
             Ok(false)
         })?;

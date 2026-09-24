@@ -498,6 +498,41 @@ impl WriteTransaction {
         }
     }
 
+    /// [`get_in`](Self::get_in), giving `visit` the value borrowed where it
+    /// lies rather than copied, and returning whether there was one.
+    pub(crate) fn get_in_with(
+        &self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        self.check_open()?;
+
+        if let Some(value) = self.later.get(tree).and_then(|waiting| waiting.get(key)) {
+            visit(value)?;
+
+            return Ok(true);
+        }
+
+        let loader = &self.shared.loader;
+        let name = tree_key(tree, loader.page_size())?;
+
+        match self.trees.get(tree) {
+            Some(state) if state.deleted => Ok(false),
+            Some(state) => btree::get_with(loader, state.id, state.root.as_ref(), key, visit),
+            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+                Some(descriptor) => btree::get_with(
+                    loader,
+                    descriptor.id,
+                    root_child(descriptor.root).as_ref(),
+                    key,
+                    visit,
+                ),
+                None => Ok(false),
+            },
+        }
+    }
+
     /// Every entry of tree `tree`, in key order, including changes made in
     /// this transaction.
     pub fn iter(&self, tree: &str) -> Result<Range<'_>> {

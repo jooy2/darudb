@@ -27,7 +27,7 @@ use crate::format::{Check, OverflowRef, Pointer};
 pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
 pub(crate) use node::{Child, LoadedNode, Node};
-pub(crate) use read::{Range, Visit, get, resolve};
+pub(crate) use read::{Range, Visit, get, get_with, resolve};
 pub(crate) use write::{Inserted, delete_tree, insert, remove};
 
 /// Where committed nodes and overflow values come from.

@@ -48,13 +48,13 @@ pub(super) fn internal(what: &str) -> Error {
     }
 }
 
-/// The value stored under `key`, as the leaf stores it.
-pub(crate) fn get_stored<L: Load>(
+/// The leaf that holds `key`, and where in it, if the tree has the key.
+fn find<'a, L: Load>(
     load: &L,
     tree: u64,
-    root: Option<&Child>,
+    root: Option<&'a Child>,
     key: &[u8],
-) -> Result<Option<StoredValue>> {
+) -> Result<Option<(NodeRef<'a>, usize)>> {
     let Some(root) = root else {
         return Ok(None);
     };
@@ -68,16 +68,52 @@ pub(crate) fn get_stored<L: Load>(
                 return Ok(None);
             }
 
-            return Ok(Some(match node.value(index)? {
-                StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
-                StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
-            }));
+            return Ok(Some((node, index)));
         }
 
         let index = node.rank(key, true);
 
         node = descend(load, &node, tree, index)?;
     }
+}
+
+/// The value stored under `key`, as the leaf stores it.
+pub(crate) fn get_stored<L: Load>(
+    load: &L,
+    tree: u64,
+    root: Option<&Child>,
+    key: &[u8],
+) -> Result<Option<StoredValue>> {
+    let Some((node, index)) = find(load, tree, root, key)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(match node.value(index)? {
+        StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
+        StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
+    }))
+}
+
+/// Gives `visit` the value stored under `key`, borrowed from its leaf when
+/// the leaf holds it, and returns whether there was one. A caller that only
+/// reads the value copies nothing.
+pub(crate) fn get_with<L: Load>(
+    load: &L,
+    tree: u64,
+    root: Option<&Child>,
+    key: &[u8],
+    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
+    let Some((node, index)) = find(load, tree, root, key)? else {
+        return Ok(false);
+    };
+
+    match node.value(index)? {
+        StoredRef::Inline(value) => visit(value)?,
+        StoredRef::Overflow(reference) => visit(&load.read_overflow(&reference, tree)?)?,
+    }
+
+    Ok(true)
 }
 
 /// The value stored under `key`.

@@ -97,6 +97,15 @@ pub(crate) fn counter(id: u64) -> Vec<u8> {
 pub(crate) trait Source {
     fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>>;
 
+    /// Gives `visit` the value under `key`, borrowed where it lies, and
+    /// returns whether there was one.
+    fn get_in_with(
+        &self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool>;
+
     fn range_in(
         &self,
         tree: &str,
@@ -114,6 +123,15 @@ pub(crate) trait Source {
 impl Source for ReadTransaction {
     fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         ReadTransaction::get_in(self, tree, key)
+    }
+
+    fn get_in_with(
+        &self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        ReadTransaction::get_in_with(self, tree, key, visit)
     }
 
     fn range_in(
@@ -138,6 +156,15 @@ impl Source for ReadTransaction {
 impl Source for WriteTransaction {
     fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         WriteTransaction::get_in(self, tree, key)
+    }
+
+    fn get_in_with(
+        &self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        WriteTransaction::get_in_with(self, tree, key, visit)
     }
 
     fn range_in(
@@ -231,16 +258,26 @@ pub(crate) fn decode(
         .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
 }
 
-/// The object of `collection` whose primary key is `key`, if there is one.
+/// The object of `collection` whose primary key is `key`, if there is one,
+/// decoded from its record where the record lies.
 pub(crate) fn get(
     source: &dyn Source,
     collection: &CollectionDef,
     key: &Value,
 ) -> Result<Option<Object>> {
-    source
-        .get_in(&records(collection.id), &key_bytes(collection, key)?)?
-        .map(|bytes| decode(source, collection, &bytes))
-        .transpose()
+    let mut object = None;
+
+    source.get_in_with(
+        &records(collection.id),
+        &key_bytes(collection, key)?,
+        &mut |bytes| {
+            object = Some(decode(source, collection, bytes)?);
+
+            Ok(())
+        },
+    )?;
+
+    Ok(object)
 }
 
 /// The record of the object of `collection` whose primary key is `key`.
