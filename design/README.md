@@ -7,12 +7,15 @@ The specifications the DaruDB engine is built to. Each document here is normativ
 | [File format](file-format.md)                   | What every byte of a database file means                                                                 |
 | [Commits and recovery](commits-and-recovery.md) | How a transaction changes the file, when a commit is durable, and what opening a file after a crash does |
 | [Locking](locking.md)                           | How processes that share one file coordinate through operating-system file locks                         |
+| [Objects and queries](objects.md)               | Collections, schemas, the key and record encodings, indexes, queries and migrations                      |
 
 These documents are for the people and agents who build the engine. The documentation site explains the same behaviour to users, in English and Korean, once each part is implemented.
 
 ## Status
 
 All three documents were accepted by the maintainer on 2026-09-23, at the end of phase 0 of the roadmap, and `CLAUDE.md` summarises them. They describe file format version 3: version 2, the first that stores data, with a MAC on each commit record of an encrypted file, which the maintainer accepted on 2026-09-24.
+
+[Objects and queries](objects.md), the specification of phase 4, is proposed and not accepted yet.
 
 Phases 1 and 2 implement them for a single process: the file format, sync and deferred commits, recovery, and encryption. Phase 3 implements the lock protocol, on the same format: the open, writer and snapshot locks, several processes on one file, and refusing network file systems. `crates/darudb/src/processes.rs` holds the tests that [Locking](locking.md#what-the-phase-3-tests-must-show) asks for.
 
