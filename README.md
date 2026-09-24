@@ -52,6 +52,8 @@ The root holds the Cargo workspace and no JavaScript manifest. Each JavaScript f
 | --------------------------------------------------------------------- | -------------------------------------------------------- |
 | [**Introduction**](https://darudb.cdget.com/guide/introduction)       | What DaruDB is, what it is for, and how far along it is. |
 | [**Getting started**](https://darudb.cdget.com/guide/getting-started) | Building from source and opening a first database.       |
+| [**Collections and objects**](https://darudb.cdget.com/guide/objects) | Schemas, objects, queries and migrations, in Rust.       |
+| [**Node.js**](https://darudb.cdget.com/guide/nodejs)                  | The same in JavaScript and TypeScript.                   |
 | [**Changelog**](https://darudb.cdget.com/changelog)                   | What changed in each package.                            |
 
 ## Contributing

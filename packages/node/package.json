@@ -6,7 +6,10 @@
   "types": "index.d.ts",
   "files": [
     "index.js",
-    "index.d.ts"
+    "index.d.ts",
+    "native.js",
+    "native.d.ts",
+    "lib"
   ],
   "author": "CDGet <jooy2.contact@gmail.com>",
   "license": "MIT",
@@ -20,9 +23,9 @@
     "url": "https://github.com/jooy2/darudb/issues"
   },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
-    "test": "node --test",
+    "build": "napi build --platform --release --js native.js --dts native.d.ts",
+    "build:debug": "napi build --platform --js native.js --dts native.d.ts",
+    "test": "node --test && tsc -p types",
     "lint": "eslint . --report-unused-disable-directives",
     "lint:fix": "eslint . --report-unused-disable-directives --fix",
     "format": "prettier .",

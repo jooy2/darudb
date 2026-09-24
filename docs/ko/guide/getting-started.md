@@ -33,7 +33,7 @@ npm install
 npm run build
 ```
 
-`npm run build`는 엔진과 바인딩을 지금 플랫폼용 애드온 하나로 컴파일하고, 그 옆에 `index.js`와 `index.d.ts`를 만듭니다.
+`npm run build`는 엔진과 바인딩을 지금 플랫폼용 애드온 하나로 컴파일하고, 그 옆에 애드온을 불러오는 파일을 만듭니다.
 
 ## 데이터베이스 열기
 
@@ -128,7 +128,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를 정합니다. Node.js 패키지에는 아직 트랜잭션이 없습니다. 엔진 API가 자리를 잡은 뒤에 들어갑니다.
+`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를 정합니다. `schema`를 주면 트랜잭션으로 읽고 쓰고 쿼리로 찾는 객체 컬렉션이 생깁니다. 쓰는 방법은 [Node.js](./nodejs.md)에 있습니다.
 
 ## 오류
 

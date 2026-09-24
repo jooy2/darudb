@@ -5,7 +5,7 @@ order: 3
 
 # Collections and objects
 
-A database opened with a schema holds collections of typed objects, with indexes the engine keeps in step and migrations from one schema version to the next. This page shows the Rust API; the Node.js package does not have it yet.
+A database opened with a schema holds collections of typed objects, with indexes the engine keeps in step and migrations from one schema version to the next. This page shows the Rust API; [Node.js](./nodejs.md) has the same in JavaScript.
 
 ## Declare a schema
 

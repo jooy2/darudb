@@ -33,7 +33,7 @@ npm install
 npm run build
 ```
 
-`npm run build` compiles the engine and the binding into one addon for your platform, and writes `index.js` and `index.d.ts` next to it.
+`npm run build` compiles the engine and the binding into one addon for your platform, and writes the files that load it next to it.
 
 ## Open a database
 
@@ -128,7 +128,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, and `pageSize` sets the page size of a new one. Transactions are not in the Node.js package yet; they reach it once the engine's API has settled.
+`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, and `pageSize` sets the page size of a new one. With a `schema`, the database holds collections of objects that transactions read and write and queries find: [Node.js](./nodejs.md) shows how.
 
 ## Errors
 

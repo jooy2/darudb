@@ -38,9 +38,10 @@ coverage/
 
 # The Node.js binding. `npm run build` in `packages/node` writes the native
 # addon and the two files that load it and describe it, all from `src/lib.rs`.
+# `index.js` and `index.d.ts` beside them are written by hand.
 packages/node/*.node
-packages/node/index.js
-packages/node/index.d.ts
+packages/node/native.js
+packages/node/native.d.ts
 # Per-platform packages, created by the napi CLI at release time.
 packages/node/npm/
 

@@ -14,7 +14,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 darudb.workspace = true
-napi = "3.13.0"
+# Node-API 6 adds `bigint`, which every supported Node.js has.
+napi = { version = "3.13.0", features = ["napi6"] }
 napi-derive = "3.6.9"
 
 [build-dependencies]

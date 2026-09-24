@@ -17,8 +17,8 @@ export default pluginTypeScriptESLint.config(
     '**/node_modules',
     // Written by `npm run build` from `src/lib.rs`. The Rust source is what is
     // reviewed; the loader napi-rs generates for it is not ours to lint.
-    'index.js',
-    'index.d.ts',
+    'native.js',
+    'native.d.ts',
     'npm',
     '**/*-lock.json',
     '**/*-lock.yaml'
@@ -48,6 +48,17 @@ export default pluginTypeScriptESLint.config(
       'n/no-unpublished-import': 'off',
       'n/no-unsupported-features/node-builtins': 'off',
       '@typescript-eslint/no-explicit-any': 'off'
+    }
+  },
+  {
+    // The package is CommonJS, as the loader napi-rs generates is, so the
+    // files it ships load each other with `require`.
+    files: ['index.js', 'lib/**/*.js'],
+    languageOptions: {
+      sourceType: 'commonjs'
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
     }
   },
   configPrettier
