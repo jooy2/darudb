@@ -184,6 +184,10 @@ impl Pending {
         self.previous.encode()
     }
 
+    pub(crate) fn schema_record(&self) -> &[u8] {
+        &self.schema.encoded
+    }
+
     pub(crate) fn version(&self) -> u64 {
         self.schema.schema.version
     }
@@ -200,6 +204,10 @@ impl Pending {
         }
 
         Ok(Some(version))
+    }
+
+    pub(crate) fn transaction(&mut self) -> &mut WriteTransaction {
+        &mut self.txn
     }
 
     pub(crate) fn migrating(&mut self) -> Migrating<'_> {

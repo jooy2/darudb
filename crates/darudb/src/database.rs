@@ -300,6 +300,13 @@ impl PendingMigration {
         self.pending.version()
     }
 
+    /// The schema the migration leads to, as its record, which the file holds
+    /// already inside the migration's transaction; see
+    /// [`Database::schema_record`].
+    pub fn schema_record(&self) -> &[u8] {
+        self.pending.schema_record()
+    }
+
     /// The schema the file held before the migration, as its record, for a
     /// language binding that decodes [`Migrating::previous_record`]'s
     /// records itself.
@@ -318,6 +325,12 @@ impl PendingMigration {
     /// The migration's write transaction, as a migration function gets it.
     pub fn migrating(&mut self) -> Migrating<'_> {
         self.pending.migrating()
+    }
+
+    /// The migration's write transaction itself, whose collections are those
+    /// of the new schema. Committing it is [`finish`](Self::finish)'s job.
+    pub fn transaction(&mut self) -> &mut WriteTransaction {
+        self.pending.transaction()
     }
 
     /// Runs the steps left, deletes the collections the steps delete, and
