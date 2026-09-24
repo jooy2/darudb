@@ -294,7 +294,16 @@ impl Shared {
                 .register(record.txn, deadline)
                 .map_err(|error| self.lock_error(error))?;
 
-            let again = self.pager.read_header(slot_offset(slot) + 8)?;
+            // A snapshot left registered would hold pages back for as long as
+            // the file is open.
+            let again = match self.pager.read_header(slot_offset(slot) + 8) {
+                Ok(again) => again,
+                Err(error) => {
+                    self.locks.unregister(record.txn);
+
+                    return Err(error);
+                }
+            };
             let txn = again[slot_offset(slot)..]
                 .first_chunk::<8>()
                 .map(|bytes| u64::from_le_bytes(*bytes));
@@ -337,7 +346,9 @@ impl Shared {
 
     /// Lets other processes open the file, once recovery is done.
     pub(crate) fn share_open_lock(&self) -> Result<()> {
-        self.locks.share().map_err(|error| self.lock_error(error))
+        self.locks
+            .share(self.settings.busy_timeout)
+            .map_err(|error| self.lock_error(error))
     }
 
     /// The slot of the published commit in the header `bytes`, and its record
