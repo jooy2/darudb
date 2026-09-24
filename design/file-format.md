@@ -75,7 +75,7 @@ Written once, when the file is created, and never again.
 | Offset | Size | Field                                                                                                |
 | ------ | ---- | ---------------------------------------------------------------------------------------------------- |
 | 0      | 8    | Magic: `89 44 61 72 75 44 42 0A` (`\x89DaruDB\n`)                                                    |
-| 8      | 4    | Format version: 2                                                                                    |
+| 8      | 4    | Format version: 3                                                                                    |
 | 12     | 4    | Page size `P`                                                                                        |
 | 16     | 16   | File id: 16 random bytes, generated when the file is created                                         |
 | 32     | 1    | Cipher: 0 for a plain file, 1 for XChaCha20-Poly1305, 2 for XAES-256-GCM ([Encryption](#encryption)) |
