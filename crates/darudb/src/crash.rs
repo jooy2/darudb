@@ -566,6 +566,67 @@ fn a_power_cut_while_the_key_changes_leaves_the_old_key_or_the_new_one() {
 }
 
 #[test]
+fn a_record_assembled_from_existing_pages_is_refused_in_an_encrypted_file() {
+    let mut encrypted = OpenOptions::new();
+
+    encrypted.key([6; 32]);
+
+    for (options, expected) in [(OpenOptions::new(), b"old"), (encrypted, b"new")] {
+        let disk = Arc::new(SimDisk::default());
+        let db = Database::create_io(disk.clone(), 4096, &options).unwrap();
+
+        for value in [b"old", b"new"] {
+            let mut txn = db.begin_write().unwrap();
+
+            txn.insert("t", b"key", value).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let header = db.shared().header();
+        let newer = header.published().unwrap();
+        let older = header
+            .records
+            .iter()
+            .flatten()
+            .find(|record| record.txn == newer.txn - 1)
+            .copied()
+            .unwrap();
+        let slot = (0..crate::format::SLOT_COUNT)
+            .find(|slot| header.records[*slot].is_none_or(|record| record.txn < older.txn))
+            .unwrap();
+
+        drop(db);
+
+        // A newer commit that no one made: the older catalog, whose pages are
+        // still there, with everything else of the newer commit. The record
+        // check is a plain hash anyone can compute; the MAC is the newer one's.
+        let forged = crate::format::CommitRecord {
+            txn: newer.txn + 1,
+            durable_txn: newer.txn,
+            catalog: older.catalog,
+            ..newer
+        };
+        let mut image = disk.current();
+        let at = crate::format::slot_offset(slot);
+
+        image[at..at + crate::format::RECORD_LEN].copy_from_slice(&forged.encode(slot));
+
+        let db = Database::open_io(Arc::new(SimDisk::from_image(image)), &options).unwrap();
+
+        assert_eq!(contents(&db)["t"][b"key".as_slice()], expected);
+
+        // A plain file has no key to tell the two apart. It takes the forgery,
+        // whose catalog and allocator trees disagree about which pages are in
+        // use; that is the damage the record MAC keeps out of encrypted files.
+        if db.is_encrypted() {
+            check_integrity(&db).unwrap();
+        } else {
+            assert!(check_integrity(&db).is_err());
+        }
+    }
+}
+
+#[test]
 fn a_reader_keeps_its_snapshot_while_the_file_changes_under_it() {
     let db = Database::create_io(Arc::new(SimDisk::default()), 4096, &OpenOptions::new()).unwrap();
     let mut txn = db.begin_write().unwrap();

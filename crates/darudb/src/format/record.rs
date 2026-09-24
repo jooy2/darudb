@@ -11,8 +11,12 @@
 //! | 64     | 32   | Free tree root                          |
 //! | 96     | 32   | Retained tree root                      |
 //! | 128    | 128  | Key block, zeros in a plain file        |
-//! | 256    | 240  | Reserved                                |
+//! | 256    | 16   | Record MAC, zeros in a plain file       |
+//! | 272    | 224  | Reserved                                |
 //! | 496    | 16   | Record check                            |
+//!
+//! The record MAC covers bytes 0 to 255 under a key only the data key's
+//! holder has; `crypto` computes it, and this module only places it.
 
 use super::check::{CHECK_LEN, Check};
 use super::pointer::{POINTER_LEN, Pointer};
@@ -24,10 +28,17 @@ pub(crate) const RECORD_LEN: usize = 512;
 /// The size of the key block, in bytes.
 pub(crate) const KEY_BLOCK_LEN: usize = 128;
 
+/// The size of the record MAC, in bytes.
+pub(crate) const RECORD_MAC_LEN: usize = 16;
+
+/// How many bytes at the start of a record the record MAC covers.
+pub(crate) const AUTHENTICATED_LEN: usize = 256;
+
 const CATALOG_OFFSET: usize = 32;
 const FREE_OFFSET: usize = CATALOG_OFFSET + POINTER_LEN;
 const RETAINED_OFFSET: usize = FREE_OFFSET + POINTER_LEN;
 const KEY_BLOCK_OFFSET: usize = 128;
+const RECORD_MAC_OFFSET: usize = AUTHENTICATED_LEN;
 const RECORD_CHECK_OFFSET: usize = RECORD_LEN - CHECK_LEN;
 
 /// One commit, as a slot records it.
@@ -49,6 +60,8 @@ pub(crate) struct CommitRecord {
     pub(crate) retained: Pointer,
     /// The wrapped data key of an encrypted file; zeros in a plain one.
     pub(crate) key_block: [u8; KEY_BLOCK_LEN],
+    /// The record MAC of an encrypted file; zeros in a plain one.
+    pub(crate) mac: [u8; RECORD_MAC_LEN],
 }
 
 impl CommitRecord {
@@ -63,13 +76,13 @@ impl CommitRecord {
             free: Pointer::NULL,
             retained: Pointer::NULL,
             key_block: [0; KEY_BLOCK_LEN],
+            mac: [0; RECORD_MAC_LEN],
         }
     }
 
-    /// The record as the bytes of slot `slot`. The slot number is mixed into
-    /// the record check, so a record in the wrong slot fails it.
-    pub(crate) fn encode(&self, slot: usize) -> [u8; RECORD_LEN] {
-        let mut bytes = [0u8; RECORD_LEN];
+    /// The bytes the record MAC covers: every field and the key block.
+    pub(crate) fn authenticated(&self) -> [u8; AUTHENTICATED_LEN] {
+        let mut bytes = [0u8; AUTHENTICATED_LEN];
 
         bytes[0..8].copy_from_slice(&self.txn.to_le_bytes());
         bytes[8..16].copy_from_slice(&self.durable_txn.to_le_bytes());
@@ -80,6 +93,16 @@ impl CommitRecord {
         self.retained.write(&mut bytes[RETAINED_OFFSET..]);
         bytes[KEY_BLOCK_OFFSET..KEY_BLOCK_OFFSET + KEY_BLOCK_LEN].copy_from_slice(&self.key_block);
 
+        bytes
+    }
+
+    /// The record as the bytes of slot `slot`. The slot number is mixed into
+    /// the record check, so a record in the wrong slot fails it.
+    pub(crate) fn encode(&self, slot: usize) -> [u8; RECORD_LEN] {
+        let mut bytes = [0u8; RECORD_LEN];
+
+        bytes[..AUTHENTICATED_LEN].copy_from_slice(&self.authenticated());
+        bytes[RECORD_MAC_OFFSET..RECORD_MAC_OFFSET + RECORD_MAC_LEN].copy_from_slice(&self.mac);
         record_check(slot, &bytes).write(&mut bytes[RECORD_CHECK_OFFSET..]);
 
         bytes
@@ -101,8 +124,10 @@ impl CommitRecord {
         }
 
         let mut key_block = [0u8; KEY_BLOCK_LEN];
+        let mut mac = [0u8; RECORD_MAC_LEN];
 
         key_block.copy_from_slice(&bytes[KEY_BLOCK_OFFSET..KEY_BLOCK_OFFSET + KEY_BLOCK_LEN]);
+        mac.copy_from_slice(&bytes[RECORD_MAC_OFFSET..RECORD_MAC_OFFSET + RECORD_MAC_LEN]);
 
         let record = Self {
             txn: le_u64(bytes, 0),
@@ -113,6 +138,7 @@ impl CommitRecord {
             free: Pointer::read(&bytes[FREE_OFFSET..]),
             retained: Pointer::read(&bytes[RETAINED_OFFSET..]),
             key_block,
+            mac,
         };
 
         record.validate()?;
@@ -184,6 +210,7 @@ mod tests {
                 check: Check::of(&[b"retained"]),
             },
             key_block: [0; KEY_BLOCK_LEN],
+            mac: [0; RECORD_MAC_LEN],
         }
     }
 
@@ -209,6 +236,16 @@ mod tests {
         assert_eq!(Pointer::read(&bytes[64..]), Pointer::NULL);
         assert_eq!(Pointer::read(&bytes[96..]), record().retained);
         assert_eq!(&bytes[128..496], &[0; 368]);
+
+        let mut signed = record();
+
+        signed.mac = [5; RECORD_MAC_LEN];
+
+        let bytes = signed.encode(1);
+
+        assert_eq!(&bytes[256..272], &[5; 16], "the record MAC");
+        assert_eq!(&bytes[..256], &signed.authenticated());
+        assert_eq!(CommitRecord::decode(1, &bytes), Ok(Some(signed)));
     }
 
     #[test]

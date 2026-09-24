@@ -13,8 +13,9 @@ use super::write::WriteTransaction;
 use crate::btree::{self, FinishedPage, Load, LoadedNode};
 use crate::error::{Error, Result};
 use crate::format::{
-    CATALOG_TREE, CommitRecord, FREE_TREE, Pointer, RETAINED_TREE, SELECTOR_OFFSET, Selector,
-    TreeDescriptor, encode_runs, free_key, free_value, retained_key, runs_per_value, slot_offset,
+    CATALOG_TREE, CommitRecord, FREE_TREE, Pointer, RECORD_MAC_LEN, RETAINED_TREE, SELECTOR_OFFSET,
+    Selector, TreeDescriptor, encode_runs, free_key, free_value, retained_key, runs_per_value,
+    slot_offset,
 };
 use crate::instance::Header;
 
@@ -85,7 +86,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
     let retained = finish_root(&mut txn, RETAINED_TREE, &mut pages, |txn| {
         txn.retained_root.take()
     })?;
-    let record = CommitRecord {
+    let mut record = CommitRecord {
         txn: txn.txn,
         durable_txn: txn.durable.txn,
         page_count: txn.space.page_count(),
@@ -94,7 +95,10 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
         free,
         retained,
         key_block: txn.key_block,
+        mac: [0; RECORD_MAC_LEN],
     };
+
+    txn.shared.sign_record(txn.slot, &mut record);
 
     write_and_publish(&mut txn, pages, &record, durability)
 }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 use zeroize::Zeroizing;
 
-use crate::crypto::{self, DataKey, PageCipher, Secret, Unlocker};
+use crate::crypto::{self, DataKey, PageCipher, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
     Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
@@ -284,7 +284,14 @@ fn open_io(
         options.settings(),
         data_key,
     );
-    let (header, last_barrier) = recovery::recover(&shared.pager, &shared.loader)?;
+    let (header, last_barrier) = recovery::recover(
+        &shared.pager,
+        &shared.loader,
+        shared
+            .record_auth
+            .as_ref()
+            .map(|auth| (auth, &shared.static_header.file_id)),
+    )?;
 
     shared.set_header(header);
     shared.set_last_barrier(last_barrier);
@@ -395,6 +402,7 @@ fn new_file(
                 &file_id,
             )?
             .encode();
+            first.mac = RecordAuth::new(&data_key).mac(&file_id, 0, &first.authenticated());
 
             (Cipher::XChaCha20Poly1305, Some(data_key))
         }

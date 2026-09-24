@@ -121,7 +121,7 @@ The new transaction id `T` is one more than the largest transaction id in any va
 1. Write every page of the transaction that is not on disk already.
 1. If the file is shorter than the page count, extend it. Pages at the end that were allocated and released again without being written still count, and recovery skips a record that counts more pages than the file holds.
 1. If choosing the slot asked for a barrier first, issue it.
-1. Write the commit record into the chosen slot, with `T`, the durable transaction id of `D`, the page count, the three roots and the key block.
+1. Write the commit record into the chosen slot, with `T`, the durable transaction id of `D`, the page count, the three roots, the key block and, in an encrypted file, the record MAC.
 1. **Barrier.** This is the commit point: from here on, the commit survives a power cut whatever happens to the selector.
 1. Write the selector: the chosen slot, with the unsynced bit clear. The commit is now published.
 1. If the file is longer than the commit's page count, truncate it. The pages past the end are free, so no snapshot and no recovery can need them. A deferred commit never truncates; the next sync commit does.

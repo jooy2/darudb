@@ -96,7 +96,7 @@ Typed records and queries come later, built on top of these trees. For now, only
 
 #### Encryption
 
-A database created with a key or a password is encrypted: every page, keys, values and tree names included, and every page is authenticated, so a changed byte is reported as `CORRUPTED` rather than read.
+A database created with a key or a password is encrypted: every page, keys, values and tree names included. Every page is authenticated, and so is the header's record of each commit, so a changed byte is reported as `CORRUPTED` rather than read.
 
 ```rust
 use darudb::OpenOptions;

@@ -7,6 +7,7 @@
 //! goes back past the last commit that was reported durable.
 
 use crate::btree::{Load, Loader, Node};
+use crate::crypto::RecordAuth;
 use crate::error::{Error, Result};
 use crate::format::{
     CATALOG_TREE, CommitRecord, FREE_TREE, HEADER_LEN, Pointer, RETAINED_TREE, SELECTOR_OFFSET,
@@ -18,9 +19,16 @@ use crate::storage::Pager;
 /// Reads the selector and the three records, adopts the commit recovery
 /// chooses, and makes the file say so.
 ///
+/// In an encrypted file, `auth` and the file id verify each record's MAC, and
+/// a record that fails it is no candidate: no key holder wrote it.
+///
 /// Also returns the selector a power cut can bring back, when recovery wrote
 /// it and issued a barrier after it; otherwise nobody knows which one it is.
-pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<(Header, Option<Selector>)> {
+pub(crate) fn recover(
+    pager: &Pager,
+    loader: &Loader,
+    auth: Option<(&RecordAuth, &[u8; 16])>,
+) -> Result<(Header, Option<Selector>)> {
     let bytes = pager.read_header(HEADER_LEN)?;
     let selector = Selector::decode(bytes[SELECTOR_OFFSET])
         .map_err(|reason| pager.corrupted(reason.to_owned()))?;
@@ -38,6 +46,16 @@ pub(crate) fn recover(pager: &Pager, loader: &Loader) -> Result<(Header, Option<
     // Nor is a record that counts more pages than the file holds a candidate:
     // the writes that grew the file did not all survive.
     let mut records = intact.map(|record| record.filter(|record| record.page_count <= file_pages));
+
+    for (slot, record) in records.iter_mut().enumerate() {
+        let signed = |record: &CommitRecord| {
+            auth.is_none_or(|(auth, file_id)| {
+                auth.verify(file_id, slot, &record.authenticated(), &record.mac)
+            })
+        };
+
+        *record = record.filter(signed);
+    }
 
     let mut candidates: Vec<(usize, CommitRecord)> = records
         .iter()

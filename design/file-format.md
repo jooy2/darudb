@@ -1,6 +1,6 @@
 # File format
 
-Status: accepted. This document describes file format version 2.
+Status: accepted. This document describes file format version 3.
 
 A DaruDB database is one file, divided into pages of equal size. Page 0 is the header, which says what the file is and where its newest commits are. Every other page is a node of a B+tree or part of an overflow run that holds one large value. This document gives the layout of each. [Commits and recovery](commits-and-recovery.md) says how they change, and [Locking](locking.md) says how several processes share them.
 
@@ -112,12 +112,13 @@ A commit record is 512 bytes:
 | 64     | 32   | Pointer to the root of the [free tree](#the-free-tree)                                     |
 | 96     | 32   | Pointer to the root of the [retained tree](#the-retained-tree)                             |
 | 128    | 128  | [Key block](#the-key-block), all zeros in a plain file                                     |
-| 256    | 240  | Reserved                                                                                   |
+| 256    | 16   | [Record MAC](#the-record-mac), all zeros in a plain file                                   |
+| 272    | 224  | Reserved                                                                                   |
 | 496    | 16   | Record check: XXH3-128 of one byte holding the slot number, followed by bytes 0 to 495     |
 
 Mixing the slot number into the record check means a record copied or written into the wrong slot fails its check.
 
-A record is **valid** when its check matches and its fields are consistent: the transaction id is at least 1, the durable transaction id is smaller than the transaction id, the page count is at least 1, the next tree id is at least 16, and every root pointer is either null or names a page below the page count, written by a transaction no newer than the record's own.
+A record is **valid** when its check matches, in an encrypted file its [record MAC](#the-record-mac) matches too, and its fields are consistent: the transaction id is at least 1, the durable transaction id is smaller than the transaction id, the page count is at least 1, the next tree id is at least 16, and every root pointer is either null or names a page below the page count, written by a transaction no newer than the record's own.
 
 ## The page envelope
 
@@ -283,13 +284,21 @@ Argon2id is memory-hard, which is what makes guessing passwords on GPUs expensiv
 
 Every commit copies the key block of the commit it started from, except the one that changes the key. The older records keep the old key block until their slots are overwritten, and until then the old password still opens the file. Changing the key is therefore a sync commit that writes the new key block, followed by empty sync commits until no slot holds the old one, which takes two when nothing else commits in between. Rotating the DEK itself means rewriting every page, which is done by compacting into a new file.
 
-Opening an encrypted file tries the caller's key or password on the key block of each valid record, newest first, and uses the first that unwraps. Every record wraps the same DEK, so which one unwraps it does not matter, and records that share a key block cost one derivation.
+Opening an encrypted file tries the caller's key or password on the key block of each record whose check matches, newest first, and uses the first that unwraps. The record MACs are checked after that, with the DEK the key block gave. Every record wraps the same DEK, so which one unwraps it does not matter, and records that share a key block cost one derivation.
+
+### The record MAC
+
+Page 0 is plain, and each page's tag is stored in the page itself as well as in its parent. So without a key of its own, a commit record could be assembled by anyone who can write the file, from pages that are there: the catalog of one commit with the free tree of another, say. No key holder committed that state, and its trees disagree about which pages are in use, so the next commit would overwrite live pages.
+
+In an encrypted file every record therefore carries a MAC: keyed BLAKE2b with a 16-byte output, under a key derived from the DEK, over the file id, the slot number as 8 bytes, and the record's bytes 0 to 255, which are every field and the key block. The key is the keyed BLAKE2b-256 of an empty message under the DEK, with the personalization `DaruDB rec key`; the MAC uses the personalization `DaruDB rec mac`. A record whose MAC fails is not valid, so recovery never adopts one. The DEK needed to check it comes from the key block, which the MAC also covers; a key block no key holder wrote cannot unwrap the DEK in the first place.
+
+BLAKE2b is in the build for Argon2id already, and a MAC of its own keeps the record independent of the page cipher.
 
 ### What stays visible
 
 The header page is plain, so an encrypted file still shows its page size, its file id, its transaction ids, its page count (and so its size), and the page numbers of its tree roots. Everything inside a page is encrypted, including every key, every value and every tree name.
 
-Replacing the whole file with an older copy of itself cannot be detected from inside the file. An application that needs to detect it has to keep the newest transaction id somewhere else.
+Replacing the whole file, or page 0 alone, with an older copy of itself cannot be detected from inside the file: the older records are genuine. An application that needs to detect it has to keep the newest transaction id somewhere else.
 
 ## Reading a file
 
@@ -298,7 +307,7 @@ Anything read from the file is untrusted input. A reader checks everything below
 | Step                                                                               | On failure                         |
 | ---------------------------------------------------------------------------------- | ---------------------------------- |
 | The file holds at least 64 bytes, and they start with the magic                    | `NOT_A_DATABASE`                   |
-| The format version is 2                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
+| The format version is 3                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
 | The static check matches                                                           | `CORRUPTED`                        |
 | The page size is a power of two from 4096 to 65536, and the cipher is known        | `CORRUPTED`                        |
 | The file holds at least one whole page                                             | `CORRUPTED`                        |
@@ -318,6 +327,7 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | Version | Introduced by                                                                                               |
 | ------- | ----------------------------------------------------------------------------------------------------------- |
 | 1       | The skeleton: magic, format version and page size, with page sizes from 512 bytes. Nothing could be stored. |
-| 2       | This document: commits, trees and encryption.                                                               |
+| 2       | Commits, trees and encryption.                                                                              |
+| 3       | This document: version 2 with the [record MAC](#the-record-mac) in encrypted files.                         |
 
-A build that writes version 2 refuses a version 1 file with `UNSUPPORTED_FORMAT_VERSION` and offers no migration, since a version 1 file never held data.
+A build that writes version 3 refuses a version 1 or version 2 file with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and version 2 never left development.

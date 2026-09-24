@@ -12,6 +12,8 @@
 
 mod keys;
 mod page;
+mod record;
 
 pub(crate) use keys::{DataKey, PasswordCost, Secret, Unlocker, wrap};
 pub(crate) use page::PageCipher;
+pub(crate) use record::RecordAuth;

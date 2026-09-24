@@ -226,7 +226,7 @@ mod tests {
         let bytes = header().encode();
 
         assert_eq!(&bytes[0..8], b"\x89DaruDB\n");
-        assert_eq!(&bytes[8..12], &2u32.to_le_bytes());
+        assert_eq!(&bytes[8..12], &3u32.to_le_bytes());
         assert_eq!(&bytes[12..16], &4096u32.to_le_bytes());
         assert_eq!(&bytes[16..32], b"0123456789abcdef");
         assert_eq!(bytes[32], 0, "the cipher of a plain file");

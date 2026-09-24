@@ -16,7 +16,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use crate::btree::{LoadedNode, Loader};
-use crate::crypto::{DataKey, PasswordCost, Secret, Unlocker};
+use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{CommitRecord, KeyBlock, SLOT_COUNT, Selector, StaticHeader};
 use crate::storage::{Cache, Pager};
@@ -79,6 +79,8 @@ pub(crate) struct Shared {
     pub(crate) settings: Settings,
     /// The data key of an encrypted file, for wrapping it under a new key.
     pub(crate) data_key: Option<DataKey>,
+    /// The key that signs an encrypted file's commit records.
+    pub(crate) record_auth: Option<RecordAuth>,
     header: Mutex<Header>,
     /// The last selector written before the last barrier, which a power cut
     /// can bring back. `None` until this instance's first barrier: another
@@ -122,6 +124,7 @@ impl Shared {
             loader,
             cache,
             settings,
+            record_auth: data_key.as_ref().map(RecordAuth::new),
             data_key,
             header: Mutex::new(header),
             last_barrier: Mutex::new(None),
@@ -165,6 +168,13 @@ impl Shared {
 
                 Err(Error::WrongKey { path })
             }
+        }
+    }
+
+    /// Sets the record MAC of `record` for slot `slot`, in an encrypted file.
+    pub(crate) fn sign_record(&self, slot: usize, record: &mut CommitRecord) {
+        if let Some(auth) = &self.record_auth {
+            record.mac = auth.mac(&self.static_header.file_id, slot, &record.authenticated());
         }
     }
 
