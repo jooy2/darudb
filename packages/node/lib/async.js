@@ -5,10 +5,11 @@
  * two APIs from waiting for each other.
  *
  * Every operation of an asynchronous transaction runs on the libuv thread
- * pool and resolves a promise. A transaction runs its operations one at a
- * time, in the order they were called, whether or not each was awaited, and
- * ends only once the last has settled; so an operation never meets a
- * transaction that ended under it.
+ * pool and resolves a promise. A transaction runs its operations in the
+ * order they were called, whether or not each was awaited, sending those
+ * called together to the pool as one batch (`Serial`), and ends only once
+ * the last has settled; so an operation never meets a transaction that ended
+ * under it.
  *
  * A write transaction holds the file's writer lock, and a second one on the
  * same file waits for it. On the thread pool that wait could take every
@@ -23,7 +24,14 @@
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 
-const { codeError, invalid, encodeRecords, decodeRecord, decodeRecords } = require('./codec');
+const {
+  Reader,
+  codeError,
+  invalid,
+  encodeRecords,
+  decodeRecord,
+  decodeRecords
+} = require('./codec');
 const { toBuffer, keyOf, irOf, collectionOf } = require('./shared');
 
 /**
@@ -160,43 +168,247 @@ function settle(value) {
   return value;
 }
 
-const noop = () => {};
+// What each operation of a batch is, as `src/lib.rs` numbers them.
+const GET = 0;
+const FIND = 1;
+const FIND_FIRST = 2;
+const COUNT = 3;
+const INSERT = 4;
+const PUT = 5;
+const DELETE = 6;
+const PREVIOUS_RECORD = 7;
+const PREVIOUS_KEYS = 8;
+
+// How `src/lib.rs` tags each result of a batch, and each key among them.
+const TAG_BYTES = 0;
+const TAG_NULL = 1;
+const TAG_NUMBER = 2;
+const TAG_FALSE = 3;
+const TAG_TRUE = 4;
+const TAG_KEYS = 5;
+const TAG_FAILURE = 6;
+const KEY_INT = 0;
+const KEY_STRING = 1;
+const KEY_BYTES = 2;
+
+const SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
 /**
- * One transaction's operations, run one at a time in the order they were
- * called. `call` runs the native transaction's `…Async` method `method`.
+ * One transaction's operations, run in the order they were called.
+ *
+ * Operations called in the same turn of the event loop, or while a batch is
+ * on the thread pool, go to the engine together as the next batch, in one
+ * call and one trip through the pool; the engine runs a batch's operations
+ * one after another. A trip costs far more than most operations, so calling
+ * many at once and awaiting them together costs little more than one, while
+ * awaiting each in turn pays a trip for each.
  */
 class Serial {
   #native;
-  #tail = Promise.resolve();
+  #queued = [];
+  #scheduled = false;
+  #running = false;
   #open = true;
+  #idle = [];
 
   constructor(native) {
     this.#native = native;
   }
 
-  call(method, ...args) {
+  /**
+   * Queues an operation of kind `kind`, with the collection, key and bytes
+   * it takes, and resolves to its result.
+   */
+  call(kind, collection, key, payload) {
     if (!this.#open) {
       return Promise.reject(codeError('CLOSED', 'the transaction has ended'));
     }
 
-    const result = this.#tail.then(() => this.#native[method](...args)).then(settle);
+    return new Promise((resolve, reject) => {
+      this.#queued.push({ kind, collection, key, payload, resolve, reject });
 
-    this.#tail = result.then(noop, noop);
-
-    return result;
+      if (!this.#running && !this.#scheduled) {
+        this.#scheduled = true;
+        queueMicrotask(() => {
+          this.#scheduled = false;
+          this.#send();
+        });
+      }
+    });
   }
 
   /** Waits for every operation called so far to settle. */
   drain() {
-    return this.#tail;
+    if (!this.#running && !this.#scheduled && this.#queued.length === 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      this.#idle.push(resolve);
+    });
   }
 
   /** Takes no more operations, and waits for the ones called to settle. */
   close() {
     this.#open = false;
 
-    return this.#tail;
+    return this.drain();
+  }
+
+  #send() {
+    const batch = this.#queued;
+
+    this.#queued = [];
+
+    if (batch.length === 0) {
+      this.#rest();
+
+      return;
+    }
+
+    this.#running = true;
+
+    let sent;
+
+    try {
+      sent = this.#native.runAsync(
+        Buffer.from(batch.map((op) => op.kind)),
+        batch.map((op) => op.collection),
+        batch.map((op) => op.key),
+        batch.map((op) => op.payload)
+      );
+    } catch (error) {
+      sent = Promise.reject(error);
+    }
+
+    sent
+      .then(settle)
+      .then(
+        (results) => deliver(batch, results),
+        (error) => {
+          for (const op of batch) {
+            op.reject(error);
+          }
+        }
+      )
+      .finally(() => {
+        this.#running = false;
+
+        if (this.#queued.length > 0) {
+          this.#send();
+        } else {
+          this.#rest();
+        }
+      });
+  }
+
+  #rest() {
+    const idle = this.#idle;
+
+    this.#idle = [];
+
+    for (const resolve of idle) {
+      resolve();
+    }
+  }
+}
+
+/** Settles each operation of `batch` with its result in `results`. */
+function deliver(batch, results) {
+  const reader = new Reader(results);
+
+  for (const op of batch) {
+    let result;
+
+    try {
+      result = readResult(reader, results);
+    } catch (error) {
+      // A batch the engine wrote wrongly: nothing after this can be trusted.
+      for (const rest of batch.slice(batch.indexOf(op))) {
+        rest.reject(error);
+      }
+
+      return;
+    }
+
+    if (result instanceof Failure) {
+      op.reject(codeError(result.code, result.message));
+    } else {
+      op.resolve(result);
+    }
+  }
+}
+
+class Failure {
+  constructor(code, message) {
+    this.code = code;
+    this.message = message;
+  }
+}
+
+/**
+ * The next result of a batch. Bytes come as a view of `results`, which the
+ * caller decodes before the batch is gone; keys of bytes are copied.
+ */
+function readResult(reader, results) {
+  switch (reader.byte()) {
+    case TAG_BYTES: {
+      const length = reader.count();
+      const start = reader.at;
+
+      reader.at += length;
+
+      return results.subarray(start, reader.at);
+    }
+    case TAG_NULL:
+      return null;
+    case TAG_NUMBER:
+      return reader.float();
+    case TAG_FALSE:
+      return false;
+    case TAG_TRUE:
+      return true;
+    case TAG_KEYS: {
+      const keys = new Array(reader.count());
+
+      for (let index = 0; index < keys.length; index++) {
+        keys[index] = readKey(reader, results);
+      }
+
+      return keys;
+    }
+    case TAG_FAILURE:
+      return new Failure(reader.string(), reader.string());
+    default:
+      throw codeError('INTERNAL', 'a batch holds a result of no known kind');
+  }
+}
+
+function readKey(reader, results) {
+  switch (reader.byte()) {
+    case KEY_INT: {
+      if (reader.end - reader.at < 8) {
+        throw codeError('INTERNAL', 'a batch ends inside a key');
+      }
+
+      const int = reader.view.getBigInt64(reader.at, true);
+
+      reader.at += 8;
+
+      return int >= -SAFE && int <= SAFE ? Number(int) : int;
+    }
+    case KEY_STRING:
+      return reader.string();
+    case KEY_BYTES: {
+      const length = reader.count();
+      const start = reader.at;
+
+      reader.at += length;
+
+      return Buffer.from(results.subarray(start, reader.at));
+    }
+    default:
+      throw codeError('INTERNAL', 'a batch holds a key of no known kind');
   }
 }
 
@@ -221,29 +433,31 @@ class AsyncReadCollection {
 
   /** The object whose primary key is `key`, or `null`. */
   async get(key) {
-    const record = await this.#serial.call('getRecordAsync', this.#layout.name, keyOf(key));
+    const record = await this.#serial.call(GET, this.#layout.name, keyOf(key), null);
 
     return record === null ? null : decodeRecord(this.#layout, record);
   }
 
   /** The objects a query finds, in its order; every object without one. */
   async find(query, parameters) {
-    const ir = irOf(this.#layout.name, query, parameters, false);
+    const ir = toBuffer(irOf(this.#layout.name, query, parameters, false));
 
-    return decodeRecords(this.#layout, await this.#serial.call('findAsync', ir, false));
+    return decodeRecords(this.#layout, await this.#serial.call(FIND, '', null, ir));
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
   async findOne(query, parameters) {
-    const ir = irOf(this.#layout.name, query, parameters, false, true);
-    const records = await this.#serial.call('findAsync', ir, true);
+    const ir = toBuffer(irOf(this.#layout.name, query, parameters, false, true));
+    const records = await this.#serial.call(FIND_FIRST, '', null, ir);
 
     return decodeRecords(this.#layout, records)[0] ?? null;
   }
 
   /** How many objects a query finds, after its offset and within its limit. */
   async count(query, parameters) {
-    return this.#serial.call('countAsync', irOf(this.#layout.name, query, parameters, true));
+    const ir = toBuffer(irOf(this.#layout.name, query, parameters, true));
+
+    return this.#serial.call(COUNT, '', null, ir);
   }
 
   get [SERIAL]() {
@@ -283,7 +497,7 @@ class AsyncWriteCollection extends AsyncReadCollection {
 
   /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */
   async delete(key) {
-    return this[SERIAL].call('deleteAsync', this[LAYOUT].name, keyOf(key));
+    return this[SERIAL].call(DELETE, this[LAYOUT].name, keyOf(key), null);
   }
 
   #write(objects, replace) {
@@ -297,7 +511,7 @@ class AsyncWriteCollection extends AsyncReadCollection {
 
     const records = toBuffer(encodeRecords(this[LAYOUT], objects));
 
-    return this[SERIAL].call('writeRecordsAsync', this[LAYOUT].name, records, replace);
+    return this[SERIAL].call(replace ? PUT : INSERT, this[LAYOUT].name, null, records);
   }
 }
 
@@ -377,7 +591,7 @@ class AsyncMigrating {
    */
   async previous(collection, key) {
     const layout = collectionOf(this.#previous, collection);
-    const record = await this.#serial.call('previousRecordAsync', collection, keyOf(key));
+    const record = await this.#serial.call(PREVIOUS_RECORD, collection, keyOf(key), null);
 
     return record === null ? null : decodeRecord(layout, record, true);
   }
@@ -386,7 +600,7 @@ class AsyncMigrating {
   async previousKeys(collection) {
     collectionOf(this.#previous, collection);
 
-    return this.#serial.call('previousKeysAsync', collection);
+    return this.#serial.call(PREVIOUS_KEYS, collection, null, null);
   }
 }
 

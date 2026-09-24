@@ -1362,6 +1362,7 @@ function encodeQuery(collection, query, count) {
 }
 
 module.exports = {
+  Reader,
   codeError,
   invalid,
   encodeRecords,

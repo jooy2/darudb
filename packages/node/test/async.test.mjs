@@ -136,7 +136,7 @@ describe('asynchronous transactions', () => {
 
     assert.deepEqual(seen, [4, true, null]);
 
-    // Many at once, more than the thread pool has threads, none awaited.
+    // Many at once, none awaited: one batch, run in the order called.
     const last = await db.writeAsync((txn) => {
       const users = txn.collection('users');
 
@@ -158,6 +158,94 @@ describe('asynchronous transactions', () => {
       db.read((txn) => txn.collection('users').count()),
       4
     );
+  });
+
+  it('give each operation called together its own result, failures included', async (context) => {
+    const path = tempPath(context);
+    const keyed = schema(1, {
+      labels: collection({ label: t.string().primaryKey(), note: t.string().optional() }),
+      blobs: collection({ hash: t.bytes().primaryKey() }),
+      bigs: collection({ n: t.bigint().primaryKey() })
+    });
+    const db = await Database.openAsync(path, { schema: keyed });
+
+    context.after(() => db.close());
+
+    // Called in one turn, so they cross into the engine as one batch.
+    const settled = await db.writeAsync((txn) => {
+      const labels = txn.collection('labels');
+      const blobs = txn.collection('blobs');
+      const bigs = txn.collection('bigs');
+
+      return Promise.allSettled([
+        labels.insert({ label: 'a' }),
+        labels.insert({ label: 'a' }),
+        labels.put({ label: 'b', note: 'x' }),
+        labels.get('b'),
+        labels.get('z'),
+        labels.count(),
+        labels.find((q) => q.sortBy('label', 'desc')),
+        labels.findOne('label == $0', ['a']),
+        labels.find((q) => q.where('missing', '==', 1)),
+        labels.delete('a'),
+        labels.delete('a'),
+        blobs.insertMany([{ hash: new Uint8Array([1, 2]) }, { hash: new Uint8Array([]) }]),
+        bigs.insertMany([{ n: 2n ** 60n }, { n: -5n }]),
+        bigs.get(2n ** 60n)
+      ]);
+    });
+    const values = settled.map((outcome) =>
+      outcome.status === 'fulfilled' ? outcome.value : outcome.reason.code
+    );
+
+    assert.deepEqual(values, [
+      'a',
+      'DUPLICATE_KEY',
+      'b',
+      { label: 'b', note: 'x' },
+      null,
+      2,
+      [
+        { label: 'b', note: 'x' },
+        { label: 'a', note: null }
+      ],
+      { label: 'a', note: null },
+      'INVALID_QUERY',
+      true,
+      false,
+      [Buffer.from([1, 2]), Buffer.from([])],
+      [2n ** 60n, -5],
+      { n: 2n ** 60n }
+    ]);
+    assert.ok(settled[1].reason instanceof Error, 'a failure in a batch is a real Error');
+    assert.deepEqual(
+      db.read((txn) => txn.collection('labels').find()),
+      [{ label: 'b', note: 'x' }],
+      'the operations after a refused one ran, and committed'
+    );
+  });
+
+  it('send operations called during a batch after it, in order', async (context) => {
+    const { db } = await withData(context);
+
+    const seen = await db.writeAsync(async (txn) => {
+      const users = txn.collection('users');
+
+      for (let n = 0; n < 500; n++) {
+        users.put({ id: 2, name: `first ${n}` });
+      }
+
+      // The first batch is on its way; these queue behind it.
+      await Promise.resolve();
+
+      for (let n = 0; n < 500; n++) {
+        users.put({ id: 2, name: `second ${n}` });
+      }
+
+      return users.get(2);
+    });
+
+    assert.equal(seen.name, 'second 499');
   });
 
   it('commit when their function resolves and abort when it rejects', async (context) => {

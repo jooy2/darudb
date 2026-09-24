@@ -13,12 +13,15 @@
 //! batch of objects costs one call and one buffer rather than a call per
 //! field.
 //!
-//! Every operation has a synchronous method and an `…Async` one. The second
-//! runs the engine's work on the libuv thread pool and resolves a promise, so
-//! the event loop never waits for the disk. A transaction sits behind a mutex
-//! so that each operation can take it to whichever pool thread runs it; the
-//! JavaScript side runs one operation of a transaction at a time, in the
-//! order it was called, so the mutex is never contended.
+//! Every operation of a transaction has a synchronous method, and the
+//! asynchronous API runs them in batches through `run_async`, on the libuv
+//! thread pool, resolving a promise, so the event loop never waits for the
+//! disk. Opening a database, beginning a transaction, committing and closing
+//! have `…Async` methods of their own. A transaction sits behind a
+//! mutex so that a batch can take it to whichever pool thread runs it; the
+//! JavaScript side sends one batch of a transaction at a time, with its
+//! operations in the order they were called, so the mutex is never
+//! contended.
 //!
 //! An error thrown from here is a JavaScript `Error` whose `code` is the
 //! engine's [`darudb::Error::code`], unchanged. A pool thread cannot throw, so
@@ -153,33 +156,6 @@ impl Deliver for Vec<u8> {
 
     fn deliver(self) -> Result<Buffer> {
         Ok(self.into())
-    }
-}
-
-impl Deliver for Option<Vec<u8>> {
-    type Js = Either<Buffer, Null>;
-
-    fn deliver(self) -> Result<Self::Js> {
-        Ok(match self {
-            Some(bytes) => Either::A(bytes.into()),
-            None => Either::B(Null),
-        })
-    }
-}
-
-impl Deliver for f64 {
-    type Js = f64;
-
-    fn deliver(self) -> Result<f64> {
-        Ok(self)
-    }
-}
-
-impl Deliver for bool {
-    type Js = bool;
-
-    fn deliver(self) -> Result<bool> {
-        Ok(self)
     }
 }
 
@@ -581,6 +557,49 @@ impl NativeTransaction {
         lock(&self.held)?.take().ok_or_else(ended)
     }
 
+    /// Runs a batch of operations on the thread pool, one after another in
+    /// the order given, and resolves to their results in one buffer, as
+    /// [`Batch`] describes. `kinds` holds one of the `OP_` numbers per
+    /// operation, and the other arrays what each takes, or an empty string or
+    /// `null` where it takes nothing.
+    ///
+    /// One failing operation fails only its own result, as it would alone:
+    /// an operation the engine refuses changes nothing, and the next one
+    /// runs.
+    #[napi(ts_return_type = "Promise<Buffer | NativeFailure>")]
+    pub fn run_async(
+        &self,
+        kinds: Buffer,
+        collections: Vec<String>,
+        keys: Vec<Option<JsKey>>,
+        payloads: Vec<Option<Buffer>>,
+    ) -> Result<AsyncTask<Work<Vec<u8>>>> {
+        if collections.len() != kinds.len()
+            || keys.len() != kinds.len()
+            || payloads.len() != kinds.len()
+        {
+            return Err(invalid("a batch's arrays differ in length"));
+        }
+
+        let ops: Vec<Op> = kinds
+            .iter()
+            .zip(collections)
+            .zip(keys)
+            .zip(payloads)
+            .map(|(((kind, collection), key), payload)| Op::of(*kind, collection, key, payload))
+            .collect();
+
+        Ok(self.later(move |txn| {
+            let mut batch = Batch::default();
+
+            for op in ops {
+                batch.push(op.run(txn));
+            }
+
+            Ok(batch.0)
+        }))
+    }
+
     #[napi]
     pub fn get_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
         let key = key_in(key)?;
@@ -590,17 +609,6 @@ impl NativeTransaction {
             .map(Buffer::from))
     }
 
-    #[napi(ts_return_type = "Promise<Buffer | null | NativeFailure>")]
-    pub fn get_record_async(
-        &self,
-        collection: String,
-        key: JsKey,
-    ) -> Result<AsyncTask<Work<Option<Vec<u8>>>>> {
-        let key = key_in(key)?;
-
-        Ok(self.later(move |txn| txn.get_record(&collection, key)))
-    }
-
     /// The records a query finds, one after another, each after its length;
     /// only the first with `first`.
     #[napi]
@@ -608,23 +616,9 @@ impl NativeTransaction {
         Ok(self.now(|txn| txn.find(&ir, first))?.into())
     }
 
-    #[napi(ts_return_type = "Promise<Buffer | NativeFailure>")]
-    pub fn find_async(&self, ir: Buffer, first: bool) -> AsyncTask<Work<Vec<u8>>> {
-        let ir = ir.to_vec();
-
-        self.later(move |txn| txn.find(&ir, first))
-    }
-
     #[napi]
     pub fn count(&self, ir: Buffer) -> Result<f64> {
         self.now(|txn| txn.count(&ir))
-    }
-
-    #[napi(ts_return_type = "Promise<number | NativeFailure>")]
-    pub fn count_async(&self, ir: Buffer) -> AsyncTask<Work<f64>> {
-        let ir = ir.to_vec();
-
-        self.later(move |txn| txn.count(&ir))
     }
 
     #[napi]
@@ -638,30 +632,11 @@ impl NativeTransaction {
             .deliver()
     }
 
-    #[napi(ts_return_type = "Promise<Array<number | bigint | string | Buffer> | NativeFailure>")]
-    pub fn write_records_async(
-        &self,
-        collection: String,
-        records: Buffer,
-        replace: bool,
-    ) -> AsyncTask<Work<Keys>> {
-        let records = records.to_vec();
-
-        self.later(move |txn| txn.write_records(&collection, &records, replace))
-    }
-
     #[napi]
     pub fn delete(&self, collection: String, key: JsKey) -> Result<bool> {
         let key = key_in(key)?;
 
         self.now(|txn| txn.delete(&collection, key))
-    }
-
-    #[napi(ts_return_type = "Promise<boolean | NativeFailure>")]
-    pub fn delete_async(&self, collection: String, key: JsKey) -> Result<AsyncTask<Work<bool>>> {
-        let key = key_in(key)?;
-
-        Ok(self.later(move |txn| txn.delete(&collection, key)))
     }
 
     /// Commits a write transaction, deferred or not, and ends it.
@@ -720,11 +695,6 @@ impl NativeTransaction {
         self.now(|txn| txn.previous_keys(&collection))?.deliver()
     }
 
-    #[napi(ts_return_type = "Promise<Array<number | bigint | string | Buffer> | NativeFailure>")]
-    pub fn previous_keys_async(&self, collection: String) -> AsyncTask<Work<Keys>> {
-        self.later(move |txn| txn.previous_keys(&collection))
-    }
-
     #[napi]
     pub fn previous_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
         let key = key_in(key)?;
@@ -732,17 +702,6 @@ impl NativeTransaction {
         Ok(self
             .now(|txn| txn.previous_record(&collection, key))?
             .map(Buffer::from))
-    }
-
-    #[napi(ts_return_type = "Promise<Buffer | null | NativeFailure>")]
-    pub fn previous_record_async(
-        &self,
-        collection: String,
-        key: JsKey,
-    ) -> Result<AsyncTask<Work<Option<Vec<u8>>>>> {
-        let key = key_in(key)?;
-
-        Ok(self.later(move |txn| txn.previous_record(&collection, key)))
     }
 
     /// Commits a migration, and returns the open database.
@@ -757,6 +716,177 @@ impl NativeTransaction {
 
         Ok(Work::task(move || finish(txn)))
     }
+}
+
+// What each operation of a batch is, as `lib/async.js` numbers them.
+const OP_GET: u8 = 0;
+const OP_FIND: u8 = 1;
+const OP_FIND_FIRST: u8 = 2;
+const OP_COUNT: u8 = 3;
+const OP_INSERT: u8 = 4;
+const OP_PUT: u8 = 5;
+const OP_DELETE: u8 = 6;
+const OP_PREVIOUS_RECORD: u8 = 7;
+const OP_PREVIOUS_KEYS: u8 = 8;
+
+/// One operation of a batch, with what it takes checked and copied, so that
+/// it can move to a pool thread.
+enum Op {
+    Get(String, darudb::Value),
+    Find(Vec<u8>, bool),
+    Count(Vec<u8>),
+    Write(String, Vec<u8>, bool),
+    Delete(String, darudb::Value),
+    PreviousRecord(String, darudb::Value),
+    PreviousKeys(String),
+    /// An operation refused before it runs, with the error it fails with.
+    Refused(napi::Error<&'static str>),
+}
+
+impl Op {
+    fn of(kind: u8, collection: String, key: Option<JsKey>, payload: Option<Buffer>) -> Self {
+        let key = || {
+            key.ok_or_else(|| invalid("the operation takes a key"))
+                .and_then(key_in)
+        };
+        let payload = || {
+            payload
+                .map(|bytes| bytes.to_vec())
+                .ok_or_else(|| invalid("the operation takes bytes"))
+        };
+        let op = match kind {
+            OP_GET => key().map(|key| Op::Get(collection, key)),
+            OP_FIND | OP_FIND_FIRST => payload().map(|ir| Op::Find(ir, kind == OP_FIND_FIRST)),
+            OP_COUNT => payload().map(Op::Count),
+            OP_INSERT | OP_PUT => {
+                payload().map(|records| Op::Write(collection, records, kind == OP_PUT))
+            }
+            OP_DELETE => key().map(|key| Op::Delete(collection, key)),
+            OP_PREVIOUS_RECORD => key().map(|key| Op::PreviousRecord(collection, key)),
+            OP_PREVIOUS_KEYS => Ok(Op::PreviousKeys(collection)),
+            _ => Err(invalid(format!("{kind} is not an operation"))),
+        };
+
+        op.unwrap_or_else(Op::Refused)
+    }
+
+    fn run(self, txn: &mut Txn) -> Result<Outcome> {
+        Ok(match self {
+            Op::Get(collection, key) => Outcome::Record(txn.get_record(&collection, key)?),
+            Op::Find(ir, first) => Outcome::Bytes(txn.find(&ir, first)?),
+            Op::Count(ir) => Outcome::Number(txn.count(&ir)?),
+            Op::Write(collection, records, replace) => {
+                Outcome::Keys(txn.write_records(&collection, &records, replace)?.0)
+            }
+            Op::Delete(collection, key) => Outcome::Bool(txn.delete(&collection, key)?),
+            Op::PreviousRecord(collection, key) => {
+                Outcome::Record(txn.previous_record(&collection, key)?)
+            }
+            Op::PreviousKeys(collection) => Outcome::Keys(txn.previous_keys(&collection)?.0),
+            Op::Refused(error) => return Err(error),
+        })
+    }
+}
+
+/// What an operation of a batch returned.
+enum Outcome {
+    Bytes(Vec<u8>),
+    Record(Option<Vec<u8>>),
+    Number(f64),
+    Bool(bool),
+    Keys(Vec<darudb::Value>),
+}
+
+/// The results of a batch, one after another, each after a tag byte:
+///
+/// - `TAG_BYTES`: a varint length and the bytes.
+/// - `TAG_NULL`, `TAG_FALSE` and `TAG_TRUE`: nothing more.
+/// - `TAG_NUMBER`: a float, 8 bytes little-endian.
+/// - `TAG_KEYS`: a varint count, then each key after its own tag:
+///   `KEY_INT` and an int, 8 bytes little-endian; `KEY_STRING` or
+///   `KEY_BYTES`, a varint length and the bytes.
+/// - `TAG_FAILURE`: the error's code and message, each a varint length and
+///   UTF-8.
+///
+/// One buffer for the whole batch costs one allocation and one crossing into
+/// JavaScript, where a value per result would cost several calls each.
+#[derive(Default)]
+struct Batch(Vec<u8>);
+
+const TAG_BYTES: u8 = 0;
+const TAG_NULL: u8 = 1;
+const TAG_NUMBER: u8 = 2;
+const TAG_FALSE: u8 = 3;
+const TAG_TRUE: u8 = 4;
+const TAG_KEYS: u8 = 5;
+const TAG_FAILURE: u8 = 6;
+
+const KEY_INT: u8 = 0;
+const KEY_STRING: u8 = 1;
+const KEY_BYTES: u8 = 2;
+
+impl Batch {
+    fn push(&mut self, outcome: Result<Outcome>) {
+        let outcome = outcome.and_then(|outcome| match outcome {
+            Outcome::Keys(keys) if !keys.iter().all(is_key) => Err(invalid(
+                "the engine returned a key of a type keys do not have",
+            )),
+            outcome => Ok(outcome),
+        });
+
+        match outcome {
+            Ok(Outcome::Bytes(bytes) | Outcome::Record(Some(bytes))) => {
+                self.0.push(TAG_BYTES);
+                self.bytes(&bytes);
+            }
+            Ok(Outcome::Record(None)) => self.0.push(TAG_NULL),
+            Ok(Outcome::Number(number)) => {
+                self.0.push(TAG_NUMBER);
+                self.0.extend_from_slice(&number.to_le_bytes());
+            }
+            Ok(Outcome::Bool(value)) => self.0.push(if value { TAG_TRUE } else { TAG_FALSE }),
+            Ok(Outcome::Keys(keys)) => {
+                self.0.push(TAG_KEYS);
+                push_varint(&mut self.0, keys.len());
+
+                for key in keys {
+                    match key {
+                        darudb::Value::Int(int) => {
+                            self.0.push(KEY_INT);
+                            self.0.extend_from_slice(&int.to_le_bytes());
+                        }
+                        darudb::Value::String(string) => {
+                            self.0.push(KEY_STRING);
+                            self.bytes(string.as_bytes());
+                        }
+                        darudb::Value::Bytes(bytes) => {
+                            self.0.push(KEY_BYTES);
+                            self.bytes(&bytes);
+                        }
+                        // Checked above.
+                        _ => {}
+                    }
+                }
+            }
+            Err(error) => {
+                self.0.push(TAG_FAILURE);
+                self.bytes(error.status.as_bytes());
+                self.bytes(error.reason.as_bytes());
+            }
+        }
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        push_varint(&mut self.0, bytes.len());
+        self.0.extend_from_slice(bytes);
+    }
+}
+
+fn is_key(value: &darudb::Value) -> bool {
+    matches!(
+        value,
+        darudb::Value::Int(_) | darudb::Value::String(_) | darudb::Value::Bytes(_)
+    )
 }
 
 fn commit(txn: Txn, deferred: bool) -> Result<()> {
@@ -829,18 +959,21 @@ fn concatenate(records: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = Vec::with_capacity(records.iter().map(|record| record.len() + 3).sum());
 
     for record in records {
-        let mut len = record.len();
-
-        while len >= 0x80 {
-            out.push(u8::try_from(len & 0x7F).unwrap_or(0) | 0x80);
-            len >>= 7;
-        }
-
-        out.push(u8::try_from(len).unwrap_or(0));
+        push_varint(&mut out, record.len());
         out.extend_from_slice(&record);
     }
 
     out
+}
+
+/// Appends `value` as a varint: seven bits a byte, low bits first.
+fn push_varint(out: &mut Vec<u8>, mut value: usize) {
+    while value >= 0x80 {
+        out.push(u8::try_from(value & 0x7F).unwrap_or(0) | 0x80);
+        value >>= 7;
+    }
+
+    out.push(u8::try_from(value).unwrap_or(0));
 }
 
 /// The varint at the start of `bytes`, and how many bytes it took.
