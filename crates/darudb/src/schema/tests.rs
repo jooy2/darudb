@@ -243,3 +243,80 @@ fn a_handle_opened_without_a_schema_can_open_one_later() {
     );
     assert!(typed.begin_read().unwrap().collection("players").is_ok());
 }
+
+/// The schema of [`schema`] at version 2, with a field more.
+fn schema_v2() -> Schema {
+    let mut schema = schema();
+
+    schema.version = 2;
+    schema.collections[1] = schema.collections[1]
+        .clone()
+        .optional("nickname", Type::String);
+    schema
+}
+
+/// Run by [`a_process_whose_file_another_process_migrated_fails_with_schema_mismatch`]:
+/// migrates the database to [`schema_v2`] and says so.
+#[test]
+fn helper_migrating_to_version_2() {
+    let Ok(path) = std::env::var(crate::testing::HELPER_PATH) else {
+        return;
+    };
+    let db = OpenOptions::new().schema(schema_v2()).open(path).unwrap();
+
+    println!("answer migrated");
+    crate::testing::wait_to_be_told();
+    drop(db);
+}
+
+#[test]
+fn a_process_whose_file_another_process_migrated_fails_with_schema_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let db = OpenOptions::new().schema(schema()).open(&path).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.collection("players")
+        .unwrap()
+        .insert(Object::new().with("handle", "ace"))
+        .unwrap();
+    txn.commit().unwrap();
+
+    let before = db.begin_read().unwrap();
+    let mut other =
+        crate::testing::Helper::spawn("schema::tests::helper_migrating_to_version_2", &path);
+
+    assert_eq!(other.answer(), "migrated");
+
+    let code = |result: crate::Result<_>| result.err().map(|error: crate::Error| error.code());
+
+    assert_eq!(
+        code(db.begin_read().unwrap().collection("players").map(drop)),
+        Some("SCHEMA_MISMATCH")
+    );
+    assert_eq!(
+        code(db.begin_write().unwrap().collection("players").map(drop)),
+        Some("SCHEMA_MISMATCH")
+    );
+    assert_eq!(
+        before.collection("players").unwrap().len().unwrap(),
+        1,
+        "a snapshot from before the migration reads under the old schema"
+    );
+
+    other.tell();
+    assert!(other.finish().0);
+
+    let again = OpenOptions::new().schema(schema_v2()).open(&path).unwrap();
+    let read = again.begin_read().unwrap();
+
+    assert_eq!(
+        read.collection("players")
+            .unwrap()
+            .get(1)
+            .unwrap()
+            .unwrap()
+            .get("nickname"),
+        Some(&Value::Null)
+    );
+}
