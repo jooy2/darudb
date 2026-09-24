@@ -256,24 +256,17 @@ impl NodeRef<'_> {
     /// The number of keys of the node below `key`, or at or below it with
     /// `or_equal`: for a branch, the child that holds `key`.
     pub(crate) fn rank(&self, key: &[u8], or_equal: bool) -> usize {
-        let (mut low, mut high) = (0, self.count());
-
-        while low < high {
-            let middle = low + (high - low) / 2;
-            let below = match self.key(middle).cmp(key) {
-                Ordering::Less => true,
-                Ordering::Equal => or_equal,
-                Ordering::Greater => false,
-            };
-
-            if below {
-                low = middle + 1;
-            } else {
-                high = middle;
+        // Every lookup runs this on each level, so the kind of node is
+        // settled once rather than on every probe.
+        match self {
+            NodeRef::Loaded(loaded) if loaded.leaf => {
+                search(loaded.count, key, or_equal, |at| leaf_key(&loaded.page, at))
             }
+            NodeRef::Loaded(loaded) => search(loaded.count, key, or_equal, |at| {
+                branch_key(&loaded.page, loaded.count, at)
+            }),
+            NodeRef::Borrowed(_) => search(self.count(), key, or_equal, |at| self.key(at)),
         }
-
-        low
     }
 
     /// The node, decoded, for a check that reads all of it.
@@ -283,6 +276,47 @@ impl NodeRef<'_> {
             NodeRef::Borrowed(node) => Ok((*node).clone()),
             NodeRef::Loaded(loaded) => loaded.to_node(),
         }
+    }
+}
+
+/// How many of `count` ascending keys, which `key_at` gives by position,
+/// are below `key`, or at or below it with `or_equal`: a binary search.
+#[inline(always)]
+fn search<'k>(
+    count: usize,
+    key: &[u8],
+    or_equal: bool,
+    key_at: impl Fn(usize) -> &'k [u8],
+) -> usize {
+    let (mut low, mut high) = (0, count);
+
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let below = match compare(key_at(middle), key) {
+            Ordering::Less => true,
+            Ordering::Equal => or_equal,
+            Ordering::Greater => false,
+        };
+
+        if below {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+
+    low
+}
+
+/// Compares two keys as unsigned bytes, the first eight as one number, which
+/// settles most comparisons of a search without a call to compare memory.
+#[inline(always)]
+fn compare(a: &[u8], b: &[u8]) -> Ordering {
+    match (a.split_first_chunk::<8>(), b.split_first_chunk::<8>()) {
+        (Some((a_head, a_rest)), Some((b_head, b_rest))) => u64::from_be_bytes(*a_head)
+            .cmp(&u64::from_be_bytes(*b_head))
+            .then_with(|| a_rest.cmp(b_rest)),
+        _ => a.cmp(b),
     }
 }
 
@@ -298,6 +332,28 @@ impl Clone for NodeRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::Rng;
+
+    #[test]
+    fn keys_compare_as_unsigned_bytes() {
+        let mut rng = Rng::new(3);
+        // Short alphabets and lengths around eight, so that keys often share
+        // their first eight bytes or end inside them.
+        let key = |rng: &mut Rng| -> Vec<u8> {
+            let len = rng.index(20);
+
+            (0..len)
+                .map(|_| [0x00, 0x01, 0x7F, 0x80, 0xFF][rng.index(5)])
+                .collect()
+        };
+
+        for _ in 0..20_000 {
+            let (a, b) = (key(&mut rng), key(&mut rng));
+
+            assert_eq!(compare(&a, &b), a.cmp(&b), "{a:?} and {b:?}");
+            assert_eq!(compare(&a, &a), Ordering::Equal);
+        }
+    }
 
     #[test]
     fn a_key_goes_to_the_child_whose_range_holds_it() {
