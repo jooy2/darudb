@@ -89,6 +89,7 @@ npm run build        # the native addon, `native.js` and `native.d.ts`
 npm run lint
 npx prettier . --check
 npm test             # node:test against the addon just built, then the types
+npm run bench        # optional: the object workloads, after a release build
 ```
 
 `npm test` loads the addon that `npm run build` left in the folder, so build first after every change to Rust code, in the engine as well as in the binding.

@@ -26,6 +26,7 @@
     "build": "napi build --platform --release --js native.js --dts native.d.ts",
     "build:debug": "napi build --platform --js native.js --dts native.d.ts",
     "test": "node --test && tsc -p types",
+    "bench": "node bench/objects.mjs",
     "lint": "eslint . --report-unused-disable-directives",
     "lint:fix": "eslint . --report-unused-disable-directives --fix",
     "format": "prettier .",

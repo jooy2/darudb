@@ -67,7 +67,7 @@ npm install
 npm run build
 ```
 
-`npm run build` writes the addon for your platform and the files that load it. `npm test` runs the tests against it and checks the TypeScript declarations.
+`npm run build` writes the addon for your platform and the files that load it. `npm test` runs the tests against it and checks the TypeScript declarations, and `npm run bench` measures it after a release build.
 
 ## License
 
