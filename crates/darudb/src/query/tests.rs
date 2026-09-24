@@ -473,6 +473,16 @@ fn queries_follow_the_documented_rules() {
     assert_eq!(find(&db, q(Filter::eq("rating", f64::NAN))), [3]);
     assert_eq!(find(&db, q(Filter::gt("rating", f64::INFINITY))), [3]);
 
+    // An int compared with a float field means the float it equals.
+    assert_eq!(find(&db, q(Filter::eq("rating", 0))), [1, 2]);
+    assert_eq!(
+        find(
+            &db,
+            Query::parse("rating < 1 AND rating >= 0", &[]).unwrap()
+        ),
+        [1, 2]
+    );
+
     // Strings compare by bytes, zero bytes included.
     assert_eq!(find(&db, q(Filter::starts_with("handle", "a"))), [1, 3]);
     assert_eq!(find(&db, q(Filter::starts_with("handle", "a\0"))), [3]);
@@ -503,7 +513,8 @@ fn queries_follow_the_documented_rules() {
 
     for broken in [
         q(Filter::eq("score", "three")),
-        q(Filter::eq("score", 3.0)),
+        q(Filter::eq("score", 3.5)),
+        q(Filter::eq("rating", 1i64 << 60)),
         q(Filter::eq("missing", 1)),
         q(Filter::eq("address", 1)),
         q(Filter::gt("handle", Value::Null)),

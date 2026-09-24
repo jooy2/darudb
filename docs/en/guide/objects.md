@@ -127,7 +127,7 @@ fn adults(db: &Database) -> Result<(), darudb::Error> {
 - **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
 - **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list is not null.
 - **Null.** Every condition on a null field is false, except `is_null`. `Filter::eq(field, Value::Null)` is `is_null`.
-- **Types.** A value has the field's type: an `Int` field compares with an int, never a float, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
+- **Types.** A value has the field's type: an `Int` field compares with an int, never a float, a `Float` field with any number, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
 - **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.
 
 The same query can be written as text, which is convenient for queries that do not change and is how the other languages will write them too:

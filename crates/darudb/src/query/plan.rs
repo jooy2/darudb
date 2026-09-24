@@ -348,6 +348,27 @@ impl<'s> Resolver<'s> {
     }
 }
 
+/// The largest integer every smaller one of which a float holds exactly.
+const EXACT_FLOAT: i64 = 1 << 53;
+
+/// An int compared with a float field, as the float it equals, when it has
+/// one. A language with one type of number, such as JavaScript, cannot tell
+/// `1` from `1.0`, so the query that writes either means the float.
+fn exact_float(value: &Value, leaf: &Kind) -> Option<Value> {
+    match (value, leaf) {
+        (Value::Int(int), Kind::Float) if (-EXACT_FLOAT..=EXACT_FLOAT).contains(int) => {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "the range checked above converts exactly"
+            )]
+            let float = *int as f64;
+
+            Some(Value::Float(float))
+        }
+        _ => None,
+    }
+}
+
 /// Whether `value` is a value of the scalar `kind`.
 fn fits(value: &Value, kind: &Kind) -> bool {
     matches!(
@@ -364,6 +385,8 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], text: &str) -> Result<Tes
     let check = |value: &Value| {
         if fits(value, &path.leaf) {
             Ok(value.clone())
+        } else if let Some(float) = exact_float(value, &path.leaf) {
+            Ok(float)
         } else if value.is_null() {
             Err(invalid(format!(
                 "`{text}` is tested with `{}` against null, which only `==` and `!=` do",
