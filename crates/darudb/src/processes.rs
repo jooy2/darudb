@@ -26,7 +26,9 @@
 //!   commits reclaim every page their snapshots kept.
 //! - **One process, many handles.** Closing and opening handles in a worker
 //!   never releases a lock another of its threads relies on; if it did, the
-//!   readers above would see pages reused.
+//!   readers above would see pages reused. One worker in three keeps no handle
+//!   for long in any thread, so that its instance closes, often while another
+//!   of its threads opens the file again.
 //!
 //! Half the workers pause for a moment between a reader's first read of the
 //! header and the registration of its snapshot ([`crate::testing::widen_race`]).
@@ -112,10 +114,9 @@ fn worker() {
     let options = options(path, &mut rng);
 
     crate::testing::WIDEN_RACES.store(id % 2 == 0, Ordering::Relaxed);
+
+    let churn = id % 3 == 0;
     let stop = Arc::new(AtomicBool::new(false));
-    let db = options
-        .open(path)
-        .unwrap_or_else(|error| fail(&format!("opening: {error}")));
     let readers: Vec<_> = (0..2)
         .map(|reader| {
             let stop = Arc::clone(&stop);
@@ -123,7 +124,7 @@ fn worker() {
             let path = path.to_path_buf();
             let seed = id.wrapping_mul(31).wrapping_add(reader);
 
-            thread::spawn(move || read(&path, &options, &stop, seed))
+            thread::spawn(move || read(&path, &options, churn, &stop, seed))
         })
         .collect();
 
@@ -138,7 +139,7 @@ fn worker() {
         });
     }
 
-    write(&db, id, &stop, &mut rng);
+    let db = write(path, &options, churn, id, &stop, &mut rng);
 
     for reader in readers {
         let _ = reader.join();
@@ -149,12 +150,33 @@ fn worker() {
     println!("stopped");
 }
 
+/// Opens the database, and fails the worker if that fails.
+fn open(path: &Path, options: &OpenOptions) -> Database {
+    options
+        .open(path)
+        .unwrap_or_else(|error| fail(&format!("opening: {error}")))
+}
+
 /// Commits transfers until told to stop, printing each sequence number once
-/// its commit has returned.
-fn write(db: &Database, id: u64, stop: &AtomicBool, rng: &mut Rng) {
+/// its commit has returned. With `churn`, it opens a new handle every few
+/// transactions and drops the old one first. Returns its last handle.
+fn write(
+    path: &Path,
+    options: &OpenOptions,
+    churn: bool,
+    id: u64,
+    stop: &AtomicBool,
+    rng: &mut Rng,
+) -> Database {
+    let mut handle = None;
     let mut sequence = 0u64;
 
     while !stop.load(Ordering::SeqCst) {
+        if churn && rng.below(4) == 0 {
+            handle = None;
+        }
+
+        let db: &Database = handle.get_or_insert_with(|| open(path, options));
         let result = (|| {
             let mut txn = db.begin_write()?;
             let from = rng.below(ACCOUNTS);
@@ -224,20 +246,18 @@ fn write(db: &Database, id: u64, stop: &AtomicBool, rng: &mut Rng) {
                 .unwrap_or_else(|error| fail(&format!("syncing: {error}")));
         }
     }
+
+    handle.unwrap_or_else(|| open(path, options))
 }
 
-/// Reads until told to stop, through a handle of its own that it closes and
-/// opens again now and then.
-fn read(path: &Path, options: &OpenOptions, stop: &AtomicBool, seed: u64) {
+/// Reads until told to stop, through a handle of its own that it drops and
+/// opens again now and then, or with `churn` after every read.
+fn read(path: &Path, options: &OpenOptions, churn: bool, stop: &AtomicBool, seed: u64) {
     let mut rng = Rng::new(seed);
-    let open = || {
-        options
-            .open(path)
-            .unwrap_or_else(|error| fail(&format!("opening a reader: {error}")))
-    };
-    let mut db = open();
+    let mut handle = None;
 
     while !stop.load(Ordering::SeqCst) {
+        let db: &Database = handle.get_or_insert_with(|| open(path, options));
         let txn = db
             .begin_read()
             .unwrap_or_else(|error| fail(&format!("beginning a read: {error}")));
@@ -259,8 +279,8 @@ fn read(path: &Path, options: &OpenOptions, stop: &AtomicBool, seed: u64) {
 
         drop(txn);
 
-        if rng.below(30) == 0 {
-            db = open();
+        if churn || rng.below(30) == 0 {
+            handle = None;
         }
     }
 }
