@@ -45,8 +45,6 @@ Confirmed by reading the code against the specification; no test reproduces them
 - **Minimum Dart and Flutter versions.** Build hooks need Dart 3.10 or Flutter 3.38 at least.
 - **Encryption API in the bindings**: how Node.js and Dart take a key or a password, and whether they offer the operating system's keystore. The Rust API exists.
 - **Choosing the page cipher.** A new encrypted file gets the page cipher that suits the processor creating it, and the caller cannot pick one. Whether to offer that, for a file that moves between very different machines, is open.
-- **Query API form**: string queries, a builder, or both.
-- **Schema migrations**: how they are declared and when they run.
 - **File format versioning**: the forward and backward compatibility policy, and whether an older file is upgraded on open or by an explicit call. The design settles only the pre-release rule: no migrations until the first release.
 - **Busy timeout**: how long opening and writing wait for another process by default before failing with `BUSY`.
 - **The barrier after another process's commit.** A writer that does not know which selector a power cut would bring back issues a barrier before its record, so processes that take turns committing pay one barrier each time the writer changes. The turn lock waits 50 milliseconds for that reason: at 5, two processes committing in tight loops made a twentieth of their commits. Whether the writer can tell that selector from the records instead, and skip the barrier, is open, and would let the turn come sooner.

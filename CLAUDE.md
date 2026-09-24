@@ -159,7 +159,16 @@ Specified in [design/file-format.md](design/file-format.md#encryption).
 - **Encryption and multi-process access do not conflict here**, because there is no shared memory and no mmap.
 - **The header stays plain**, so page size, transaction ids and file size are visible; everything inside a page is not.
 
-### API and query model **[Tentative]**
+### API and query model
+
+The maintainer settled these on 2026-09-24. **[Decided]**
+
+- **Queries have two forms that compile to one IR**: a builder in every language, typed where the language allows, and a string query language that the engine parses, so that every binding shares one parser. The IR is what the engine executes.
+- **Schema migrations go by version.** The application declares a schema version. Opening a file whose schema is older applies the additive changes itself (new collections, new fields with a default, new indexes) and runs the application's migration function for each version step in between, all in one write transaction.
+- **A primary key is a declared field or an auto-increment.** A collection names one field of type integer, string or bytes as its primary key, or gets a 64-bit integer that the engine assigns in increasing order.
+- **Rust declares a schema with a builder at run time**, in the crate itself. A derive macro, which would be a separate proc-macro crate, is weighed in phase 5 together with Dart's code generation.
+
+The rest of this section is **[Tentative]**.
 
 - **Query results are plain objects (snapshots).** No accessor objects tied to the database's lifetime, so there is no "used after the database was closed" crash to have.
 - **v1 queries**
@@ -171,7 +180,7 @@ Specified in [design/file-format.md](design/file-format.md#encryption).
   - `sort`, `limit` / `offset`, `count`.
   - Links (to-one and to-many), backlinks, embedded objects, lists.
 - **Language APIs**
-  - Rust: typed schema and query builder in the crate itself.
+  - Rust: the schema builder above, and a query builder in the crate itself.
   - Dart: schema and a type-safe query builder generated with `build_runner`.
   - TypeScript: a builder typed with generics.
 - **The language boundary costs more than it looks.** Real-world performance is often decided by the binding layer rather than the engine, so records cross as packed binary buffers in one call, and batch APIs are the default.
