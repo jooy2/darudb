@@ -13,10 +13,24 @@
 //! batch of objects costs one call and one buffer rather than a call per
 //! field.
 //!
+//! Every operation has a synchronous method and an `…Async` one. The second
+//! runs the engine's work on the libuv thread pool and resolves a promise, so
+//! the event loop never waits for the disk. A transaction sits behind a mutex
+//! so that each operation can take it to whichever pool thread runs it; the
+//! JavaScript side runs one operation of a transaction at a time, in the
+//! order it was called, so the mutex is never contended.
+//!
 //! An error thrown from here is a JavaScript `Error` whose `code` is the
-//! engine's [`darudb::Error::code`], unchanged.
+//! engine's [`darudb::Error::code`], unchanged. A pool thread cannot throw, so
+//! an asynchronous operation that fails resolves to a [`NativeFailure`], which
+//! the JavaScript side throws.
 
-use napi::bindgen_prelude::{BigInt, Buffer, Either4, Either5, Uint8Array};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use napi::bindgen_prelude::{
+    AsyncTask, BigInt, Buffer, Either, Either4, Either5, Null, ToNapiValue, TypeName, Uint8Array,
+};
+use napi::{Env, Task};
 use napi_derive::napi;
 
 /// A result whose error becomes a JavaScript `Error` with the engine's code.
@@ -50,6 +64,14 @@ pub fn engine_version() -> &'static str {
     darudb::VERSION
 }
 
+/// What an asynchronous operation resolves to when it fails: the error's
+/// code and message, which the JavaScript side throws.
+#[napi(object)]
+pub struct NativeFailure {
+    pub code: String,
+    pub message: String,
+}
+
 /// A migration step's changes that are not a function: what
 /// `darudb::Migration` holds besides `run`.
 #[napi(object)]
@@ -76,6 +98,161 @@ pub struct NativeOptions {
     pub migrations: Option<Vec<NativeMigration>>,
 }
 
+/// Work for the thread pool: a function that returns a value or an error.
+pub struct Work<T: Deliver> {
+    run: Option<Box<dyn FnOnce() -> Result<T> + Send>>,
+}
+
+impl<T: Deliver> Work<T> {
+    fn task(run: impl FnOnce() -> Result<T> + Send + 'static) -> AsyncTask<Self> {
+        AsyncTask::new(Self {
+            run: Some(Box::new(run)),
+        })
+    }
+}
+
+/// A value a pool thread hands back, and what JavaScript gets for it.
+pub trait Deliver: Send + 'static {
+    type Js: ToNapiValue + TypeName;
+
+    fn deliver(self) -> Result<Self::Js>;
+}
+
+impl<T: Deliver> Task for Work<T> {
+    type Output = std::result::Result<T, NativeFailure>;
+    type JsValue = Either<T::Js, NativeFailure>;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let run = self
+            .run
+            .take()
+            .ok_or_else(|| napi::Error::from_reason("a pool task ran twice".to_owned()))?;
+
+        Ok(run().map_err(failure))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(
+            match output.and_then(|value| value.deliver().map_err(failure)) {
+                Ok(js) => Either::A(js),
+                Err(failure) => Either::B(failure),
+            },
+        )
+    }
+}
+
+fn failure(error: napi::Error<&'static str>) -> NativeFailure {
+    NativeFailure {
+        code: error.status.to_owned(),
+        message: error.reason.clone(),
+    }
+}
+
+impl Deliver for Vec<u8> {
+    type Js = Buffer;
+
+    fn deliver(self) -> Result<Buffer> {
+        Ok(self.into())
+    }
+}
+
+impl Deliver for Option<Vec<u8>> {
+    type Js = Either<Buffer, Null>;
+
+    fn deliver(self) -> Result<Self::Js> {
+        Ok(match self {
+            Some(bytes) => Either::A(bytes.into()),
+            None => Either::B(Null),
+        })
+    }
+}
+
+impl Deliver for f64 {
+    type Js = f64;
+
+    fn deliver(self) -> Result<f64> {
+        Ok(self)
+    }
+}
+
+impl Deliver for bool {
+    type Js = bool;
+
+    fn deliver(self) -> Result<bool> {
+        Ok(self)
+    }
+}
+
+impl Deliver for () {
+    type Js = Null;
+
+    fn deliver(self) -> Result<Null> {
+        Ok(Null)
+    }
+}
+
+/// Primary keys, as `insert` and `previousKeys` give them.
+pub struct Keys(Vec<darudb::Value>);
+
+impl Deliver for Keys {
+    type Js = Vec<JsKeyOut>;
+
+    fn deliver(self) -> Result<Self::Js> {
+        self.0.into_iter().map(key_out).collect()
+    }
+}
+
+impl Deliver for darudb::Database {
+    type Js = NativeDatabase;
+
+    fn deliver(self) -> Result<NativeDatabase> {
+        Ok(NativeDatabase { inner: Some(self) })
+    }
+}
+
+impl Deliver for darudb::Opening {
+    type Js = NativeOpening;
+
+    fn deliver(self) -> Result<NativeOpening> {
+        Ok(NativeOpening { state: Some(self) })
+    }
+}
+
+impl Deliver for Txn {
+    type Js = NativeTransaction;
+
+    fn deliver(self) -> Result<NativeTransaction> {
+        Ok(NativeTransaction::of(self))
+    }
+}
+
+/// The options of `Database.open`, as the engine takes them.
+fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
+    let mut open_options = darudb::OpenOptions::new();
+
+    if let Some(create) = options.create {
+        open_options.create(create);
+    }
+
+    if let Some(page_size) = options.page_size {
+        open_options.page_size(page_size);
+    }
+
+    if let Some(milliseconds) = options.busy_timeout {
+        open_options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
+    }
+
+    if let Some(schema) = &options.schema {
+        open_options.schema(darudb::Schema::decode(schema).map_err(to_js_error)?);
+    }
+
+    for migration in options.migrations.unwrap_or_default() {
+        open_options.migration(migration_of(migration)?);
+    }
+
+    Ok(open_options)
+}
+
 /// Opening a database: the open database, or the migration it is going
 /// through.
 #[napi]
@@ -87,31 +264,24 @@ pub struct NativeOpening {
 impl NativeOpening {
     #[napi(factory)]
     pub fn open(path: String, options: NativeOptions) -> Result<Self> {
-        let mut open_options = darudb::OpenOptions::new();
-
-        if let Some(create) = options.create {
-            open_options.create(create);
-        }
-
-        if let Some(page_size) = options.page_size {
-            open_options.page_size(page_size);
-        }
-
-        if let Some(milliseconds) = options.busy_timeout {
-            open_options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
-        }
-
-        if let Some(schema) = &options.schema {
-            open_options.schema(darudb::Schema::decode(schema).map_err(to_js_error)?);
-        }
-
-        for migration in options.migrations.unwrap_or_default() {
-            open_options.migration(migration_of(migration)?);
-        }
-
-        let state = open_options.open_migrating(&path).map_err(to_js_error)?;
+        let state = open_options(options)?
+            .open_migrating(&path)
+            .map_err(to_js_error)?;
 
         Ok(Self { state: Some(state) })
+    }
+
+    /// `open` on the thread pool.
+    #[napi(ts_return_type = "Promise<NativeOpening | NativeFailure>")]
+    pub fn open_async(
+        path: String,
+        options: NativeOptions,
+    ) -> Result<AsyncTask<Work<darudb::Opening>>> {
+        let options = open_options(options)?;
+
+        Ok(Work::task(move || {
+            options.open_migrating(&path).map_err(to_js_error)
+        }))
     }
 
     /// Whether a migration is under way.
@@ -120,120 +290,25 @@ impl NativeOpening {
         matches!(self.state, Some(darudb::Opening::Migrating(_)))
     }
 
-    #[napi(getter)]
-    pub fn previous_version(&self) -> Result<f64> {
-        Ok(u64_number(self.pending_ref()?.previous_version()))
-    }
-
-    /// The record of the schema the migration leads to.
-    #[napi(getter)]
-    pub fn schema_record(&self) -> Result<Buffer> {
-        Ok(self.pending_ref()?.schema_record().to_vec().into())
-    }
-
-    #[napi(getter)]
-    pub fn previous_schema_record(&self) -> Result<Buffer> {
-        Ok(self.pending_ref()?.previous_schema_record().into())
-    }
-
-    /// Runs the next version step's own function, and returns its version,
-    /// or `null` once every step has run.
+    /// The open database, when no migration is under way.
     #[napi]
-    pub fn next_step(&mut self) -> Result<Option<f64>> {
-        Ok(self
-            .pending()?
-            .next_step()
-            .map_err(to_js_error)?
-            .map(u64_number))
-    }
-
-    #[napi]
-    pub fn previous_keys(&mut self, collection: String) -> Result<Vec<JsKeyOut>> {
-        let keys = self
-            .pending()?
-            .migrating()
-            .previous_keys(&collection)
-            .map_err(to_js_error)?;
-
-        keys.into_iter().map(key_out).collect()
-    }
-
-    #[napi]
-    pub fn previous_record(&mut self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
-        let key = key_in(key)?;
-
-        Ok(self
-            .pending()?
-            .migrating()
-            .previous_record(&collection, key)
-            .map_err(to_js_error)?
-            .map(Buffer::from))
-    }
-
-    #[napi]
-    pub fn get_record(&mut self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
-        get_record(self.transaction()?, &collection, key)
-    }
-
-    #[napi]
-    pub fn find(&mut self, ir: Buffer, first: bool) -> Result<Buffer> {
-        find(self.transaction()?, &ir, first)
-    }
-
-    #[napi]
-    pub fn count(&mut self, ir: Buffer) -> Result<f64> {
-        count(self.transaction()?, &ir)
-    }
-
-    #[napi]
-    pub fn write_records(
-        &mut self,
-        collection: String,
-        records: Buffer,
-        replace: bool,
-    ) -> Result<Vec<JsKeyOut>> {
-        write_records(self.transaction()?, &collection, &records, replace)
-    }
-
-    #[napi]
-    pub fn delete(&mut self, collection: String, key: JsKey) -> Result<bool> {
-        delete(self.transaction()?, &collection, key)
-    }
-
-    /// The open database, after committing a migration if one is under way.
-    #[napi]
-    pub fn finish(&mut self) -> Result<NativeDatabase> {
-        let state = self.state.take().ok_or_else(ended)?;
-
-        Ok(NativeDatabase {
-            inner: Some(state.complete().map_err(to_js_error)?),
-        })
-    }
-
-    /// Leaves the file as it was, and ends the opening.
-    #[napi]
-    pub fn abort(&mut self) {
-        self.state = None;
-    }
-
-    fn pending_ref(&self) -> Result<&darudb::PendingMigration> {
-        match &self.state {
-            Some(darudb::Opening::Migrating(pending)) => Ok(pending),
-            _ => Err(ended()),
+    pub fn database(&mut self) -> Result<NativeDatabase> {
+        match self.state.take() {
+            Some(darudb::Opening::Open(database)) => Ok(NativeDatabase {
+                inner: Some(database),
+            }),
+            _ => Err(invalid("the opening has no open database")),
         }
     }
 
-    fn pending(&mut self) -> Result<&mut darudb::PendingMigration> {
-        match &mut self.state {
-            Some(darudb::Opening::Migrating(pending)) => Ok(pending),
-            _ => Err(ended()),
-        }
-    }
-
-    fn transaction(&mut self) -> Result<&mut darudb::WriteTransaction> {
-        match &mut self.state {
-            Some(darudb::Opening::Migrating(pending)) => Ok(pending.transaction()),
-            _ => Err(ended()),
+    /// The migration under way, as a transaction.
+    #[napi]
+    pub fn migration(&mut self) -> Result<NativeTransaction> {
+        match self.state.take() {
+            Some(darudb::Opening::Migrating(pending)) => {
+                Ok(NativeTransaction::of(Txn::Migration(pending)))
+            }
+            _ => Err(invalid("the opening has no migration under way")),
         }
     }
 }
@@ -267,22 +342,55 @@ impl NativeDatabase {
     }
 
     #[napi]
-    pub fn begin_read(&self) -> Result<NativeRead> {
-        Ok(NativeRead {
-            inner: Some(self.database()?.begin_read().map_err(to_js_error)?),
-        })
+    pub fn begin_read(&self) -> Result<NativeTransaction> {
+        let txn = self.database()?.begin_read().map_err(to_js_error)?;
+
+        Ok(NativeTransaction::of(Txn::Read(Box::new(txn))))
+    }
+
+    #[napi(ts_return_type = "Promise<NativeTransaction | NativeFailure>")]
+    pub fn begin_read_async(&self) -> Result<AsyncTask<Work<Txn>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database
+                .begin_read()
+                .map(|txn| Txn::Read(Box::new(txn)))
+                .map_err(to_js_error)
+        }))
     }
 
     #[napi]
-    pub fn begin_write(&self) -> Result<NativeWrite> {
-        Ok(NativeWrite {
-            inner: Some(self.database()?.begin_write().map_err(to_js_error)?),
-        })
+    pub fn begin_write(&self) -> Result<NativeTransaction> {
+        let txn = self.database()?.begin_write().map_err(to_js_error)?;
+
+        Ok(NativeTransaction::of(Txn::Write(Box::new(txn))))
+    }
+
+    /// `begin_write` on the thread pool, which waits there for another
+    /// process's writer.
+    #[napi(ts_return_type = "Promise<NativeTransaction | NativeFailure>")]
+    pub fn begin_write_async(&self) -> Result<AsyncTask<Work<Txn>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database
+                .begin_write()
+                .map(|txn| Txn::Write(Box::new(txn)))
+                .map_err(to_js_error)
+        }))
     }
 
     #[napi]
     pub fn sync(&self) -> Result<()> {
         self.database()?.sync().map_err(to_js_error)
+    }
+
+    #[napi(ts_return_type = "Promise<null | NativeFailure>")]
+    pub fn sync_async(&self) -> Result<AsyncTask<Work<()>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || database.sync().map_err(to_js_error)))
     }
 
     /// Makes deferred commits durable and closes the handle. Closing one that
@@ -295,6 +403,16 @@ impl NativeDatabase {
         }
     }
 
+    #[napi(ts_return_type = "Promise<null | NativeFailure>")]
+    pub fn close_async(&mut self) -> AsyncTask<Work<()>> {
+        let database = self.inner.take();
+
+        Work::task(move || match database {
+            Some(database) => database.close().map_err(to_js_error),
+            None => Ok(()),
+        })
+    }
+
     fn database(&self) -> Result<&darudb::Database> {
         self.inner
             .as_ref()
@@ -302,119 +420,369 @@ impl NativeDatabase {
     }
 }
 
-/// A read transaction.
+/// What a transaction object holds: a read or a write transaction, or a
+/// migration under way, whose write transaction migration functions use.
+/// The transactions are boxed, being many times the size of a migration's
+/// handle.
+pub enum Txn {
+    Read(Box<darudb::ReadTransaction>),
+    Write(Box<darudb::WriteTransaction>),
+    Migration(darudb::PendingMigration),
+}
+
+impl Txn {
+    fn get_record(&mut self, collection: &str, key: darudb::Value) -> Result<Option<Vec<u8>>> {
+        match self {
+            Txn::Read(txn) => txn
+                .collection(collection)
+                .and_then(|collection| collection.get_record(key)),
+            _ => self
+                .writing()?
+                .collection(collection)
+                .and_then(|collection| collection.get_record(key)),
+        }
+        .map_err(to_js_error)
+    }
+
+    fn find(&mut self, ir: &[u8], first: bool) -> Result<Vec<u8>> {
+        let request = request_of(ir, first)?;
+        let records = match self {
+            Txn::Read(txn) => txn
+                .collection(&request.collection)
+                .and_then(|collection| collection.query_records(&request.query)),
+            _ => self
+                .writing()?
+                .collection(&request.collection)
+                .and_then(|collection| collection.query_records(&request.query)),
+        }
+        .map_err(to_js_error)?;
+
+        Ok(concatenate(records))
+    }
+
+    fn count(&mut self, ir: &[u8]) -> Result<f64> {
+        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+
+        match self {
+            Txn::Read(txn) => txn
+                .collection(&request.collection)
+                .and_then(|collection| collection.count(&request.query)),
+            _ => self
+                .writing()?
+                .collection(&request.collection)
+                .and_then(|collection| collection.count(&request.query)),
+        }
+        .map(u64_number)
+        .map_err(to_js_error)
+    }
+
+    /// Writes the records in `records`, each after its length, and returns
+    /// their keys. A refused record stops the batch there, and the records
+    /// before it stay written.
+    fn write_records(&mut self, collection: &str, records: &[u8], replace: bool) -> Result<Keys> {
+        let mut writer = self
+            .writing()?
+            .collection(collection)
+            .map_err(to_js_error)?;
+        let mut keys = Vec::new();
+        let mut at = 0;
+
+        while at < records.len() {
+            let (len, used) = varint(&records[at..])?;
+            let start = at + used;
+            let end = start
+                .checked_add(len)
+                .filter(|end| *end <= records.len())
+                .ok_or_else(|| invalid("a batch of records ends inside one"))?;
+            let record = &records[start..end];
+            let key = if replace {
+                writer.put_record(record)
+            } else {
+                writer.insert_record(record)
+            }
+            .map_err(to_js_error)?;
+
+            keys.push(key);
+            at = end;
+        }
+
+        Ok(Keys(keys))
+    }
+
+    fn delete(&mut self, collection: &str, key: darudb::Value) -> Result<bool> {
+        self.writing()?
+            .collection(collection)
+            .and_then(|mut collection| collection.delete(key))
+            .map_err(to_js_error)
+    }
+
+    fn previous_record(&mut self, collection: &str, key: darudb::Value) -> Result<Option<Vec<u8>>> {
+        self.migration()?
+            .migrating()
+            .previous_record(collection, key)
+            .map_err(to_js_error)
+    }
+
+    fn previous_keys(&mut self, collection: &str) -> Result<Keys> {
+        self.migration()?
+            .migrating()
+            .previous_keys(collection)
+            .map(Keys)
+            .map_err(to_js_error)
+    }
+
+    fn writing(&mut self) -> Result<&mut darudb::WriteTransaction> {
+        match self {
+            Txn::Read(_) => Err(invalid("a read transaction does not write")),
+            Txn::Write(txn) => Ok(txn),
+            Txn::Migration(pending) => Ok(pending.transaction()),
+        }
+    }
+
+    fn migration(&mut self) -> Result<&mut darudb::PendingMigration> {
+        match self {
+            Txn::Migration(pending) => Ok(pending),
+            _ => Err(invalid("the transaction is not a migration")),
+        }
+    }
+}
+
+/// A transaction, or a migration under way.
 #[napi]
-pub struct NativeRead {
-    inner: Option<darudb::ReadTransaction>,
+pub struct NativeTransaction {
+    held: Arc<Mutex<Option<Txn>>>,
 }
 
 #[napi]
-impl NativeRead {
+impl NativeTransaction {
+    fn of(txn: Txn) -> Self {
+        Self {
+            held: Arc::new(Mutex::new(Some(txn))),
+        }
+    }
+
+    /// Runs `operation` on the transaction here.
+    fn now<T>(&self, operation: impl FnOnce(&mut Txn) -> Result<T>) -> Result<T> {
+        with(&self.held, operation)
+    }
+
+    /// Runs `operation` on the transaction on the thread pool.
+    fn later<T: Deliver>(
+        &self,
+        operation: impl FnOnce(&mut Txn) -> Result<T> + Send + 'static,
+    ) -> AsyncTask<Work<T>> {
+        let held = Arc::clone(&self.held);
+
+        Work::task(move || with(&held, operation))
+    }
+
+    /// Takes the transaction out, ending it here.
+    fn take(&self) -> Result<Txn> {
+        lock(&self.held)?.take().ok_or_else(ended)
+    }
+
     #[napi]
     pub fn get_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
-        let txn = self.inner.as_ref().ok_or_else(ended)?;
         let key = key_in(key)?;
 
-        Ok(txn
-            .collection(&collection)
-            .and_then(|collection| collection.get_record(key))
-            .map_err(to_js_error)?
+        Ok(self
+            .now(|txn| txn.get_record(&collection, key))?
             .map(Buffer::from))
+    }
+
+    #[napi(ts_return_type = "Promise<Buffer | null | NativeFailure>")]
+    pub fn get_record_async(
+        &self,
+        collection: String,
+        key: JsKey,
+    ) -> Result<AsyncTask<Work<Option<Vec<u8>>>>> {
+        let key = key_in(key)?;
+
+        Ok(self.later(move |txn| txn.get_record(&collection, key)))
     }
 
     /// The records a query finds, one after another, each after its length;
     /// only the first with `first`.
     #[napi]
     pub fn find(&self, ir: Buffer, first: bool) -> Result<Buffer> {
-        let txn = self.inner.as_ref().ok_or_else(ended)?;
-        let request = request_of(&ir, first)?;
-        let records = txn
-            .collection(&request.collection)
-            .and_then(|collection| collection.query_records(&request.query))
-            .map_err(to_js_error)?;
+        Ok(self.now(|txn| txn.find(&ir, first))?.into())
+    }
 
-        Ok(concatenate(records).into())
+    #[napi(ts_return_type = "Promise<Buffer | NativeFailure>")]
+    pub fn find_async(&self, ir: Buffer, first: bool) -> AsyncTask<Work<Vec<u8>>> {
+        let ir = ir.to_vec();
+
+        self.later(move |txn| txn.find(&ir, first))
     }
 
     #[napi]
     pub fn count(&self, ir: Buffer) -> Result<f64> {
-        let txn = self.inner.as_ref().ok_or_else(ended)?;
-        let request = darudb::QueryRequest::decode(&ir).map_err(to_js_error)?;
-
-        txn.collection(&request.collection)
-            .and_then(|collection| collection.count(&request.query))
-            .map(u64_number)
-            .map_err(to_js_error)
+        self.now(|txn| txn.count(&ir))
     }
 
-    /// Ends the transaction. Ending one that has ended does nothing.
-    #[napi]
-    pub fn end(&mut self) {
-        self.inner = None;
-    }
-}
+    #[napi(ts_return_type = "Promise<number | NativeFailure>")]
+    pub fn count_async(&self, ir: Buffer) -> AsyncTask<Work<f64>> {
+        let ir = ir.to_vec();
 
-/// A write transaction.
-#[napi]
-pub struct NativeWrite {
-    inner: Option<darudb::WriteTransaction>,
-}
-
-#[napi]
-impl NativeWrite {
-    #[napi]
-    pub fn get_record(&mut self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
-        get_record(self.transaction()?, &collection, key)
-    }
-
-    #[napi]
-    pub fn find(&mut self, ir: Buffer, first: bool) -> Result<Buffer> {
-        find(self.transaction()?, &ir, first)
-    }
-
-    #[napi]
-    pub fn count(&mut self, ir: Buffer) -> Result<f64> {
-        count(self.transaction()?, &ir)
+        self.later(move |txn| txn.count(&ir))
     }
 
     #[napi]
     pub fn write_records(
-        &mut self,
+        &self,
         collection: String,
         records: Buffer,
         replace: bool,
     ) -> Result<Vec<JsKeyOut>> {
-        write_records(self.transaction()?, &collection, &records, replace)
+        self.now(|txn| txn.write_records(&collection, &records, replace))?
+            .deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<Array<number | bigint | string | Buffer> | NativeFailure>")]
+    pub fn write_records_async(
+        &self,
+        collection: String,
+        records: Buffer,
+        replace: bool,
+    ) -> AsyncTask<Work<Keys>> {
+        let records = records.to_vec();
+
+        self.later(move |txn| txn.write_records(&collection, &records, replace))
     }
 
     #[napi]
-    pub fn delete(&mut self, collection: String, key: JsKey) -> Result<bool> {
-        delete(self.transaction()?, &collection, key)
+    pub fn delete(&self, collection: String, key: JsKey) -> Result<bool> {
+        let key = key_in(key)?;
+
+        self.now(|txn| txn.delete(&collection, key))
     }
 
-    /// Commits, deferred or not, and ends the transaction.
+    #[napi(ts_return_type = "Promise<boolean | NativeFailure>")]
+    pub fn delete_async(&self, collection: String, key: JsKey) -> Result<AsyncTask<Work<bool>>> {
+        let key = key_in(key)?;
+
+        Ok(self.later(move |txn| txn.delete(&collection, key)))
+    }
+
+    /// Commits a write transaction, deferred or not, and ends it.
     #[napi]
-    pub fn commit(&mut self, deferred: bool) -> Result<()> {
-        let txn = self.inner.take().ok_or_else(ended)?;
-
-        if deferred {
-            txn.commit_deferred()
-        } else {
-            txn.commit()
-        }
-        .map_err(to_js_error)
+    pub fn commit(&self, deferred: bool) -> Result<()> {
+        commit(self.take()?, deferred)
     }
 
-    /// Throws the changes away and ends the transaction. Aborting one that
+    #[napi(ts_return_type = "Promise<null | NativeFailure>")]
+    pub fn commit_async(&self, deferred: bool) -> Result<AsyncTask<Work<()>>> {
+        let txn = self.take()?;
+
+        Ok(Work::task(move || commit(txn, deferred)))
+    }
+
+    /// Ends the transaction, throwing a write's changes away. Ending one that
     /// has ended does nothing.
     #[napi]
-    pub fn abort(&mut self) {
-        self.inner = None;
+    pub fn end(&self) {
+        if let Ok(mut held) = lock(&self.held) {
+            *held = None;
+        }
     }
 
-    fn transaction(&mut self) -> Result<&mut darudb::WriteTransaction> {
-        self.inner.as_mut().ok_or_else(ended)
+    #[napi(getter)]
+    pub fn previous_version(&self) -> Result<f64> {
+        self.now(|txn| Ok(u64_number(txn.migration()?.previous_version())))
     }
+
+    /// The record of the schema the migration leads to.
+    #[napi(getter)]
+    pub fn schema_record(&self) -> Result<Buffer> {
+        self.now(|txn| Ok(txn.migration()?.schema_record().to_vec().into()))
+    }
+
+    #[napi(getter)]
+    pub fn previous_schema_record(&self) -> Result<Buffer> {
+        self.now(|txn| Ok(txn.migration()?.previous_schema_record().into()))
+    }
+
+    /// Runs the next version step's own function, and returns its version,
+    /// or `null` once every step has run.
+    #[napi]
+    pub fn next_step(&self) -> Result<Option<f64>> {
+        self.now(|txn| {
+            Ok(txn
+                .migration()?
+                .next_step()
+                .map_err(to_js_error)?
+                .map(u64_number))
+        })
+    }
+
+    #[napi]
+    pub fn previous_keys(&self, collection: String) -> Result<Vec<JsKeyOut>> {
+        self.now(|txn| txn.previous_keys(&collection))?.deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<Array<number | bigint | string | Buffer> | NativeFailure>")]
+    pub fn previous_keys_async(&self, collection: String) -> AsyncTask<Work<Keys>> {
+        self.later(move |txn| txn.previous_keys(&collection))
+    }
+
+    #[napi]
+    pub fn previous_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
+        let key = key_in(key)?;
+
+        Ok(self
+            .now(|txn| txn.previous_record(&collection, key))?
+            .map(Buffer::from))
+    }
+
+    #[napi(ts_return_type = "Promise<Buffer | null | NativeFailure>")]
+    pub fn previous_record_async(
+        &self,
+        collection: String,
+        key: JsKey,
+    ) -> Result<AsyncTask<Work<Option<Vec<u8>>>>> {
+        let key = key_in(key)?;
+
+        Ok(self.later(move |txn| txn.previous_record(&collection, key)))
+    }
+
+    /// Commits a migration, and returns the open database.
+    #[napi]
+    pub fn finish(&self) -> Result<NativeDatabase> {
+        finish(self.take()?)?.deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<NativeDatabase | NativeFailure>")]
+    pub fn finish_async(&self) -> Result<AsyncTask<Work<darudb::Database>>> {
+        let txn = self.take()?;
+
+        Ok(Work::task(move || finish(txn)))
+    }
+}
+
+fn commit(txn: Txn, deferred: bool) -> Result<()> {
+    match txn {
+        Txn::Write(txn) if deferred => txn.commit_deferred(),
+        Txn::Write(txn) => txn.commit(),
+        _ => return Err(invalid("only a write transaction commits")),
+    }
+    .map_err(to_js_error)
+}
+
+fn finish(txn: Txn) -> Result<darudb::Database> {
+    match txn {
+        Txn::Migration(pending) => pending.finish().map_err(to_js_error),
+        _ => Err(invalid("only a migration finishes")),
+    }
+}
+
+fn lock(held: &Mutex<Option<Txn>>) -> Result<MutexGuard<'_, Option<Txn>>> {
+    held.lock()
+        .map_err(|_| napi::Error::new("INTERNAL", "a transaction's lock was poisoned".to_owned()))
+}
+
+/// Runs `operation` on the transaction `held` holds, if it has not ended.
+fn with<T>(held: &Mutex<Option<Txn>>, operation: impl FnOnce(&mut Txn) -> Result<T>) -> Result<T> {
+    operation(lock(held)?.as_mut().ok_or_else(ended)?)
 }
 
 /// Parses a query in the query language into IR, with its parameters.
@@ -445,39 +813,6 @@ pub fn parse_query(
     Ok(request.encode().map_err(to_js_error)?.into())
 }
 
-fn get_record(
-    txn: &mut darudb::WriteTransaction,
-    collection: &str,
-    key: JsKey,
-) -> Result<Option<Buffer>> {
-    let key = key_in(key)?;
-
-    Ok(txn
-        .collection(collection)
-        .and_then(|collection| collection.get_record(key))
-        .map_err(to_js_error)?
-        .map(Buffer::from))
-}
-
-fn find(txn: &mut darudb::WriteTransaction, ir: &[u8], first: bool) -> Result<Buffer> {
-    let request = request_of(ir, first)?;
-    let records = txn
-        .collection(&request.collection)
-        .and_then(|collection| collection.query_records(&request.query))
-        .map_err(to_js_error)?;
-
-    Ok(concatenate(records).into())
-}
-
-fn count(txn: &mut darudb::WriteTransaction, ir: &[u8]) -> Result<f64> {
-    let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
-
-    txn.collection(&request.collection)
-        .and_then(|collection| collection.count(&request.query))
-        .map(u64_number)
-        .map_err(to_js_error)
-}
-
 /// The query in `ir`, cut to its first object with `first`.
 fn request_of(ir: &[u8], first: bool) -> Result<darudb::QueryRequest> {
     let mut request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
@@ -487,49 +822,6 @@ fn request_of(ir: &[u8], first: bool) -> Result<darudb::QueryRequest> {
     }
 
     Ok(request)
-}
-
-/// Writes the records in `records`, each after its length, and returns their
-/// keys. A refused record stops the batch there, and the records before it
-/// stay written.
-fn write_records(
-    txn: &mut darudb::WriteTransaction,
-    collection: &str,
-    records: &[u8],
-    replace: bool,
-) -> Result<Vec<JsKeyOut>> {
-    let mut writer = txn.collection(collection).map_err(to_js_error)?;
-    let mut keys = Vec::new();
-    let mut at = 0;
-
-    while at < records.len() {
-        let (len, used) = varint(&records[at..])?;
-        let start = at + used;
-        let end = start
-            .checked_add(len)
-            .filter(|end| *end <= records.len())
-            .ok_or_else(|| invalid("a batch of records ends inside one"))?;
-        let record = &records[start..end];
-        let key = if replace {
-            writer.put_record(record)
-        } else {
-            writer.insert_record(record)
-        }
-        .map_err(to_js_error)?;
-
-        keys.push(key_out(key)?);
-        at = end;
-    }
-
-    Ok(keys)
-}
-
-fn delete(txn: &mut darudb::WriteTransaction, collection: &str, key: JsKey) -> Result<bool> {
-    let key = key_in(key)?;
-
-    txn.collection(collection)
-        .and_then(|mut collection| collection.delete(key))
-        .map_err(to_js_error)
 }
 
 /// Records one after another, each after its length as a varint.
@@ -673,7 +965,7 @@ fn invalid(message: impl Into<String>) -> napi::Error<&'static str> {
     napi::Error::new("INVALID_ARGUMENT", message.into())
 }
 
-/// The error for a transaction or an opening used after it ended.
+/// The error for a transaction used after it ended.
 fn ended() -> napi::Error<&'static str> {
     napi::Error::new("CLOSED", "the transaction has ended".to_owned())
 }

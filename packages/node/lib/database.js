@@ -3,13 +3,18 @@
 /**
  * The database and its transactions: `Database`, the read and write
  * transactions a function runs in, the collections they reach, and
- * `Migrating`, which a migration function gets.
+ * `Migrating`, which a migration function gets. `lib/async.js` has the
+ * asynchronous API's transactions, which `Database` begins too.
  *
- * Transactions are synchronous and scoped to a function: `read` and `write`
- * begin one, run the function, and end it, committing a write when the
- * function returns and aborting it when the function throws. Nothing can
- * leave a transaction open, and so hold the writer lock, by forgetting it.
+ * Transactions are scoped to a function: `read` and `write` begin one, run
+ * the function, and end it, committing a write when the function returns and
+ * aborting it when the function throws, and `readAsync` and `writeAsync` do
+ * the same when the function settles. Nothing can leave a transaction open,
+ * and so hold the writer lock, by forgetting it.
  */
+
+const { realpathSync, statSync } = require('node:fs');
+const { resolve } = require('node:path');
 
 const native = require('../native.js');
 const {
@@ -18,11 +23,29 @@ const {
   encodeRecords,
   decodeRecord,
   decodeRecords,
-  decodeSchema,
-  encodeSchema,
-  encodeQuery
+  encodeSchema
 } = require('./codec');
-const { Query } = require('./query');
+const {
+  toBuffer,
+  synchronous,
+  nativeMigration,
+  keyOf,
+  irOf,
+  layoutOf,
+  looseLayoutOf,
+  collectionOf
+} = require('./shared');
+const {
+  settle,
+  hold,
+  holdForSync,
+  turn,
+  inside,
+  Serial,
+  AsyncReadTransaction,
+  AsyncWriteTransaction,
+  AsyncMigrating
+} = require('./async');
 
 /** Kept from users, so that a `Database` comes only from `Database.open`. */
 const CREATE = Symbol('create');
@@ -30,145 +53,6 @@ const CREATE = Symbol('create');
 /** Where a collection keeps its transaction and its layout, out of sight. */
 const TXN = Symbol('txn');
 const LAYOUT = Symbol('layout');
-
-/** A view of `bytes` as the `Buffer` the native layer takes, without a copy. */
-function toBuffer(bytes) {
-  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
-}
-
-/** Refuses a promise where a transaction's function returns. */
-function synchronous(result) {
-  if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
-    // The function goes on running after the transaction has ended, and
-    // fails there; its rejection is this error's, not an unhandled one.
-    result.then(undefined, () => {});
-
-    throw invalid(
-      "a transaction's function returned a promise; transactions are synchronous, so it has to finish before it returns"
-    );
-  }
-}
-
-/** The largest schema version the engine's migrations take. */
-const MAX_VERSION = 2 ** 32 - 1;
-
-/** A migration as the native layer takes it: everything but its function. */
-function nativeMigration(migration) {
-  if (typeof migration !== 'object' || migration === null) {
-    throw invalid('a migration is an object with a `version`');
-  }
-
-  if (
-    !Number.isSafeInteger(migration.version) ||
-    migration.version < 1 ||
-    migration.version > MAX_VERSION
-  ) {
-    throw invalid(`a migration's version is a whole number from 1 to ${MAX_VERSION}`);
-  }
-
-  // Each entry is an array of `size` names.
-  const list = (value, name, size) => {
-    if (value === undefined) {
-      return [];
-    }
-
-    const fits = (entry) =>
-      size === 1
-        ? typeof entry === 'string'
-        : Array.isArray(entry) &&
-          entry.length === size &&
-          entry.every((part) => typeof part === 'string');
-
-    if (!Array.isArray(value) || !value.every(fits)) {
-      throw invalid(
-        `a migration's \`${name}\` is an array of ${size === 1 ? 'names' : `arrays of ${size} names`}`
-      );
-    }
-
-    return value;
-  };
-
-  if (migration.run !== undefined && typeof migration.run !== 'function') {
-    throw invalid("a migration's `run` is a function");
-  }
-
-  return {
-    version: migration.version,
-    renameCollections: list(migration.renameCollections, 'renameCollections', 2),
-    renameFields: list(migration.renameFields, 'renameFields', 3),
-    deleteCollections: list(migration.deleteCollections, 'deleteCollections', 1),
-    replaceFields: list(migration.replaceFields, 'replaceFields', 2)
-  };
-}
-
-/** Whether `value` is a value the native layer takes as a key or a parameter. */
-function isScalar(value) {
-  return (
-    typeof value === 'number' ||
-    typeof value === 'bigint' ||
-    typeof value === 'string' ||
-    typeof value === 'boolean' ||
-    value instanceof Uint8Array
-  );
-}
-
-/** Refuses what cannot be a primary key before it reaches the native layer. */
-function keyOf(key) {
-  if (!isScalar(key) || typeof key === 'boolean') {
-    throw invalid(
-      `a primary key is an int, a string or bytes, not ${key === null ? 'null' : typeof key}`
-    );
-  }
-
-  return key;
-}
-
-/**
- * The IR of a query given in any of the forms `find` and `count` take. With
- * `first`, a query built here keeps only its first object; text leaves that
- * to the native layer.
- */
-function irOf(collection, query, parameters, count, first = false) {
-  if (typeof query === 'string') {
-    if (parameters !== undefined && !Array.isArray(parameters)) {
-      throw codeError('INVALID_QUERY', "a query's parameters are an array");
-    }
-
-    for (const parameter of parameters ?? []) {
-      if (parameter !== null && parameter !== undefined && !isScalar(parameter)) {
-        throw codeError(
-          'INVALID_QUERY',
-          `a query's parameter is a single value, not ${typeof parameter}`
-        );
-      }
-    }
-
-    return native.parseQuery(collection, query, parameters ?? [], count);
-  }
-
-  let built = query ?? new Query();
-
-  if (typeof query === 'function') {
-    const fresh = new Query();
-
-    built = query(fresh) ?? fresh;
-  }
-
-  if (!(built instanceof Query)) {
-    throw codeError(
-      'INVALID_QUERY',
-      'a query is a function that builds one, a `Query`, or text in the query language'
-    );
-  }
-
-  const parts = built.parts();
-
-  if (first) {
-    parts.limit = parts.limit === null ? 1 : Math.min(parts.limit, 1);
-  }
-
-  return toBuffer(encodeQuery(collection, parts, count));
-}
 
 /** A collection of a transaction, for reading its objects. */
 class ReadCollection {
@@ -266,80 +150,6 @@ class WriteCollection extends ReadCollection {
   }
 }
 
-/** Calls `mark` with every int kind among `fields`, in lists and embedded objects too. */
-function eachInt(fields, mark, declared) {
-  for (const field of fields.list) {
-    const spec = declared === undefined ? undefined : declared[field.name]?.spec;
-    let kind = field.kind;
-    let specKind = spec;
-
-    if (kind.type === 'list') {
-      kind = kind.element;
-      specKind = spec?.element;
-    }
-
-    if (kind.type === 'int') {
-      mark(kind, specKind);
-    } else if (kind.type === 'object') {
-      eachInt(kind.fields, mark, specKind?.fields);
-    }
-  }
-}
-
-/**
- * The layout of the stored schema's record, with the fields declared with
- * `t.bigint()` marked, since the file stores one type of int.
- */
-function layoutOf(record, declared) {
-  const layout = decodeSchema(record);
-
-  for (const [name, collection] of layout.collections) {
-    const fields = declared?.collections[name]?.fields;
-
-    eachInt(
-      collection.fields,
-      (kind, spec) => {
-        if (spec?.big) {
-          kind.big = true;
-        }
-      },
-      fields
-    );
-  }
-
-  return layout;
-}
-
-/** The layout of a schema no declaration describes: every int may be a `bigint`. */
-function looseLayoutOf(record) {
-  const layout = decodeSchema(record);
-
-  for (const collection of layout.collections.values()) {
-    eachInt(collection.fields, (kind) => {
-      kind.anyInt = true;
-    });
-  }
-
-  return layout;
-}
-
-/** The collection `name` of `layout`, or an error. */
-function collectionOf(layout, name) {
-  if (layout === null) {
-    throw invalid(
-      'the database was opened without a schema, so it has no collections; declare one with the `schema` option'
-    );
-  }
-
-  const collection = layout.collections.get(name);
-
-  if (collection === undefined) {
-    throw invalid(`the schema has no collection called \`${name}\``);
-  }
-
-  return collection;
-}
-
 /** A read transaction: one commit, for as long as its function runs. */
 class ReadTransaction {
   #txn;
@@ -378,13 +188,13 @@ class WriteTransaction {
  * them.
  */
 class Migrating {
-  #opening;
+  #txn;
   #layout;
   #previous;
   #version;
 
-  constructor(opening, layout, previous, version) {
-    this.#opening = opening;
+  constructor(txn, layout, previous, version) {
+    this.#txn = txn;
     this.#layout = layout;
     this.#previous = previous;
     this.#version = version;
@@ -392,7 +202,7 @@ class Migrating {
 
   /** The schema version the file held before the migration. */
   get previousVersion() {
-    return this.#opening.previousVersion;
+    return this.#txn.previousVersion;
   }
 
   /** The version this step migrates to. */
@@ -402,7 +212,7 @@ class Migrating {
 
   /** Collection `name` of the new schema, for reading and writing. */
   collection(name) {
-    return new WriteCollection(this.#opening, collectionOf(this.#layout, name));
+    return new WriteCollection(this.#txn, collectionOf(this.#layout, name));
   }
 
   /**
@@ -413,7 +223,7 @@ class Migrating {
    */
   previous(collection, key) {
     const layout = collectionOf(this.#previous, collection);
-    const record = this.#opening.previousRecord(collection, keyOf(key));
+    const record = this.#txn.previousRecord(collection, keyOf(key));
 
     return record === null ? null : decodeRecord(layout, record, true);
   }
@@ -422,74 +232,168 @@ class Migrating {
   previousKeys(collection) {
     collectionOf(this.#previous, collection);
 
-    return this.#opening.previousKeys(collection);
+    return this.#txn.previousKeys(collection);
   }
 }
 
-/** An open database. Created with `Database.open`. */
+/** What `open` and `openAsync` pass to the native layer, checked. */
+function nativeOptions(options) {
+  const { create, pageSize, busyTimeout, schema, migrations = [] } = options;
+
+  if (!Array.isArray(migrations)) {
+    throw invalid('`migrations` is an array');
+  }
+
+  return {
+    create,
+    pageSize,
+    busyTimeout,
+    schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
+    migrations: migrations.map(nativeMigration)
+  };
+}
+
+/** The migration functions of `options`, by the version they migrate to. */
+function runsOf(options) {
+  return new Map(
+    (options.migrations ?? [])
+      .filter((migration) => migration.run !== undefined)
+      .map((migration) => [migration.version, migration.run])
+  );
+}
+
+/**
+ * The file at `path`, as the engine tells one open file from another: by
+ * device and inode, or on Windows by its real path. Two handles to one file
+ * get the same key however each named it, so their writes queue together.
+ */
+function fileKeyOf(path) {
+  try {
+    if (process.platform === 'win32') {
+      return realpathSync.native(path);
+    }
+
+    const { dev, ino } = statSync(path, { bigint: true });
+
+    return `${dev}:${ino}`;
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** An open database. Created with `Database.open` or `Database.openAsync`. */
 class Database {
   #native;
   #path;
   #layout;
-  /** Whether a write transaction of this database is running. */
-  #writing = false;
+  #file;
 
   constructor(token, database, path, layout) {
     if (token !== CREATE) {
-      throw invalid('a database is opened with `Database.open`');
+      throw invalid('a database is opened with `Database.open` or `Database.openAsync`');
     }
 
     this.#native = database;
     this.#path = path;
     this.#layout = layout;
+    this.#file = fileKeyOf(path);
   }
 
   /**
    * Opens the database at `path`, creating it if nothing exists there, and
-   * stores, checks or migrates its schema.
+   * stores, checks or migrates its schema. Migration functions run
+   * synchronously.
    */
   static open(path, options = {}) {
-    const { create, pageSize, busyTimeout, schema, migrations = [] } = options;
-
-    if (!Array.isArray(migrations)) {
-      throw invalid('`migrations` is an array');
-    }
-
-    const opening = native.NativeOpening.open(path, {
-      create,
-      pageSize,
-      busyTimeout,
-      schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
-      migrations: migrations.map(nativeMigration)
-    });
+    const opening = native.NativeOpening.open(path, nativeOptions(options));
     let database;
 
-    try {
-      if (opening.isMigrating) {
-        const layout = layoutOf(opening.schemaRecord, schema);
-        const previous = looseLayoutOf(opening.previousSchemaRecord);
-        const runs = new Map(
-          migrations
-            .filter((migration) => migration.run !== undefined)
-            .map((migration) => [migration.version, migration.run])
-        );
+    if (opening.isMigrating) {
+      const txn = opening.migration();
+      // The migration holds the writer lock, so a write on the file from
+      // its functions would wait for it.
+      const release = hold(fileKeyOf(path));
+
+      try {
+        const layout = layoutOf(txn.schemaRecord, options.schema);
+        const previous = looseLayoutOf(txn.previousSchemaRecord);
+        const runs = runsOf(options);
         let version;
 
-        while ((version = opening.nextStep()) !== null) {
+        while ((version = txn.nextStep()) !== null) {
           const run = runs.get(version);
 
           if (run !== undefined) {
-            synchronous(run(new Migrating(opening, layout, previous, version)));
+            synchronous(run(new Migrating(txn, layout, previous, version)));
           }
         }
-      }
 
-      database = opening.finish();
-    } catch (error) {
-      opening.abort();
-      throw error;
+        database = txn.finish();
+      } catch (error) {
+        txn.end();
+        throw error;
+      } finally {
+        release();
+      }
+    } else {
+      database = opening.database();
     }
 
+    return Database.#of(database, path, options.schema);
+  }
+
+  /**
+   * Opens the database at `path` like `open`, on the thread pool, and
+   * resolves to it. Migration functions may be asynchronous, and get the
+   * asynchronous API.
+   */
+  static async openAsync(path, options = {}) {
+    const opening = settle(await native.NativeOpening.openAsync(path, nativeOptions(options)));
+    let database;
+
+    if (opening.isMigrating) {
+      const txn = opening.migration();
+      const serial = new Serial(txn);
+      const file = fileKeyOf(path);
+      const release = hold(file);
+
+      try {
+        const layout = layoutOf(txn.schemaRecord, options.schema);
+        const previous = looseLayoutOf(txn.previousSchemaRecord);
+        const previousVersion = txn.previousVersion;
+        const runs = runsOf(options);
+        let version;
+
+        // Every operation has settled whenever `nextStep` runs, so it never
+        // waits on the event loop for the transaction.
+        while ((version = txn.nextStep()) !== null) {
+          const run = runs.get(version);
+
+          if (run !== undefined) {
+            await inside(file, () =>
+              run(new AsyncMigrating(serial, layout, previous, previousVersion, version))
+            );
+            await serial.drain();
+          }
+        }
+
+        await serial.close();
+        database = settle(await txn.finishAsync());
+      } catch (error) {
+        await serial.close();
+        txn.end();
+        throw error;
+      } finally {
+        release();
+      }
+    } else {
+      database = opening.database();
+    }
+
+    return Database.#of(database, path, options.schema);
+  }
+
+  static #of(database, path, schema) {
     const record = database.schemaRecord;
 
     return new Database(CREATE, database, path, record === null ? null : layoutOf(record, schema));
@@ -546,47 +450,103 @@ class Database {
    * returns without waiting for the disk.
    */
   write(fn, options = {}) {
-    const durability = options.durability ?? 'sync';
-
-    if (durability !== 'sync' && durability !== 'deferred') {
-      throw invalid("`durability` is `'sync'` or `'deferred'`");
-    }
-
+    const deferred = deferredOf(options);
     const database = this.#database();
 
-    // A second write transaction here would wait for this one, which cannot
-    // finish while it waits.
-    if (this.#writing) {
-      throw invalid(
-        'a write transaction of this database is running already, and write transactions do not nest'
-      );
-    }
+    return holdForSync(this.#file, 'a synchronous write transaction', () => {
+      const txn = database.beginWrite();
+      let committed = false;
 
-    const txn = database.beginWrite();
-    let committed = false;
+      try {
+        const result = fn(new WriteTransaction(txn, this.#layout));
 
-    this.#writing = true;
+        synchronous(result);
+        txn.commit(deferred);
+        committed = true;
+
+        return result;
+      } finally {
+        if (!committed) {
+          txn.end();
+        }
+      }
+    });
+  }
+
+  /**
+   * Runs `fn`, which may be asynchronous, in a read transaction whose
+   * operations run on the thread pool, and resolves to what `fn` resolves
+   * to. The transaction sees one commit until `fn` settles.
+   */
+  async readAsync(fn) {
+    const txn = settle(await this.#database().beginReadAsync());
+    const serial = new Serial(txn);
 
     try {
-      const result = fn(new WriteTransaction(txn, this.#layout));
-
-      synchronous(result);
-      txn.commit(durability === 'deferred');
-      committed = true;
-
-      return result;
+      return await fn(new AsyncReadTransaction(serial, this.#layout));
     } finally {
-      this.#writing = false;
-
-      if (!committed) {
-        txn.abort();
-      }
+      await serial.close();
+      txn.end();
     }
   }
 
+  /**
+   * Runs `fn`, which may be asynchronous, in a write transaction whose
+   * operations run on the thread pool, commits it when `fn` resolves, or
+   * aborts it when `fn` rejects. This process's asynchronous writes on one
+   * file run one after another.
+   */
+  async writeAsync(fn, options = {}) {
+    const deferred = deferredOf(options);
+    const database = this.#database();
+    const release = await turn(this.#file);
+
+    try {
+      const txn = settle(await database.beginWriteAsync());
+      const serial = new Serial(txn);
+      let result;
+
+      try {
+        result = await inside(this.#file, () =>
+          fn(new AsyncWriteTransaction(serial, this.#layout))
+        );
+      } catch (error) {
+        await serial.close();
+        txn.end();
+        throw error;
+      }
+
+      await serial.close();
+      settle(await txn.commitAsync(deferred));
+
+      return result;
+    } finally {
+      release();
+    }
+  }
+
+  // `sync` and `close` wait for the writer when a deferred commit is not yet
+  // durable, so they follow the rules of a write: the synchronous ones are
+  // refused while an asynchronous write holds the file, and the asynchronous
+  // ones wait their turn after this process's writes.
+
   /** Makes every commit durable, deferred ones included. */
   sync() {
-    this.#database().sync();
+    const database = this.#database();
+
+    holdForSync(this.#file, '`sync`', () => database.sync());
+  }
+
+  /** `sync` on the thread pool, after this process's writes on the file. */
+  async syncAsync() {
+    const database = this.#database();
+    const release = await turn(this.#file);
+
+    try {
+      settle(await database.syncAsync());
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -597,8 +557,33 @@ class Database {
     if (this.#native !== null) {
       const database = this.#native;
 
+      holdForSync(this.#file, '`close`', () => {
+        this.#native = null;
+        database.close();
+      });
+    }
+  }
+
+  /**
+   * `close` on the thread pool, after this process's writes on the file.
+   * The database is closed to new work at once.
+   */
+  async closeAsync() {
+    if (this.#native !== null) {
+      const database = this.#native;
+      // Taken before the database closes to new work, so that a call from
+      // inside a write's function is refused with the database still open.
+      const turning = turn(this.#file);
+
       this.#native = null;
-      database.close();
+
+      const release = await turning;
+
+      try {
+        settle(await database.closeAsync());
+      } finally {
+        release();
+      }
     }
   }
 
@@ -609,6 +594,17 @@ class Database {
 
     return this.#native;
   }
+}
+
+/** Whether a write's options ask for a deferred commit. */
+function deferredOf(options) {
+  const durability = options.durability ?? 'sync';
+
+  if (durability !== 'sync' && durability !== 'deferred') {
+    throw invalid("`durability` is `'sync'` or `'deferred'`");
+  }
+
+  return durability === 'deferred';
 }
 
 module.exports = { Database };

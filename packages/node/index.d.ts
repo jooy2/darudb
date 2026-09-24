@@ -337,6 +337,59 @@ export interface WriteTransaction<S> {
   ): WriteCollection<ObjectOf<FieldsOf<S, N>>, InsertOf<FieldsOf<S, N>>>;
 }
 
+/** A collection of an asynchronous transaction, for reading its objects. */
+export interface AsyncReadCollection<O> {
+  /** The collection's name. */
+  readonly name: string;
+  /** The object whose primary key is `key`, or `null`. */
+  get(key: Key): Promise<O | null>;
+  /** The objects a query finds, in its order; every object without one. */
+  find(query?: QueryInput<O>): Promise<O[]>;
+  /** The objects a query in the query language finds, with `$0`, `$1` and on. */
+  find(text: string, parameters?: readonly (QueryValue | null)[]): Promise<O[]>;
+  /** The first object a query finds, or `null`. */
+  findOne(query?: QueryInput<O>): Promise<O | null>;
+  findOne(text: string, parameters?: readonly (QueryValue | null)[]): Promise<O | null>;
+  /** How many objects a query finds, after its offset and within its limit. */
+  count(query?: QueryInput<O>): Promise<number>;
+  count(text: string, parameters?: readonly (QueryValue | null)[]): Promise<number>;
+}
+
+/** A collection of an asynchronous write transaction, for reading and writing. */
+export interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
+  /** Inserts `object` and resolves to its primary key. */
+  insert(object: I): Promise<Key>;
+  /**
+   * Inserts `objects` in one call into the engine and resolves to their
+   * keys. A refused object stops the batch with its error, and the objects
+   * before it stay inserted in the transaction.
+   */
+  insertMany(objects: readonly I[]): Promise<Key[]>;
+  /** Inserts `object`, or replaces the object with its key. */
+  put(object: I): Promise<Key>;
+  putMany(objects: readonly I[]): Promise<Key[]>;
+  /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */
+  delete(key: Key): Promise<boolean>;
+}
+
+/**
+ * An asynchronous read transaction: one commit, until its function settles.
+ * Its operations run one at a time, in the order they were called.
+ */
+export interface AsyncReadTransaction<S> {
+  collection<N extends NameOf<S>>(name: N): AsyncReadCollection<ObjectOf<FieldsOf<S, N>>>;
+}
+
+/**
+ * An asynchronous write transaction: changes that commit together when its
+ * function resolves, once every operation called has settled.
+ */
+export interface AsyncWriteTransaction<S> {
+  collection<N extends NameOf<S>>(
+    name: N
+  ): AsyncWriteCollection<ObjectOf<FieldsOf<S, N>>, InsertOf<FieldsOf<S, N>>>;
+}
+
 /**
  * The write transaction of a migration, as a migration function gets it:
  * the collections of the new schema, and the objects as the schema before
@@ -357,6 +410,21 @@ export interface Migrating<S> extends WriteTransaction<S> {
   previousKeys(collection: string): Key[];
 }
 
+/**
+ * The write transaction of a migration, as an asynchronous migration
+ * function gets it from `Database.openAsync`.
+ */
+export interface AsyncMigrating<S> extends AsyncWriteTransaction<S> {
+  /** The schema version the file held before the migration. */
+  readonly previousVersion: number;
+  /** The version this step migrates to. */
+  readonly version: number;
+  /** `Migrating.previous`, resolved. */
+  previous(collection: string, key: Key): Promise<Record<string, unknown> | null>;
+  /** The keys of every object of `collection`, named as before the migration. */
+  previousKeys(collection: string): Promise<Key[]>;
+}
+
 /** What schema version `version` changes from the version before it. */
 export interface Migration<S = Schema> {
   version: number;
@@ -370,6 +438,16 @@ export interface Migration<S = Schema> {
   replaceFields?: [collection: string, field: string][];
   /** Runs in the migration's write transaction, after the renames. */
   run?(migrating: Migrating<S>): void;
+}
+
+/** A migration of `Database.openAsync`, whose function may be asynchronous. */
+export interface AsyncMigration<S = Schema> extends Omit<Migration<S>, 'run'> {
+  /**
+   * Runs in the migration's write transaction, after the renames. The step
+   * ends once what it returns has settled, and every operation it called
+   * with it.
+   */
+  run?(migrating: AsyncMigrating<S>): Promise<void> | void;
 }
 
 /** Options for `Database.open`. */
@@ -389,6 +467,12 @@ export interface OpenOptions<S = Schema> {
   migrations?: Migration<S>[];
 }
 
+/** Options for `Database.openAsync`, whose migration functions may be asynchronous. */
+export interface AsyncOpenOptions<S = Schema> extends Omit<OpenOptions<S>, 'migrations'> {
+  /** How an older schema version becomes this one. */
+  migrations?: AsyncMigration<S>[];
+}
+
 /** How a write commits: waiting for the disk, or not. */
 export interface WriteOptions {
   /**
@@ -399,7 +483,14 @@ export interface WriteOptions {
   durability?: 'sync' | 'deferred';
 }
 
-/** An open database. There is no constructor: use `Database.open`. */
+/**
+ * An open database. There is no constructor: use `Database.open` or
+ * `Database.openAsync`.
+ *
+ * Every method has an asynchronous twin whose name ends in `Async`, which
+ * does the engine's work on the thread pool and resolves a promise, so the
+ * event loop never waits for the disk or for another process's writer.
+ */
 export declare class Database<S extends Schema<any> = Schema> {
   private constructor();
   /**
@@ -411,6 +502,12 @@ export declare class Database<S extends Schema<any> = Schema> {
     options: OpenOptions<S> & { schema: S }
   ): Database<S>;
   static open(path: string, options?: OpenOptions<never>): Database;
+  /** `open` on the thread pool, with asynchronous migration functions. */
+  static openAsync<S extends Schema<any>>(
+    path: string,
+    options: AsyncOpenOptions<S> & { schema: S }
+  ): Promise<Database<S>>;
+  static openAsync(path: string, options?: AsyncOpenOptions<never>): Promise<Database>;
   /** The path the database was opened at. Still readable after `close`. */
   readonly path: string;
   /** Whether `close` has not been called. */
@@ -428,8 +525,30 @@ export declare class Database<S extends Schema<any> = Schema> {
    * when `fn` throws, and returns what `fn` returns.
    */
   write<R>(fn: (txn: WriteTransaction<S>) => R, options?: WriteOptions): R;
+  /**
+   * Runs `fn`, which may be asynchronous, in a read transaction, and
+   * resolves to what it resolves to.
+   */
+  readAsync<R>(fn: (txn: AsyncReadTransaction<S>) => R): Promise<Awaited<R>>;
+  /**
+   * Runs `fn`, which may be asynchronous, in a write transaction, commits it
+   * when `fn` resolves, aborts it when `fn` rejects, and resolves to what
+   * `fn` resolves to. This process's writes on one file run one after
+   * another.
+   */
+  writeAsync<R>(
+    fn: (txn: AsyncWriteTransaction<S>) => R,
+    options?: WriteOptions
+  ): Promise<Awaited<R>>;
   /** Makes every commit durable, deferred ones included. */
   sync(): void;
+  /** `sync` on the thread pool, after this process's writes on the file. */
+  syncAsync(): Promise<void>;
   /** Makes deferred commits durable and closes the database. */
   close(): void;
+  /**
+   * `close` on the thread pool, after this process's writes on the file. The
+   * database refuses new work at once.
+   */
+  closeAsync(): Promise<void>;
 }

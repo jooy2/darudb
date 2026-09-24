@@ -93,4 +93,56 @@ new Query().where(conditions.not(conditions.eq('a', 1))).limit(3);
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 
-export { app, age, email, id, city, visits, friends, embeddedId, version };
+// The asynchronous API has the same types, resolved.
+async function asynchronous() {
+  const opened = await Database.openAsync('app.darudb', {
+    schema: app,
+    migrations: [
+      {
+        version: 1,
+        async run(m) {
+          const users = m.collection('users');
+
+          for (const key of await m.previousKeys('users')) {
+            const before = await m.previous('users', key);
+
+            await users.put({ id: key as number, name: String(before?.name) });
+          }
+        }
+      }
+    ]
+  });
+  const key: Key = await opened.writeAsync(async (txn) => {
+    const users = txn.collection('users');
+
+    // @ts-expect-error `age` is an int.
+    await users.insert({ name: 'Carol', age: 'old' });
+    // @ts-expect-error the schema has no such collection.
+    txn.collection('orders');
+
+    return users.insert({ name: 'Alice' });
+  });
+  const found = await opened.readAsync((txn) =>
+    txn.collection('users').find((q) => q.where('age', '>=', 18))
+  );
+  const total: number = await opened.readAsync(async (txn) => txn.collection('users').count());
+  const one = await opened.readAsync((txn) => txn.collection('users').get(key));
+  // @ts-expect-error `get` may find nothing.
+  const oneAge: number = one.age;
+  // @ts-expect-error a read transaction does not write.
+  await opened.readAsync((txn) => txn.collection('users').insert({ name: 'Eve' }));
+  Database.open('app.darudb', {
+    schema: app,
+    migrations: [
+      // @ts-expect-error a migration function of `open` gets the synchronous API.
+      { version: 1, run: (m) => m.previous('users', 1).then(() => {}) }
+    ]
+  });
+
+  await opened.syncAsync();
+  await opened.closeAsync();
+
+  return [found[0].visits, total, oneAge] as const;
+}
+
+export { app, age, email, id, city, visits, friends, embeddedId, version, asynchronous };

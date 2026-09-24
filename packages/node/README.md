@@ -40,6 +40,18 @@ const same = db.read((txn) =>
 db.close();
 ```
 
+Each method has an asynchronous twin, `openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync`, which runs the engine's work on the thread pool and resolves a promise, so a server's event loop never waits for the disk:
+
+```ts
+const db = await Database.openAsync('app.darudb', { schema: app });
+
+await db.writeAsync(async (txn) => {
+  await txn.collection('users').insert({ name: 'Carol' });
+});
+
+const count = await db.readAsync((txn) => txn.collection('users').count());
+```
+
 Objects and queries cross into the engine as bytes, one buffer per call, so a batch of objects costs one call. Raising the schema's version migrates the file when it opens, with renames, deletions and a JavaScript function of your own; [the guide](https://darudb.cdget.com/guide/nodejs) has the details.
 
 Every error thrown by the package is an `Error` with a stable `code`, the same one in every language DaruDB ships to:

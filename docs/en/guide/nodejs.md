@@ -5,7 +5,7 @@ order: 4
 
 # Node.js
 
-The Node.js package reaches the same engine and the same file as Rust, through a synchronous API: a schema declared in JavaScript, transactions scoped to a function, and queries built with a typed builder or written as text.
+The Node.js package reaches the same engine and the same file as Rust: a schema declared in JavaScript, transactions scoped to a function, and queries built with a typed builder or written as text. Every method comes in a synchronous form and an asynchronous one that keeps the event loop free.
 
 ## Declare a schema
 
@@ -93,6 +93,36 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 
 A value that comes from outside the program belongs in a parameter, never in the text.
 
+## Use the asynchronous API
+
+Each method of `Database` has a twin whose name ends in `Async`: `openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync`. The twin does the engine's work on the libuv thread pool and resolves a promise, so the event loop keeps running while the engine waits for the disk or for another process's writer. A server should use it.
+
+```ts
+const db = await Database.openAsync('app.darudb', { schema: app });
+
+const key = await db.writeAsync(async (txn) => {
+  const users = txn.collection('users');
+  const bob = await users.findOne((q) => q.where('name', '==', 'Bob'));
+
+  if (bob !== null) {
+    await users.put({ ...bob, age: bob.age + 1 });
+  }
+
+  return users.insert({ name: 'Carol' });
+});
+
+const adults = await db.readAsync((txn) =>
+  txn.collection('users').find((q) => q.where('age', '>=', 18))
+);
+```
+
+- The function may be asynchronous. `writeAsync` commits when it resolves and aborts when it rejects, and takes the same `durability` option as `write`. `readAsync` sees one commit until the function settles.
+- Every collection method returns a promise. A transaction runs its operations one at a time, in the order they were called, whether each was awaited or not, and commits only after the last one has settled. A rejected operation changes nothing, as in the synchronous API.
+- This process's writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first without holding a thread of the pool, and so do `syncAsync` and `closeAsync`, which wait for the writer when a deferred commit is not yet durable.
+- Write transactions still do not nest. Inside a `writeAsync` function, `writeAsync`, `write`, `sync` or `close` on the same file fails with `INVALID_ARGUMENT`, and so do their asynchronous forms. While an asynchronous write on the file is under way, a synchronous `write`, `sync` or `close` from anywhere fails the same way, because it would block the event loop that the other write needs to finish.
+- `openAsync` gives migration functions the same asynchronous collections, and `previous` and `previousKeys` return promises there. A migration function may be asynchronous, and its step ends once every operation it called has settled.
+- The pool has four threads unless the `UV_THREADPOOL_SIZE` environment variable says otherwise, and Node.js runs its own file system calls there too.
+
 ## Migrate
 
 Raise the schema's version when it changes. The engine adds new collections, fields with a default and indexes by itself; anything else is a migration, and a migration can run a JavaScript function in the migration's write transaction.
@@ -136,4 +166,4 @@ const db = Database.open('app.darudb', {
 
 ## Errors
 
-Every error the package throws is an `Error` whose `code` is one of the engine's codes, listed in [Getting started](./getting-started.md#errors). A transaction or collection used after its function has returned throws `CLOSED`.
+Every error the package throws is an `Error` whose `code` is one of the engine's codes, listed in [Getting started](./getting-started.md#errors). A transaction or collection used after its function has returned throws `CLOSED`, or in the asynchronous API rejects with it.
