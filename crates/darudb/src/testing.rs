@@ -118,6 +118,33 @@ impl Helper {
         panic!("the helper never printed `{word}`");
     }
 
+    /// Sends `command` to a helper that reads commands, and returns its answer:
+    /// what follows `answer ` on the next line it prints that holds one.
+    pub(crate) fn ask(&mut self, command: &str) -> String {
+        use std::io::Write;
+
+        let stdin = self.child.stdin.as_mut().unwrap();
+
+        writeln!(stdin, "{command}").unwrap();
+        stdin.flush().unwrap();
+
+        self.answer()
+    }
+
+    /// The next answer the helper prints, unprompted or not.
+    pub(crate) fn answer(&self) -> String {
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .expect("the helper stopped answering");
+
+            if let Some(at) = line.find("answer ") {
+                return line[at + "answer ".len()..].to_owned();
+            }
+        }
+    }
+
     /// Lets a helper waiting in [`wait_to_be_told`] go on.
     pub(crate) fn tell(&mut self) {
         use std::io::Write;

@@ -71,7 +71,8 @@ pub enum Error {
     /// [`Database::close`]: crate::Database::close
     Closed,
     /// The database stayed busy for longer than the busy timeout allows:
-    /// another write transaction held it, or another process had it open.
+    /// another write transaction held it, in this process or another, or
+    /// another process was recovering it.
     Busy {
         /// The database's path.
         path: PathBuf,
@@ -155,7 +156,7 @@ impl fmt::Display for Error {
             Error::Closed => f.write_str("the database has been closed"),
             Error::Busy { path } => write!(
                 f,
-                "`{}` stayed busy for longer than the busy timeout: another write transaction or another process held it",
+                "`{}` stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it",
                 path.display()
             ),
             Error::SyncFailed { path, source } => {

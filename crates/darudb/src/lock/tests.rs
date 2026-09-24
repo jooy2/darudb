@@ -3,54 +3,272 @@
 //! on Unix-like systems.
 
 use std::env;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{LockError, Locks, last_unreached};
+use crate::format::{SELECTOR_OFFSET, Selector};
 use crate::storage::DbFile;
 use crate::testing::{HELPER_PATH, Helper, wait_to_be_told};
 use crate::{Database, OpenOptions};
 
-/// The helper: opens the database, says so, and keeps it open until killed.
+/// The options of the database in the file `path`: encrypted when its name
+/// says so.
+fn options_for(path: &Path) -> OpenOptions {
+    let mut options = OpenOptions::new();
+
+    options.max_unsynced_time(Duration::from_secs(3600));
+
+    if path.to_string_lossy().contains("encrypted") {
+        options.key([0x3C; 32]);
+    }
+
+    options
+}
+
+/// The helper: opens the database and runs the commands the test sends it,
+/// one a line, answering each on a line that starts with `answer`.
+///
+/// - `put <key> <value>` commits `value` under `key` in tree `t`.
+/// - `snapshot` begins a read transaction and keeps it.
+/// - `get <key>` reads through the kept read transaction, or a new one.
+/// - `sum` counts the entries of tree `t` in the kept read transaction and
+///   adds up the first byte of every value.
+/// - `hold-writer` begins a write transaction and keeps it.
+/// - `release` ends what it keeps.
 #[test]
-fn helper_holding_the_file_open() {
+fn helper_running_commands() {
     let Ok(path) = env::var(HELPER_PATH) else {
         return;
     };
-    let _db = Database::open(path).unwrap();
+    let db = options_for(path.as_ref()).open(&path).unwrap();
+    let mut snapshot = None;
+    let mut writer = None;
 
-    println!("open");
+    println!("\nanswer open");
 
-    loop {
-        thread::sleep(Duration::from_secs(1));
+    for line in io::stdin().lines() {
+        let line = line.unwrap();
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let outcome = match words.as_slice() {
+            ["put", key, value] => db.begin_write().and_then(|mut txn| {
+                txn.insert("t", key.as_bytes(), value.as_bytes())?;
+                txn.commit()?;
+
+                Ok("done".to_owned())
+            }),
+            ["snapshot"] => db.begin_read().map(|txn| {
+                snapshot = Some(txn);
+
+                "done".to_owned()
+            }),
+            ["get", key] => {
+                let fresh;
+                let txn = match &snapshot {
+                    Some(txn) => txn,
+                    None => {
+                        fresh = db.begin_read().unwrap();
+
+                        &fresh
+                    }
+                };
+
+                txn.get("t", key.as_bytes()).map(|value| {
+                    value.map_or("none".to_owned(), |value| String::from_utf8(value).unwrap())
+                })
+            }
+            ["sum"] => snapshot.as_ref().unwrap().iter("t").and_then(|entries| {
+                let mut count = 0u64;
+                let mut sum = 0u64;
+
+                for entry in entries {
+                    let (_, value) = entry?;
+
+                    count += 1;
+                    sum += u64::from(value[0]);
+                }
+
+                Ok(format!("{count} {sum}"))
+            }),
+            ["hold-writer"] => db.begin_write().map(|txn| {
+                writer = Some(txn);
+
+                "done".to_owned()
+            }),
+            ["release"] => {
+                snapshot = None;
+                writer = None;
+
+                Ok("done".to_owned())
+            }
+            _ => panic!("an unknown command: {line}"),
+        };
+
+        match outcome {
+            Ok(answer) => println!("answer {answer}"),
+            Err(error) => println!("answer error {}", error.code()),
+        }
+    }
+}
+
+fn helper(path: &Path) -> Helper {
+    let helper = Helper::spawn("lock::tests::helper_running_commands", path);
+
+    assert_eq!(helper.answer(), "open");
+
+    helper
+}
+
+#[test]
+fn processes_share_one_file_and_see_each_other_s_commits() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for name in ["plain.darudb", "encrypted.darudb"] {
+        let path = dir.path().join(name);
+        let mut other = helper(&path);
+        let db = options_for(&path).open(&path).unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("t", b"mine", b"1").unwrap();
+        txn.commit().unwrap();
+
+        assert_eq!(other.ask("get mine"), "1");
+        assert_eq!(other.ask("put theirs 2"), "done");
+        assert_eq!(
+            db.begin_read().unwrap().get("t", b"theirs").unwrap(),
+            Some(b"2".to_vec())
+        );
+
+        // Deferred commits from both sides, and a sync that makes them all
+        // durable whoever made them.
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("t", b"deferred", b"3").unwrap();
+        txn.commit_deferred().unwrap();
+
+        assert_eq!(other.ask("get deferred"), "3");
+
+        db.sync().unwrap();
+
+        assert!(!selector(&db).unsynced);
+    }
+}
+
+/// The selector in the file, read through the database's own handle: this
+/// process may not open a second one.
+fn selector(db: &Database) -> Selector {
+    let bytes = db.shared().pager.read_header(SELECTOR_OFFSET + 1).unwrap();
+
+    Selector::decode(bytes[SELECTOR_OFFSET]).unwrap()
+}
+
+#[test]
+fn a_process_that_opens_a_file_another_has_open_does_not_recover_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let db = options_for(&path).open(&path).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"k", b"deferred").unwrap();
+    txn.commit_deferred().unwrap();
+
+    let before = selector(&db);
+
+    assert!(before.unsynced);
+
+    // Recovery would find the published commit unsynced, check it, and write
+    // the selector with the bit clear.
+    let mut other = helper(&path);
+
+    assert_eq!(selector(&db), before);
+    assert_eq!(other.ask("get k"), "deferred");
+}
+
+#[test]
+fn a_snapshot_in_another_process_keeps_every_page_it_reaches() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for name in ["plain.darudb", "encrypted.darudb"] {
+        let path = dir.path().join(name);
+        let db = options_for(&path).open(&path).unwrap();
+        let write = |value: u8, deferred: bool| {
+            let mut txn = db.begin_write().unwrap();
+
+            for key in 0..300u32 {
+                txn.insert("t", &key.to_be_bytes(), &[value; 100]).unwrap();
+            }
+
+            if deferred {
+                txn.commit_deferred().unwrap();
+            } else {
+                txn.commit().unwrap();
+            }
+        };
+
+        write(1, false);
+
+        let mut other = helper(&path);
+
+        assert_eq!(other.ask("snapshot"), "done");
+
+        // Every page of the snapshot is copied again and again. Without its
+        // lock, the writer would reuse them.
+        for round in 2..30 {
+            write(round, round % 3 == 0);
+        }
+
+        assert_eq!(other.ask("sum"), "300 300");
+        assert_eq!(other.ask("release"), "done");
+
+        // Released, the pages go back into use.
+        write(30, false);
+        write(31, false);
+
+        let settled = db.shared().pager.file_len().unwrap();
+
+        for round in 32..40 {
+            write(round, false);
+        }
+
+        assert!(db.shared().pager.file_len().unwrap() <= settled + 8 * 4096);
+        crate::crash::check_integrity(&db).unwrap();
     }
 }
 
 #[test]
-fn a_second_process_waits_for_the_file_and_gives_up_with_busy() {
+fn a_writer_in_another_process_holds_off_this_one_and_no_reader() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.darudb");
-    let helper = Helper::spawn("lock::tests::helper_holding_the_file_open", &path);
-
-    helper.wait_for("open");
-
-    let error = OpenOptions::new()
-        .busy_timeout(Duration::from_millis(100))
-        .open(&path)
-        .unwrap_err();
-
-    assert_eq!(error.code(), "BUSY");
-
-    // Its locks die with it.
-    helper.kill();
-
+    let mut other = helper(&path);
     let db = OpenOptions::new()
         .busy_timeout(Duration::from_millis(100))
         .open(&path)
         .unwrap();
 
-    assert!(db.begin_read().unwrap().tree_names().unwrap().is_empty());
+    assert_eq!(other.ask("put k 1"), "done");
+    assert_eq!(other.ask("hold-writer"), "done");
+    assert_eq!(db.begin_write().unwrap_err().code(), "BUSY");
+    assert_eq!(
+        db.begin_read().unwrap().get("t", b"k").unwrap(),
+        Some(b"1".to_vec())
+    );
+    assert_eq!(other.ask("release"), "done");
+
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"k", b"2").unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(other.ask("get k"), "2");
+
+    // A writer that dies holding the lock lets it go.
+    assert_eq!(other.ask("hold-writer"), "done");
+    other.kill();
+
+    db.begin_write().unwrap().abort();
 }
 
 /// Locks on `path` through a handle of this process's own. The file is an

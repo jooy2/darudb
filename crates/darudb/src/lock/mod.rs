@@ -4,11 +4,11 @@
 //! `design/locking.md` is the specification. The locks sit on bytes far past
 //! the end of any data:
 //!
-//! | Byte            | Lock                                                        |
-//! | --------------- | ----------------------------------------------------------- |
-//! | 2^62            | Open: held for as long as the process has the file open     |
-//! | 2^62 + 1        | Writer: held by the process whose transaction is writing    |
-//! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot |
+//! | Byte            | Lock                                                         |
+//! | --------------- | ------------------------------------------------------------ |
+//! | 2^62            | Open: shared while the file is open, exclusive to recover it |
+//! | 2^62 + 1        | Writer: held by the process whose transaction is writing     |
+//! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot  |
 //!
 //! No mutex lives in shared memory and no lock file has a layout, so a process
 //! that dies leaves nothing for the others to clean up: the operating system
@@ -25,10 +25,10 @@
 //! in the process, and why [`Locks`] keeps every handle it is given open until
 //! it is dropped.
 //!
-//! For now the open lock is held exclusively for as long as the file is open,
-//! so a second process cannot open the file at all. The writer and snapshot
-//! locks are taken already, and converting the open lock, which lets a second
-//! process in, is not in place yet.
+//! The open lock is how a process that opens the file learns whether any other
+//! process has it open, which decides whether a crash may have left something
+//! to recover. The first to open it holds it exclusively while it recovers,
+//! and every process shares it after that.
 
 mod sys;
 
@@ -60,6 +60,17 @@ const FIRST_PAUSE: Duration = Duration::from_micros(20);
 /// The longest pause between two attempts: short enough to notice a released
 /// lock soon, long enough not to keep a processor busy.
 const LAST_PAUSE: Duration = Duration::from_millis(10);
+
+/// How the open lock was granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Access {
+    /// Exclusively: no other process has the file open, and recovery may run.
+    /// [`Locks::share`] lets other processes in afterwards.
+    Alone,
+    /// Shared with other processes that have the file open. Whatever they
+    /// found to recover, the first of them recovered.
+    Shared,
+}
 
 /// Why a lock was not taken.
 #[derive(Debug)]
@@ -127,8 +138,56 @@ impl Locks {
         }
     }
 
+    /// Takes the open lock: exclusively if no other process has the file open,
+    /// and otherwise shared, once any recovery in progress has finished. The
+    /// wait for the shared lock lasts up to `timeout`.
+    pub(crate) fn open(&self, timeout: Duration) -> Result<Access, LockError> {
+        if self
+            .try_lock(OPEN_BYTE, 1, Mode::Exclusive)
+            .map_err(LockError::Io)?
+        {
+            *lock(&self.open) = true;
+
+            return Ok(Access::Alone);
+        }
+
+        let deadline = Instant::now().checked_add(timeout);
+
+        poll(deadline, || {
+            self.try_lock(OPEN_BYTE, 1, Mode::Shared)
+                .map_err(LockError::Io)
+        })?;
+        *lock(&self.open) = true;
+
+        Ok(Access::Shared)
+    }
+
+    /// Converts the open lock, held exclusively, to shared, letting other
+    /// processes open the file.
+    ///
+    /// No other process can slip in between: a Unix-like system converts a
+    /// record lock in place, and on Windows the shared lock is taken while the
+    /// exclusive one is still held, after which one unlock releases the
+    /// exclusive one.
+    pub(crate) fn share(&self) -> Result<(), LockError> {
+        if !self
+            .try_lock(OPEN_BYTE, 1, Mode::Shared)
+            .map_err(LockError::Io)?
+        {
+            return Err(LockError::Io(io::Error::other(
+                "the open lock held exclusively could not be shared",
+            )));
+        }
+
+        #[cfg(windows)]
+        self.unlock(OPEN_BYTE, 1).map_err(LockError::Io)?;
+
+        Ok(())
+    }
+
     /// Takes the open lock exclusively, waiting up to `timeout` for every other
-    /// process to close the file.
+    /// process to close the file. Creating a database where the file system
+    /// has no links needs it, to write the first page before anyone reads it.
     pub(crate) fn open_alone(&self, timeout: Duration) -> Result<(), LockError> {
         let deadline = Instant::now().checked_add(timeout);
 

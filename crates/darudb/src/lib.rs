@@ -10,9 +10,10 @@
 //! a crash or a power cut holds the last commit that returned. A database
 //! created with a key or a password ([`OpenOptions::key`],
 //! [`OpenOptions::password`]) is encrypted and authenticated, every page of
-//! it. Typed records and queries come later, built on top. The file format
-//! will change without a migration until the first release, and only one
-//! process may have a file open at a time for now.
+//! it. Several processes may have one file open at once: one writes at a
+//! time, and readers never wait for it. Typed records and queries come later,
+//! built on top. The file format will change without a migration until the
+//! first release.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;

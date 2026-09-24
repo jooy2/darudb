@@ -4,7 +4,7 @@
 
 The engine of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file, and its Rust API.
 
-> DaruDB is in early development. The crate is not published yet, and the file format will change without a migration path until the first release. Only one process may have a file open at a time for now.
+> DaruDB is in early development. The crate is not published yet, and the file format will change without a migration path until the first release.
 
 ## Usage
 
@@ -38,6 +38,8 @@ fn main() -> Result<(), darudb::Error> {
 ```
 
 A commit is durable when `commit` returns, and a file opened after a crash or a power cut holds the last commit that returned. `commit_deferred` returns without waiting for the disk: readers see the changes at once, a crash of the process loses none of them, and they become durable within a second, or sooner at the next `commit`, `Database::sync` or close. Every error carries a stable code, `Error::code`, which is the same string in every language DaruDB ships to.
+
+Several processes can open the same file at once. One writes at a time, readers never wait for it, and a process that dies at any moment leaves nothing for the others to clean up. A process that has a database open must not open the file any other way, not even to copy it: on Unix-like systems, closing that second handle drops the locks the database holds.
 
 ### Encryption
 

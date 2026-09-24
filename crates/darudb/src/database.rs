@@ -13,9 +13,9 @@ use crate::format::{
     STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
 use crate::instance::{FileKey, Shared, find, registry};
-use crate::lock::{LockError, Locks};
+use crate::lock::{Access, LockError, Locks};
 use crate::options::OpenOptions;
-use crate::storage::{self, DbFile, FileIo, Pager};
+use crate::storage::{self, Created, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 
 /// An open database.
@@ -183,8 +183,16 @@ impl Database {
         } else {
             None
         };
+        // The first page of a file created empty in place, which is written
+        // under the open lock.
+        let mut unwritten = None;
         let (file, data_key) = match created {
-            Some((file, data_key)) => (file, data_key),
+            Some((Created::Whole(file), data_key, _)) => (file, data_key),
+            Some((Created::Empty(file), data_key, page)) => {
+                unwritten = Some(page);
+
+                (file, data_key)
+            }
             None => (open_file(path)?, None),
         };
         let file = Arc::new(file);
@@ -201,12 +209,23 @@ impl Database {
         }
 
         let locks = Locks::on(Arc::clone(&file));
+        let timeout = options.settings().busy_timeout;
+        let access = match unwritten {
+            None => locks
+                .open(timeout)
+                .map_err(|error| lock_error(path, error))?,
+            Some(page) => {
+                // Another process that opened the empty file first finds no
+                // database there and lets go of the lock.
+                locks
+                    .open_alone(timeout)
+                    .map_err(|error| lock_error(path, error))?;
+                storage::fill(&file, path, &page).map_err(|source| io_error(path, source))?;
 
-        locks
-            .open_alone(options.settings().busy_timeout)
-            .map_err(|error| lock_error(path, error))?;
-
-        let shared = open_io(file, locks, path, options, data_key)?;
+                Access::Alone
+            }
+        };
+        let shared = open_io(file, locks, access, path, options, data_key)?;
 
         instances.insert(key, Arc::downgrade(&shared));
 
@@ -221,6 +240,7 @@ impl Database {
             shared: open_io(
                 io,
                 Locks::none(),
+                Access::Alone,
                 Path::new("simulated.darudb"),
                 options,
                 None,
@@ -243,7 +263,7 @@ impl Database {
         io.sync().map_err(|source| io_error(path, source))?;
 
         Ok(Self {
-            shared: open_io(io, Locks::none(), path, options, data_key)?,
+            shared: open_io(io, Locks::none(), Access::Alone, path, options, data_key)?,
         })
     }
 
@@ -254,15 +274,18 @@ impl Database {
     }
 }
 
-/// Reads the static fields of the file, unlocks an encrypted one, runs
-/// recovery, and builds the shared instance. `data_key` is the key of a file
-/// this process has just created, which need not be unwrapped again.
+/// Reads the static fields of the file, unlocks an encrypted one, and builds
+/// the shared instance. `data_key` is the key of a file this process has just
+/// created, which need not be unwrapped again.
 ///
-/// `locks` hold the open lock already, exclusively: no other process has the
-/// file open, and recovery may run.
+/// `locks` hold the open lock already, as `access` says. Alone, the process
+/// runs recovery and then shares the lock with other processes. Otherwise
+/// another process has the file open and recovered it, and only the published
+/// record is checked.
 fn open_io(
     io: Arc<dyn FileIo>,
     locks: Locks,
+    access: Access,
     path: &Path,
     options: &OpenOptions,
     data_key: Option<DataKey>,
@@ -315,17 +338,29 @@ fn open_io(
         options.settings(),
         data_key,
     );
-    let (header, last_barrier) = recovery::recover(
-        &shared.pager,
-        &shared.loader,
-        shared
-            .record_auth
-            .as_ref()
-            .map(|auth| (auth, &shared.static_header.file_id)),
-    )?;
 
-    shared.set_header(header);
-    shared.set_last_barrier(last_barrier);
+    match access {
+        Access::Alone => {
+            let (header, last_barrier) = recovery::recover(
+                &shared.pager,
+                &shared.loader,
+                shared
+                    .record_auth
+                    .as_ref()
+                    .map(|auth| (auth, &shared.static_header.file_id)),
+            )?;
+
+            shared.set_header(header);
+            shared.set_last_barrier(last_barrier);
+            shared.share_open_lock()?;
+        }
+        // The first write transaction reads the header under the writer
+        // lock. Until then the instance knows no header, and no selector a
+        // power cut would bring back.
+        Access::Shared => {
+            shared.read_published()?;
+        }
+    }
 
     Ok(Arc::new(shared))
 }
@@ -390,16 +425,19 @@ fn unlock(
     })
 }
 
+/// A database file this process created, the data key of an encrypted one,
+/// and its first page.
+type NewFile = (Created, Option<DataKey>, Vec<u8>);
+
 /// Creates a database at `path`, or returns `None` if a file is already there.
-/// Returns the data key of an encrypted one along with the file.
 ///
 /// See [`storage::create_file`] for why the path never holds half a database.
-fn create(path: &Path, options: &OpenOptions) -> Result<Option<(DbFile, Option<DataKey>)>> {
+fn create(path: &Path, options: &OpenOptions) -> Result<Option<NewFile>> {
     let (page, data_key) = new_file(path, options.new_page_size(), options)?;
 
     Ok(storage::create_file(path, &page)
         .map_err(|source| io_error(path, source))?
-        .map(|file| (file, data_key)))
+        .map(|created| (created, data_key, page)))
 }
 
 /// Page 0 of a new database, and the data key if `options` encrypt it.

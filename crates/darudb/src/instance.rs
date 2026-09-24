@@ -281,26 +281,9 @@ impl Shared {
         self.check_usable()?;
 
         let deadline = Instant::now().checked_add(self.settings.busy_timeout);
-        let mut damaged = 0;
 
         loop {
-            let bytes = self.pager.read_header(HEADER_LEN)?;
-            let (slot, record) = match self.published_in(&bytes) {
-                Ok(published) => published,
-                // A stale selector names the slot a writer is filling. Only
-                // a record that keeps failing is damaged.
-                Err(reason) => {
-                    damaged += 1;
-
-                    if damaged == HEADER_ATTEMPTS {
-                        return Err(self.pager.corrupted(reason.to_owned()));
-                    }
-
-                    thread::yield_now();
-
-                    continue;
-                }
-            };
+            let (bytes, slot, record) = self.read_published()?;
 
             self.locks
                 .register(record.txn, deadline)
@@ -317,6 +300,39 @@ impl Shared {
 
             self.locks.unregister(record.txn);
         }
+    }
+
+    /// Reads the header from the file, without a lock, until its published
+    /// record is valid. Returns the header's bytes, the published slot and its
+    /// record.
+    ///
+    /// A reader may hold a stale selector that names the slot a writer is
+    /// filling, so a record that fails is read again, and only one that keeps
+    /// failing is damaged.
+    pub(crate) fn read_published(&self) -> Result<(Vec<u8>, usize, CommitRecord)> {
+        let mut damaged = 0;
+
+        loop {
+            let bytes = self.pager.read_header(HEADER_LEN)?;
+
+            match self.published_in(&bytes) {
+                Ok((slot, record)) => return Ok((bytes, slot, record)),
+                Err(reason) => {
+                    damaged += 1;
+
+                    if damaged == HEADER_ATTEMPTS {
+                        return Err(self.pager.corrupted(reason.to_owned()));
+                    }
+
+                    thread::yield_now();
+                }
+            }
+        }
+    }
+
+    /// Lets other processes open the file, once recovery is done.
+    pub(crate) fn share_open_lock(&self) -> Result<()> {
+        self.locks.share().map_err(|error| self.lock_error(error))
     }
 
     /// The slot of the published commit in the header `bytes`, and its record
