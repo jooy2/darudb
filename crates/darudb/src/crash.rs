@@ -9,6 +9,10 @@
 //! dies, that commit is the last one that returned or the one in flight,
 //! deferred commits included. After a power cut, it may also be any deferred
 //! commit since the last barrier, or the durable commit before them.
+//!
+//! The object runs do the same with collections of objects, and check besides
+//! that every index holds exactly what its objects give it, and that a
+//! migration cut short leaves the file at the old schema or the new one.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -162,7 +166,8 @@ pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
         if tree >= crate::format::FIRST_USER_TREE {
             let read = db.begin_read().map_err(|error| error.to_string())?;
 
-            if read.len(&name).map_err(|error| error.to_string())? != entries {
+            // `len_in`, since the object layer's trees are among them.
+            if read.len_in(&name).map_err(|error| error.to_string())? != entries {
                 return Err(format!(
                     "{name} holds {entries} entries, not what its descriptor says"
                 ));
@@ -763,6 +768,394 @@ fn damage_pages(options: &OpenOptions) {
                 }
             }
             Err(error) => assert_eq!(error.code(), "CORRUPTED", "{error}"),
+        }
+    }
+}
+
+/// The objects of the collection `items`, by id.
+type Objects = BTreeMap<i64, crate::Object>;
+
+/// The schema of the object runs at `version`: version 2 adds a unique index
+/// that a migration builds, and a field its function fills.
+fn object_schema(version: u64) -> crate::Schema {
+    use crate::{Collection, Schema, Type};
+
+    let items = Collection::new("items")
+        .optional("name", Type::String)
+        .with_default("rank", Type::Int, 0)
+        .optional("tags", Type::list(Type::String))
+        .optional("blob", Type::Bytes)
+        .unique("name")
+        .index("rank")
+        .index("tags");
+
+    match version {
+        1 => Schema::new(1).collection(items),
+        _ => Schema::new(2).collection(
+            items
+                .optional("double", Type::Int)
+                .optional("label", Type::String)
+                .unique("label"),
+        ),
+    }
+}
+
+fn object_options(version: u64, seed: u64) -> OpenOptions {
+    let mut options = OpenOptions::new();
+
+    options
+        .max_unsynced_time(Duration::MAX)
+        .schema(object_schema(version));
+
+    if version == 2 {
+        options.migration(crate::Migration::to(2).run(|migrating| {
+            for key in migrating.previous_keys("items")? {
+                let mut items = migrating.collection("items")?;
+                let mut item = items.get(key)?.unwrap_or_default();
+                let rank = item.get("rank").and_then(crate::Value::as_int).unwrap_or(0);
+
+                item.set("double", rank * 2);
+                item.set(
+                    "label",
+                    format!(
+                        "item {}",
+                        item.get("id").and_then(crate::Value::as_int).unwrap_or(0)
+                    ),
+                );
+                items.put(item)?;
+            }
+
+            Ok(())
+        }));
+    }
+
+    if seed % 2 == 1 {
+        options.key([u8::try_from(seed % 251).unwrap(); 32]);
+    }
+
+    options
+}
+
+fn objects(db: &Database) -> Objects {
+    let read = db.begin_read().unwrap();
+
+    read.collection("items")
+        .unwrap()
+        .iter()
+        .unwrap()
+        .map(|object| {
+            let object = object.unwrap();
+
+            (
+                object.get("id").and_then(crate::Value::as_int).unwrap(),
+                object,
+            )
+        })
+        .collect()
+}
+
+/// Checks that the indexes of the database's schema hold exactly what its
+/// objects give them.
+fn check_objects(db: &Database) -> Result<(), String> {
+    let read = db.begin_read().map_err(|error| error.to_string())?;
+    let schema = read.schema().cloned().ok_or("the database has no schema")?;
+
+    crate::schema::objects::check_indexes(&read, &schema.schema)
+}
+
+fn random_item(rng: &mut Rng, page_size: usize) -> crate::Object {
+    let mut item = crate::Object::new();
+
+    if rng.below(4) == 0 {
+        item.set("id", 1 + i64::try_from(rng.below(40)).unwrap());
+    }
+
+    if rng.below(2) == 0 {
+        item.set("name", ["a", "b", "c", "d", "e", "f"][rng.index(6)]);
+    }
+
+    item.set("rank", i64::try_from(rng.below(5)).unwrap());
+
+    if rng.below(2) == 0 {
+        let tags: Vec<crate::Value> = (0..rng.below(3))
+            .map(|_| ["x", "y", "z"][rng.index(3)].into())
+            .collect();
+
+        item.set("tags", tags);
+    }
+
+    if rng.below(6) == 0 {
+        let len = if rng.below(3) == 0 {
+            rng.index(3 * page_size)
+        } else {
+            rng.index(64)
+        };
+
+        item.set("blob", rng.bytes(len));
+    }
+
+    item
+}
+
+/// One random transaction of object writes, as [`random_transaction`] is of
+/// tree writes. A write a unique index refuses leaves the model as it was.
+fn random_object_transaction(
+    rng: &mut Rng,
+    db: &Database,
+    model: &Objects,
+    page_size: usize,
+    deferred: bool,
+) -> (crate::Result<()>, Objects, bool) {
+    let mut next = model.clone();
+    let mut txn = match db.begin_write() {
+        Ok(txn) => txn,
+        Err(error) => return (Err(error), next, false),
+    };
+
+    for _ in 0..1 + rng.index(12) {
+        let mut items = match txn.collection("items") {
+            Ok(items) => items,
+            Err(error) => return (Err(error), model.clone(), false),
+        };
+        let result = match rng.below(4) {
+            0 => {
+                let id = 1 + i64::try_from(rng.below(40)).unwrap();
+
+                items.delete(id).map(|existed| {
+                    assert_eq!(existed, next.remove(&id).is_some());
+                })
+            }
+            1 => items.put(random_item(rng, page_size)).map(drop),
+            _ => items.insert(random_item(rng, page_size)).map(drop),
+        };
+
+        match result {
+            Err(Error::DuplicateKey { .. }) => {}
+            Err(error) => return (Err(error), model.clone(), false),
+            Ok(()) => {
+                // What the transaction holds now is the model, whatever the
+                // write filled in.
+                next = match items.iter() {
+                    Ok(objects) => match objects.collect::<crate::Result<Vec<_>>>() {
+                        Ok(objects) => objects
+                            .into_iter()
+                            .map(|object| {
+                                (
+                                    object.get("id").and_then(crate::Value::as_int).unwrap(),
+                                    object,
+                                )
+                            })
+                            .collect(),
+                        Err(error) => return (Err(error), model.clone(), false),
+                    },
+                    Err(error) => return (Err(error), model.clone(), false),
+                };
+            }
+        }
+    }
+
+    if rng.below(8) == 0 {
+        txn.abort();
+
+        return (Ok(()), model.clone(), false);
+    }
+
+    let result = if deferred {
+        txn.commit_deferred()
+    } else {
+        txn.commit()
+    };
+
+    (result, next, true)
+}
+
+/// [`run`] for objects: random object transactions, cut by power failures
+/// and process deaths, and after each cut, the objects are one of the states
+/// the file may hold, every index agrees with them, and a new object gets a
+/// number past every id there.
+fn run_objects(seed: u64, steps: usize) {
+    let mut rng = Rng::new(seed);
+    let options = object_options(1, seed);
+    let page_size = 4096;
+    let mut disk = Arc::new(SimDisk::default());
+    let mut db = Database::create_io(disk.clone(), 4096, &options).unwrap();
+    let mut model = Objects::new();
+    let mut history = vec![Objects::new()];
+
+    for step in 0..steps {
+        let crash = rng.below(5) == 0;
+        let deferred = rng.below(2) == 0;
+
+        if crash {
+            disk.stop_after(rng.index(60));
+        }
+
+        let (result, attempted, committing) =
+            random_object_transaction(&mut rng, &db, &model, page_size, deferred);
+
+        if !crash {
+            result.unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+            if committing {
+                if deferred {
+                    history.push(attempted.clone());
+                } else {
+                    history = vec![attempted.clone()];
+                }
+
+                model = attempted;
+            }
+
+            continue;
+        }
+
+        let finished = result.is_ok();
+        let power_cut = rng.below(2) == 0;
+        let image = if power_cut {
+            disk.power_cut(&mut rng)
+        } else {
+            disk.current()
+        };
+
+        drop(db);
+        disk = Arc::new(SimDisk::from_image(image));
+        db = Database::open_io(disk.clone(), &options)
+            .unwrap_or_else(|error| panic!("seed {seed} step {step}: reopening failed: {error}"));
+
+        let found = objects(&db);
+
+        check_integrity(&db).unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+        check_objects(&db).unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+        let latest = if finished && committing {
+            &attempted
+        } else {
+            &model
+        };
+        let barrier_returned = finished && committing && !deferred;
+        let allowed = found == *latest
+            || (committing && !finished && found == attempted)
+            || (power_cut && !barrier_returned && history.contains(&found));
+
+        assert!(
+            allowed,
+            "seed {seed} step {step}: the file holds {} objects, none of the states it may",
+            found.len()
+        );
+
+        // The next number passes every id there.
+        let mut txn = db.begin_write().unwrap();
+        let id = txn
+            .collection("items")
+            .unwrap()
+            .insert(crate::Object::new())
+            .unwrap();
+
+        assert!(
+            found.keys().all(|existing| id.as_int() > Some(*existing)),
+            "seed {seed} step {step}: a new object got {id:?}"
+        );
+        txn.abort();
+
+        model = found.clone();
+        history = vec![found];
+    }
+}
+
+/// Runs the object runs with a quarter of `DARUDB_CRASH_SEEDS`, 100 by
+/// default.
+#[test]
+fn objects_and_their_indexes_survive_power_cuts_and_process_kills() {
+    let seeds = std::env::var("DARUDB_CRASH_SEEDS")
+        .ok()
+        .and_then(|seeds| seeds.parse::<u64>().ok())
+        .map_or(100, |seeds| seeds.div_ceil(4));
+
+    for seed in 0..seeds {
+        run_objects(seed, 40);
+    }
+}
+
+#[test]
+fn a_migration_cut_short_leaves_the_old_schema_or_the_new_one() {
+    let mut rng = Rng::new(17);
+
+    // The pager writes neighbouring pages together, so the migration takes
+    // only a few operations: every cut from before its first write to after
+    // its barrier, several times, so that power cuts keep different writes.
+    for run in 0..96 {
+        let cut = run % 12;
+        let seed = u64::try_from(run).unwrap();
+        let disk = Arc::new(SimDisk::default());
+        let db = Database::create_io(disk.clone(), 4096, &object_options(1, seed)).unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        for index in 0..300 {
+            let mut item = crate::Object::new().with("rank", index % 7);
+
+            if index % 3 == 0 {
+                item.set("tags", vec![crate::Value::from("x")]);
+            }
+
+            txn.collection("items").unwrap().insert(item).unwrap();
+        }
+
+        txn.commit().unwrap();
+
+        let before = objects(&db);
+
+        drop(db);
+        disk.stop_after(cut);
+
+        let migrated = Database::open_io(disk.clone(), &object_options(2, seed));
+        let finished = migrated.is_ok();
+
+        drop(migrated);
+
+        let power_cut = run % 3 != 0;
+        let image = if power_cut {
+            disk.power_cut(&mut rng)
+        } else {
+            disk.current()
+        };
+        let disk = Arc::new(SimDisk::from_image(image));
+
+        // The file holds version 1 with every object as it was, unless the
+        // migration committed, and a migration whose open returned did.
+        match Database::open_io(disk.clone(), &object_options(1, seed)) {
+            Ok(db) => {
+                assert!(
+                    !finished,
+                    "cut {cut}: the migration returned and did not last"
+                );
+                assert_eq!(objects(&db), before, "cut {cut}");
+                check_objects(&db).unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+            }
+            Err(Error::SchemaTooNew { .. }) => {}
+            Err(error) => panic!("cut {cut}: {error}"),
+        }
+
+        // Either way, opening with version 2 ends with the migrated objects.
+        let db = Database::open_io(disk, &object_options(2, seed))
+            .unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+        let after = objects(&db);
+
+        check_integrity(&db).unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+        check_objects(&db).unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+        assert_eq!(after.len(), before.len(), "cut {cut}");
+
+        for (id, item) in &after {
+            let rank = item.get("rank").and_then(crate::Value::as_int).unwrap();
+
+            assert_eq!(
+                item.get("double"),
+                Some(&crate::Value::Int(rank * 2)),
+                "cut {cut}"
+            );
+            assert_eq!(
+                item.get("label"),
+                Some(&crate::Value::from(format!("item {id}")))
+            );
         }
     }
 }
