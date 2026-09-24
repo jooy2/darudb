@@ -31,22 +31,10 @@ pub(crate) fn encode(value: &Value, out: &mut Vec<u8>) -> Result<(), &'static st
         Value::Null => out.push(NULL),
         Value::Bool(false) => out.push(FALSE),
         Value::Bool(true) => out.push(TRUE),
-        Value::Int(value) => {
-            out.push(INT);
-            out.extend_from_slice(&(u64::from_be_bytes(value.to_be_bytes()) ^ SIGN).to_be_bytes());
-        }
-        Value::Float(value) => {
-            out.push(FLOAT);
-            out.extend_from_slice(&ordered_float(*value).to_be_bytes());
-        }
-        Value::String(value) => {
-            out.push(STRING);
-            escape(value.as_bytes(), out);
-        }
-        Value::Bytes(value) => {
-            out.push(BYTES);
-            escape(value, out);
-        }
+        Value::Int(value) => number(INT, u64::from_be_bytes(value.to_be_bytes()) ^ SIGN, out),
+        Value::Float(value) => number(FLOAT, ordered_float(*value), out),
+        Value::String(value) => escape(STRING, value.as_bytes(), out),
+        Value::Bytes(value) => escape(BYTES, value, out),
         Value::List(_) | Value::Object(_) => return Err("a list or an object is not a key"),
     }
 
@@ -163,9 +151,9 @@ pub(crate) fn compare(a: &Value, b: &Value) -> Ordering {
 /// with, and no other encoding does: the tag and the escaped prefix, without
 /// the end.
 pub(crate) fn string_prefix(prefix: &str) -> Vec<u8> {
-    let mut out = vec![STRING];
+    let mut out = Vec::new();
 
-    escape(prefix.as_bytes(), &mut out);
+    escape(STRING, prefix.as_bytes(), &mut out);
     out.truncate(out.len() - 2);
 
     out
@@ -214,15 +202,31 @@ fn unordered_float(bits: u64) -> f64 {
 }
 
 /// Writes `bytes` with every `0x00` doubled as `0x00 0xFF`, then `0x00 0x00`.
-fn escape(bytes: &[u8], out: &mut Vec<u8>) {
-    for &byte in bytes {
-        out.push(byte);
+/// Appends `tag` and `number` as eight big-endian bytes.
+fn number(tag: u8, number: u64, out: &mut Vec<u8>) {
+    let mut bytes = [tag; 9];
 
-        if byte == 0 {
-            out.push(0xFF);
-        }
+    bytes[1..].copy_from_slice(&number.to_be_bytes());
+    out.extend_from_slice(&bytes);
+}
+
+/// Appends `tag` and `bytes` escaped. The room is reserved first and the
+/// bytes between zeros copied in runs: a key built a byte at a time grew
+/// its buffer again and again, which cost a lookup by a string more than
+/// the lookup's search of a tree.
+fn escape(tag: u8, bytes: &[u8], out: &mut Vec<u8>) {
+    let mut rest = bytes;
+
+    out.reserve(bytes.len() + 3);
+    out.push(tag);
+
+    while let Some(zero) = rest.iter().position(|&byte| byte == 0) {
+        out.extend_from_slice(&rest[..=zero]);
+        out.push(0xFF);
+        rest = &rest[zero + 1..];
     }
 
+    out.extend_from_slice(rest);
     out.extend_from_slice(&[0, 0]);
 }
 
