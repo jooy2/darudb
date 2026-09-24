@@ -23,11 +23,13 @@ export type Key = number | bigint | string | Uint8Array;
 export type FieldMode = 'required' | 'optional' | 'default';
 
 /**
- * A field's type. `T` is the value an object read from the database holds,
- * `I` the value written.
+ * What every field type carries for the type checker, and never at run
+ * time: `T` is the value an object read from the database holds, `M` how
+ * the field holds it, `K` whether it is the primary key, and `I` the value
+ * written.
  */
-export interface FieldType<T, M extends FieldMode = 'required', K extends boolean = false, I = T> {
-  /** @internal Carries the value's type; never set. */
+export interface Typed<T, M extends FieldMode, K extends boolean, I> {
+  /** @internal */
   readonly __value?: T;
   /** @internal */
   readonly __mode?: M;
@@ -35,66 +37,123 @@ export interface FieldType<T, M extends FieldMode = 'required', K extends boolea
   readonly __key?: K;
   /** @internal */
   readonly __input?: I;
-  /** The field may be null, and is null when left out. */
-  optional(): FieldType<T, 'optional', K, I>;
-  /** The field is required, and holds `value` when left out. */
-  default(value: I): FieldType<T, 'default', K, I>;
-  /** Queries on the field read an index rather than every object. */
-  index(): FieldType<T, M, K, I>;
-  /** An index that also refuses two objects with the same value. Any number may hold null. */
-  unique(): FieldType<T, M, K, I>;
-  /** The field is the collection's primary key: an int, a string or bytes. */
-  primaryKey(): FieldType<T, M, true, I>;
 }
 
+/** A field's type, with its modifiers. Each returns a copy. */
+export interface FieldType<T, M extends FieldMode = 'required', I = T> extends Typed<
+  T,
+  M,
+  false,
+  I
+> {
+  /** The field may be null, and is null when left out. */
+  optional(): FieldType<T, 'optional', I>;
+  /** The field is required, and holds `value` when left out. */
+  default(value: I): FieldType<T, 'default', I>;
+  /** Queries on the field read an index rather than every object. */
+  index(): FieldType<T, M, I>;
+  /** An index that also refuses two objects with the same value. Any number may hold null. */
+  unique(): FieldType<T, M, I>;
+}
+
+/** The type of a field that can be the primary key: an int, a string or bytes. */
+export interface KeyableType<T, I = T> extends FieldType<T, 'required', I> {
+  /** The field is the collection's primary key. */
+  primaryKey(): KeyType<T, I>;
+}
+
+/** The primary key's field: required, without a default. */
+export interface KeyType<T, I = T> extends Typed<T, 'required', true, I> {
+  index(): KeyType<T, I>;
+  unique(): KeyType<T, I>;
+}
+
+/** A link, which has no default: it would name an object. */
+export interface LinkType<M extends FieldMode = 'required'> extends Typed<Key, M, false, Key> {
+  optional(): LinkType<'optional'>;
+  index(): LinkType<M>;
+  unique(): LinkType<M>;
+}
+
+/** An embedded object, whose fields have their own defaults, and no index. */
+export interface EmbeddedType<T, I, M extends FieldMode = 'required'> extends Typed<
+  T,
+  M,
+  false,
+  I
+> {
+  optional(): EmbeddedType<T, I, 'optional'>;
+}
+
+/** Any field's type. */
+export type AnyField = Typed<any, FieldMode, boolean, any>;
+
 /** The fields of a collection or an embedded object, by name. */
-export type Fields = Record<string, FieldType<any, FieldMode, boolean, any>>;
+export type Fields = Record<string, AnyField>;
 
 type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
 /** The value an object read from the database holds in a field. */
 type ValueOf<F> =
-  F extends FieldType<infer T, infer M, any, any> ? (M extends 'optional' ? T | null : T) : never;
+  F extends Typed<infer T, infer M, any, any> ? (M extends 'optional' ? T | null : T) : never;
 
 /** The value written to a field. */
-type InputOf<F> = F extends FieldType<any, any, any, infer I> ? I : never;
+type InputOf<F> = F extends Typed<any, any, any, infer I> ? I : never;
 
 type RequiredKeys<F extends Fields> = {
-  [K in keyof F]: F[K] extends FieldType<any, 'required', any, any> ? K : never;
+  [K in keyof F]: F[K] extends Typed<any, 'required', any, any> ? K : never;
 }[keyof F];
 
 type HasKey<F extends Fields> = true extends {
-  [K in keyof F]: F[K] extends FieldType<any, any, true, any> ? true : false;
+  [K in keyof F]: F[K] extends Typed<any, any, true, any> ? true : false;
 }[keyof F]
   ? true
   : false;
 
-/** An object as the database holds it: every field, null where optional and empty. */
+/** The fields of an embedded object as it is read: every one, null where optional and empty. */
+export type EmbeddedOf<F extends Fields> = Simplify<{ [K in keyof F]: ValueOf<F[K]> }>;
+
+/** The fields of an embedded object as it is written. */
+export type EmbeddedInputOf<F extends Fields> = Simplify<
+  { [K in RequiredKeys<F>]: InputOf<F[K]> } & {
+    [K in Exclude<keyof F, RequiredKeys<F>>]?: InputOf<F[K]> | null;
+  }
+>;
+
+/** An object as the database holds it, with the `id` of a collection without a key field. */
 export type ObjectOf<F extends Fields> = Simplify<
-  { [K in keyof F]: ValueOf<F[K]> } & (HasKey<F> extends true ? unknown : { id: number })
+  EmbeddedOf<F> & (HasKey<F> extends true ? unknown : { id: number })
 >;
 
 /** An object as it is written: required fields without a default, and any of the rest. */
 export type InsertOf<F extends Fields> = Simplify<
-  { [K in RequiredKeys<F>]: InputOf<F[K]> } & {
-    [K in Exclude<keyof F, RequiredKeys<F>>]?: InputOf<F[K]> | null;
-  } & (HasKey<F> extends true ? unknown : { id?: number })
+  EmbeddedInputOf<F> & (HasKey<F> extends true ? unknown : { id?: number })
 >;
 
 /** The types of fields. */
 export declare const t: {
   bool(): FieldType<boolean>;
-  /** A 64-bit int, as a number; one beyond 2^53 reads as a `bigint`. */
-  int(): FieldType<number, 'required', false, number | bigint>;
+  /**
+   * A 64-bit int read as a number. A value beyond 2^53, which a number does
+   * not hold exactly, is refused when written and fails when read: declare
+   * such a field with `bigint`.
+   */
+  int(): KeyableType<number>;
+  /** A 64-bit int read as a `bigint`, whatever its size. */
+  bigint(): KeyableType<bigint, bigint | number>;
   float(): FieldType<number>;
-  string(): FieldType<string>;
-  bytes(): FieldType<Uint8Array>;
+  string(): KeyableType<string>;
+  bytes(): KeyableType<Uint8Array>;
   /** The primary key of an object of collection `collection`. */
-  link(collection: string): FieldType<Key>;
+  link(collection: string): LinkType;
   /** A list of values of `element`, a type without modifiers. */
-  list<T, I>(element: FieldType<T, 'required', false, I>): FieldType<T[], 'required', false, I[]>;
+  list<T, I>(
+    element: FieldType<T, 'required', I> | KeyableType<T, I>
+  ): FieldType<T[], 'required', I[]>;
+  /** A list of links: a to-many link. */
+  list(element: LinkType): FieldType<Key[]>;
   /** An embedded object with fields of its own. */
-  object<F extends Fields>(fields: F): FieldType<ObjectOf<F>, 'required', false, InsertOf<F>>;
+  object<F extends Fields>(fields: F): EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>;
 };
 
 /** A collection: its fields. */
@@ -319,6 +378,11 @@ export interface OpenOptions<S = Schema> {
   create?: boolean;
   /** The page size of a new database: a power of two from 4096 to 65536. */
   pageSize?: number;
+  /**
+   * How long, in milliseconds, opening and a write transaction wait for
+   * another process's writer before failing with `BUSY`. 5000 by default.
+   */
+  busyTimeout?: number;
   /** The collections the database holds. */
   schema?: S;
   /** How an older schema version becomes this one. */

@@ -9,7 +9,13 @@
 
 const { invalid } = require('./codec');
 
-/** A field's type, with how the field holds it. Each method returns a copy. */
+/** The types a primary key can have. */
+const KEY_TYPES = new Set(['int', 'string', 'bytes']);
+
+/**
+ * A field's type, with how the field holds it. Each method returns a copy,
+ * and refuses at once what the engine would refuse when the file opens.
+ */
 class FieldType {
   constructor(spec) {
     this.spec = Object.freeze(spec);
@@ -18,11 +24,23 @@ class FieldType {
 
   /** The field may be null, and is null when left out. */
   optional() {
+    if (this.spec.primaryKey) {
+      throw invalid('a primary key is required, never optional');
+    }
+
     return new FieldType({ ...this.spec, optional: true });
   }
 
   /** The field is required, and holds `value` when left out. */
   default(value) {
+    if (this.spec.type === 'link' || this.spec.type === 'object') {
+      throw invalid(`a field of type ${this.spec.type} has no default`);
+    }
+
+    if (this.spec.primaryKey) {
+      throw invalid('a primary key has no default: every object brings its own');
+    }
+
     return new FieldType({ ...this.spec, default: value });
   }
 
@@ -36,8 +54,16 @@ class FieldType {
     return new FieldType({ ...this.spec, unique: true });
   }
 
-  /** The field is the collection's primary key. */
+  /** The field is the collection's primary key: an int, a string or bytes. */
   primaryKey() {
+    if (!KEY_TYPES.has(this.spec.type)) {
+      throw invalid(`a primary key is an int, a string or bytes, not a ${this.spec.type}`);
+    }
+
+    if (this.spec.optional || this.spec.default !== undefined) {
+      throw invalid('a primary key is required, without a default');
+    }
+
     return new FieldType({ ...this.spec, primaryKey: true });
   }
 }
@@ -60,6 +86,8 @@ function fieldTypes(fields, where) {
 const t = Object.freeze({
   bool: () => new FieldType({ type: 'bool' }),
   int: () => new FieldType({ type: 'int' }),
+  /** An int read as a `bigint` always, for values beyond 2^53. */
+  bigint: () => new FieldType({ type: 'int', big: true }),
   float: () => new FieldType({ type: 'float' }),
   string: () => new FieldType({ type: 'string' }),
   bytes: () => new FieldType({ type: 'bytes' }),
@@ -77,18 +105,31 @@ const t = Object.freeze({
   object: (fields) => new FieldType({ type: 'object', fields: fieldTypes(fields, '`t.object`') })
 });
 
+/** Marks what `collection` made, so that `schema` takes nothing else. */
+const COLLECTION = Symbol('collection');
+
 /**
  * A collection: its fields by name. A field marked `primaryKey()` is the
  * key; without one, the collection gets an `id` that the engine numbers.
  */
 function collection(fields) {
-  return Object.freeze({ fields: fieldTypes(fields, '`collection`') });
+  return Object.freeze({ fields: fieldTypes(fields, '`collection`'), [COLLECTION]: true });
 }
 
 /** The collections of a database, at `version`, from 1 up. */
 function schema(version, collections) {
   if (!Number.isSafeInteger(version) || version < 1) {
     throw invalid('a schema version is a whole number from 1 up');
+  }
+
+  if (typeof collections !== 'object' || collections === null) {
+    throw invalid('`schema` takes an object of collections');
+  }
+
+  for (const [name, value] of Object.entries(collections)) {
+    if (value === null || typeof value !== 'object' || value[COLLECTION] !== true) {
+      throw invalid(`\`${name}\` in \`schema\` is not made by \`collection\``);
+    }
   }
 
   return Object.freeze({ version, collections: Object.freeze({ ...collections }) });

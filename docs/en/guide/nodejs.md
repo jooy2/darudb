@@ -32,9 +32,9 @@ const app = schema(1, {
 const db = Database.open('app.darudb', { schema: app });
 ```
 
-- The types are `t.bool()`, `t.int()`, `t.float()`, `t.string()`, `t.bytes()`, `t.link(collection)`, `t.list(type)` and `t.object(fields)`.
+- The types are `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t.bytes()`, `t.link(collection)`, `t.list(type)` and `t.object(fields)`.
 - `optional()` lets a field be null, `default(value)` fills it in when it is left out, `index()` and `unique()` index it, and `primaryKey()` makes it the key. A collection without a key field gets an `id` that the engine numbers from 1.
-- An int is a number, and one beyond 2^53 reads as a `bigint`. Bytes are a `Uint8Array`.
+- A `t.int()` field holds a number. A value beyond 2^53, which a number does not hold exactly, is refused when written and fails when read; declare such a field with `t.bigint()`, which always reads as a `bigint`. Bytes are a `Uint8Array`.
 
 [Collections and objects](./objects.md) has the rules the engine keeps, which are the same in every language.
 
@@ -61,13 +61,13 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 
 - `insert` and `insertMany` return the keys. `put` and `putMany` insert or replace. `delete` says whether there was an object.
 - A batch crosses into the engine as one buffer in one call, which is much cheaper than one call per object.
-- `insert` fails with `DUPLICATE_KEY` when the key or a unique value is taken, and a value of the wrong type fails with `INVALID_ARGUMENT`. A refused write changes nothing, and the rest of the function can go on.
-- Transactions are synchronous. A function that returns a promise is refused, and its transaction is aborted.
+- `insert` fails with `DUPLICATE_KEY` when the key or a unique value is taken. A value of the wrong type, or a property the schema does not have, fails with `INVALID_ARGUMENT`. A refused write changes nothing, and the rest of the function can go on.
+- Transactions are synchronous. A function that returns a promise is refused, and its transaction is aborted. Write transactions do not nest: `db.write` inside another's function fails at once, where it would otherwise wait for itself. A write waits for another process's writer for up to five seconds, or the `busyTimeout` option in milliseconds.
 - `db.write(fn, { durability: 'deferred' })` returns without waiting for the disk. Readers see the changes at once, and they become durable at the next sync commit, `db.sync()`, `close`, or within a second.
 
 ## Query
 
-`find`, `findOne` and `count` take a function that builds a query:
+`find`, `findOne` and `count` take a function that builds a query. `findOne` stops at the first object.
 
 ```ts
 const adults = db.read((txn) =>

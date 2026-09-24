@@ -15,9 +15,23 @@ const app = schema(1, {
     age: t.int().default(0).index(),
     tags: t.list(t.string()).optional(),
     team: t.link('teams').optional(),
-    address: t.object({ city: t.string(), zip: t.int().optional() }).optional()
+    friends: t.list(t.link('users')).optional(),
+    address: t.object({ city: t.string(), zip: t.int().optional() }).optional(),
+    visits: t.bigint().default(0n)
   })
 });
+
+// What the engine refuses in a declaration is refused here too.
+// @ts-expect-error a link has no default.
+t.link('teams').default('north');
+// @ts-expect-error a float cannot be a primary key.
+t.float().primaryKey();
+// @ts-expect-error a primary key is required.
+t.string().optional().primaryKey();
+// @ts-expect-error a primary key is required.
+t.string().primaryKey().optional();
+// @ts-expect-error an embedded object has no index.
+t.object({ a: t.int() }).index();
 
 declare const db: Database<typeof app>;
 
@@ -52,6 +66,10 @@ const age: number = first.age;
 const email: string | null = first.email;
 const id: number = first.id;
 const city: string | undefined = first.address?.city;
+const visits: bigint = first.visits;
+const friends: Key[] | null = first.friends;
+// @ts-expect-error an embedded object has no `id`.
+const embeddedId = first.address?.id;
 
 db.read((txn) => {
   const users = txn.collection('users');
@@ -61,6 +79,7 @@ db.read((txn) => {
   users.find((q) => q.where((c) => c.or(c.eq('name', 'Alice'), c.isNull('email'))));
   users.find('age >= $0 SORT BY age DESC', [18]);
   users.count((q) => q.where('name', 'startsWith', 'A'));
+  users.findOne(new Query<typeof first>().where('age', '>', 1));
   // @ts-expect-error `agee` is not a field.
   users.find((q) => q.where('agee', '>=', 18));
   // @ts-expect-error `age` holds numbers.
@@ -74,4 +93,4 @@ new Query().where(conditions.not(conditions.eq('a', 1))).limit(3);
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 
-export { app, age, email, id, city, version };
+export { app, age, email, id, city, visits, friends, embeddedId, version };

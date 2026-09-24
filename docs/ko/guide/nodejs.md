@@ -32,9 +32,9 @@ const app = schema(1, {
 const db = Database.open('app.darudb', { schema: app });
 ```
 
-- 타입은 `t.bool()`, `t.int()`, `t.float()`, `t.string()`, `t.bytes()`, `t.link(collection)`, `t.list(type)`, `t.object(fields)`가 있습니다.
+- 타입은 `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t.bytes()`, `t.link(collection)`, `t.list(type)`, `t.object(fields)`가 있습니다.
 - `optional()`은 필드가 null일 수 있게 하고, `default(value)`는 필드가 빠졌을 때 채울 값을 정합니다. `index()`와 `unique()`는 인덱스를 두고, `primaryKey()`는 그 필드를 키로 삼습니다. 키 필드가 없는 컬렉션에는 엔진이 1부터 번호를 매기는 `id`가 생깁니다.
-- 정수는 number로 읽고, 2^53을 넘는 값은 `bigint`로 읽습니다. 바이트는 `Uint8Array`입니다.
+- `t.int()` 필드는 number입니다. number가 정확히 담지 못하는 2^53 너머의 값은 쓸 때 거부하고 읽을 때 실패합니다. 그런 값이 필요하면 `t.bigint()`로 선언하세요. 언제나 `bigint`로 읽힙니다. 바이트는 `Uint8Array`입니다.
 
 엔진이 지키는 규칙은 언어와 관계없이 같고, [컬렉션과 객체](./objects.md)에 있습니다.
 
@@ -61,13 +61,13 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 
 - `insert`와 `insertMany`는 키를 돌려줍니다. `put`과 `putMany`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
 - 여러 객체를 한 번에 넘기면 버퍼 하나에 담아 엔진을 한 번만 부릅니다. 객체마다 부르는 것보다 훨씬 쌉니다.
-- `insert`는 키나 고유 값이 이미 있으면 `DUPLICATE_KEY`로, 값의 타입이 틀리면 `INVALID_ARGUMENT`로 실패합니다. 거부된 쓰기는 아무것도 바꾸지 않으므로 함수는 이어서 진행해도 됩니다.
-- 트랜잭션은 동기입니다. promise를 돌려주는 함수는 거부하고, 그 트랜잭션은 취소합니다.
+- `insert`는 키나 고유 값이 이미 있으면 `DUPLICATE_KEY`로 실패합니다. 값의 타입이 틀리거나 스키마에 없는 속성이 있으면 `INVALID_ARGUMENT`로 실패합니다. 거부된 쓰기는 아무것도 바꾸지 않으므로 함수는 이어서 진행해도 됩니다.
+- 트랜잭션은 동기입니다. promise를 돌려주는 함수는 거부하고, 그 트랜잭션은 취소합니다. 쓰기 트랜잭션은 겹칠 수 없습니다. 다른 쓰기 함수 안에서 `db.write`를 부르면 자기 자신을 기다리는 대신 곧바로 실패합니다. 다른 프로세스가 쓰고 있으면 5초, 또는 `busyTimeout` 옵션에 준 밀리초만큼 기다립니다.
 - `db.write(fn, { durability: 'deferred' })`는 디스크를 기다리지 않고 반환합니다. 변경은 곧바로 읽기에 보이고, 다음 동기 커밋이나 `db.sync()`, `close`, 또는 1초 안에 디스크에 기록됩니다.
 
 ## 조회하기
 
-`find`, `findOne`, `count`는 쿼리를 만드는 함수를 받습니다.
+`find`, `findOne`, `count`는 쿼리를 만드는 함수를 받습니다. `findOne`은 첫 객체에서 멈춥니다.
 
 ```ts
 const adults = db.read((txn) =>

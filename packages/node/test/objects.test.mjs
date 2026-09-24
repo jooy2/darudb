@@ -46,7 +46,7 @@ const users = collection({
   team: t.link('teams').optional(),
   address: t.object({ city: t.string(), zip: t.int().optional() }).optional(),
   avatar: t.bytes().optional(),
-  big: t.int().optional()
+  big: t.bigint().optional()
 });
 
 const v1 = schema(1, { teams, users });
@@ -101,7 +101,8 @@ describe('objects', () => {
     assert.equal(bob.tags, null);
     assert.deepEqual(carol.tags, [], 'an empty list is not null');
     assert.equal(carol.score, 2);
-    assert.equal(carol.big, 2n ** 60n, 'an int beyond 2^53 reads as a bigint');
+    assert.equal(carol.big, 2n ** 60n, 'a `t.bigint()` field reads as a bigint');
+    assert.equal(alice.big, null);
     assert.equal(
       db.read((txn) => txn.collection('teams').get('north')).city,
       'Seoul',
@@ -440,5 +441,180 @@ describe('migrations', () => {
       again.read((txn) => txn.collection('users').count()),
       3
     );
+  });
+});
+
+describe('what a review found', () => {
+  it('refuses a property the schema does not have, rather than dropping it', (context) => {
+    const { db } = withData(context);
+
+    db.write((txn) => {
+      assertCode(
+        () => txn.collection('users').insert({ name: 'x', nickame: 'y' }),
+        'INVALID_ARGUMENT'
+      );
+      assertCode(
+        () => txn.collection('users').insert({ name: 'x', address: { city: 'c', id: 5 } }),
+        'INVALID_ARGUMENT'
+      );
+    });
+  });
+
+  it('keeps `findOne` to the query it is given, and stops at the first object', (context) => {
+    const { db } = withData(context);
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+
+      assert.equal(
+        users.findOne(() => new Query().where('name', '==', 'zzz')),
+        null
+      );
+      assert.equal(users.findOne(new Query().where('name', '==', 'Bob')).name, 'Bob');
+      assert.equal(
+        users.findOne((q) => q.limit(0)),
+        null
+      );
+      assert.equal(users.findOne('age > 0 SORT BY age DESC').name, 'Carol');
+      assert.equal(users.findOne('age > 0 LIMIT 0'), null);
+    });
+  });
+
+  it('reads and writes fields named like what every object inherits', (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, {
+        odd: collection({
+          constructor: t.string().optional(),
+          toString: t.string().optional(),
+          // A computed key: a plain `__proto__:` would set the prototype.
+          ['__proto__']: t.string().optional()
+        })
+      })
+    });
+
+    context.after(() => db.close());
+    db.write((txn) => {
+      const odd = txn.collection('odd');
+
+      odd.insert({});
+
+      const withProto = {};
+
+      Object.defineProperty(withProto, '__proto__', { value: 'p', enumerable: true });
+      odd.insert(withProto);
+    });
+
+    const [first, second] = db.read((txn) => txn.collection('odd').find());
+
+    assert.equal(first.constructor, null);
+    assert.equal(Object.hasOwn(second, '__proto__'), true);
+    assert.equal(second.__proto__, 'p');
+  });
+
+  it('leaves no unhandled rejection behind a refused async function', async (context) => {
+    const { db } = withData(context);
+
+    assertCode(
+      () =>
+        db.write(async (txn) => {
+          await null;
+          txn.collection('users').insert({ name: 'Late' });
+        }),
+      'INVALID_ARGUMENT'
+    );
+    // The function's own failure, after the transaction ended, settles here.
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+
+  it("refuses what cannot reach the engine with the engine's codes", (context) => {
+    const { db, path } = withData(context);
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+
+      assertCode(() => users.get(true), 'INVALID_ARGUMENT');
+      assertCode(() => users.get(null), 'INVALID_ARGUMENT');
+      assertCode(() => users.find('name == $0', [{}]), 'INVALID_QUERY');
+    });
+    db.write((txn) => assertCode(() => txn.collection('users').delete({}), 'INVALID_ARGUMENT'));
+
+    for (const version of [2.5, '2', 2 ** 32]) {
+      assertCode(
+        () => Database.open(path, { schema: v1, migrations: [{ version, run() {} }] }),
+        'INVALID_ARGUMENT'
+      );
+    }
+
+    assertCode(
+      () =>
+        Database.open(path, {
+          schema: v1,
+          migrations: [{ version: 2, renameFields: [['users', 'a']] }]
+        }),
+      'INVALID_ARGUMENT'
+    );
+  });
+
+  it('keeps ints exact: beyond 2^53 only through `t.bigint()`', (context) => {
+    const { db, path } = withData(context);
+
+    db.write((txn) => {
+      assertCode(
+        () => txn.collection('users').insert({ name: 'x', age: 2n ** 60n }),
+        'INVALID_ARGUMENT'
+      );
+      assert.equal(txn.collection('users').insert({ name: 'y', age: 2n ** 40n }), 4);
+    });
+    db.close();
+
+    // The file stores one type of int, so declaring the field as a number
+    // opens, and reading the value it cannot hold says so.
+    const narrow = Database.open(path, {
+      schema: schema(1, { teams, users: collection({ ...users.fields, big: t.int().optional() }) })
+    });
+
+    context.after(() => narrow.close());
+    assertCode(() => narrow.read((txn) => txn.collection('users').get(3)), 'INVALID_ARGUMENT');
+    assert.equal(narrow.read((txn) => txn.collection('users').get(4)).age, 2 ** 40);
+  });
+
+  it('refuses a string UTF-8 cannot hold', (context) => {
+    const { db } = withData(context);
+
+    db.write((txn) =>
+      assertCode(() => txn.collection('users').insert({ name: '\ud800' }), 'INVALID_ARGUMENT')
+    );
+  });
+
+  it('refuses modifiers a type cannot have when they are declared', () => {
+    assertCode(() => t.link('teams').default('north'), 'INVALID_ARGUMENT');
+    assertCode(() => t.float().primaryKey(), 'INVALID_ARGUMENT');
+    assertCode(() => t.string().optional().primaryKey(), 'INVALID_ARGUMENT');
+    assertCode(() => t.string().primaryKey().optional(), 'INVALID_ARGUMENT');
+    assertCode(() => schema(1, { a: { fields: {} } }), 'INVALID_ARGUMENT');
+  });
+
+  it('refuses a filter nested beyond what the engine takes', (context) => {
+    const { db } = withData(context);
+    let condition = conditions.isNull('email');
+
+    for (let depth = 0; depth < 20_000; depth++) {
+      condition = conditions.not(condition);
+    }
+
+    db.read((txn) =>
+      assertCode(() => txn.collection('users').find((q) => q.where(condition)), 'INVALID_QUERY')
+    );
+  });
+
+  it('refuses a write transaction inside another at once, rather than waiting', (context) => {
+    const path = tempPath(context);
+    const db = Database.open(path, { schema: v1, busyTimeout: 50 });
+
+    context.after(() => db.close());
+    db.write(() => {
+      assertCode(() => db.write(() => {}), 'INVALID_ARGUMENT');
+    });
+    db.write(() => {});
   });
 });

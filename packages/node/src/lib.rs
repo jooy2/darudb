@@ -69,6 +69,8 @@ pub struct NativeMigration {
 pub struct NativeOptions {
     pub create: Option<bool>,
     pub page_size: Option<u32>,
+    /// How long to wait for another writer, in milliseconds.
+    pub busy_timeout: Option<u32>,
     /// The declared schema, as `Schema::decode` reads it.
     pub schema: Option<Buffer>,
     pub migrations: Option<Vec<NativeMigration>>,
@@ -93,6 +95,10 @@ impl NativeOpening {
 
         if let Some(page_size) = options.page_size {
             open_options.page_size(page_size);
+        }
+
+        if let Some(milliseconds) = options.busy_timeout {
+            open_options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
         }
 
         if let Some(schema) = &options.schema {
@@ -170,8 +176,8 @@ impl NativeOpening {
     }
 
     #[napi]
-    pub fn find(&mut self, ir: Buffer) -> Result<Buffer> {
-        find(self.transaction()?, &ir)
+    pub fn find(&mut self, ir: Buffer, first: bool) -> Result<Buffer> {
+        find(self.transaction()?, &ir, first)
     }
 
     #[napi]
@@ -316,10 +322,12 @@ impl NativeRead {
             .map(Buffer::from))
     }
 
+    /// The records a query finds, one after another, each after its length;
+    /// only the first with `first`.
     #[napi]
-    pub fn find(&self, ir: Buffer) -> Result<Buffer> {
+    pub fn find(&self, ir: Buffer, first: bool) -> Result<Buffer> {
         let txn = self.inner.as_ref().ok_or_else(ended)?;
-        let request = darudb::QueryRequest::decode(&ir).map_err(to_js_error)?;
+        let request = request_of(&ir, first)?;
         let records = txn
             .collection(&request.collection)
             .and_then(|collection| collection.query_records(&request.query))
@@ -360,8 +368,8 @@ impl NativeWrite {
     }
 
     #[napi]
-    pub fn find(&mut self, ir: Buffer) -> Result<Buffer> {
-        find(self.transaction()?, &ir)
+    pub fn find(&mut self, ir: Buffer, first: bool) -> Result<Buffer> {
+        find(self.transaction()?, &ir, first)
     }
 
     #[napi]
@@ -451,8 +459,8 @@ fn get_record(
         .map(Buffer::from))
 }
 
-fn find(txn: &mut darudb::WriteTransaction, ir: &[u8]) -> Result<Buffer> {
-    let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+fn find(txn: &mut darudb::WriteTransaction, ir: &[u8], first: bool) -> Result<Buffer> {
+    let request = request_of(ir, first)?;
     let records = txn
         .collection(&request.collection)
         .and_then(|collection| collection.query_records(&request.query))
@@ -468,6 +476,17 @@ fn count(txn: &mut darudb::WriteTransaction, ir: &[u8]) -> Result<f64> {
         .and_then(|collection| collection.count(&request.query))
         .map(u64_number)
         .map_err(to_js_error)
+}
+
+/// The query in `ir`, cut to its first object with `first`.
+fn request_of(ir: &[u8], first: bool) -> Result<darudb::QueryRequest> {
+    let mut request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+
+    if first {
+        request.query = request.query.first();
+    }
+
+    Ok(request)
 }
 
 /// Writes the records in `records`, each after its length, and returns their

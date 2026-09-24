@@ -14,7 +14,12 @@ const { decodeRecords, encodeRecords } = require('../lib/codec.js');
 /** A layout as `decodeSchema` builds one, from fields in id order. */
 const layoutOf = (list) => ({
   name: 'things',
-  fields: { list, positions: new Map(list.map((field, index) => [field.id, index])) }
+  fields: {
+    list,
+    positions: new Map(list.map((field, index) => [field.id, index])),
+    names: new Set(list.map((field) => field.name)),
+    hasProto: false
+  }
 });
 
 const field = (id, name, kind, optional = true) => ({
@@ -67,7 +72,7 @@ describe('records', () => {
   });
 
   it('keep ints exact across the whole 64-bit range', () => {
-    const ints = layoutOf([field(1, 'n', { type: 'int' })]);
+    const ints = layoutOf([field(1, 'n', { type: 'int', anyInt: true })]);
     const values = [
       0,
       1,
@@ -136,5 +141,38 @@ describe('records', () => {
       code: 'INVALID_ARGUMENT',
       message: /`object.inner`/
     });
+  });
+});
+
+describe('the stored schema', () => {
+  it('reads bytes that are not a schema as damage, and as nothing else', () => {
+    const { encodeSchema, decodeSchema } = require('../lib/codec.js');
+    const { collection, schema, t } = require('../lib/schema.js');
+    const bytes = encodeSchema(
+      schema(1, {
+        teams: collection({ name: t.string().primaryKey() }),
+        users: collection({
+          name: t.string().default('x'),
+          tags: t.list(t.string()).optional().index(),
+          team: t.link('teams').optional(),
+          address: t.object({ city: t.string() }).optional()
+        })
+      })
+    );
+    const next = random(7);
+
+    for (let round = 0; round < 5000; round++) {
+      const damaged = bytes.slice();
+
+      for (let flips = 1 + Math.floor(next() * 3); flips > 0; flips--) {
+        damaged[Math.floor(next() * damaged.length)] = Math.floor(next() * 256);
+      }
+
+      try {
+        decodeSchema(damaged);
+      } catch (error) {
+        assert.equal(error.code, 'CORRUPTED', error.stack);
+      }
+    }
   });
 });

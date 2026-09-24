@@ -173,6 +173,14 @@ class Writer {
     }
 
     if (!ascii) {
+      // An unpaired surrogate has no UTF-8, and `encode` would turn it into
+      // U+FFFD without a word.
+      if (!value.isWellFormed()) {
+        throw invalid(
+          `the string ${JSON.stringify(value)} holds an unpaired surrogate, which UTF-8 cannot hold`
+        );
+      }
+
       this.bytesOf(encoder.encode(value));
 
       return;
@@ -357,6 +365,19 @@ function writeValue(writer, kind, value, where) {
         throw invalid(`\`${where}\` holds an int, not ${describe(value)}`);
       }
 
+      // Beyond 2^53, only a field declared with `t.bigint()` reads the value
+      // back, so only such a field takes it.
+      if (
+        !kind.big &&
+        !kind.anyInt &&
+        typeof value === 'bigint' &&
+        (value > BIG_SAFE || value < -BIG_SAFE)
+      ) {
+        throw invalid(
+          `\`${where}\` is an int read as a number, which does not hold ${value} exactly; declare it with \`t.bigint()\``
+        );
+      }
+
       writer.byte(INT);
       writer.int(value);
 
@@ -433,10 +454,18 @@ function writeValue(writer, kind, value, where) {
  * by id in ascending order: a record.
  */
 function writeFields(writer, fields, object, where) {
+  // A property the schema does not have is refused, as the engine refuses
+  // it, rather than dropped: it is a typo, or a name a migration changed.
+  for (const name of Object.keys(object)) {
+    if (!fields.names.has(name)) {
+      throw invalid(`\`${where ? `${where}.${name}` : name}\` is not a field`);
+    }
+  }
+
   let present = 0;
 
   for (const field of fields.list) {
-    const value = object[field.name];
+    const value = own(object, field.name);
 
     if (value !== undefined && value !== null) {
       present++;
@@ -446,13 +475,18 @@ function writeFields(writer, fields, object, where) {
   writer.varint(present);
 
   for (const field of fields.list) {
-    const value = object[field.name];
+    const value = own(object, field.name);
 
     if (value !== undefined && value !== null) {
       writer.varint(field.id);
       writeValue(writer, field.kind, value, where ? `${where}.${field.name}` : field.name);
     }
   }
+}
+
+/** Property `name` of `object` itself, never one it inherits such as `constructor`. */
+function own(object, name) {
+  return Object.hasOwn(object, name) ? object[name] : undefined;
 }
 
 /**
@@ -555,7 +589,19 @@ function readValue(reader, kind, depth) {
       break;
     case 'int':
       if (tag === INT) {
-        return reader.int();
+        const value = reader.int();
+
+        if (kind.big) {
+          return BigInt(value);
+        }
+
+        if (typeof value === 'bigint' && !kind.anyInt) {
+          throw invalid(
+            `an int field holds ${value}, beyond what a number holds exactly; declare it with \`t.bigint()\``
+          );
+        }
+
+        return value;
       }
 
       break;
@@ -579,7 +625,10 @@ function readValue(reader, kind, depth) {
       break;
     case 'link':
       if (tag === LINK) {
-        return readValue(reader, kind.target.key.kind, depth + 1);
+        // A link holds a key, which may be a `bigint`.
+        const key = kind.target.key.kind;
+
+        return readValue(reader, key.type === 'int' ? ANY_INT : key, depth + 1);
       }
 
       break;
@@ -618,6 +667,9 @@ function readValue(reader, kind, depth) {
 
   throw corrupted(`a field of type ${kind.type} holds the tag ${tag}`);
 }
+
+/** An int read as a number, or a `bigint` beyond 2^53, as keys are. */
+const ANY_INT = Object.freeze({ type: 'int', anyInt: true });
 
 /** A default as a field reads it, a fresh copy of a list or bytes. */
 function defaultOf(field) {
@@ -675,7 +727,17 @@ function readFields(reader, fields, lenient, depth) {
       }
     }
 
-    object[field.name] = value;
+    if (fields.hasProto && field.name === '__proto__') {
+      // Assigning it would set the object's prototype instead.
+      Object.defineProperty(object, field.name, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+    } else {
+      object[field.name] = value;
+    }
   }
 
   return object;
@@ -807,7 +869,9 @@ function fieldsOf(list) {
 
   return {
     list,
-    positions: new Map(list.map((field, index) => [field.id, index]))
+    positions: new Map(list.map((field, index) => [field.id, index])),
+    names: new Set(list.map((field) => field.name)),
+    hasProto: list.some((field) => field.name === '__proto__')
   };
 }
 
@@ -817,6 +881,18 @@ function fieldsOf(list) {
  * collections they name.
  */
 function decodeSchema(bytes) {
+  try {
+    return decodeSchemaFields(bytes);
+  } catch (error) {
+    if (error.code !== undefined) {
+      throw error;
+    }
+
+    throw corrupted(`the stored schema does not decode: ${error.message}`);
+  }
+}
+
+function decodeSchemaFields(bytes) {
   const record = readAnyFields(new Reader(bytes), 0);
   const byId = new Map();
   const links = [];
@@ -1150,7 +1226,14 @@ function writePath(writer, path) {
   }
 }
 
-function writeExpression(writer, node) {
+/** How deeply a filter may nest, as the engine holds every query to. */
+const MAX_FILTER_DEPTH = 24;
+
+function writeExpression(writer, node, depth = 1) {
+  if (depth > MAX_FILTER_DEPTH) {
+    throw codeError('INVALID_QUERY', `the filter nests more than ${MAX_FILTER_DEPTH} levels deep`);
+  }
+
   const inner = new Writer(64);
 
   switch (node.kind) {
@@ -1170,7 +1253,7 @@ function writeExpression(writer, node) {
         inner.varint(terms.length);
 
         for (const term of terms) {
-          writeExpression(inner, term);
+          writeExpression(inner, term, depth + 1);
         }
       }
 
