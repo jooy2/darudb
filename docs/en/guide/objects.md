@@ -98,7 +98,39 @@ fn read(db: &Database) -> Result<(), darudb::Error> {
 - A refused write changes nothing, and the transaction can go on and commit.
 - Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.
 
-Queries over indexes are the next part of the object layer, and are not in the API yet.
+## Query objects
+
+A `Query` says which objects to find, in what order, and how many. `query` returns them, and `count` counts them.
+
+```rust
+use darudb::{Database, Filter, Query};
+
+fn adults(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let users = read.collection("users")?;
+    let query = Query::new()
+        .filter(Filter::ge("age", 18).and(Filter::starts_with("name", "A")))
+        .sort_by_desc("age")
+        .limit(10);
+
+    for user in users.query(&query)? {
+        println!("{:?}", user.get("name"));
+    }
+
+    let adults = users.count(&Query::new().filter(Filter::ge("age", 18)))?;
+    println!("{adults} adults");
+    Ok(())
+}
+```
+
+- **Conditions** are `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `between`, `is_in`, `contains`, `starts_with`, `ends_with`, `is_null` and `is_not_null`, combined with `and`, `or` and `!`.
+- **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
+- **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list is not null.
+- **Null.** Every condition on a null field is false, except `is_null`. `Filter::eq(field, Value::Null)` is `is_null`.
+- **Types.** A value has the field's type: an `Int` field compares with an int, never a float, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
+- **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.
+
+A condition on the primary key or on an indexed field, joined to the rest of the filter with `and`, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.
 
 ## Migrate to a new version
 

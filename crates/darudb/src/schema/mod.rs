@@ -16,7 +16,7 @@
 //! whose names begin with a NUL character, which applications cannot touch.
 
 mod declare;
-mod objects;
+pub(crate) mod objects;
 mod open;
 mod resolve;
 #[cfg(test)]

@@ -6,6 +6,8 @@
 //! ends where it can be told to end, so encodings concatenate: the encoding of
 //! a value followed by a primary key sorts by the value, then the key.
 
+use std::cmp::Ordering;
+
 use super::value::Value;
 
 pub(crate) const NULL: u8 = 0x01;
@@ -94,6 +96,62 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Value, usize), &'static str> {
     }
 }
 
+/// Compares two scalar values as their encodings compare: null first, then
+/// by type in the order of the tags, then by value, with floats in the
+/// canonical order. A list or an object sorts after everything, though no
+/// caller compares one.
+pub(crate) fn compare(a: &Value, b: &Value) -> Ordering {
+    fn rank(value: &Value) -> u8 {
+        match value {
+            Value::Null => NULL,
+            Value::Bool(false) => FALSE,
+            Value::Bool(true) => TRUE,
+            Value::Int(_) => INT,
+            Value::Float(_) => FLOAT,
+            Value::String(_) => STRING,
+            Value::Bytes(_) => BYTES,
+            Value::List(_) | Value::Object(_) => u8::MAX,
+        }
+    }
+
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => a.cmp(b),
+        (Value::Float(a), Value::Float(b)) => ordered_float(*a).cmp(&ordered_float(*b)),
+        (Value::String(a), Value::String(b)) => a.as_bytes().cmp(b.as_bytes()),
+        (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
+        _ => rank(a).cmp(&rank(b)),
+    }
+}
+
+/// The bytes that the encoding of every string starting with `prefix` starts
+/// with, and no other encoding does: the tag and the escaped prefix, without
+/// the end.
+pub(crate) fn string_prefix(prefix: &str) -> Vec<u8> {
+    let mut out = vec![STRING];
+
+    escape(prefix.as_bytes(), &mut out);
+    out.truncate(out.len() - 2);
+
+    out
+}
+
+/// The first byte string after every string that starts with `prefix`, or
+/// `None` if there is none: `prefix` with its trailing `0xFF` bytes dropped
+/// and its last byte raised.
+pub(crate) fn after_prefix(prefix: &[u8]) -> Option<Vec<u8>> {
+    let mut out = prefix.to_vec();
+
+    while let Some(last) = out.pop() {
+        if last < u8::MAX {
+            out.push(last + 1);
+
+            return Some(out);
+        }
+    }
+
+    None
+}
+
 /// `value` with `-0.0` made `0.0` and every NaN made one NaN, so that values
 /// that compare equal encode alike.
 pub(crate) fn canonical_float(value: f64) -> f64 {
@@ -156,7 +214,6 @@ fn unescape(bytes: &[u8]) -> Result<(Vec<u8>, usize), &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
 
     use super::*;
     use crate::testing::Rng;
@@ -300,5 +357,47 @@ mod tests {
         ] {
             assert!(decode(bytes).is_err(), "{bytes:?}");
         }
+    }
+
+    #[test]
+    fn values_compare_as_their_encodings_do() {
+        let mut rng = Rng::new(21);
+        let samples: Vec<Value> = (0..400)
+            .map(|_| {
+                let kind = rng.below(5);
+
+                random(&mut rng, kind)
+            })
+            .collect();
+
+        for a in &samples {
+            for b in &samples {
+                assert_eq!(
+                    compare(a, b),
+                    encoded(a).unwrap().cmp(&encoded(b).unwrap()),
+                    "{a:?} and {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_string_prefix_bounds_exactly_the_strings_that_start_with_it() {
+        let words = ["", "a", "a\0", "a\0b", "ab", "b", "\0", "\u{ff}", "a\u{ff}"];
+
+        for prefix in words {
+            let start = string_prefix(prefix);
+            let end = after_prefix(&start);
+
+            for word in words {
+                let key = encoded(&Value::from(word)).unwrap();
+                let inside = key >= start && end.as_ref().is_none_or(|end| key < *end);
+
+                assert_eq!(inside, word.starts_with(prefix), "{word:?} and {prefix:?}");
+            }
+        }
+
+        assert_eq!(after_prefix(&[1, 0xFF, 0xFF]), Some(vec![2]));
+        assert_eq!(after_prefix(&[0xFF]), None);
     }
 }

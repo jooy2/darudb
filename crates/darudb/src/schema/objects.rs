@@ -52,6 +52,8 @@ pub(crate) trait Source {
         backward: bool,
     ) -> Result<Range<'_>>;
 
+    fn len_in(&self, tree: &str) -> Result<u64>;
+
     /// The error for damage found in the file.
     fn corrupted(&self, reason: String) -> Error;
 }
@@ -69,6 +71,10 @@ impl Source for ReadTransaction {
         backward: bool,
     ) -> Result<Range<'_>> {
         ReadTransaction::range_in::<&[u8]>(self, tree, &(start, end), backward)
+    }
+
+    fn len_in(&self, tree: &str) -> Result<u64> {
+        ReadTransaction::len_in(self, tree)
     }
 
     fn corrupted(&self, reason: String) -> Error {
@@ -89,6 +95,10 @@ impl Source for WriteTransaction {
         backward: bool,
     ) -> Result<Range<'_>> {
         WriteTransaction::range_in::<&[u8]>(self, tree, &(start, end), backward)
+    }
+
+    fn len_in(&self, tree: &str) -> Result<u64> {
+        WriteTransaction::len_in(self, tree)
     }
 
     fn corrupted(&self, reason: String) -> Error {
@@ -256,6 +266,11 @@ impl<'a> CollectionReader<'a> {
         &self.schema.schema.collections[self.position]
     }
 
+    /// The transaction, the schema and the collection, for running a query.
+    pub(crate) fn parts(&self) -> (&dyn Source, &StoredSchema, &CollectionDef) {
+        (self.txn, &self.schema.schema, self.definition())
+    }
+
     /// The object whose primary key is `key`, if there is one.
     pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>> {
         get(self.txn, self.definition(), &key.into())
@@ -300,6 +315,11 @@ impl<'a> CollectionWriter<'a> {
 
     fn definition(&self) -> &CollectionDef {
         &self.schema.schema.collections[self.position]
+    }
+
+    /// The transaction, the schema and the collection, for running a query.
+    pub(crate) fn parts(&self) -> (&dyn Source, &StoredSchema, &CollectionDef) {
+        (&*self.txn, &self.schema.schema, self.definition())
     }
 
     /// Inserts `object` and returns its primary key.

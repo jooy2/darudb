@@ -180,10 +180,10 @@ Each writes the record and adds, changes or removes the index entries whose valu
 A query names a collection and holds, all optional:
 
 - **A filter**: an expression that an object has to satisfy.
-- **A sort**: fields, each ascending or descending. Null sorts first ascending and last descending. Without a sort, objects come in primary key order.
+- **A sort**: fields, each ascending or descending. Null sorts first ascending and last descending. Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too.
 - **An offset and a limit** on the sorted result.
 
-A query either returns the objects or counts them.
+A query either returns the objects or counts them. A count is of the objects the query would return, after its offset and within its limit.
 
 ### The filter
 
@@ -198,9 +198,10 @@ A query either returns the objects or counts them.
 | `a AND b`, `a OR b`, `NOT a`            | As in logic                                                           |
 
 - **A path** names a field, and follows embedded objects and links with `.`: `address.city`, `author.name`. A path through a to-one link reads the linked object, and holds as null if there is none.
-- **A path to a list**, or through a to-many link, holds when it holds for any element: `tags == "red"` for an object with a red tag.
+- **A path to a list**, or through a to-many link, holds when it holds for any element: `tags == "red"` for an object with a red tag. An empty list has no element, so nothing holds for it but `IS NOT NULL`: `IS NULL` holds when the list itself is null. `CONTAINS` on a list compares elements for equality, and `STARTSWITH` and `ENDSWITH` on a list of strings hold when an element does.
 - **A null field** makes every condition on it false except `IS NULL`, and `IS NOT NULL` true only for a field that is not null. `path == null` means `path IS NULL`, and `path != null` means `path IS NOT NULL`; `null` anywhere else is `INVALID_QUERY`.
 - **A value has to fit the field's type.** An `int` compares with an `int` and a `float` with a `float`; comparing across the two, or with anything else, is `INVALID_QUERY`. So is sorting by a list, a link through a to-many link, or an embedded object.
+- **A filter nests at most 24 levels deep.** `AND` inside `AND`, and `OR` inside `OR`, flatten into one level, so only `NOT` and alternating groups count. Deeper is `INVALID_QUERY`, which keeps every query inside the nesting a record allows.
 
 ### The IR
 
@@ -259,13 +260,13 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 
 The engine chooses how to find the objects, and the choice never changes the result: every query also has a plain answer, a scan of the collection with the filter applied to each object, and the tests compare the two ([Tests](#what-the-phase-4-tests-must-show)).
 
-1. **Find an access path.** Among the conditions that every matching object has to meet, the terms of the filter's top-level `AND`, pick one that an index or the primary key answers: an equality, an `IN`, a range from comparisons or `BETWEEN`, or a `STARTSWITH`, which is a range on a string's encoding. Prefer the primary key, then a unique index, then equality over range. With none, scan the collection.
+1. **Find an access path.** Among the conditions that every matching object has to meet, the terms of the filter's top-level `AND`, pick one on a field of the collection itself that an index or the primary key answers: an equality, an `IN`, a range from comparisons or `BETWEEN`, a `STARTSWITH`, which is a range on a string's encoding, or an `IS NULL` on an indexed field, which is an equality with null. An equality or a `CONTAINS` on a list field is an equality in its index. The order of preference is an equality on the primary key or a unique index, then an `IN` on them, then an equality or an `IN` on another index, then a range; the range terms on the chosen field narrow one range together. With none, walk the index of the one field the query sorts by, if it sorts by an indexed field alone, or else every record.
 2. **Read the candidates** from the access path, in key order or in reverse.
 3. **Apply the rest of the filter** to each candidate, reading linked objects where a path goes through a link.
-4. **Sort.** When the access path already delivers the sort's order, which holds when the sort is on the path's field alone, the objects stream in that order and the limit stops the reading early. Otherwise the matching objects are sorted in memory, keeping only the best `offset + limit` when there is a limit.
+4. **Sort.** When the access path already delivers the query's order, the objects stream in that order and the limit stops the reading early. That holds when the sort is on the path's field alone and the field is not a list, and when there is no sort and the path is the primary key or one value of an index. An index walked in reverse gives the objects of one value in descending key order, so they are held back and given in ascending key order. Otherwise the matching objects are sorted in memory, keeping only the best `offset + limit` when there is a limit.
 5. **Skip the offset and stop at the limit.**
 
-A count follows the same steps without decoding objects when the index answers the whole filter.
+When the access path answers the whole filter, the rest of the filter is empty. A count then follows the same steps without reading the objects, and a count without a filter reads only the number of records the collection's tree keeps.
 
 Walking an index in reverse is the kernel's backward walk of a tree, the one its `range_backward` offers.
 

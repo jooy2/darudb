@@ -59,7 +59,7 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `lock/`       | Cross-process coordination through file range locks                                      | Phase 3          |
 | `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
 | `schema/`     | Declared schemas, migrations, and objects written with their indexes in step             | Phase 4          |
-| `query/`      | The query IR and its execution                                                           | Planned, phase 4 |
+| `query/`      | The query IR, the builder, choosing a key range or an index, and running the query       | Phase 4          |
 | `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6 |
 
 From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.

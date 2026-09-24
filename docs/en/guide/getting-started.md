@@ -150,6 +150,7 @@ Every error carries a `code` that names the failure. The code is the same in Rus
 | `SCHEMA_MISMATCH` | The declared schema differs from the one the file holds at the same version, or the file was migrated since this handle opened it. |
 | `SCHEMA_TOO_NEW` | The file holds a newer schema version than the one declared: a newer application wrote it. |
 | `DUPLICATE_KEY` | An insert found its primary key taken, or a unique index found a value taken. |
+| `INVALID_QUERY` | A query names a field the collection does not have, or tests one with a value of another type. |
 | `MIGRATION_FAILED` | A migration function reported that it failed. The file keeps its old schema and data. |
 | `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |

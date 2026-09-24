@@ -16,7 +16,8 @@
 //!
 //! A database opened with a [`Schema`] ([`OpenOptions::schema`]) also holds
 //! collections of typed [`Object`]s, with indexes kept in step with them and
-//! [`Migration`]s from one schema version to the next. Queries come next.
+//! [`Migration`]s from one schema version to the next, and [`Query`]s that
+//! read them through their indexes.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;
@@ -44,8 +45,8 @@
 //! - `space`: which pages a write transaction may use, and which it gives back.
 //! - `instance` and `txn`: the shared state of an open file, transactions, the
 //!   commit and recovery.
-//! - `schema`: the object layer, collections, objects, indexes and
-//!   migrations, kept in the kernel's trees. Its encodings are in
+//! - `schema` and `query`: the object layer, collections, objects, indexes,
+//!   migrations and queries, kept in the kernel's trees. Its encodings are in
 //!   `format::object`.
 //! - [`Database`], [`OpenOptions`] and [`Error`]: the public surface.
 //!
@@ -64,6 +65,7 @@ mod lock;
 mod options;
 #[cfg(test)]
 mod processes;
+mod query;
 mod schema;
 mod space;
 mod storage;
@@ -79,6 +81,7 @@ pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};
 pub use options::OpenOptions;
+pub use query::{Filter, Query};
 pub use schema::{
     Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
 };

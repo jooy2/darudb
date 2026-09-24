@@ -98,7 +98,39 @@ fn read(db: &Database) -> Result<(), darudb::Error> {
 - 거부된 쓰기는 아무것도 바꾸지 않으므로, 트랜잭션은 계속 쓰다가 커밋해도 됩니다.
 - 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 값입니다. 스키마의 필드가 모두 들어 있고, 빠진 필드에는 기본값이나 null이 들어갑니다.
 
-인덱스를 쓰는 쿼리는 객체 계층의 다음 작업이라 아직 API에 없습니다.
+## 객체 조회하기
+
+`Query`에는 어떤 객체를 어떤 순서로 몇 개 찾을지 적습니다. `query`는 찾은 객체를 돌려주고, `count`는 개수를 셉니다.
+
+```rust
+use darudb::{Database, Filter, Query};
+
+fn adults(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let users = read.collection("users")?;
+    let query = Query::new()
+        .filter(Filter::ge("age", 18).and(Filter::starts_with("name", "A")))
+        .sort_by_desc("age")
+        .limit(10);
+
+    for user in users.query(&query)? {
+        println!("{:?}", user.get("name"));
+    }
+
+    let adults = users.count(&Query::new().filter(Filter::ge("age", 18)))?;
+    println!("{adults} adults");
+    Ok(())
+}
+```
+
+- **조건**은 `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `between`, `is_in`, `contains`, `starts_with`, `ends_with`, `is_null`, `is_not_null`이 있고, `and`와 `or`, `!`로 엮습니다.
+- **경로**는 필드 이름이고, 내장 객체나 링크를 지날 때는 `.`으로 잇습니다. `address.city`처럼 쓰고, `author.name`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다.
+- **목록.** 목록에 건 조건은 원소 하나라도 맞으면 참입니다. 목록에 `contains`를 쓰면 그 원소가 있는지 봅니다. 빈 목록은 null이 아닙니다.
+- **null.** null인 필드에 건 조건은 `is_null`을 빼고 모두 거짓입니다. `Filter::eq(field, Value::Null)`은 `is_null`과 같습니다.
+- **타입.** 값은 필드의 타입과 같아야 합니다. `Int` 필드는 정수와 비교하고 실수와는 비교하지 않습니다. 링크는 대상 컬렉션의 키와 비교합니다. 이를 어기거나 없는 필드를 쓴 쿼리는 `INVALID_QUERY`로 실패합니다.
+- **순서.** 정렬을 주지 않으면 기본 키 순서로 나오고, 정렬 값이 같은 객체끼리도 기본 키 순서를 따릅니다. null은 오름차순에서 맨 앞, 내림차순에서 맨 뒤에 옵니다. 문자열은 바이트 순서로 비교합니다.
+
+기본 키나 인덱스가 있는 필드에 건 조건이 나머지 조건과 `and`로 이어져 있으면, 엔진은 그 조건에 맞는 객체만 읽습니다. 인덱스가 있는 필드 하나로만 정렬하면 그 순서대로 읽다가 개수 제한에서 멈춥니다. 그렇지 않으면 컬렉션의 객체를 모두 읽습니다. 어느 쪽으로 읽든 결과는 같습니다.
 
 ## 새 버전으로 마이그레이션하기
 
