@@ -8,7 +8,9 @@
  * The files go into `directory`, the system's temporary directory by
  * default, and are removed afterwards. The numbers are for comparing builds
  * on one machine; `object_bench.rs` spells out the workloads, which run the
- * same way against other databases outside this repository.
+ * same way against other databases outside this repository. The lines of the
+ * asynchronous API have no counterpart there: they show what a round trip
+ * through the thread pool adds.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,8 +53,22 @@ const measure = (name, count, step, objects = 1) => {
     step(round);
   }
 
-  const nanos = Number(process.hrtime.bigint() - started);
-  const each = nanos / (count * objects);
+  report(name, count * objects, Number(process.hrtime.bigint() - started));
+};
+
+/** `measure` for a step that returns a promise, awaited before the next. */
+const measureAsync = async (name, count, step, objects = 1) => {
+  const started = process.hrtime.bigint();
+
+  for (let round = 0; round < count; round++) {
+    await step(round);
+  }
+
+  report(name, count * objects, Number(process.hrtime.bigint() - started));
+};
+
+const report = (name, total, nanos) => {
+  const each = nanos / total;
   const text =
     each >= 1e6
       ? `${(each / 1e6).toFixed(2)} ms`
@@ -61,13 +77,13 @@ const measure = (name, count, step, objects = 1) => {
         : `${Math.round(each)} ns`;
 
   console.log(
-    `${name.padEnd(48)} ${Math.round((count * objects * 1e9) / nanos)
+    `${name.padEnd(48)} ${Math.round((total * 1e9) / nanos)
       .toString()
       .padStart(12)} ${text.padStart(14)}`
   );
 };
 
-const run = (directory) => {
+const run = async (directory) => {
   console.log(`\n${'plain file'.padEnd(48)} ${'per second'.padStart(12)} ${'each'.padStart(14)}`);
 
   let db = Database.open(join(directory, 'commits.darudb'), { schema: people });
@@ -141,6 +157,43 @@ const run = (directory) => {
     );
   });
 
+  console.log(`\n${'asynchronous API, same file'.padEnd(48)}`);
+  await measureAsync('readAsync, get by primary key, awaited each', 20_000, (round) =>
+    db.readAsync((txn) => txn.collection('people').get(1 + scatter(round)))
+  );
+  await measureAsync(
+    'get by primary key, awaited each, one transaction',
+    1,
+    () =>
+      db.readAsync(async (txn) => {
+        const people = txn.collection('people');
+
+        for (let round = 0; round < 20_000; round++) {
+          await people.get(1 + scatter(round));
+        }
+      }),
+    20_000
+  );
+  await measureAsync(
+    'get by primary key, called at once, one transaction',
+    1,
+    () =>
+      db.readAsync((txn) => {
+        const people = txn.collection('people');
+
+        return Promise.all(
+          Array.from({ length: 20_000 }, (_, round) => people.get(1 + scatter(round)))
+        );
+      }),
+    20_000
+  );
+  await measureAsync('writeAsync, one object per deferred commit', 5_000, (round) =>
+    db.writeAsync((txn) => txn.collection('people').insert(person(OBJECTS + round)), {
+      durability: 'deferred'
+    })
+  );
+  console.log();
+
   measure(
     'update, get and put, in one transaction',
     1,
@@ -180,7 +233,7 @@ const run = (directory) => {
 const directory = mkdtempSync(join(process.argv[2] ?? tmpdir(), 'darudb-bench-'));
 
 try {
-  run(directory);
+  await run(directory);
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }
