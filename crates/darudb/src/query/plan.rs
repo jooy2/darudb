@@ -32,8 +32,9 @@ fn invalid(message: impl Into<String>) -> Error {
 /// One step of reading a path from an object.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Step<'s> {
-    /// The field of this name of an object, null if the object is null.
-    Field(&'s str),
+    /// This field of an object, null if the object is null: found by name
+    /// in an object, and by id in a record.
+    Field(&'s FieldDef),
     /// Each element of a list, one null if the list is null.
     Expand,
     /// The object of this collection a link names, null if there is none.
@@ -367,7 +368,7 @@ impl<'s> Resolver<'s> {
                 direct = Some(field);
             }
 
-            steps.push(Step::Field(&field.name));
+            steps.push(Step::Field(field));
 
             let kind = match &field.kind {
                 Kind::List(element) => {

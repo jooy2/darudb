@@ -12,7 +12,7 @@ use super::ir::Op;
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
 use crate::error::Result;
 use crate::format::object::codec::{self, FieldRef};
-use crate::format::object::schema::{CollectionDef, IndexDef, Kind};
+use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
 use crate::schema::objects::{self, Source, index_tree, records};
 
@@ -47,8 +47,8 @@ impl Reader<'_> {
         };
 
         match (step, value) {
-            (Step::Field(name), Value::Object(object)) => {
-                self.any(object.get(name).unwrap_or(&Value::Null), rest, test)
+            (Step::Field(field), Value::Object(object)) => {
+                self.any(object.get(&field.name).unwrap_or(&Value::Null), rest, test)
             }
             (Step::Expand, Value::List(elements)) => {
                 for element in elements {
@@ -78,11 +78,11 @@ impl Reader<'_> {
         path: &Resolved<'_>,
         test: &mut dyn FnMut(ValueRef<'_>) -> bool,
     ) -> Result<bool> {
-        let Some((Step::Field(name), rest)) = path.steps.split_first() else {
+        let Some((Step::Field(field), rest)) = path.steps.split_first() else {
             return Ok(false);
         };
 
-        match fields.field(name)? {
+        match fields.field(field)? {
             Current::Borrowed(ValueRef::Value(value)) => self.any(value, rest, test),
             Current::Borrowed(value) if rest.is_empty() => Ok(test(value)),
             Current::Borrowed(value) => self.any(&value.to_value(), rest, test),
@@ -229,14 +229,14 @@ enum Current<'a> {
 
 /// The fields of an object, as a filter and a sort read them.
 trait Fields {
-    /// The value of the collection's field `name`.
-    fn field(&self, name: &str) -> Result<Current<'_>>;
+    /// The value of `field`, a field of the collection.
+    fn field<'f>(&'f self, field: &'f FieldDef) -> Result<Current<'f>>;
 }
 
 impl Fields for Object {
-    fn field(&self, name: &str) -> Result<Current<'_>> {
+    fn field<'f>(&'f self, field: &'f FieldDef) -> Result<Current<'f>> {
         Ok(Current::Borrowed(
-            self.get(name).map_or(ValueRef::Null, ValueRef::Value),
+            self.get(&field.name).map_or(ValueRef::Null, ValueRef::Value),
         ))
     }
 }
@@ -251,13 +251,12 @@ struct View<'a> {
 }
 
 impl Fields for View<'_> {
-    fn field(&self, name: &str) -> Result<Current<'_>> {
+    /// The field is found by its id, which the plan resolved once, rather
+    /// than by its name in the schema for each object.
+    fn field<'f>(&'f self, field: &'f FieldDef) -> Result<Current<'f>> {
         let damaged = |reason: &str| {
             self.source
                 .corrupted(format!("an object of `{}`: {reason}", self.collection.name))
-        };
-        let Some(field) = self.collection.fields.by_name(name) else {
-            return Ok(Current::Borrowed(ValueRef::Null));
         };
         let found = codec::find_field(self.record, field.id).map_err(damaged)?;
 
