@@ -31,7 +31,8 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use napi::bindgen_prelude::{
-    AsyncTask, BigInt, Buffer, Either, Either4, Either5, Null, ToNapiValue, TypeName, Uint8Array,
+    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, Either5, Null, ToNapiValue, TypeName,
+    Uint8Array,
 };
 use napi::{Env, Task};
 use napi_derive::napi;
@@ -588,20 +589,25 @@ impl NativeTransaction {
         }))
     }
 
-    #[napi]
-    pub fn get_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
+    #[napi(ts_return_type = "Buffer | null")]
+    pub fn get_record<'env>(
+        &self,
+        env: &'env Env,
+        collection: String,
+        key: JsKey,
+    ) -> Result<Option<BufferSlice<'env>>> {
         let key = key_in(key)?;
 
-        Ok(self
-            .now(|txn| txn.get_record(&collection, key))?
-            .map(Buffer::from))
+        self.now(|txn| txn.get_record(&collection, key))?
+            .map(|record| js_bytes(env, record))
+            .transpose()
     }
 
     /// The records a query finds, one after another, each after its length;
     /// only the first with `first`.
-    #[napi]
-    pub fn find(&self, ir: Buffer, first: bool) -> Result<Buffer> {
-        Ok(self.now(|txn| txn.find(&ir, first))?.into())
+    #[napi(ts_return_type = "Buffer")]
+    pub fn find<'env>(&self, env: &'env Env, ir: Buffer, first: bool) -> Result<BufferSlice<'env>> {
+        js_bytes(env, self.now(|txn| txn.find(&ir, first))?)
     }
 
     #[napi]
@@ -683,13 +689,18 @@ impl NativeTransaction {
         self.now(|txn| txn.previous_keys(&collection))?.deliver()
     }
 
-    #[napi]
-    pub fn previous_record(&self, collection: String, key: JsKey) -> Result<Option<Buffer>> {
+    #[napi(ts_return_type = "Buffer | null")]
+    pub fn previous_record<'env>(
+        &self,
+        env: &'env Env,
+        collection: String,
+        key: JsKey,
+    ) -> Result<Option<BufferSlice<'env>>> {
         let key = key_in(key)?;
 
-        Ok(self
-            .now(|txn| txn.previous_record(&collection, key))?
-            .map(Buffer::from))
+        self.now(|txn| txn.previous_record(&collection, key))?
+            .map(|record| js_bytes(env, record))
+            .transpose()
     }
 
     /// Commits a migration, and returns the open database.
@@ -1064,6 +1075,22 @@ fn key_out(key: darudb::Value) -> Result<JsKeyOut> {
         darudb::Value::Bytes(bytes) => Either4::D(bytes.into()),
         other => return Err(invalid(format!("{other:?} is not a key"))),
     })
+}
+
+/// Up to this many bytes, a result is copied into a buffer JavaScript owns;
+/// beyond, the allocation is handed over. Handing it over saves the copy but
+/// costs more than copying a record or two: V8 registers the allocation, and
+/// a finalizer frees it.
+const COPY_LIMIT: usize = 1 << 20;
+
+/// `bytes` as a JavaScript `Buffer`.
+fn js_bytes(env: &Env, bytes: Vec<u8>) -> Result<BufferSlice<'_>> {
+    if bytes.len() <= COPY_LIMIT {
+        BufferSlice::copy_from(env, &bytes)
+    } else {
+        BufferSlice::from_data(env, bytes)
+    }
+    .map_err(|error| napi::Error::new("INTERNAL", error.reason.clone()))
 }
 
 fn u64_number(value: u64) -> f64 {
