@@ -40,12 +40,16 @@ fn options_for(path: &Path) -> OpenOptions {
 ///   adds up the first byte of every value.
 /// - `hold-writer` begins a write transaction and keeps it.
 /// - `release` ends what it keeps.
+/// - `fork <marker>` forks; see [`forked_child`].
 #[test]
 fn helper_running_commands() {
     let Ok(path) = env::var(HELPER_PATH) else {
         return;
     };
-    let db = options_for(path.as_ref()).open(&path).unwrap();
+    // The only handle, so that a forked child that drops it drops the
+    // instance.
+    #[cfg_attr(not(unix), expect(unused_mut, reason = "only a forked child drops it"))]
+    let mut handle = Some(options_for(path.as_ref()).open(&path).unwrap());
     let mut snapshot = None;
     let mut writer = None;
 
@@ -53,6 +57,7 @@ fn helper_running_commands() {
 
     for line in io::stdin().lines() {
         let line = line.unwrap();
+        let db = handle.as_ref().unwrap();
         let words: Vec<&str> = line.split_whitespace().collect();
         let outcome = match words.as_slice() {
             ["put", key, value] => db.begin_write().and_then(|mut txn| {
@@ -105,6 +110,11 @@ fn helper_running_commands() {
 
                 Ok("done".to_owned())
             }
+            #[cfg(unix)]
+            ["fork", marker] => match super::sys::fork().unwrap() {
+                None => forked_child(path.as_ref(), &mut handle, Path::new(marker)),
+                Some(child) => Ok(format!("child {}", super::sys::wait_for(child).unwrap())),
+            },
             _ => panic!("an unknown command: {line}"),
         };
 
@@ -113,6 +123,51 @@ fn helper_running_commands() {
             Err(error) => println!("answer error {}", error.code()),
         }
     }
+}
+
+/// A child forked from the helper, which holds the file open, no read or
+/// write transaction on it. Every handle the child inherited has to behave as
+/// closed; the child opens the file itself, reads through its own handle,
+/// and drops the inherited ones, which must not release its own locks. It
+/// says which snapshot it reads, waits for the test to create `marker`, and
+/// ends. Its exit code says which check failed.
+#[cfg(unix)]
+fn forked_child(path: &Path, inherited: &mut Option<Database>, marker: &Path) -> ! {
+    let exit = super::sys::exit_now;
+    let Some(db) = inherited.as_ref() else {
+        exit(10);
+    };
+
+    if db.begin_read().err().map(|error| error.code()) != Some("CLOSED") {
+        exit(11);
+    }
+
+    if db.begin_write().err().map(|error| error.code()) != Some("CLOSED") {
+        exit(12);
+    }
+
+    let Ok(own) = options_for(path).open(path) else {
+        exit(13);
+    };
+    let Ok(read) = own.begin_read() else {
+        exit(14);
+    };
+
+    // Closing an inherited descriptor would release every lock the child
+    // holds on the file, its own snapshot's included.
+    *inherited = None;
+
+    println!("answer child-reading {}", read.commit_id());
+
+    for _ in 0..3000 {
+        if marker.exists() {
+            exit(0);
+        }
+
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    exit(15)
 }
 
 fn helper(path: &Path) -> Helper {
@@ -426,4 +481,33 @@ fn network_file_systems_are_told_apart_from_local_ones() {
         &path,
         Some(&DbFile::open(&path).unwrap())
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_forked_child_uses_its_own_handle_and_keeps_its_own_locks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let marker = dir.path().join("marker");
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("put k 1"), "done");
+
+    let answer = other.ask(&format!("fork {}", marker.display()));
+    let snapshot: u64 = answer
+        .strip_prefix("child-reading ")
+        .unwrap_or_else(|| panic!("the child answered `{answer}`"))
+        .parse()
+        .unwrap();
+
+    // Nobody but the child reads, so the lock on its snapshot is its own.
+    let locks = locks_on(&path);
+
+    assert!(locks.snapshot_below(snapshot + 1).unwrap());
+
+    std::fs::write(&marker, b"").unwrap();
+
+    assert_eq!(other.answer(), "child 0");
+    assert!(!locks.snapshot_below(snapshot + 1).unwrap());
+    assert_eq!(other.ask("get k"), "1", "the parent's handle still works");
 }

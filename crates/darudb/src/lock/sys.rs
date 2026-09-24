@@ -74,6 +74,53 @@ pub(super) fn is_remote(file: Option<&File>, path: &Path) -> bool {
     platform::is_remote(file, path).unwrap_or(false)
 }
 
+/// Forks this process, for the tests of what a forked child inherits. Returns
+/// the child's process id in the parent, and `None` in the child.
+#[cfg(all(test, unix))]
+pub(super) fn fork() -> io::Result<Option<libc::pid_t>> {
+    // SAFETY: only a helper process of the tests calls it, while its other
+    // threads are idle, and the child only uses the database and then ends
+    // with `exit_now`, without running the parent's destructors.
+    match unsafe { libc::fork() } {
+        -1 => Err(io::Error::last_os_error()),
+        0 => Ok(None),
+        child => Ok(Some(child)),
+    }
+}
+
+/// Waits for the forked process `child` and returns its exit code.
+#[cfg(all(test, unix))]
+pub(super) fn wait_for(child: libc::pid_t) -> io::Result<i32> {
+    let mut status = 0;
+
+    loop {
+        // SAFETY: `status` is a valid, exclusively borrowed `int` for the call.
+        if unsafe { libc::waitpid(child, &raw mut status, 0) } != -1 {
+            break;
+        }
+
+        let error = io::Error::last_os_error();
+
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+
+    if libc::WIFEXITED(status) {
+        Ok(libc::WEXITSTATUS(status))
+    } else {
+        Err(io::Error::other("the forked process did not exit normally"))
+    }
+}
+
+/// Ends a forked child at once, with `code`, running none of the destructors
+/// it inherited from its parent.
+#[cfg(all(test, unix))]
+pub(super) fn exit_now(code: i32) -> ! {
+    // SAFETY: `_exit` takes any exit code and never returns.
+    unsafe { libc::_exit(code) }
+}
+
 /// The error for a file system whose locks do not work.
 fn unsupported(source: io::Error) -> io::Error {
     io::Error::new(io::ErrorKind::Unsupported, source)
