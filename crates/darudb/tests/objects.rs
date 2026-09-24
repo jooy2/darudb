@@ -746,7 +746,25 @@ fn a_migration_can_stop_for_its_caller_between_its_steps() {
     };
 
     assert_eq!((pending.previous_version(), pending.version()), (1, 3));
+    assert_eq!(
+        Schema::decode(&pending.previous_schema_record()).unwrap(),
+        v1()
+    );
     assert_eq!(pending.next_step().unwrap(), Some(2));
+    assert!(
+        pending
+            .migrating()
+            .previous_record("users", 1)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        pending
+            .migrating()
+            .previous_record("users", 9)
+            .unwrap()
+            .is_none()
+    );
     drop(pending);
     assert_eq!(objects(&open(&dir, v1(), &[]).unwrap(), "users").len(), 2);
 

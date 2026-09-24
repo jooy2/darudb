@@ -180,6 +180,10 @@ impl Pending {
         self.previous.version
     }
 
+    pub(crate) fn previous_record(&self) -> Vec<u8> {
+        self.previous.encode()
+    }
+
     pub(crate) fn version(&self) -> u64 {
         self.schema.schema.version
     }
@@ -410,5 +414,24 @@ impl Migrating<'_> {
         let definition = &self.previous.collections[objects::position(self.previous, collection)?];
 
         objects::get(&*self.txn, definition, &key.into())
+    }
+
+    /// The record of the object [`previous`](Self::previous) reads, as the
+    /// file holds it, for a language binding that decodes records itself
+    /// with [`PendingMigration::previous_schema_record`]. A field the record
+    /// lacks reads as its default or null, required or not.
+    ///
+    /// [`PendingMigration::previous_schema_record`]: crate::PendingMigration::previous_schema_record
+    pub fn previous_record(
+        &self,
+        collection: &str,
+        key: impl Into<Value>,
+    ) -> Result<Option<Vec<u8>>> {
+        let definition = &self.previous.collections[objects::position(self.previous, collection)?];
+
+        self.txn.get_in(
+            &records(definition.id),
+            &objects::key_bytes(definition, &key.into())?,
+        )
     }
 }

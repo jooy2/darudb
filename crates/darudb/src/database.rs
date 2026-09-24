@@ -300,6 +300,13 @@ impl PendingMigration {
         self.pending.version()
     }
 
+    /// The schema the file held before the migration, as its record, for a
+    /// language binding that decodes [`Migrating::previous_record`]'s
+    /// records itself.
+    pub fn previous_schema_record(&self) -> Vec<u8> {
+        self.pending.previous_record()
+    }
+
     /// Runs the function of the next version step, if its migration
     /// registered one, and returns the step's version; `None` once every step
     /// has run. An error ends the migration: drop it, and the file keeps its
