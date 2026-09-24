@@ -179,18 +179,29 @@ impl Locks {
     /// record lock in place, and on Windows the shared lock is taken while the
     /// exclusive one is still held, after which one unlock releases the
     /// exclusive one.
-    pub(crate) fn share(&self) -> Result<(), LockError> {
-        if !self
+    ///
+    /// Should Windows refuse the shared lock alongside the exclusive one, the
+    /// exclusive lock is released first and the shared one waited for, up to
+    /// `timeout`. The gap that leaves is harmless here, because this process
+    /// has finished recovery and begun nothing yet: another process that
+    /// recovers the file meanwhile finds nothing to change.
+    pub(crate) fn share(&self, timeout: Duration) -> Result<(), LockError> {
+        let shared = self
             .try_lock(OPEN_BYTE, 1, Mode::Shared)
-            .map_err(LockError::Io)?
-        {
-            return Err(LockError::Io(io::Error::other(
-                "the open lock held exclusively could not be shared",
-            )));
+            .map_err(LockError::Io)?;
+
+        if cfg!(windows) || !shared {
+            self.unlock(OPEN_BYTE, 1).map_err(LockError::Io)?;
         }
 
-        #[cfg(windows)]
-        self.unlock(OPEN_BYTE, 1).map_err(LockError::Io)?;
+        if !shared {
+            let deadline = Instant::now().checked_add(timeout);
+
+            poll(deadline, || {
+                self.try_lock(OPEN_BYTE, 1, Mode::Shared)
+                    .map_err(LockError::Io)
+            })?;
+        }
 
         Ok(())
     }
