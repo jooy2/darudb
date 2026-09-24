@@ -73,12 +73,18 @@ impl Helper {
     /// Starts the test `test`, by its full path, in a new process, with
     /// [`HELPER_PATH`] set to `path`.
     pub(crate) fn spawn(test: &str, path: &std::path::Path) -> Self {
+        Self::spawn_with(test, &[(HELPER_PATH, path.as_os_str())])
+    }
+
+    /// Starts the test `test`, by its full path, in a new process, with the
+    /// environment variables `variables` set.
+    pub(crate) fn spawn_with(test: &str, variables: &[(&str, &std::ffi::OsStr)]) -> Self {
         use std::io::BufRead;
         use std::process::{Command, Stdio};
 
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture", "--test-threads", "1"])
-            .env(HELPER_PATH, path)
+            .envs(variables.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -155,6 +161,36 @@ impl Helper {
         stdin.flush().unwrap();
     }
 
+    /// The lines the helper has printed since the last call, without waiting.
+    pub(crate) fn printed(&self) -> Vec<String> {
+        self.lines.try_iter().collect()
+    }
+
+    /// Kills the helper, waits until it is gone with every lock it held, and
+    /// returns what it printed that was not read yet.
+    pub(crate) fn kill_and_read(mut self) -> Vec<String> {
+        self.stop();
+
+        // Its output ends once it is gone.
+        self.lines.iter().collect()
+    }
+
+    /// Closes the helper's input, which tells a helper that reads it to stop.
+    pub(crate) fn close_input(&mut self) {
+        drop(self.child.stdin.take());
+    }
+
+    /// Closes the helper's input if it is still open, and waits for the
+    /// helper. Returns whether it exited normally, and what it printed that
+    /// was not read yet.
+    pub(crate) fn finish(mut self) -> (bool, Vec<String>) {
+        self.close_input();
+
+        let exited = self.child.wait().is_ok_and(|status| status.success());
+
+        (exited, self.lines.iter().collect())
+    }
+
     /// Kills the helper and waits until it is gone, with every lock it held.
     pub(crate) fn kill(mut self) {
         self.stop();
@@ -169,5 +205,30 @@ impl Helper {
 impl Drop for Helper {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Whether [`widen_race`] pauses. A process sets it once, before it opens a
+/// database.
+pub(crate) static WIDEN_RACES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Pauses where the engine's own tests want a race to be likely rather than
+/// rare, if [`WIDEN_RACES`] is set: one call in four, for up to 20
+/// milliseconds, long enough for other processes to publish, sync and reclaim
+/// meanwhile. Only test builds call it: between a reader's first read of the
+/// header and the registration of its snapshot, which is the window the
+/// second read exists for.
+pub(crate) fn widen_race() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+
+    if WIDEN_RACES.load(Ordering::Relaxed) {
+        let mut rng = Rng::new(CALLS.fetch_add(1, Ordering::Relaxed));
+
+        if rng.below(4) == 0 {
+            std::thread::sleep(std::time::Duration::from_micros(rng.below(20_000)));
+        }
     }
 }

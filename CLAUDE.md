@@ -64,10 +64,12 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
 
-Tests sit beside what they test, plus three places that test the whole engine:
+Tests sit beside what they test, plus four places that test the whole engine:
 
 - `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. Half the runs use an encrypted file. `DARUDB_CRASH_SEEDS` makes it longer.
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
+- `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
+- The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
 - `tests/transactions.rs` and `tests/open.rs`: the public API on real files.
 
 `examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
@@ -217,7 +219,8 @@ Each of these was tried elsewhere and caused the problems this project exists to
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
 - **The header in memory is not the file's.** Another process may commit at any moment, so a reader reads the header from the file and locks its snapshot's byte, and a writer reads it again under the writer lock (`Shared::refresh_header`). The instance's copy is what this process's writer last knew, and a difference from the file is how it learns that another process committed.
 - **`lock/sys.rs` is the only module with `unsafe` code.** The crate denies `unsafe_code`, and that module allows it for the operating system's byte-range lock calls, which the standard library does not offer. Clippy requires a `SAFETY` comment on every `unsafe` block, and one unsafe operation per block.
-- **Nothing in a process may open a database file that the process has open**, tests included. On Unix-like systems, closing any descriptor of a file releases every lock the process holds on it. `tests/transactions.rs` reads the selector byte from another process for that reason, and the lock tests run a second process of the test binary through `testing::Helper`.
+- **Nothing in a process may open a database file that the process has open**, tests included. On Unix-like systems, closing any descriptor of a file releases every lock the process holds on it. `tests/transactions.rs` reads the selector byte from another process for that reason.
+- **Test builds pause some readers on purpose.** `testing::widen_race` sleeps between a reader's first read of the header and the registration of its snapshot, in half the workers of the multi-process suite, so that the second read that closes that window is tested at all.
 - **An open unsynced window has a thread.** `instance.rs` starts `darudb-sync` when a deferred commit opens a window with a time limit, and the thread ends when the window does. The crash suite turns the time limit off, so its runs replay from their seed.
 - **Debug builds of the engine are optimized** (`opt-level = 2` in the root `Cargo.toml`), with debug assertions and overflow checks still on. The cipher's generic code is compiled into the engine, and unoptimized it made the crash suites forty times slower.
 - **Half the crash suite's runs, and every other process-kill round, use an encrypted file.** A test that builds a database for the engine's internals should say which kind it uses.

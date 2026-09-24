@@ -285,6 +285,11 @@ impl Shared {
         loop {
             let (bytes, slot, record) = self.read_published()?;
 
+            // The multi-process suite pauses here in some workers, to test
+            // the second read below.
+            #[cfg(test)]
+            crate::testing::widen_race();
+
             self.locks
                 .register(record.txn, deadline)
                 .map_err(|error| self.lock_error(error))?;

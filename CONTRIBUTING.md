@@ -71,6 +71,7 @@ The crash suites run a quick version by default. Before a change to the storage 
 ```bash
 DARUDB_CRASH_SEEDS=2000 cargo test -p darudb --release --lib crash
 DARUDB_KILL_ROUNDS=500 cargo test -p darudb --release --test process_kill
+DARUDB_PROCESS_KILLS=300 cargo test -p darudb --release --lib processes
 ```
 
 A change meant to make the engine faster comes with numbers from before and after it, on the same machine:

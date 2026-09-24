@@ -56,6 +56,8 @@ mod format;
 mod instance;
 mod lock;
 mod options;
+#[cfg(test)]
+mod processes;
 mod space;
 mod storage;
 #[cfg(test)]

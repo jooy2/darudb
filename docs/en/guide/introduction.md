@@ -45,12 +45,11 @@ The storage kernel works:
 - Every page is verified against the check its parent recorded before it is used, so a damaged page is reported rather than read.
 - A database created with a key or a password is encrypted and authenticated, every page of it, and changing the password re-encrypts nothing.
 - Several processes can have one file open at once. They coordinate through file locks alone: one writes at a time, readers never wait, and a process that dies leaves nothing behind.
-- The crash suites back this up, with encryption on and off: thousands of simulated power cuts, each keeping an arbitrary part of the writes in flight, and hundreds of real processes killed in the middle of a commit.
+- The crash suites back this up, with encryption on and off: thousands of simulated power cuts, each keeping an arbitrary part of the writes in flight, hundreds of real processes killed in the middle of a commit, and several processes reading and writing one file while random ones are killed.
 - The Node.js package opens and closes a database through that engine, and passes its errors on with the same codes. Transactions reach it once the engine's API has settled.
 
 The work ahead, in order:
 
-1. **Several processes**: the file lock protocol, tested by fuzzing concurrent processes that are killed at random.
 1. **Objects and queries**: schemas, indexes, queries and migrations, with benchmarks.
 1. **Bindings and release**: the Dart package and prebuilt binaries for every supported platform.
 1. **Tools**: integrity check, salvage, backup and compaction.
