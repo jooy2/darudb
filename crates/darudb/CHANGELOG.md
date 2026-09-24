@@ -19,3 +19,4 @@
 - Each commit record of an encrypted database carries a MAC under a key derived from the data key, so a record put together from the file's own pages by someone without the key is refused. The file format version is 3.
 - `Database::set_key` and `Database::set_password` change the key of an encrypted database without encrypting any page again, and `Database::is_encrypted` tells the two kinds of database apart.
 - The error codes `KEY_REQUIRED`, for an encrypted database opened without a key or password, and `WRONG_KEY`, for one that does not open it.
+- A database file is locked while it is open, with the operating system's byte-range locks. Another process that opens it waits for up to the busy timeout and fails with `BUSY`, where it could write to the file at the same time before.

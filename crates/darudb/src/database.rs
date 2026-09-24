@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
@@ -12,7 +12,8 @@ use crate::format::{
     Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
     STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
-use crate::instance::{FileKey, Shared, registry};
+use crate::instance::{FileKey, Shared, find, registry};
+use crate::lock::{LockError, Locks};
 use crate::options::OpenOptions;
 use crate::storage::{self, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
@@ -163,15 +164,16 @@ impl Database {
     }
 
     /// Opens or creates the database, once the options are known to be valid.
+    ///
+    /// The registry of open files stays locked throughout, so two threads
+    /// opening one file end up with one instance, and the process with one
+    /// handle to the file.
     pub(crate) fn open_with(path: &Path, options: &OpenOptions) -> Result<Self> {
         let mut instances = registry();
 
         instances.retain(|_, instance| instance.strong_count() > 0);
 
-        if let Some(shared) = FileKey::of(path)
-            .and_then(|key| instances.get(&key))
-            .and_then(Weak::upgrade)
-        {
+        if let Some(shared) = FileKey::of(path).and_then(|key| find(&instances, &key)) {
             shared.admit(options.secret())?;
 
             return Ok(Self { shared });
@@ -186,11 +188,28 @@ impl Database {
             Some((file, data_key)) => (file, data_key),
             None => (open_file(path)?, None),
         };
-        let shared = open_io(Arc::new(file), path, options, data_key)?;
+        let file = Arc::new(file);
+        let key = FileKey::of_file(&file, path).map_err(|source| io_error(path, source))?;
 
-        if let Some(key) = FileKey::of(path) {
-            instances.insert(key, Arc::downgrade(&shared));
+        if let Some(shared) = find(&instances, &key) {
+            // The path led to a file this process has open after all: it was
+            // moved there after the lookup above. Closing the new handle would
+            // release the instance's locks, so the instance keeps it.
+            shared.keep_handle(file);
+            shared.admit(options.secret())?;
+
+            return Ok(Self { shared });
         }
+
+        let locks = Locks::on(Arc::clone(&file));
+
+        locks
+            .open_alone(options.settings().busy_timeout)
+            .map_err(|error| lock_error(path, error))?;
+
+        let shared = open_io(file, locks, path, options, data_key)?;
+
+        instances.insert(key, Arc::downgrade(&shared));
 
         Ok(Self { shared })
     }
@@ -200,7 +219,13 @@ impl Database {
     #[cfg(test)]
     pub(crate) fn open_io(io: Arc<dyn FileIo>, options: &OpenOptions) -> Result<Self> {
         Ok(Self {
-            shared: open_io(io, Path::new("simulated.darudb"), options, None)?,
+            shared: open_io(
+                io,
+                Locks::none(),
+                Path::new("simulated.darudb"),
+                options,
+                None,
+            )?,
         })
     }
 
@@ -219,7 +244,7 @@ impl Database {
         io.sync().map_err(|source| io_error(path, source))?;
 
         Ok(Self {
-            shared: open_io(io, path, options, data_key)?,
+            shared: open_io(io, Locks::none(), path, options, data_key)?,
         })
     }
 
@@ -233,8 +258,12 @@ impl Database {
 /// Reads the static fields of the file, unlocks an encrypted one, runs
 /// recovery, and builds the shared instance. `data_key` is the key of a file
 /// this process has just created, which need not be unwrapped again.
+///
+/// `locks` hold the open lock already, exclusively: no other process has the
+/// file open, and recovery may run.
 fn open_io(
     io: Arc<dyn FileIo>,
+    locks: Locks,
     path: &Path,
     options: &OpenOptions,
     data_key: Option<DataKey>,
@@ -281,6 +310,7 @@ fn open_io(
     ));
     let shared = Shared::new(
         pager,
+        locks,
         path.to_path_buf(),
         static_header,
         options.settings(),
@@ -464,6 +494,16 @@ fn open_file(path: &Path) -> Result<DbFile> {
         },
         _ => io_error(path, error),
     })
+}
+
+/// A lock that was not taken, as the error the caller sees.
+fn lock_error(path: &Path, error: LockError) -> Error {
+    match error {
+        LockError::Busy => Error::Busy {
+            path: path.to_path_buf(),
+        },
+        LockError::Io(source) => io_error(path, source),
+    }
 }
 
 fn io_error(path: &Path, source: io::Error) -> Error {

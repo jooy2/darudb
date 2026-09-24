@@ -53,6 +53,7 @@ mod database;
 mod error;
 mod format;
 mod instance;
+mod lock;
 mod options;
 mod space;
 mod storage;

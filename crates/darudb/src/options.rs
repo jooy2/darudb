@@ -69,7 +69,8 @@ impl OpenOptions {
     }
 
     /// How long [`Database::begin_write`] waits for a write transaction that
-    /// is already running before failing with [`Error::Busy`]. Five seconds by
+    /// is already running, and opening waits for another process that has the
+    /// file open, before failing with [`Error::Busy`]. Five seconds by
     /// default.
     ///
     /// Every handle to a file in one process shares one instance, and the

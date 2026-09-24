@@ -34,14 +34,27 @@ zeroize.workspace = true
 # builds on it already. MIT OR Apache-2.0.
 blake2.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# The C library's `fcntl` record locks, which the standard library does not
+# expose: it locks whole files only. MIT OR Apache-2.0, with no dependencies,
+# and already in the build through `getrandom`.
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# `LockFileEx` and `UnlockFileEx`, the byte-range locks of Windows. MIT OR
+# Apache-2.0, published by Microsoft, and it brings only `windows-link`.
+windows-sys.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 
 [lints.rust]
-# The engine is safe Rust. A module that genuinely needs `unsafe` (a file range
-# lock through the operating system, for instance) says why in the commit that
-# relaxes this, and keeps the `unsafe` inside that one module.
-unsafe_code = "forbid"
+# The engine is safe Rust, with one exception: `lock/sys.rs` calls the
+# operating system's byte-range locks, which the standard library does not
+# offer, and allows `unsafe` for itself alone. Any other module that uses it
+# fails to build. `deny` rather than `forbid` is what lets that one module opt
+# out.
+unsafe_code = "deny"
 missing_docs = "warn"
 unreachable_pub = "warn"
 
@@ -54,3 +67,7 @@ expect_used = "warn"
 # Offsets and lengths move between `u64` (the file), `usize` (memory) and `u32`
 # (the header). A silent truncation between them is a corrupted file.
 cast_possible_truncation = "warn"
+# Every `unsafe` block says why it is sound, and does one unsafe thing, so
+# that the reason covers all of it.
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"

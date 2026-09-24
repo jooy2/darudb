@@ -1,11 +1,11 @@
 //! The one instance of each open database file in this process.
 //!
 //! Every [`Database`](crate::Database) handle for a file in the process shares
-//! it: the file handle, the page cache, the published commit, the registry of
-//! snapshots in use, and the writer gate. A second handle to the same file is
-//! a second reference to this instance, never a second open file, which is
-//! what `design/locking.md` requires for the file locks of phase 3 and what
-//! keeps two handles in one process from writing at once today.
+//! it: the file handle and the locks on it, the page cache, the published
+//! commit, the registry of snapshots in use, and the writer gate. A second
+//! handle to the same file is a second reference to this instance, never a
+//! second open file: closing a second descriptor of the file would release
+//! every lock the process holds on it (`design/locking.md`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -19,7 +19,8 @@ use crate::btree::{LoadedNode, Loader};
 use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{CommitRecord, KeyBlock, SLOT_COUNT, Selector, StaticHeader};
-use crate::storage::{Cache, Pager};
+use crate::lock::Locks;
+use crate::storage::{Cache, DbFile, Pager};
 
 /// How many decoded pages each open file keeps in memory.
 const CACHE_PAGES: usize = 4096;
@@ -74,6 +75,8 @@ pub(crate) struct Shared {
     pub(crate) path: PathBuf,
     pub(crate) static_header: StaticHeader,
     pub(crate) pager: Arc<Pager>,
+    /// This process's handles to the file and its locks on it.
+    locks: Locks,
     pub(crate) loader: Loader,
     pub(crate) cache: Arc<Cache<LoadedNode>>,
     pub(crate) settings: Settings,
@@ -102,6 +105,7 @@ impl Shared {
     /// [`set_header`](Self::set_header) stores it.
     pub(crate) fn new(
         pager: Arc<Pager>,
+        locks: Locks,
         path: PathBuf,
         static_header: StaticHeader,
         settings: Settings,
@@ -121,6 +125,7 @@ impl Shared {
             path,
             static_header,
             pager,
+            locks,
             loader,
             cache,
             settings,
@@ -171,6 +176,19 @@ impl Shared {
         }
     }
 
+    /// Keeps `file`, a second handle to this file, open until the instance
+    /// closes; see [`Locks::keep`].
+    pub(crate) fn keep_handle(&self, file: Arc<DbFile>) {
+        self.locks.keep(file);
+    }
+
+    /// Whether this is a process forked from the one that opened the file. It
+    /// holds none of the file's locks, so its inherited handles behave as
+    /// closed, and it opens the file again to use it.
+    pub(crate) fn inherited(&self) -> bool {
+        self.locks.inherited()
+    }
+
     /// Sets the record MAC of `record` for slot `slot`, in an encrypted file.
     pub(crate) fn sign_record(&self, slot: usize, record: &mut CommitRecord) {
         if let Some(auth) = &self.record_auth {
@@ -190,6 +208,7 @@ impl Shared {
     /// Takes a snapshot of the published commit and registers it, so that no
     /// writer reuses a page it can reach until it is released.
     pub(crate) fn begin_snapshot(&self) -> Result<CommitRecord> {
+        self.check_owner()?;
         self.check_usable()?;
 
         // The header lock is held while registering, so a writer cannot
@@ -268,6 +287,7 @@ impl Shared {
 
     /// Waits for this process's writer gate, up to `timeout`.
     fn acquire_writer_within(self: &Arc<Self>, timeout: Duration) -> Result<WriterGuard> {
+        self.check_owner()?;
         self.check_usable()?;
 
         // A timeout too long to add up is as good as waiting for ever.
@@ -402,6 +422,17 @@ impl Shared {
         self.sync_failed.store(true, Ordering::SeqCst);
     }
 
+    /// Refuses a handle inherited by a forked process, which holds none of the
+    /// file's locks. Checked where a transaction begins or commits, which is
+    /// where the locks would be needed.
+    pub(crate) fn check_owner(&self) -> Result<()> {
+        if self.inherited() {
+            return Err(Error::Closed);
+        }
+
+        Ok(())
+    }
+
     /// Refuses every use of a file whose barrier failed.
     pub(crate) fn check_usable(&self) -> Result<()> {
         if self.sync_failed.load(Ordering::SeqCst) {
@@ -420,6 +451,11 @@ impl Drop for Shared {
     /// for a barrier get one, on a best-effort basis: nothing is left to report
     /// a failure to, and a failure costs nothing but what a power cut would.
     fn drop(&mut self) {
+        // A forked process leaves the file to the process that opened it.
+        if self.inherited() {
+            return;
+        }
+
         let _ = self.sync_published();
 
         if let Some(flusher) = lock(&self.unsynced).flusher.take() {
@@ -506,7 +542,8 @@ type Identity = (u64, u64);
 type Identity = PathBuf;
 
 impl FileKey {
-    /// The key of the file at `path`, if something is there.
+    /// The key of the file at `path`, if something is there. Nothing is
+    /// opened to find it.
     pub(crate) fn of(path: &Path) -> Option<Self> {
         #[cfg(unix)]
         {
@@ -520,10 +557,32 @@ impl FileKey {
         // The volume serial number and file index that would identify a file
         // on Windows are not available from the standard library yet, so the
         // canonical path stands in for them. Two hard links to one database
-        // are therefore two instances on Windows.
+        // are therefore two instances on Windows, which is safe there: a lock
+        // belongs to a handle, so the two instances take turns through their
+        // locks as two processes would.
         #[cfg(windows)]
         {
             fs::canonicalize(path).ok().map(Self)
+        }
+    }
+
+    /// The key of the open file `file`, which `path` led to.
+    pub(crate) fn of_file(file: &DbFile, path: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let _ = path;
+            let metadata = file.as_file().metadata()?;
+
+            Ok(Self((metadata.dev(), metadata.ino())))
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = file;
+
+            fs::canonicalize(path).map(Self)
         }
     }
 }
@@ -536,4 +595,16 @@ pub(crate) static REGISTRY: LazyLock<Mutex<HashMap<FileKey, Weak<Shared>>>> =
 /// two threads opening one file end up with one instance.
 pub(crate) fn registry() -> MutexGuard<'static, HashMap<FileKey, Weak<Shared>>> {
     lock(&REGISTRY)
+}
+
+/// The instance of the file `key` names, if this process has it open. One a
+/// forked process inherited does not count: it holds none of the locks.
+pub(crate) fn find(
+    instances: &HashMap<FileKey, Weak<Shared>>,
+    key: &FileKey,
+) -> Option<Arc<Shared>> {
+    instances
+        .get(key)
+        .and_then(Weak::upgrade)
+        .filter(|shared| !shared.inherited())
 }

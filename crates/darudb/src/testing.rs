@@ -45,3 +45,84 @@ impl Rng {
         }
     }
 }
+
+/// Another process running one test of this test binary, killed when dropped.
+///
+/// Byte-range locks are only ever in conflict between processes on Unix-like
+/// systems, so a test of the locks needs a second process. The test it runs
+/// does its work only when it finds [`HELPER_PATH`] set, and returns at once
+/// when the suite runs it as an ordinary test.
+#[derive(Debug)]
+pub(crate) struct Helper {
+    child: std::process::Child,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+/// The variable that hands a helper its database's path.
+pub(crate) const HELPER_PATH: &str = "DARUDB_HELPER_PATH";
+
+impl Helper {
+    /// Starts the test `test`, by its full path, in a new process, with
+    /// [`HELPER_PATH`] set to `path`.
+    pub(crate) fn spawn(test: &str, path: &std::path::Path) -> Self {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads", "1"])
+            .env(HELPER_PATH, path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, lines) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+
+        Self { child, lines }
+    }
+
+    /// Waits for the helper to print a line ending in `word`, and fails the
+    /// test if it does not within a generous time. The test harness prints the
+    /// test's name at the start of the first line of its output.
+    pub(crate) fn wait_for(&self, word: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match self.lines.recv_timeout(left) {
+                Ok(printed) if printed.split_whitespace().last() == Some(word) => return,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+
+        panic!("the helper never printed `{word}`");
+    }
+
+    /// Kills the helper and waits until it is gone, with every lock it held.
+    pub(crate) fn kill(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}

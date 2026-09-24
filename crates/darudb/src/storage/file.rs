@@ -37,6 +37,11 @@ impl DbFile {
         Ok(Self { file })
     }
 
+    /// The file itself, for the locks taken on it and for what identifies it.
+    pub(crate) fn as_file(&self) -> &File {
+        &self.file
+    }
+
     /// The length of the file, in bytes.
     pub(crate) fn len(&self) -> io::Result<u64> {
         Ok(self.file.metadata()?.len())

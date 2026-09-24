@@ -33,6 +33,7 @@ pub(super) enum Durability {
 }
 
 pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Result<()> {
+    txn.shared.check_owner()?;
     txn.shared.check_usable()?;
 
     let loader = txn.shared.loader.clone();

@@ -6,6 +6,9 @@
 
 mod common;
 
+use std::env;
+use std::path::Path;
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -288,10 +291,47 @@ fn many_commits_leave_a_file_that_opens_with_all_of_them() {
     assert_eq!(read.len("log").unwrap(), 50 - 8);
 }
 
-/// The selector byte of the file at `path`: bit 2 is set while deferred
-/// commits wait for a barrier (`design/file-format.md`).
-fn unsynced(path: &std::path::Path) -> bool {
-    common::read(path)[64] & 0b100 != 0
+const PROBE_PATH: &str = "DARUDB_PROBE_PATH";
+
+/// Run by [`unsynced`] in a process of its own: prints the selector byte of
+/// the file named by `DARUDB_PROBE_PATH`. Run as an ordinary test, it has
+/// nothing to do.
+#[test]
+fn selector_probe() {
+    let Ok(path) = env::var(PROBE_PATH) else {
+        return;
+    };
+
+    println!("\nselector {}", common::read(Path::new(&path))[64]);
+}
+
+/// Whether the selector byte of the file at `path` has bit 2 set, as it does
+/// while deferred commits wait for a barrier (`design/file-format.md`).
+///
+/// Another process reads the file. This one has it open, and opening and
+/// closing a second descriptor of it here would release the locks the
+/// database holds on it.
+fn unsynced(path: &Path) -> bool {
+    let output = Command::new(env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "selector_probe",
+            "--nocapture",
+            "--test-threads",
+            "1",
+        ])
+        .env(PROBE_PATH, path)
+        .output()
+        .unwrap();
+    let selector: u8 = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("selector "))
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    selector & 0b100 != 0
 }
 
 #[test]

@@ -25,6 +25,8 @@ xaes-256-gcm = { version = "0.1.0", default-features = false, features = ["zeroi
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = "1.9.0"
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+libc = { version = "0.2.189", default-features = false }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 # Applies to what this workspace builds, which in practice means the Node.js
 # addon: a consumer of the `darudb` crate builds with its own profile.

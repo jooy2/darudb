@@ -56,7 +56,7 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1          |
 | `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1          |
 | `format/`     | What bytes on disk mean: every layout of `design/file-format.md`. No I/O at all          | Phase 2          |
-| `lock/`       | Cross-process coordination through file range locks                                      | Planned, phase 3 |
+| `lock/`       | Cross-process coordination through file range locks                                      | Phase 3          |
 | `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
 | `schema/`     | Collections, fields, indexes, schema migrations                                          | Planned, phase 4 |
 | `query/`      | The query IR and its execution                                                           | Planned, phase 4 |
@@ -215,7 +215,9 @@ Each of these was tried elsewhere and caused the problems this project exists to
 
 - **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
-- **Only one process may have a file open until phase 3.** Handles within one process share one instance and are safe together; two processes are not coordinated yet, because the lock protocol of `design/locking.md` is not implemented.
+- **Only one process may have a file open until phase 3 is done.** The open lock of `design/locking.md` is held exclusively for as long as a file is open, so a second process waits for the busy timeout and fails with `BUSY`. Handles within one process share one instance and are safe together.
+- **`lock/sys.rs` is the only module with `unsafe` code.** The crate denies `unsafe_code`, and that module allows it for the operating system's byte-range lock calls, which the standard library does not offer. Clippy requires a `SAFETY` comment on every `unsafe` block, and one unsafe operation per block.
+- **Nothing in a process may open a database file that the process has open**, tests included. On Unix-like systems, closing any descriptor of a file releases every lock the process holds on it. `tests/transactions.rs` reads the selector byte from another process for that reason, and the lock tests run a second process of the test binary through `testing::Helper`.
 - **An open unsynced window has a thread.** `instance.rs` starts `darudb-sync` when a deferred commit opens a window with a time limit, and the thread ends when the window does. The crash suite turns the time limit off, so its runs replay from their seed.
 - **Debug builds of the engine are optimized** (`opt-level = 2` in the root `Cargo.toml`), with debug assertions and overflow checks still on. The cipher's generic code is compiled into the engine, and unoptimized it made the crash suites forty times slower.
 - **Half the crash suite's runs, and every other process-kill round, use an encrypted file.** A test that builds a database for the engine's internals should say which kind it uses.
