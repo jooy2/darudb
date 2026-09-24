@@ -9,9 +9,10 @@
 //! every object read is still tested against the whole filter unless the
 //! access answers the filter exactly.
 
-use std::ops::Bound;
+use std::borrow::Cow;
+use std::ops::{Bound, Deref};
 
-use super::ir::{Expr, Ir, MAX_DEPTH, Op};
+use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::key;
@@ -29,7 +30,7 @@ fn invalid(message: impl Into<String>) -> Error {
 }
 
 /// One step of reading a path from an object.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum Step<'s> {
     /// The field of this name of an object, null if the object is null.
     Field(&'s str),
@@ -39,10 +40,56 @@ pub(crate) enum Step<'s> {
     Follow(&'s CollectionDef),
 }
 
+/// How many steps a path keeps without a vector of its own: a field, a
+/// field of a list, or a field through a link.
+const INLINE_STEPS: usize = 3;
+
+/// The steps of a path. Nearly every path is short, and a query plans one
+/// for each test and each sort key, so a short one is kept inline rather
+/// than in a vector of its own.
+#[derive(Debug)]
+pub(crate) enum Steps<'s> {
+    Inline(usize, [Step<'s>; INLINE_STEPS]),
+    Heap(Vec<Step<'s>>),
+}
+
+impl<'s> Steps<'s> {
+    fn new() -> Self {
+        Steps::Inline(0, [Step::Expand; INLINE_STEPS])
+    }
+
+    fn push(&mut self, step: Step<'s>) {
+        match self {
+            Steps::Inline(len, steps) if *len < INLINE_STEPS => {
+                steps[*len] = step;
+                *len += 1;
+            }
+            Steps::Inline(_, steps) => {
+                let mut heap = steps.to_vec();
+
+                heap.push(step);
+                *self = Steps::Heap(heap);
+            }
+            Steps::Heap(steps) => steps.push(step),
+        }
+    }
+}
+
+impl<'s> Deref for Steps<'s> {
+    type Target = [Step<'s>];
+
+    fn deref(&self) -> &[Step<'s>] {
+        match self {
+            Steps::Inline(len, steps) => &steps[..*len],
+            Steps::Heap(steps) => steps,
+        }
+    }
+}
+
 /// A path, resolved against the schema.
 #[derive(Debug)]
 pub(crate) struct Resolved<'s> {
-    pub(crate) steps: Vec<Step<'s>>,
+    pub(crate) steps: Steps<'s>,
     /// The type of the values at the end: a scalar, a link's being its
     /// target's key type.
     pub(crate) leaf: Kind,
@@ -54,20 +101,21 @@ pub(crate) struct Resolved<'s> {
     pub(crate) direct: Option<&'s FieldDef>,
 }
 
-/// A test of the values at a path.
+/// A test of the values at a path. Its values are borrowed from the query
+/// or its parameters, except a number made the float it equals.
 #[derive(Debug)]
-pub(crate) enum Test {
+pub(crate) enum Test<'s> {
     /// `==`, `!=`, `<`, `<=`, `>` or `>=` with a value.
-    Compare(Op, Value),
-    Between(Value, Value),
+    Compare(Op, Cow<'s, Value>),
+    Between(Cow<'s, Value>, Cow<'s, Value>),
     /// Equal to one of the values, which are sorted and without repeats.
-    In(Vec<Value>),
+    In(Vec<Cow<'s, Value>>),
     /// `CONTAINS` on a list: equal to the value.
-    Element(Value),
+    Element(Cow<'s, Value>),
     /// `CONTAINS` on a string.
-    Substring(String),
-    StartsWith(String),
-    EndsWith(String),
+    Substring(&'s str),
+    StartsWith(&'s str),
+    EndsWith(&'s str),
     IsNull,
 }
 
@@ -77,7 +125,7 @@ pub(crate) enum Cond<'s> {
     And(Vec<Cond<'s>>),
     Or(Vec<Cond<'s>>),
     Not(Box<Cond<'s>>),
-    Test { path: Resolved<'s>, test: Test },
+    Test { path: Resolved<'s>, test: Test<'s> },
 }
 
 /// A range of keys.
@@ -123,13 +171,15 @@ pub(crate) struct Plan<'s> {
     pub(crate) exact: bool,
 }
 
-/// Checks `ir` against `collection` of `schema`, and plans it.
+/// Checks `ir` against `collection` of `schema`, with `parameters` for its
+/// parameters, and plans it.
 pub(crate) fn plan<'s>(
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
-    ir: &Ir,
+    ir: &'s Ir,
+    parameters: &'s [Value],
 ) -> Result<Plan<'s>> {
-    let (filter, sort) = resolve(schema, collection, ir)?;
+    let (filter, sort) = resolve(schema, collection, ir, parameters)?;
     let (access, consumed, ordered) = choose(collection, filter.as_ref(), &sort);
     let (filter, exact) = match filter {
         Some(Cond::And(terms)) if !consumed.is_empty() => {
@@ -169,9 +219,10 @@ pub(crate) fn plan<'s>(
 pub(crate) fn scan<'s>(
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
-    ir: &Ir,
+    ir: &'s Ir,
+    parameters: &'s [Value],
 ) -> Result<Plan<'s>> {
-    let (filter, sort) = resolve(schema, collection, ir)?;
+    let (filter, sort) = resolve(schema, collection, ir, parameters)?;
 
     Ok(Plan {
         collection,
@@ -193,9 +244,14 @@ pub(crate) fn scan<'s>(
 fn resolve<'s>(
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
-    ir: &Ir,
+    ir: &'s Ir,
+    parameters: &'s [Value],
 ) -> Result<(Option<Cond<'s>>, Vec<(Resolved<'s>, bool)>)> {
-    let resolver = Resolver { schema, collection };
+    let resolver = Resolver {
+        schema,
+        collection,
+        parameters,
+    };
     let filter = ir
         .filter
         .as_ref()
@@ -224,10 +280,12 @@ fn resolve<'s>(
 struct Resolver<'s> {
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
+    /// The values of a bound prepared query's parameters.
+    parameters: &'s [Value],
 }
 
 impl<'s> Resolver<'s> {
-    fn cond(&self, expr: &Expr, depth: usize) -> Result<Cond<'s>> {
+    fn cond(&self, expr: &'s Expr, depth: usize) -> Result<Cond<'s>> {
         if depth > MAX_DEPTH {
             return Err(invalid(format!(
                 "the filter nests more than {MAX_DEPTH} levels deep"
@@ -248,21 +306,36 @@ impl<'s> Resolver<'s> {
                     .collect::<Result<_>>()?,
             ),
             Expr::Not(term) => Cond::Not(Box::new(self.cond(term, depth + 1)?)),
-            Expr::Prepared { .. } => {
+            Expr::Prepared { .. } if self.parameters.is_empty() => {
                 return Err(invalid(format!(
                     "`${}` has no value: a prepared query runs with its parameters",
                     expr.first_param().unwrap_or_default()
                 )));
             }
-            Expr::Test { op, path, values } => {
-                let resolved = self.path(path)?;
-                let test = test(*op, &resolved, values, path)?;
+            Expr::Prepared { op, path, values } => {
+                let operands = Operands::Prepared(values, self.parameters);
 
-                Cond::Test {
-                    path: resolved,
-                    test,
+                // What `Expr::test` makes of a test with null, when a
+                // parameter's value is the null.
+                match (op, operands.single()?) {
+                    (Op::Eq, Some(Value::Null)) => self.test(Op::IsNull, path, Operands::None)?,
+                    (Op::Ne, Some(Value::Null)) => {
+                        Cond::Not(Box::new(self.test(Op::IsNull, path, Operands::None)?))
+                    }
+                    _ => self.test(*op, path, operands)?,
                 }
             }
+            Expr::Test { op, path, values } => self.test(*op, path, Operands::Values(values))?,
+        })
+    }
+
+    fn test(&self, op: Op, path: &'s [String], operands: Operands<'s>) -> Result<Cond<'s>> {
+        let resolved = self.path(path)?;
+        let test = test(op, &resolved, operands, path)?;
+
+        Ok(Cond::Test {
+            path: resolved,
+            test,
         })
     }
 
@@ -277,7 +350,7 @@ impl<'s> Resolver<'s> {
         // Joined only for an error.
         let text = || path.join(".");
         let mut fields = &self.collection.fields;
-        let mut steps = Vec::new();
+        let mut steps = Steps::new();
         let mut many = false;
         let mut direct = None;
 
@@ -397,15 +470,60 @@ fn fits(value: &Value, kind: &Kind) -> bool {
     )
 }
 
-/// The test of `values` with `op` at `path`, whose names are `names`: those
-/// are joined only for an error, since a query that plans joins none.
-fn test(op: Op, path: &Resolved<'_>, values: &[Value], names: &[String]) -> Result<Test> {
+/// The values of a test: its own, those of a prepared test with its
+/// parameters' values, or none.
+#[derive(Clone, Copy)]
+enum Operands<'s> {
+    Values(&'s [Value]),
+    Prepared(&'s [Operand], &'s [Value]),
+    None,
+}
+
+impl<'s> Operands<'s> {
+    fn len(self) -> usize {
+        match self {
+            Operands::Values(values) => values.len(),
+            Operands::Prepared(operands, _) => operands.len(),
+            Operands::None => 0,
+        }
+    }
+
+    fn get(self, at: usize) -> Result<&'s Value> {
+        match self {
+            Operands::Values(values) => Ok(&values[at]),
+            Operands::Prepared(operands, parameters) => match &operands[at] {
+                Operand::Value(value) => Ok(value),
+                Operand::Param(index) => parameters
+                    .get(*index)
+                    .ok_or_else(|| super::ir::missing(*index, parameters.len())),
+            },
+            Operands::None => Err(invalid("a test has no value")),
+        }
+    }
+
+    /// The one value, if there is exactly one.
+    fn single(self) -> Result<Option<&'s Value>> {
+        match self.len() {
+            1 => self.get(0).map(Some),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// The test of `operands` with `op` at `path`, whose names are `names`:
+/// those are joined only for an error, since a query that plans joins none.
+fn test<'s>(
+    op: Op,
+    path: &Resolved<'_>,
+    operands: Operands<'s>,
+    names: &[String],
+) -> Result<Test<'s>> {
     let text = || names.join(".");
-    let check = |value: &Value| {
+    let check = |value: &'s Value| {
         if fits(value, &path.leaf) {
-            Ok(value.clone())
+            Ok(Cow::Borrowed(value))
         } else if let Some(float) = exact_float(value, &path.leaf) {
-            Ok(float)
+            Ok(Cow::Owned(float))
         } else if value.is_null() {
             Err(invalid(format!(
                 "`{}` is tested with `{}` against null, which only `==` and `!=` do",
@@ -421,8 +539,8 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], names: &[String]) -> Resu
             )))
         }
     };
-    let string = |value: &Value| match (&path.leaf, value) {
-        (Kind::String, Value::String(text)) => Ok(text.clone()),
+    let string = |value: &'s Value| match (&path.leaf, value) {
+        (Kind::String, Value::String(text)) => Ok(text.as_str()),
         _ => Err(invalid(format!(
             "`{}` tests strings, and `{}` holds {} or it is tested against {value:?}",
             op.text(),
@@ -431,23 +549,27 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], names: &[String]) -> Resu
         ))),
     };
 
-    Ok(match (op, values) {
-        (Op::IsNull, []) => Test::IsNull,
-        (Op::Between, [low, high]) => Test::Between(check(low)?, check(high)?),
-        (Op::In, values) => {
-            let mut values = values.iter().map(check).collect::<Result<Vec<_>>>()?;
+    let value = |at: usize| operands.get(at);
 
-            values.sort_by(key::compare);
+    Ok(match (op, operands.len()) {
+        (Op::IsNull, 0) => Test::IsNull,
+        (Op::Between, 2) => Test::Between(check(value(0)?)?, check(value(1)?)?),
+        (Op::In, len) => {
+            let mut values = (0..len)
+                .map(|at| check(value(at)?))
+                .collect::<Result<Vec<_>>>()?;
+
+            values.sort_by(|a, b| key::compare(a, b));
             values.dedup_by(|a, b| key::compare(a, b).is_eq());
 
             Test::In(values)
         }
-        (Op::Contains, [value]) if path.list_leaf => Test::Element(check(value)?),
-        (Op::Contains, [value]) => Test::Substring(string(value)?),
-        (Op::StartsWith, [value]) => Test::StartsWith(string(value)?),
-        (Op::EndsWith, [value]) => Test::EndsWith(string(value)?),
-        (Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge, [value]) => {
-            Test::Compare(op, check(value)?)
+        (Op::Contains, 1) if path.list_leaf => Test::Element(check(value(0)?)?),
+        (Op::Contains, 1) => Test::Substring(string(value(0)?)?),
+        (Op::StartsWith, 1) => Test::StartsWith(string(value(0)?)?),
+        (Op::EndsWith, 1) => Test::EndsWith(string(value(0)?)?),
+        (Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge, 1) => {
+            Test::Compare(op, check(value(0)?)?)
         }
         _ => {
             return Err(invalid(format!(
@@ -510,7 +632,7 @@ struct Candidate<'s, 'c> {
     index: Option<&'s IndexDef>,
     lookup: Lookup,
     /// The values looked up, for `Equal` and `Several`.
-    values: &'c [Value],
+    values: &'c [Cow<'s, Value>],
     /// The range of values, for `Range`, as bounds on the values.
     low: Bound<&'c Value>,
     high: Bound<&'c Value>,
@@ -518,7 +640,7 @@ struct Candidate<'s, 'c> {
 }
 
 /// The value an `IS NULL` on an index looks up.
-const NULL: &[Value] = &[Value::Null];
+const NULL: &[Cow<'static, Value>] = &[Cow::Borrowed(&Value::Null)];
 
 impl Candidate<'_, '_> {
     /// How good the lookup is: equality before several values before a
@@ -743,7 +865,7 @@ fn choose<'s>(
 
     match (best.lookup, best.source) {
         (Lookup::Equal | Lookup::Several, Source::Key) => {
-            let keys: Vec<Vec<u8>> = best.values.iter().map(encoded).collect();
+            let keys: Vec<Vec<u8>> = best.values.iter().map(|value| encoded(value)).collect();
 
             (
                 Access::Keys { keys, backward },

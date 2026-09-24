@@ -1,6 +1,8 @@
 //! Building a query in Rust: [`Query`] and [`Filter`].
 
+use std::borrow::Cow;
 use std::ops::Not;
+use std::sync::Arc;
 
 use super::ir::{Expr, Ir, Op};
 use crate::error::Result;
@@ -149,14 +151,17 @@ impl QueryRequest {
 
         Ok(Self {
             collection,
-            query: Query { ir },
+            query: Query::from_ir(ir),
             count,
         })
     }
 
-    /// The IR of this request.
+    /// The IR of this request, a bound query's with its parameters' values
+    /// in their places.
     pub fn encode(&self) -> Result<Vec<u8>> {
-        super::ir::encode(&self.collection, &self.query.ir, self.count)
+        let ir = self.query.bound_ir()?;
+
+        super::ir::encode(&self.collection, &ir, self.count)
     }
 }
 
@@ -176,9 +181,39 @@ impl QueryRequest {
 ///     .limit(10);
 /// # let _ = query;
 /// ```
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Query {
-    pub(crate) ir: Ir,
+    body: Body,
+    /// The values of a prepared query's parameters, once it is bound. The
+    /// planner reads each where the IR names it, so that binding copies
+    /// nothing of the query itself.
+    pub(crate) parameters: Option<Vec<Value>>,
+}
+
+/// The IR of a query: its own, or one that a prepared query shares with
+/// every query bound from it.
+#[derive(Debug, Clone)]
+enum Body {
+    Owned(Ir),
+    Shared(Arc<Ir>),
+}
+
+impl Default for Body {
+    fn default() -> Self {
+        Body::Owned(Ir::default())
+    }
+}
+
+/// Two queries are equal when they find the same objects in the same way:
+/// a bound query equals the query with its parameters' values in their
+/// places.
+impl PartialEq for Query {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.bound_ir(), other.bound_ir()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl Query {
@@ -187,11 +222,52 @@ impl Query {
         Self::default()
     }
 
+    /// The query `ir` describes. One with parameters is kept to be shared
+    /// by the queries bound from it.
+    pub(crate) fn from_ir(ir: Ir) -> Self {
+        Self {
+            body: if ir.has_parameters() {
+                Body::Shared(Arc::new(ir))
+            } else {
+                Body::Owned(ir)
+            },
+            parameters: None,
+        }
+    }
+
+    /// The IR, whose parameters, if any, [`parameters`](Self::parameters)
+    /// gives values.
+    pub(crate) fn ir(&self) -> &Ir {
+        match &self.body {
+            Body::Owned(ir) => ir,
+            Body::Shared(ir) => ir,
+        }
+    }
+
+    /// The IR to change. A prepared query's is copied first if another
+    /// query shares it, and stays shareable.
+    fn ir_mut(&mut self) -> &mut Ir {
+        match &mut self.body {
+            Body::Owned(ir) => ir,
+            Body::Shared(ir) => Arc::make_mut(ir),
+        }
+    }
+
+    /// The IR with the parameters' values in their places.
+    pub(crate) fn bound_ir(&self) -> Result<Cow<'_, Ir>> {
+        match &self.parameters {
+            Some(parameters) => self.ir().bind(parameters).map(Cow::Owned),
+            None => Ok(Cow::Borrowed(self.ir())),
+        }
+    }
+
     /// Keeps only the objects that meet `filter`, and those of any filter
     /// given before.
     #[must_use]
     pub fn filter(mut self, filter: Filter) -> Self {
-        self.ir.filter = Some(match self.ir.filter.take() {
+        let ir = self.ir_mut();
+
+        ir.filter = Some(match ir.filter.take() {
             Some(before) => Expr::and([before, filter.0]),
             None => filter.0,
         });
@@ -202,7 +278,7 @@ impl Query {
     /// sorts first.
     #[must_use]
     pub fn sort_by(mut self, field: &str) -> Self {
-        self.ir.sort.push((path(field), false));
+        self.ir_mut().sort.push((path(field), false));
         self
     }
 
@@ -210,21 +286,21 @@ impl Query {
     /// Null sorts last.
     #[must_use]
     pub fn sort_by_desc(mut self, field: &str) -> Self {
-        self.ir.sort.push((path(field), true));
+        self.ir_mut().sort.push((path(field), true));
         self
     }
 
     /// Skips the first `count` objects of the result.
     #[must_use]
     pub fn offset(mut self, count: u64) -> Self {
-        self.ir.offset = count;
+        self.ir_mut().offset = count;
         self
     }
 
     /// Returns at most `count` objects.
     #[must_use]
     pub fn limit(mut self, count: u64) -> Self {
-        self.ir.limit = Some(count);
+        self.ir_mut().limit = Some(count);
         self
     }
 
@@ -232,7 +308,9 @@ impl Query {
     /// query's own limit is zero. A lookup of one object stops reading there.
     #[must_use]
     pub fn first(mut self) -> Self {
-        self.ir.limit = Some(self.ir.limit.map_or(1, |limit| limit.min(1)));
+        let ir = self.ir_mut();
+
+        ir.limit = Some(ir.limit.map_or(1, |limit| limit.min(1)));
         self
     }
 
@@ -259,9 +337,7 @@ impl Query {
     /// # Ok::<(), darudb::Error>(())
     /// ```
     pub fn parse(text: &str, parameters: &[Value]) -> Result<Self> {
-        Ok(Self {
-            ir: super::parse::parse(text, Some(parameters))?,
-        })
+        Ok(Self::from_ir(super::parse::parse(text, Some(parameters))?))
     }
 
     /// Parses `text` in the query language as [`parse`](Self::parse) does,
@@ -280,17 +356,20 @@ impl Query {
     /// # Ok::<(), darudb::Error>(())
     /// ```
     pub fn prepare(text: &str) -> Result<Self> {
-        Ok(Self {
-            ir: super::parse::parse(text, None)?,
-        })
+        Ok(Self::from_ir(super::parse::parse(text, None)?))
     }
 
     /// This query with `parameters` for its `$0`, `$1` and on. A query without
-    /// parameters comes back as it is.
+    /// parameters, or one bound already, comes back as it is.
+    ///
+    /// The bound query shares the prepared one's IR rather than copying it,
+    /// and the values take their places when the query is planned.
     pub fn bind(&self, parameters: &[Value]) -> Result<Self> {
-        Ok(Self {
-            ir: self.ir.bind(parameters)?,
-        })
+        if self.parameters_wanted() {
+            self.with_parameters(parameters.to_vec())
+        } else {
+            Ok(self.clone())
+        }
     }
 
     /// [`bind`](Self::bind) with the parameters as a language binding sends
@@ -298,6 +377,26 @@ impl Query {
     /// field `n + 1` the value of parameter `n`, a null one left out
     /// (`design/objects.md`, "The IR").
     pub fn bind_encoded(&self, parameters: &[u8]) -> Result<Self> {
-        self.bind(&super::ir::decode_parameters(parameters)?)
+        let parameters = super::ir::decode_parameters(parameters)?;
+
+        if self.parameters_wanted() {
+            self.with_parameters(parameters)
+        } else {
+            Ok(self.clone())
+        }
+    }
+
+    /// Whether the query has parameters without values.
+    fn parameters_wanted(&self) -> bool {
+        self.parameters.is_none() && self.ir().has_parameters()
+    }
+
+    fn with_parameters(&self, parameters: Vec<Value>) -> Result<Self> {
+        self.ir().check_parameters(parameters.len())?;
+
+        Ok(Self {
+            body: self.body.clone(),
+            parameters: Some(parameters),
+        })
     }
 }

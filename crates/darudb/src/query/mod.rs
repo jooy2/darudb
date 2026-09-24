@@ -24,7 +24,23 @@ pub use build::{Filter, Query, QueryRequest};
 
 use crate::error::Result;
 use crate::format::object::Object;
+use crate::format::object::schema::{CollectionDef, StoredSchema};
 use crate::schema::{CollectionReader, CollectionWriter};
+
+/// `query` on `collection`, checked and planned, with its parameters'
+/// values if it is a bound prepared query.
+fn plan<'s>(
+    schema: &'s StoredSchema,
+    collection: &'s CollectionDef,
+    query: &'s Query,
+) -> Result<plan::Plan<'s>> {
+    plan::plan(
+        schema,
+        collection,
+        query.ir(),
+        query.parameters.as_deref().unwrap_or_default(),
+    )
+}
 
 impl CollectionReader<'_> {
     /// The objects `query` finds, in its order.
@@ -35,7 +51,7 @@ impl CollectionReader<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan::plan(schema, collection, &query.ir)?)
+        run::objects(source, &plan(schema, collection, query)?)
     }
 
     /// How many objects `query` finds, after its offset and within its
@@ -44,7 +60,7 @@ impl CollectionReader<'_> {
     pub fn count(&self, query: &Query) -> Result<u64> {
         let (source, schema, collection) = self.parts();
 
-        run::count(source, &plan::plan(schema, collection, &query.ir)?)
+        run::count(source, &plan(schema, collection, query)?)
     }
 
     /// The records of the objects `query` finds, in its order, as the file
@@ -54,7 +70,7 @@ impl CollectionReader<'_> {
     pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
         let (source, schema, collection) = self.parts();
 
-        run::stored(source, &plan::plan(schema, collection, &query.ir)?)
+        run::stored(source, &plan(schema, collection, query)?)
     }
 }
 
@@ -64,7 +80,7 @@ impl CollectionWriter<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan::plan(schema, collection, &query.ir)?)
+        run::objects(source, &plan(schema, collection, query)?)
     }
 
     /// How many objects `query` finds, with this transaction's changes; see
@@ -72,7 +88,7 @@ impl CollectionWriter<'_> {
     pub fn count(&self, query: &Query) -> Result<u64> {
         let (source, schema, collection) = self.parts();
 
-        run::count(source, &plan::plan(schema, collection, &query.ir)?)
+        run::count(source, &plan(schema, collection, query)?)
     }
 
     /// The records of the objects `query` finds, with this transaction's
@@ -80,6 +96,6 @@ impl CollectionWriter<'_> {
     pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
         let (source, schema, collection) = self.parts();
 
-        run::stored(source, &plan::plan(schema, collection, &query.ir)?)
+        run::stored(source, &plan(schema, collection, query)?)
     }
 }

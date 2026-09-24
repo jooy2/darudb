@@ -258,16 +258,18 @@ fn ids(objects: &[Object]) -> Vec<i64> {
         .collect()
 }
 
-/// Runs `ir` through the planner and as a scan, and checks the two agree.
-/// Returns the planned objects' ids, or `None` for an invalid query.
+/// Runs `ir`, with `parameters` for its parameters, through the planner and
+/// as a scan, and checks the two agree. Returns the planned objects' ids, or
+/// `None` for an invalid query.
 fn agree(
     source: &dyn Source,
     db_schema: &crate::format::object::schema::StoredSchema,
     ir: &Ir,
+    parameters: &[Value],
 ) -> Option<Vec<i64>> {
     let collection = db_schema.collection("players").unwrap();
-    let planned = plan::plan(db_schema, collection, ir);
-    let scanned = plan::scan(db_schema, collection, ir);
+    let planned = plan::plan(db_schema, collection, ir, parameters);
+    let scanned = plan::scan(db_schema, collection, ir, parameters);
 
     let (planned, scanned) = match (planned, scanned) {
         (Ok(planned), Ok(scanned)) => (planned, scanned),
@@ -353,15 +355,29 @@ fn every_query_gives_the_scans_answer() {
             // The IR a query crosses the language boundary as reads back as
             // the same query. Compared as bytes, since NaN is not equal to
             // itself as a value.
-            let bytes = ir::encode("players", &query.ir, false).unwrap();
+            let bytes = ir::encode("players", query.ir(), false).unwrap();
             let (_, decoded, _) = ir::decode(&bytes).unwrap();
 
             assert_eq!(ir::encode("players", &decoded, false).unwrap(), bytes);
 
-            if let Some(found) = agree(&read, &open.schema, &query.ir) {
+            let found = agree(&read, &open.schema, query.ir(), &[]);
+
+            if let Some(found) = &found {
                 valid += 1;
                 nonempty += usize::from(!found.is_empty());
             }
+
+            // The same query prepared with every value a parameter, which
+            // the planner reads from the parameters where the IR names them.
+            let (prepared, parameters) = prepared(&query);
+            let bound = prepared.bind(&parameters).unwrap();
+
+            assert_eq!(
+                agree(&read, &open.schema, bound.ir(), &parameters),
+                found,
+                "{:?} with {parameters:?}",
+                bound.ir()
+            );
         }
 
         assert!(valid > 1000, "seed {seed}: only {valid} queries were valid");
@@ -383,8 +399,12 @@ fn every_query_gives_the_scans_answer() {
         for _ in 0..300 {
             let query = query(&mut rng);
             let open = txn.schema().cloned().unwrap();
+            let (prepared, parameters) = prepared(&query);
 
-            agree(&txn, &open.schema, &query.ir);
+            assert_eq!(
+                agree(&txn, &open.schema, prepared.ir(), &parameters),
+                agree(&txn, &open.schema, query.ir(), &[])
+            );
         }
     }
 }
@@ -569,9 +589,21 @@ fn a_filter_nested_too_deeply_is_refused() {
     );
 }
 
+/// `query` prepared from its text with every value a parameter, and the
+/// parameters' values.
+fn prepared(query: &Query) -> (Query, Vec<Value>) {
+    let mut parameters = Vec::new();
+    let written = text(query.ir(), &mut parameters, true);
+    let prepared = Query::prepare(&written).unwrap_or_else(|error| panic!("{written}: {error}"));
+
+    (prepared, parameters)
+}
+
 /// `ir` in the query language. Floats and bytes, which have no literal that
-/// keeps every value, go into `parameters`; other values are written out.
-fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
+/// keeps every value, go into `parameters`; other values are written out,
+/// unless `every` is set, which makes every value a parameter and a null
+/// test a comparison with a null parameter.
+fn text(ir: &Ir, parameters: &mut Vec<Value>, every: bool) -> String {
     fn name(name: &str) -> String {
         let plain = name
             .chars()
@@ -594,8 +626,12 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
             .join(".")
     }
 
-    fn value(value: &Value, parameters: &mut Vec<Value>) -> String {
+    fn value(value: &Value, parameters: &mut Vec<Value>, every: bool) -> String {
         match value {
+            _ if every => {
+                parameters.push(value.clone());
+                format!("${}", parameters.len() - 1)
+            }
             Value::Null => "null".to_owned(),
             Value::Bool(value) => value.to_string(),
             Value::Int(value) => value.to_string(),
@@ -622,7 +658,7 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
         }
     }
 
-    fn expr(node: &ir::Expr, parameters: &mut Vec<Value>) -> String {
+    fn expr(node: &ir::Expr, parameters: &mut Vec<Value>, every: bool) -> String {
         match node {
             ir::Expr::And(terms) | ir::Expr::Or(terms) => {
                 let joint = if matches!(node, ir::Expr::And(_)) {
@@ -630,11 +666,21 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
                 } else {
                     " OR "
                 };
-                let terms: Vec<String> = terms.iter().map(|term| expr(term, parameters)).collect();
+                let terms: Vec<String> = terms
+                    .iter()
+                    .map(|term| expr(term, parameters, every))
+                    .collect();
 
                 format!("({})", terms.join(joint))
             }
-            ir::Expr::Not(term) => format!("NOT ({})", expr(term, parameters)),
+            ir::Expr::Not(term) => match term.as_ref() {
+                ir::Expr::Test {
+                    op: ir::Op::IsNull,
+                    path: at,
+                    ..
+                } if every => format!("{} != {}", path(at), value(&Value::Null, parameters, true)),
+                term => format!("NOT ({})", expr(term, parameters, every)),
+            },
             ir::Expr::Prepared { .. } => unreachable!("a builder's query has no parameters"),
             ir::Expr::Test {
                 op,
@@ -644,19 +690,27 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
                 let at = path(at);
 
                 match (op, values.as_slice()) {
+                    (ir::Op::IsNull, _) if every => {
+                        format!("{at} == {}", value(&Value::Null, parameters, true))
+                    }
                     (ir::Op::IsNull, _) => format!("{at} is null"),
                     (ir::Op::Between, [low, high]) => {
-                        let (low, high) = (value(low, parameters), value(high, parameters));
+                        let (low, high) = (
+                            value(low, parameters, every),
+                            value(high, parameters, every),
+                        );
 
                         format!("{at} BETWEEN {low} AND {high}")
                     }
                     (ir::Op::In, values) => {
-                        let values: Vec<String> =
-                            values.iter().map(|each| value(each, parameters)).collect();
+                        let values: Vec<String> = values
+                            .iter()
+                            .map(|each| value(each, parameters, every))
+                            .collect();
 
                         format!("{at} in [{}]", values.join(", "))
                     }
-                    (op, [one]) => format!("{at} {} {}", op.text(), value(one, parameters)),
+                    (op, [one]) => format!("{at} {} {}", op.text(), value(one, parameters, every)),
                     _ => unreachable!("a builder's test has its values"),
                 }
             }
@@ -666,7 +720,7 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
     let mut out = Vec::new();
 
     if let Some(filter) = &ir.filter {
-        out.push(expr(filter, parameters));
+        out.push(expr(filter, parameters, every));
     }
 
     if !ir.sort.is_empty() {
@@ -699,14 +753,14 @@ fn the_query_language_builds_the_builders_query() {
     for _ in 0..3000 {
         let built = query(&mut rng);
         let mut parameters = Vec::new();
-        let written = text(&built.ir, &mut parameters);
+        let written = text(built.ir(), &mut parameters, false);
         let parsed = Query::parse(&written, &parameters)
             .unwrap_or_else(|error| panic!("{written}: {error}"));
 
         // Compared as IR, where NaN equals itself.
         assert_eq!(
-            ir::encode("players", &parsed.ir, false).unwrap(),
-            ir::encode("players", &built.ir, false).unwrap(),
+            ir::encode("players", parsed.ir(), false).unwrap(),
+            ir::encode("players", built.ir(), false).unwrap(),
             "{written}"
         );
     }
@@ -956,12 +1010,12 @@ fn a_prepared_query_runs_as_the_parsed_one_does() {
         assert_eq!(find(&db, bound), find(&db, parsed), "{text}");
 
         // Through the IR, as a binding sends a prepared query.
-        let bytes = ir::encode("players", &prepared.ir, false).unwrap();
+        let bytes = ir::encode("players", prepared.ir(), false).unwrap();
         let (_, decoded, _) = ir::decode(&bytes).unwrap();
 
-        assert_eq!(decoded, prepared.ir, "{text}");
+        assert_eq!(&decoded, prepared.ir(), "{text}");
         assert_eq!(
-            Query { ir: decoded }.bind(&parameters).unwrap(),
+            Query::from_ir(decoded).bind(&parameters).unwrap(),
             Query::parse(text, &parameters).unwrap()
         );
     }

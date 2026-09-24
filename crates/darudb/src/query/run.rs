@@ -309,15 +309,9 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
             .binary_search_by(|other| value.compare(other).reverse())
             .is_ok(),
         Test::Element(other) => value.compare(other).is_eq(),
-        Test::Substring(text) => value
-            .as_str()
-            .is_some_and(|value| value.contains(text.as_str())),
-        Test::StartsWith(text) => value
-            .as_str()
-            .is_some_and(|value| value.starts_with(text.as_str())),
-        Test::EndsWith(text) => value
-            .as_str()
-            .is_some_and(|value| value.ends_with(text.as_str())),
+        Test::Substring(text) => value.as_str().is_some_and(|value| value.contains(*text)),
+        Test::StartsWith(text) => value.as_str().is_some_and(|value| value.starts_with(*text)),
+        Test::EndsWith(text) => value.as_str().is_some_and(|value| value.ends_with(*text)),
         Test::IsNull => value.is_null(),
     }
 }

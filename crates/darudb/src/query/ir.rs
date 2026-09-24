@@ -188,16 +188,29 @@ impl Expr {
                     .iter()
                     .map(|value| match value {
                         Operand::Value(value) => Ok(value.clone()),
-                        Operand::Param(index) => parameters.get(*index).cloned().ok_or_else(|| {
-                            invalid(format!(
-                                "`${index}` names a parameter, and {} were given",
-                                parameters.len()
-                            ))
-                        }),
+                        Operand::Param(index) => parameters
+                            .get(*index)
+                            .cloned()
+                            .ok_or_else(|| missing(*index, parameters.len())),
                     })
                     .collect::<Result<_>>()?,
             ),
         })
+    }
+
+    /// Fails if a parameter of the expression is numbered `count` or more.
+    fn check_parameters(&self, count: usize) -> Result<()> {
+        match self {
+            Expr::And(terms) | Expr::Or(terms) => terms
+                .iter()
+                .try_for_each(|term| term.check_parameters(count)),
+            Expr::Not(term) => term.check_parameters(count),
+            Expr::Test { .. } => Ok(()),
+            Expr::Prepared { values, .. } => values.iter().try_for_each(|value| match value {
+                Operand::Param(index) if *index >= count => Err(missing(*index, count)),
+                _ => Ok(()),
+            }),
+        }
     }
 
     /// The number of the first parameter in the expression, if it has one.
@@ -260,6 +273,20 @@ pub(crate) struct Ir {
 }
 
 impl Ir {
+    /// Whether the query has parameters.
+    pub(crate) fn has_parameters(&self) -> bool {
+        self.filter
+            .as_ref()
+            .is_some_and(|filter| filter.first_param().is_some())
+    }
+
+    /// Fails if a parameter is numbered `count` or more.
+    pub(crate) fn check_parameters(&self, count: usize) -> Result<()> {
+        self.filter
+            .as_ref()
+            .map_or(Ok(()), |filter| filter.check_parameters(count))
+    }
+
     /// The query with `parameters` in place of its parameters; the query
     /// itself if it has none.
     pub(crate) fn bind(&self, parameters: &[Value]) -> Result<Ir> {
@@ -280,6 +307,13 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidQuery {
         message: message.into(),
     }
+}
+
+/// The error for parameter `index` of a query given `count`.
+pub(crate) fn missing(index: usize, count: usize) -> Error {
+    invalid(format!(
+        "`${index}` names a parameter, and {count} were given"
+    ))
 }
 
 /// The IR record of `ir` on collection `collection`, counting the objects
