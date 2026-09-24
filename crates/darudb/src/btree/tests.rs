@@ -126,6 +126,13 @@ impl Harness {
             .unwrap()
     }
 
+    fn entries_backward(&self, start: Bound<&[u8]>, end: Bound<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
+        Range::new_backward(&self.loader, TREE, self.root.as_ref(), start, end)
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap()
+    }
+
     /// Writes every page the transaction changed and starts the next one.
     fn commit(&mut self) {
         let mut pages = Vec::new();
@@ -467,4 +474,58 @@ fn a_value_just_past_the_inline_limit_goes_to_an_overflow_run() {
     harness.commit();
 
     assert_eq!(harness.get(b"k"), Some(big));
+}
+
+#[test]
+fn a_backward_walk_gives_the_forward_walk_in_reverse() {
+    let mut rng = Rng::new(11);
+
+    for page_size in [4096, 16384] {
+        let mut harness = Harness::new(page_size);
+
+        for round in 0..3 {
+            for _ in 0..600 {
+                let key = key_of(&mut rng, page_size);
+
+                if rng.below(4) == 0 {
+                    harness.remove(&key);
+                } else {
+                    harness.insert(&key, &value_of(&mut rng, page_size));
+                }
+            }
+
+            // Uncommitted nodes, then committed ones.
+            if round > 0 {
+                harness.commit();
+            }
+
+            for _ in 0..40 {
+                let a = key_of(&mut rng, page_size);
+                let b = key_of(&mut rng, page_size);
+                let bound = |rng: &mut Rng, key: &[u8]| -> Bound<Vec<u8>> {
+                    match rng.below(3) {
+                        0 => Bound::Unbounded,
+                        1 => Bound::Included(key.to_vec()),
+                        _ => Bound::Excluded(key.to_vec()),
+                    }
+                };
+                let (low, high) = if a <= b { (a, b) } else { (b, a) };
+                let start = bound(&mut rng, &low);
+                let end = bound(&mut rng, &high);
+                let mut forward = harness.entries(as_slice(&start), as_slice(&end));
+
+                forward.reverse();
+
+                assert_eq!(
+                    harness.entries_backward(as_slice(&start), as_slice(&end)),
+                    forward,
+                    "page size {page_size}, {start:?} to {end:?}"
+                );
+            }
+        }
+    }
+}
+
+fn as_slice(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
+    bound.as_ref().map(Vec::as_slice)
 }

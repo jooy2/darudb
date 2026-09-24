@@ -345,6 +345,25 @@ impl WriteTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
+        self.walk(tree, &range, false)
+    }
+
+    /// The entries of tree `tree` whose keys lie within `range`, in reverse
+    /// key order, including changes made in this transaction.
+    pub fn range_backward<K: AsRef<[u8]>>(
+        &self,
+        tree: &str,
+        range: impl RangeBounds<K>,
+    ) -> Result<Range<'_>> {
+        self.walk(tree, &range, true)
+    }
+
+    fn walk<K: AsRef<[u8]>>(
+        &self,
+        tree: &str,
+        range: &impl RangeBounds<K>,
+        backward: bool,
+    ) -> Result<Range<'_>> {
         self.check_open()?;
 
         let loader = &self.shared.loader;
@@ -352,10 +371,10 @@ impl WriteTransaction {
 
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(Range::empty()),
-            Some(state) => Range::over(loader, state.id, state.root.as_ref(), &range),
+            Some(state) => Range::over(loader, state.id, state.root.as_ref(), range, backward),
             None => match find_tree(loader, self.catalog.as_ref(), name)? {
                 Some(descriptor) if !descriptor.root.is_null() => {
-                    Range::over_committed(loader, descriptor.id, descriptor.root, &range)
+                    Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
                 }
                 _ => Ok(Range::empty()),
             },

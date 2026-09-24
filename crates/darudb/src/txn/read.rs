@@ -73,13 +73,32 @@ impl ReadTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
+        self.walk(tree, &range, false)
+    }
+
+    /// The entries of tree `tree` whose keys lie within `range`, in reverse
+    /// key order: the last key first.
+    pub fn range_backward<K: AsRef<[u8]>>(
+        &self,
+        tree: &str,
+        range: impl RangeBounds<K>,
+    ) -> Result<Range<'_>> {
+        self.walk(tree, &range, true)
+    }
+
+    fn walk<K: AsRef<[u8]>>(
+        &self,
+        tree: &str,
+        range: &impl RangeBounds<K>,
+        backward: bool,
+    ) -> Result<Range<'_>> {
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
 
         match find_tree(loader, catalog.as_ref(), name)? {
             Some(descriptor) if !descriptor.root.is_null() => {
-                Range::over_committed(loader, descriptor.id, descriptor.root, &range)
+                Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
             }
             _ => Ok(Range::empty()),
         }

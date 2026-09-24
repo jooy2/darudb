@@ -453,3 +453,44 @@ fn dropping_the_last_handle_makes_deferred_commits_durable() {
 
     assert!(!unsynced(&path));
 }
+
+#[test]
+fn a_backward_range_gives_the_keys_from_the_last_down() {
+    let dir = TestDir::new();
+    let db = open(&dir);
+    let mut txn = db.begin_write().unwrap();
+
+    for key in [b"a", b"b", b"c", b"d"] {
+        txn.insert("t", key, b"").unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let keys = |range: darudb::Range<'_>| -> Vec<Vec<u8>> {
+        range.map(|entry| entry.unwrap().0).collect()
+    };
+    let read = db.begin_read().unwrap();
+
+    assert_eq!(
+        keys(read.range_backward::<&[u8]>("t", ..).unwrap()),
+        [b"d", b"c", b"b", b"a"]
+    );
+    assert_eq!(
+        keys(
+            read.range_backward("t", b"b".as_slice()..b"d".as_slice())
+                .unwrap()
+        ),
+        [b"c", b"b"]
+    );
+
+    // A write transaction sees its own changes backwards too.
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"e", b"").unwrap();
+    txn.remove("t", b"a").unwrap();
+
+    assert_eq!(
+        keys(txn.range_backward::<&[u8]>("t", ..).unwrap()),
+        [b"e", b"d", b"c", b"b"]
+    );
+}

@@ -88,6 +88,8 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
+`range_backward`는 같은 키를 마지막 것부터 거꾸로 돕니다. 키가 커지는 트리에서 가장 최근 항목을 읽을 때 씁니다.
+
 `commit` 없이 버린 쓰기 트랜잭션은 취소되고, 그 안에서 한 일은 파일에 남지 않습니다. 쓰기 트랜잭션은 한 번에 하나뿐입니다. `begin_write`는 이미 실행 중인 트랜잭션을 바쁨 대기 시간만큼 기다리며, `OpenOptions::busy_timeout`으로 바꾸지 않으면 5초입니다.
 
 `commit`은 디스크에 기록될 때까지 기다렸다가 반환합니다. `commit_deferred`는 기다리지 않습니다. 변경은 곧바로 읽기 트랜잭션에 보이고, 다음 `commit`이나 `Database::sync`, 데이터베이스를 닫을 때, 또는 기본값으로 1초를 기다린 뒤에 이후 커밋과 함께 디스크에 기록됩니다. 프로세스가 비정상 종료돼도 하나도 잃지 않습니다. 정전이 나면 가장 최근 것부터 되돌려질 수 있지만, 중간이 빠지거나 파일이 손상되지는 않습니다. 기다릴 수 있는 양은 `OpenOptions::max_unsynced_time`과 `OpenOptions::max_unsynced_pages`로 정합니다.

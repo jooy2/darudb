@@ -23,7 +23,8 @@ pub use read::ReadTransaction;
 pub use write::WriteTransaction;
 
 /// Entries of a tree in key order, as [`ReadTransaction::range`] and
-/// [`WriteTransaction::range`] return them.
+/// [`WriteTransaction::range`] return them, or in reverse key order, as their
+/// `range_backward` does.
 ///
 /// Each item is a key and its value. An item is an error when a page the walk
 /// needs is damaged; the walk ends there.
@@ -50,16 +51,16 @@ impl<'a> Range<'a> {
         tree: u64,
         root: Option<&'a Child>,
         bounds: &impl RangeBounds<K>,
+        backward: bool,
     ) -> Result<Self> {
-        Ok(Self {
-            inner: Some(btree::Range::new(
-                loader,
-                tree,
-                root,
-                as_bytes(bounds.start_bound()),
-                as_bytes(bounds.end_bound()),
-            )?),
-        })
+        let (start, end) = (as_bytes(bounds.start_bound()), as_bytes(bounds.end_bound()));
+        let inner = if backward {
+            btree::Range::new_backward(loader, tree, root, start, end)?
+        } else {
+            btree::Range::new(loader, tree, root, start, end)?
+        };
+
+        Ok(Self { inner: Some(inner) })
     }
 
     fn over_committed<K: AsRef<[u8]>>(
@@ -67,16 +68,16 @@ impl<'a> Range<'a> {
         tree: u64,
         root: Pointer,
         bounds: &impl RangeBounds<K>,
+        backward: bool,
     ) -> Result<Self> {
-        Ok(Self {
-            inner: Some(btree::Range::from_pointer(
-                loader,
-                tree,
-                root,
-                as_bytes(bounds.start_bound()),
-                as_bytes(bounds.end_bound()),
-            )?),
-        })
+        let (start, end) = (as_bytes(bounds.start_bound()), as_bytes(bounds.end_bound()));
+        let inner = if backward {
+            btree::Range::from_pointer_backward(loader, tree, root, start, end)?
+        } else {
+            btree::Range::from_pointer(loader, tree, root, start, end)?
+        };
+
+        Ok(Self { inner: Some(inner) })
     }
 }
 
