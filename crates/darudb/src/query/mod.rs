@@ -72,6 +72,21 @@ impl CollectionReader<'_> {
 
         run::stored(source, &plan(schema, collection, query)?)
     }
+
+    /// Gives `visit` the record of each object `query` finds, in its order,
+    /// as [`query_records`](Self::query_records) returns them, but borrowed
+    /// rather than copied into a vector of its own: a binding that copies
+    /// the records into one buffer copies each once. It stops at the first
+    /// error `visit` returns.
+    pub fn query_records_with(
+        &self,
+        query: &Query,
+        mut visit: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let (source, schema, collection) = self.parts();
+
+        run::each_stored(source, &plan(schema, collection, query)?, &mut visit)
+    }
 }
 
 impl CollectionWriter<'_> {
@@ -97,5 +112,17 @@ impl CollectionWriter<'_> {
         let (source, schema, collection) = self.parts();
 
         run::stored(source, &plan(schema, collection, query)?)
+    }
+
+    /// Gives `visit` the record of each object `query` finds, with this
+    /// transaction's changes; see [`CollectionReader::query_records_with`].
+    pub fn query_records_with(
+        &self,
+        query: &Query,
+        mut visit: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let (source, schema, collection) = self.parts();
+
+        run::each_stored(source, &plan(schema, collection, query)?, &mut visit)
     }
 }

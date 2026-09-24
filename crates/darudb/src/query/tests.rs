@@ -286,6 +286,14 @@ fn agree(
     };
     let found = ids(&run::objects(source, &planned).unwrap());
     let expected = ids(&run::whole(|| run::objects(source, &scanned)).unwrap());
+    let mut lent = Vec::new();
+
+    run::each_stored(source, &planned, &mut |record| {
+        lent.push(record.to_vec());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(lent, run::stored(source, &planned).unwrap(), "{ir:?}");
 
     assert_eq!(found, expected, "{ir:?}\nplanned {planned:?}");
     assert_eq!(

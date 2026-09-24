@@ -611,6 +611,17 @@ pub(crate) fn stored(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Vec<u8>
     Ok(records)
 }
 
+/// Runs `plan` and gives `visit` the record of each object it finds, in its
+/// order, borrowed: where the tree holds it, for an object the walk delivers
+/// in the query's order.
+pub(crate) fn each_stored(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    found(source, plan, &mut |record| visit(&record))
+}
+
 /// What [`found`] gives the record of each object in the result to, in the
 /// result's order: borrowed from the walk, or owned when it was read
 /// alone.

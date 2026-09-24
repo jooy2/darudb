@@ -742,6 +742,28 @@ fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
 
     assert_eq!(records, expected);
     assert_eq!(records.len(), 2);
+
+    // The same records, lent one at a time, and the first error stops them.
+    let mut lent = Vec::new();
+
+    users
+        .query_records_with(&decoded.query, |record| {
+            lent.push(record.to_vec());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(lent, expected);
+
+    let mut calls = 0;
+    let stopped = users.query_records_with(&decoded.query, |_| {
+        calls += 1;
+        Err(darudb::Error::InvalidArgument {
+            message: "stop".to_owned(),
+        })
+    });
+
+    assert_eq!(code(stopped), "INVALID_ARGUMENT");
+    assert_eq!(calls, 1);
     assert_eq!(code(QueryRequest::decode(&[0xFF])), "INVALID_QUERY");
 }
 
