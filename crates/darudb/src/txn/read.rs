@@ -2,6 +2,7 @@
 
 use std::ops::RangeBounds;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::{Range, catalog_names, engine_tree, find_tree, root_child, tree_key, user_tree};
 use crate::btree::{self, Load};
@@ -23,6 +24,10 @@ pub struct ReadTransaction {
     /// The schema of the handle that began the transaction, if it declared
     /// one.
     schema: Option<Arc<OpenSchema>>,
+    /// Whether the commit this transaction sees holds `schema`, once a
+    /// collection has checked. The commit does not change, so neither does
+    /// the answer.
+    schema_checked: AtomicBool,
 }
 
 impl ReadTransaction {
@@ -33,12 +38,19 @@ impl ReadTransaction {
             shared: Arc::clone(shared),
             record,
             schema,
+            schema_checked: AtomicBool::new(false),
         })
     }
 
     /// The schema of the handle that began the transaction.
     pub(crate) fn schema(&self) -> Option<&Arc<OpenSchema>> {
         self.schema.as_ref()
+    }
+
+    /// Whether a collection has found the file to hold the transaction's
+    /// schema already.
+    pub(crate) fn schema_checked(&self) -> &AtomicBool {
+        &self.schema_checked
     }
 
     /// The error for damage found in the file.

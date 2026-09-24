@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::ops::Bound;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
 use crate::format::object::codec;
@@ -112,16 +113,23 @@ impl Source for WriteTransaction {
 pub(crate) fn checked_schema(
     source: &dyn Source,
     schema: Option<&Arc<OpenSchema>>,
+    checked: &AtomicBool,
 ) -> Result<Arc<OpenSchema>> {
     let schema = schema.ok_or_else(|| Error::InvalidArgument {
         message: "the database was opened without a schema, so it has no collections; declare one with `OpenOptions::schema`".to_owned(),
     })?;
+
+    if checked.load(Ordering::Relaxed) {
+        return Ok(Arc::clone(schema));
+    }
 
     if source.get_in(META, SCHEMA_KEY)?.as_deref() != Some(schema.encoded.as_slice()) {
         return Err(Error::SchemaMismatch {
             message: "another process migrated the database's schema since this handle opened it; open it again with the new schema".to_owned(),
         });
     }
+
+    checked.store(true, Ordering::Relaxed);
 
     Ok(Arc::clone(schema))
 }
@@ -261,7 +269,7 @@ pub struct CollectionReader<'a> {
 
 impl<'a> CollectionReader<'a> {
     pub(crate) fn new(txn: &'a ReadTransaction, name: &str) -> Result<Self> {
-        let schema = checked_schema(txn, txn.schema())?;
+        let schema = checked_schema(txn, txn.schema(), txn.schema_checked())?;
         let position = position(&schema.schema, name)?;
 
         Ok(Self {
@@ -319,7 +327,7 @@ pub struct CollectionWriter<'a> {
 
 impl<'a> CollectionWriter<'a> {
     pub(crate) fn new(txn: &'a mut WriteTransaction, name: &str) -> Result<Self> {
-        let schema = checked_schema(txn, txn.schema())?;
+        let schema = checked_schema(txn, txn.schema(), txn.schema_checked())?;
         let position = position(&schema.schema, name)?;
 
         Ok(Self {

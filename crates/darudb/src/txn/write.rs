@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::{
     Range, catalog_names, check_key, check_value, engine_tree, find_tree, root_child, tree_key,
@@ -68,6 +69,10 @@ pub struct WriteTransaction {
     /// The schema of the handle that began the transaction, if it declared
     /// one.
     pub(super) schema: Option<Arc<OpenSchema>>,
+    /// Whether the file holds `schema`, once a collection has checked. Only
+    /// a migration writes the stored schema, and it sets the schema anew, so
+    /// the answer holds for the rest of the transaction.
+    pub(super) schema_checked: AtomicBool,
 }
 
 impl WriteTransaction {
@@ -191,6 +196,7 @@ impl WriteTransaction {
             next_tree_id: base.next_tree_id,
             failed: false,
             schema,
+            schema_checked: AtomicBool::new(false),
         })
     }
 
@@ -203,6 +209,13 @@ impl WriteTransaction {
     /// migration is storing in it.
     pub(crate) fn set_schema(&mut self, schema: Arc<OpenSchema>) {
         self.schema = Some(schema);
+        self.schema_checked = AtomicBool::new(false);
+    }
+
+    /// Whether a collection has found the file to hold the transaction's
+    /// schema already.
+    pub(crate) fn schema_checked(&self) -> &AtomicBool {
+        &self.schema_checked
     }
 
     /// The longest key a tree of this file holds.
