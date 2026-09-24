@@ -11,6 +11,7 @@
 //! order is the order it wants.
 
 mod finish;
+mod leaf;
 mod load;
 mod node;
 mod read;

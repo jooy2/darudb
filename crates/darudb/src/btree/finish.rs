@@ -7,7 +7,7 @@
 use super::node::{Branch, Child, LoadedNode, Node};
 use super::read::internal;
 use crate::error::Result;
-use crate::format::{PageHeader, PageKind, Pointer, encode_branch, encode_leaf};
+use crate::format::{PageHeader, PageKind, Pointer, encode_branch};
 use crate::storage::Pager;
 
 /// One encoded page of a commit, ready to write.
@@ -35,13 +35,12 @@ pub(crate) fn finish(
         Child::Clean(pointer) => return Ok(pointer),
         Child::Dirty { page, node } => (page, *node),
     };
-    let mut bytes = vec![0u8; pager.page_size()];
-    let header = match node {
-        Node::Leaf(entries) => {
-            encode_leaf(&entries, &mut bytes);
-
-            header(PageKind::Leaf, 0, entries.len(), txn, tree)?
-        }
+    let (header, mut bytes) = match node {
+        // A leaf is laid out as its page already.
+        Node::Leaf(leaf) => (
+            header(PageKind::Leaf, 0, leaf.len(), txn, tree)?,
+            leaf.into_page(),
+        ),
         Node::Branch(Branch {
             level,
             keys,
@@ -53,9 +52,14 @@ pub(crate) fn finish(
                 pointers.push(finish(pager, txn, tree, child, out)?);
             }
 
+            let mut bytes = vec![0u8; pager.page_size()];
+
             encode_branch(&keys, &pointers, &mut bytes);
 
-            header(PageKind::Branch, level, keys.len(), txn, tree)?
+            (
+                header(PageKind::Branch, level, keys.len(), txn, tree)?,
+                bytes,
+            )
         }
     };
 

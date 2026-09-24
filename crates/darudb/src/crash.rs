@@ -110,7 +110,7 @@ pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
                     }
                 }
                 Node::Leaf(leaf) => {
-                    for entry in leaf {
+                    for entry in &leaf.to_entries().map_err(str::to_owned)? {
                         entries += 1;
 
                         let value = match &entry.value {

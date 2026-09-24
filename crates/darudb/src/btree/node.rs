@@ -3,10 +3,11 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use super::leaf::Leaf;
 use crate::format::{
-    LeafEntry, PageHeader, PageKind, Pointer, StoredRef, StoredValue, branch_child, branch_key,
-    branch_len, branch_size, check_branch, check_leaf, decode_branch, decode_leaf, leaf_entry,
-    leaf_inline, leaf_key, leaf_size, leaf_value,
+    PageHeader, PageKind, Pointer, StoredRef, branch_child, branch_key, branch_len, branch_size,
+    check_branch, check_leaf, decode_branch, leaf_entry, leaf_inline, leaf_key, leaf_size,
+    leaf_value,
 };
 
 /// A child of a branch, or the root of a tree.
@@ -36,8 +37,8 @@ impl Child {
 /// A B+tree node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Node {
-    /// Entries in ascending key order.
-    Leaf(Vec<LeafEntry>),
+    /// Entries in ascending key order, laid out as their page.
+    Leaf(Leaf),
     /// Keys and one more child than keys.
     Branch(Branch),
 }
@@ -66,7 +67,7 @@ impl Node {
     /// The bytes of a page's content area this node takes.
     pub(crate) fn len(&self) -> usize {
         match self {
-            Node::Leaf(entries) => entries.iter().map(LeafEntry::len).sum(),
+            Node::Leaf(leaf) => leaf.size(),
             Node::Branch(branch) => branch_len(&branch.keys),
         }
     }
@@ -156,7 +157,7 @@ impl LoadedNode {
     /// The node, decoded for a write transaction to change.
     pub(crate) fn to_node(&self) -> crate::error::Result<Node> {
         let node = if self.leaf {
-            decode_leaf(&self.page, self.count).map(Node::Leaf)
+            Ok(Node::Leaf(Leaf::from_page(&self.page, self.count)))
         } else {
             decode_branch(&self.page, self.count).map(|(keys, children)| {
                 Node::Branch(Branch {
@@ -196,7 +197,7 @@ impl NodeRef<'_> {
     /// children.
     pub(crate) fn count(&self) -> usize {
         match self {
-            NodeRef::Borrowed(Node::Leaf(entries)) => entries.len(),
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.len(),
             NodeRef::Borrowed(Node::Branch(branch)) => branch.keys.len(),
             NodeRef::Loaded(loaded) => loaded.count,
         }
@@ -213,7 +214,7 @@ impl NodeRef<'_> {
     /// Key `index`: a leaf entry's, or a branch's separator.
     pub(crate) fn key(&self, index: usize) -> &[u8] {
         match self {
-            NodeRef::Borrowed(Node::Leaf(entries)) => &entries[index].key,
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.key(index),
             NodeRef::Borrowed(Node::Branch(branch)) => &branch.keys[index],
             NodeRef::Loaded(loaded) if loaded.leaf => leaf_key(&loaded.page, index),
             NodeRef::Loaded(loaded) => branch_key(&loaded.page, loaded.count, index),
@@ -223,7 +224,7 @@ impl NodeRef<'_> {
     /// The value of a leaf's entry `index`.
     pub(crate) fn value(&self, index: usize) -> crate::error::Result<StoredRef<'_>> {
         match self {
-            NodeRef::Borrowed(Node::Leaf(entries)) => Ok(entries[index].value.as_stored()),
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.value(index).map_err(super::read::internal),
             NodeRef::Loaded(loaded) if loaded.leaf => {
                 leaf_value(&loaded.page, index).map_err(super::read::internal)
             }
@@ -235,10 +236,7 @@ impl NodeRef<'_> {
     /// inline.
     pub(crate) fn inline_entry(&self, index: usize) -> Option<(&[u8], &[u8])> {
         match self {
-            NodeRef::Borrowed(Node::Leaf(entries)) => match &entries[index].value {
-                StoredValue::Inline(value) => Some((&entries[index].key, value)),
-                StoredValue::Overflow(_) => None,
-            },
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.inline(index),
             NodeRef::Loaded(loaded) if loaded.leaf => leaf_inline(&loaded.page, index),
             _ => None,
         }
@@ -247,9 +245,7 @@ impl NodeRef<'_> {
     /// The key and the value of a leaf's entry `index`.
     pub(crate) fn entry(&self, index: usize) -> crate::error::Result<(&[u8], StoredRef<'_>)> {
         match self {
-            NodeRef::Borrowed(Node::Leaf(entries)) => {
-                Ok((&entries[index].key, entries[index].value.as_stored()))
-            }
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.entry(index).map_err(super::read::internal),
             NodeRef::Loaded(loaded) if loaded.leaf => {
                 leaf_entry(&loaded.page, index).map_err(super::read::internal)
             }

@@ -183,8 +183,12 @@ pub(crate) fn check_commit(loader: &Loader, record: &CommitRecord) -> Result<boo
                     }
                 }
             }
-            Node::Leaf(entries) => {
-                for entry in entries {
+            Node::Leaf(leaf) => {
+                let entries = leaf.to_entries().map_err(|reason| Error::Internal {
+                    message: reason.to_owned(),
+                })?;
+
+                for entry in &entries {
                     if let StoredValue::Overflow(reference) = &entry.value {
                         if reference.txn > floor {
                             if reference.first + u64::from(reference.pages) > record.page_count {

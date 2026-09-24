@@ -178,38 +178,65 @@ fn read_u16(page: &[u8], at: usize) -> usize {
     usize::from(u16::from_le_bytes([page[at], page[at + 1]]))
 }
 
+/// The bytes an entry's cell takes in a leaf, its slot not included.
+pub(crate) fn cell_len(key_len: usize, value: StoredRef<'_>) -> usize {
+    match value {
+        StoredRef::Inline(value) => inline_entry_len(key_len, value.len()) - 2,
+        StoredRef::Overflow(_) => LEAF_OVERHEAD - 2 + key_len,
+    }
+}
+
+/// Writes an entry's cell, of [`cell_len`] bytes, at offset `at` of a leaf.
+pub(crate) fn write_cell(page: &mut [u8], at: usize, key: &[u8], value: StoredRef<'_>) {
+    page[at..at + 2].copy_from_slice(&offset(key.len()));
+
+    match value {
+        StoredRef::Inline(value) => {
+            page[at + 2] = 0;
+            page[at + 3..at + 5].copy_from_slice(&offset(value.len()));
+            page[at + 5..at + 5 + key.len()].copy_from_slice(key);
+            page[at + 5 + key.len()..at + 5 + key.len() + value.len()].copy_from_slice(value);
+        }
+        StoredRef::Overflow(reference) => {
+            page[at + 2] = 1;
+            page[at + 3..at + 3 + key.len()].copy_from_slice(key);
+            reference.write(&mut page[at + 3 + key.len()..]);
+        }
+    }
+}
+
+/// Where the cell of entry `index` of a leaf that [`check_leaf`] passed
+/// lies, and how long it is.
+pub(crate) fn leaf_cell(page: &[u8], index: usize) -> (usize, usize) {
+    let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+    let key_len = read_u16(page, at);
+    let len = if page[at + 2] == 0 {
+        inline_entry_len(key_len, read_u16(page, at + 3)) - 2
+    } else {
+        LEAF_OVERHEAD - 2 + key_len
+    };
+
+    (at, len)
+}
+
+/// Points slot `index` of a leaf at offset `at`.
+pub(crate) fn set_slot(page: &mut [u8], index: usize, at: usize) {
+    let slot = CONTENT_OFFSET + 2 * index;
+
+    page[slot..slot + 2].copy_from_slice(&offset(at));
+}
+
 /// Writes `entries` as the content of a leaf. The caller has checked that
 /// they fit.
 pub(crate) fn encode_leaf(entries: &[LeafEntry], page: &mut [u8]) {
     let mut cursor = check_offset(page.len());
 
     for (index, entry) in entries.iter().enumerate() {
-        let body = entry.len() - 2;
+        let value = entry.value.as_stored();
 
-        cursor -= body;
-
-        let at = cursor;
-        let key = &entry.key;
-
-        page[at..at + 2].copy_from_slice(&offset(key.len()));
-
-        match &entry.value {
-            StoredValue::Inline(value) => {
-                page[at + 2] = 0;
-                page[at + 3..at + 5].copy_from_slice(&offset(value.len()));
-                page[at + 5..at + 5 + key.len()].copy_from_slice(key);
-                page[at + 5 + key.len()..at + 5 + key.len() + value.len()].copy_from_slice(value);
-            }
-            StoredValue::Overflow(reference) => {
-                page[at + 2] = 1;
-                page[at + 3..at + 3 + key.len()].copy_from_slice(key);
-                reference.write(&mut page[at + 3 + key.len()..]);
-            }
-        }
-
-        let slot = CONTENT_OFFSET + 2 * index;
-
-        page[slot..slot + 2].copy_from_slice(&offset(at));
+        cursor -= cell_len(entry.key.len(), value);
+        write_cell(page, cursor, &entry.key, value);
+        set_slot(page, index, cursor);
     }
 
     debug_assert!(cursor >= CONTENT_OFFSET + 2 * entries.len());
@@ -349,6 +376,7 @@ pub(crate) fn leaf_size(page: &[u8], count: usize) -> usize {
 }
 
 /// Reads the `count` entries of a leaf.
+#[cfg(test)]
 pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &'static str> {
     check_leaf(page, count)?;
 

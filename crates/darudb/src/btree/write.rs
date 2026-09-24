@@ -9,18 +9,23 @@
 
 use std::mem;
 
+use super::leaf::Leaf;
 use super::node::{Branch, Child, Node, child_index};
 use super::read::{get_stored, internal};
 use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
     CONTENT_OFFSET, Check, LeafEntry, OverflowRef, POINTER_LEN, PageHeader, PageKind, Pointer,
-    StoredValue, branch_key_len, branch_len, content_len, inline_entry_len, inline_limit,
-    overflow_pages,
+    StoredRef, StoredValue, branch_key_len, branch_len, content_len, inline_entry_len,
+    inline_limit, overflow_pages,
 };
 
 /// A node split in two: the separator and the new right-hand node.
 type Split = Option<(Vec<u8>, Child)>;
+
+/// What an insert found under its key: nothing, or a value, with the
+/// overflow run it kept, if any, for the caller to give back.
+type Replaced = Option<Option<OverflowRef>>;
 
 /// Stores `value` under `key`, replacing any value already there. Returns
 /// whether one was.
@@ -32,18 +37,18 @@ pub(crate) fn insert<L: Load, S: Store>(
     key: &[u8],
     value: &[u8],
 ) -> Result<bool> {
-    let value = store_value(load.page_size(), store, tree, key.len(), value)?;
+    let run = store_value(load.page_size(), store, tree, key.len(), value)?;
+    let value = run.map_or(StoredRef::Inline(value), StoredRef::Overflow);
 
     let Some(child) = root.as_mut() else {
         let page = store.allocate()?;
+        let mut leaf = Leaf::new(load.page_size());
 
-        *root = Some(Child::dirty(
-            page,
-            Node::Leaf(vec![LeafEntry {
-                key: key.to_vec(),
-                value,
-            }]),
-        ));
+        if !leaf.insert(0, key, value) {
+            return Err(internal("an entry does not fit in an empty leaf"));
+        }
+
+        *root = Some(Child::dirty(page, Node::Leaf(leaf)));
 
         return Ok(false);
     };
@@ -66,8 +71,8 @@ pub(crate) fn insert<L: Load, S: Store>(
     }
 
     match replaced {
-        Some(old) => {
-            release_value(store, &old);
+        Some(run) => {
+            release_run(store, run);
 
             Ok(true)
         }
@@ -82,34 +87,47 @@ fn insert_into<L: Load, S: Store>(
     child: &mut Child,
     level: Option<u8>,
     key: &[u8],
-    value: StoredValue,
-) -> Result<(Option<StoredValue>, Split)> {
-    let capacity = content_len(load.page_size());
+    value: StoredRef<'_>,
+) -> Result<(Replaced, Split)> {
+    let page_size = load.page_size();
+    let capacity = content_len(page_size);
     let node = make_dirty(load, store, child, tree, level)?;
 
     match node {
-        Node::Leaf(entries) => {
-            let replaced = match entries.binary_search_by(|entry| entry.key.as_slice().cmp(key)) {
-                Ok(index) => Some(mem::replace(&mut entries[index].value, value)),
-                Err(index) => {
-                    entries.insert(
-                        index,
-                        LeafEntry {
-                            key: key.to_vec(),
-                            value,
-                        },
-                    );
-
-                    None
-                }
+        Node::Leaf(leaf) => {
+            let found = leaf.search(key);
+            let replaced = match found {
+                Ok(index) => Some(leaf.remove(index).map_err(internal)?),
+                Err(_) => None,
             };
-            let split = if leaf_len(entries) > capacity {
-                Some(split_leaf(store, entries, capacity)?)
-            } else {
-                None
-            };
+            let at = found.unwrap_or_else(|index| index);
 
-            Ok((replaced, split))
+            if leaf.insert(at, key, value) {
+                return Ok((replaced, None));
+            }
+
+            // The page is full: the entries, the new one among them, are
+            // shared out between it and a new one.
+            let mut entries = leaf.to_entries().map_err(internal)?;
+
+            entries.insert(
+                at,
+                LeafEntry {
+                    key: key.to_vec(),
+                    value: owned(value),
+                },
+            );
+
+            let (left, separator, right) = split_leaf(entries, page_size)?;
+
+            *leaf = left;
+
+            let page = store.allocate()?;
+
+            Ok((
+                replaced,
+                Some((separator, Child::dirty(page, Node::Leaf(right)))),
+            ))
         }
         Node::Branch(branch) => {
             let index = child_index(&branch.keys, key);
@@ -155,8 +173,8 @@ pub(crate) fn remove<L: Load, S: Store>(
         return Ok(false);
     };
 
-    if let Some(value) = remove_from(load, store, tree, child, None, key)? {
-        release_value(store, &value);
+    if let Some(run) = remove_from(load, store, tree, child, None, key)? {
+        release_run(store, run);
     }
 
     collapse_root(store, root)?;
@@ -171,14 +189,14 @@ fn remove_from<L: Load, S: Store>(
     child: &mut Child,
     level: Option<u8>,
     key: &[u8],
-) -> Result<Option<StoredValue>> {
+) -> Result<Replaced> {
     let node = make_dirty(load, store, child, tree, level)?;
 
     match node {
-        Node::Leaf(entries) => Ok(entries
-            .binary_search_by(|entry| entry.key.as_slice().cmp(key))
-            .ok()
-            .map(|index| entries.remove(index).value)),
+        Node::Leaf(leaf) => match leaf.search(key) {
+            Ok(index) => Ok(Some(leaf.remove(index).map_err(internal)?)),
+            Err(_) => Ok(None),
+        },
         Node::Branch(branch) => {
             let index = child_index(&branch.keys, key);
             let removed = remove_from(
@@ -207,7 +225,7 @@ fn collapse_root<S: Store>(store: &mut S, root: &mut Option<Child>) -> Result<()
         let page = *page;
 
         match node.as_mut() {
-            Node::Leaf(entries) if entries.is_empty() => {
+            Node::Leaf(leaf) if leaf.is_empty() => {
                 store.release(page);
                 *root = None;
 
@@ -240,7 +258,7 @@ fn rebalance<L: Load, S: Store>(
     let (empty_leaf, underfull) = {
         let node = dirty_node(&branch.children[index])?;
         let empty = match node {
-            Node::Leaf(entries) => entries.is_empty(),
+            Node::Leaf(leaf) => leaf.is_empty(),
             Node::Branch(child) => child.keys.is_empty(),
         };
 
@@ -278,16 +296,27 @@ fn rebalance<L: Load, S: Store>(
         let Node::Leaf(moved) = take_node(load, store, right_child, tree, child_level)? else {
             return Err(internal("a leaf's neighbour is a branch"));
         };
-        let Node::Leaf(entries) = make_dirty(load, store, left_child, tree, child_level)? else {
+        let Node::Leaf(kept) = make_dirty(load, store, left_child, tree, child_level)? else {
             return Err(internal("a leaf's neighbour is a branch"));
         };
+        let mut entries = kept.to_entries().map_err(internal)?;
 
-        entries.extend(moved);
+        entries.extend(moved.to_entries().map_err(internal)?);
 
         if left_len + right_len <= capacity {
+            *kept = Leaf::from_entries(load.page_size(), &entries);
+
             (true, None)
         } else {
-            (false, Some(split_leaf(store, entries, capacity)?))
+            let (left, separator, right) = split_leaf(entries, load.page_size())?;
+            let page = store.allocate()?;
+
+            *kept = left;
+
+            (
+                false,
+                Some((separator, Child::dirty(page, Node::Leaf(right)))),
+            )
         }
     } else {
         let Node::Branch(moved) = take_node(load, store, right_child, tree, child_level)? else {
@@ -384,16 +413,19 @@ fn release_child<S: Store>(store: &mut S, child: &Child) {
     }
 }
 
-fn leaf_len(entries: &[LeafEntry]) -> usize {
-    entries.iter().map(LeafEntry::len).sum()
+/// A value as its entry keeps it.
+fn owned(value: StoredRef<'_>) -> StoredValue {
+    match value {
+        StoredRef::Inline(value) => StoredValue::Inline(value.to_vec()),
+        StoredRef::Overflow(reference) => StoredValue::Overflow(reference),
+    }
 }
 
-/// Splits an overflowing leaf, keeping the left half in place.
-fn split_leaf<S: Store>(
-    store: &mut S,
-    entries: &mut Vec<LeafEntry>,
-    capacity: usize,
-) -> Result<(Vec<u8>, Child)> {
+/// Shares out the entries of an overflowing leaf, in order, between two
+/// leaves as evenly as their sizes allow. Returns the left leaf, the
+/// separator, which is the first key of the right one, and the right leaf.
+fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Vec<u8>, Leaf)> {
+    let capacity = content_len(page_size);
     let sizes: Vec<usize> = entries.iter().map(LeafEntry::len).collect();
     let total: usize = sizes.iter().sum();
     let mut best = None;
@@ -414,9 +446,12 @@ fn split_leaf<S: Store>(
     let (at, _) = best.ok_or_else(|| internal("a leaf that cannot be split"))?;
     let right = entries.split_off(at);
     let separator = right[0].key.clone();
-    let page = store.allocate()?;
 
-    Ok((separator, Child::dirty(page, Node::Leaf(right))))
+    Ok((
+        Leaf::from_entries(page_size, &entries),
+        separator,
+        Leaf::from_entries(page_size, &right),
+    ))
 }
 
 /// Splits an overflowing branch, keeping the left part in place. The key in
@@ -473,16 +508,17 @@ fn split_branch<S: Store>(
     ))
 }
 
-/// Keeps a small value in the leaf, and writes a large one to an overflow run.
+/// Keeps a small value in the leaf, and writes a large one to an overflow
+/// run, whose reference it returns.
 fn store_value<S: Store>(
     page_size: usize,
     store: &mut S,
     tree: u64,
     key_len: usize,
     value: &[u8],
-) -> Result<StoredValue> {
+) -> Result<Option<OverflowRef>> {
     if inline_entry_len(key_len, value.len()) <= inline_limit(page_size) {
-        return Ok(StoredValue::Inline(value.to_vec()));
+        return Ok(None);
     }
 
     let len = value.len() as u64;
@@ -516,7 +552,7 @@ fn store_value<S: Store>(
         }
     }
 
-    Ok(StoredValue::Overflow(OverflowRef {
+    Ok(Some(OverflowRef {
         first,
         txn: store.txn(),
         pages: u32::try_from(pages).map_err(|_| internal("an overflow run too long"))?,
@@ -526,8 +562,8 @@ fn store_value<S: Store>(
 }
 
 /// Gives back the overflow pages of a value that is no longer stored.
-fn release_value<S: Store>(store: &mut S, value: &StoredValue) {
-    if let StoredValue::Overflow(reference) = value {
+fn release_run<S: Store>(store: &mut S, run: Option<OverflowRef>) {
+    if let Some(reference) = run {
         for index in 0..u64::from(reference.pages) {
             store.release(reference.first + index);
         }
@@ -561,9 +597,11 @@ pub(crate) fn delete_tree<L: Load, S: Store>(
         };
 
         match node {
-            Node::Leaf(entries) => {
-                for entry in &entries {
-                    release_value(store, &entry.value);
+            Node::Leaf(leaf) => {
+                for index in 0..leaf.len() {
+                    if let StoredRef::Overflow(reference) = leaf.value(index).map_err(internal)? {
+                        release_run(store, Some(reference));
+                    }
                 }
             }
             Node::Branch(branch) => {

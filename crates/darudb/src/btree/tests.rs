@@ -225,7 +225,9 @@ impl Harness {
             };
 
             match &node.to_node().unwrap() {
-                Node::Leaf(entries) => {
+                Node::Leaf(leaf) => {
+                    let entries = leaf.to_entries().unwrap();
+
                     assert!(
                         is_root || !entries.is_empty(),
                         "an empty leaf below the root"
@@ -235,7 +237,7 @@ impl Harness {
                         assert!(pair[0].key < pair[1].key);
                     }
 
-                    for entry in entries {
+                    for entry in &entries {
                         assert!(in_bounds(&entry.key), "a key outside its parent's range");
                     }
 
@@ -501,11 +503,14 @@ fn a_value_just_past_the_inline_limit_goes_to_an_overflow_run() {
     let Some(Child::Dirty { node, .. }) = &harness.root else {
         panic!();
     };
-    let Node::Leaf(entries) = node.as_ref() else {
+    let Node::Leaf(leaf) = node.as_ref() else {
         panic!();
     };
 
-    assert!(matches!(entries[0].value, StoredValue::Overflow(_)));
+    assert!(matches!(
+        leaf.to_entries().unwrap()[0].value,
+        StoredValue::Overflow(_)
+    ));
     assert_eq!(harness.get(b"k"), Some(big.clone()));
 
     harness.commit();

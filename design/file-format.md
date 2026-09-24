@@ -151,7 +151,7 @@ Kind, level, tree id and transaction id are redundant with what the parent alrea
 
 ## Leaf pages
 
-A leaf holds the tree's entries in ascending key order. Its content area starts with a **slot array**: one 2-byte offset per entry, in key order, each giving where in the page the entry starts. The entries themselves sit in the rest of the content area; a writer packs them against the end, leaving the free space in the middle.
+A leaf holds the tree's entries in ascending key order. Its content area starts with a **slot array**: one 2-byte offset per entry, in key order, each giving where in the page the entry starts. The entries themselves sit in the rest of the content area, in any order; a writer packs them against the end, leaving the free space in the middle.
 
 An entry is:
 
