@@ -68,7 +68,7 @@ Tests sit beside what they test, plus these places that test the whole engine:
 
 - `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. Half the runs use an encrypted file. Object runs write collections instead and check the indexes against the objects after every cut, and migrations are cut at every step. `DARUDB_CRASH_SEEDS` makes it longer.
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
-- `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
+- `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. Each commit also writes an object under a unique index the workers contend for, and readers check the indexes against the objects. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
 - The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
 - `tests/transactions.rs`, `tests/open.rs` and `tests/objects.rs`: the public API on real files.
 

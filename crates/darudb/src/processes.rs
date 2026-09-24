@@ -10,7 +10,9 @@
 //! handle and open it again. Every commit moves money between accounts, so
 //! the accounts always add up to [`TOTAL`], and it records the worker's
 //! sequence number, which the worker prints once the commit returns. Values of
-//! every size, some spanning pages of their own, come and go in a log.
+//! every size, some spanning pages of their own, come and go in a log, and
+//! each commit writes an object into a collection with a unique index whose
+//! values the workers contend for.
 //!
 //! What must hold, and where it is checked:
 //!
@@ -21,7 +23,10 @@
 //!   in a reader fails the run: it can only have been overwritten.
 //! - **Nothing is lost.** Once every worker has stopped, the file passes the
 //!   integrity check and holds the last commit every worker reported, deferred
-//!   ones included, since no power was cut.
+//!   ones included, since no power was cut, with its object.
+//! - **Indexes agree with objects in every snapshot.** Readers count the
+//!   objects through an index and through the records, and now and then check
+//!   every index entry; at the end, no unique value is held twice.
 //! - **Dead processes hold nothing back.** Once they have stopped, a few
 //!   commits reclaim every page their snapshots kept.
 //! - **One process, many handles.** Closing and opening handles in a worker
@@ -71,6 +76,31 @@ const WORKERS: usize = 4;
 /// past this, which keeps pages moving between used, retained and free.
 const LOG_ENTRIES: u64 = 150;
 
+/// How many of its objects a worker keeps: it deletes the one this many
+/// commits old.
+const EVENTS_KEPT: u64 = 20;
+
+/// The values of the unique field, few enough that workers take each
+/// other's.
+const TAGS: [&str; 12] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+
+fn schema() -> crate::Schema {
+    use crate::{Collection, Schema, Type};
+
+    Schema::new(1).collection(
+        Collection::new("events")
+            .field("worker", Type::Int)
+            .field("sequence", Type::Int)
+            .optional("tag", Type::String)
+            .index("worker")
+            .unique("tag"),
+    )
+}
+
+fn signed(value: u64) -> i64 {
+    i64::try_from(value).unwrap()
+}
+
 const WORKER_PATH: &str = "DARUDB_WORKER_PATH";
 const WORKER_ID: &str = "DARUDB_WORKER_ID";
 
@@ -81,6 +111,7 @@ fn options(path: &Path, rng: &mut Rng) -> OpenOptions {
     let mut options = OpenOptions::new();
 
     options
+        .schema(schema())
         .busy_timeout(Duration::from_secs(60))
         .max_unsynced_time(Duration::from_millis(5 + rng.below(200)))
         .max_unsynced_pages(16 + rng.below(1000));
@@ -210,6 +241,41 @@ fn write(
 
             txn.insert("log", &key, &rng.bytes(len))?;
 
+            // An object for the commit, with a tag another worker may hold,
+            // and the one `EVENTS_KEPT` commits old deleted.
+            {
+                let mut events = txn.collection("events")?;
+                let event = crate::Object::new()
+                    .with("worker", signed(id))
+                    .with("sequence", signed(sequence));
+
+                if rng.below(2) == 0 {
+                    let tagged = event.clone().with("tag", TAGS[rng.index(TAGS.len())]);
+
+                    match events.insert(tagged) {
+                        Err(crate::Error::DuplicateKey { .. }) => {
+                            events.insert(event)?;
+                        }
+                        result => {
+                            result?;
+                        }
+                    }
+                } else {
+                    events.insert(event)?;
+                }
+
+                if let Some(old) = sequence.checked_sub(EVENTS_KEPT) {
+                    let query = crate::Query::new().filter(
+                        crate::Filter::eq("worker", signed(id))
+                            .and(crate::Filter::eq("sequence", signed(old))),
+                    );
+
+                    for found in events.query(&query)? {
+                        events.delete(found.get("id").cloned().unwrap_or(crate::Value::Null))?;
+                    }
+                }
+            }
+
             if txn.len("log")? > LOG_ENTRIES {
                 let oldest: Vec<Vec<u8>> = txn
                     .iter("log")?
@@ -287,7 +353,8 @@ fn read(path: &Path, options: &OpenOptions, churn: bool, stop: &AtomicBool, seed
 }
 
 /// What a snapshot holds, reduced to a few numbers, after checking that its
-/// accounts add up. Every page of it is read, and so verified.
+/// accounts add up and its objects agree with their index. Every page of it
+/// is read, and so verified.
 fn contents(txn: &ReadTransaction) -> Result<(u64, u64, u64), String> {
     let failed = |error: crate::Error| format!("reading snapshot {}: {error}", txn.commit_id());
     let mut total = 0;
@@ -316,6 +383,35 @@ fn contents(txn: &ReadTransaction) -> Result<(u64, u64, u64), String> {
         for byte in key.iter().chain(&value) {
             digest = (digest ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01B3);
         }
+    }
+
+    let events = txn.collection("events").map_err(failed)?;
+    let stored = events.len().map_err(failed)?;
+    let indexed = events
+        .count(&crate::Query::new().filter(crate::Filter::ge("worker", 0)))
+        .map_err(failed)?;
+
+    if stored != indexed {
+        return Err(format!(
+            "snapshot {} holds {stored} events, and their index {indexed}",
+            txn.commit_id()
+        ));
+    }
+
+    for event in events.iter().map_err(failed)? {
+        let event = event.map_err(failed)?;
+
+        for byte in format!("{event:?}").bytes() {
+            digest = (digest ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3);
+        }
+    }
+
+    // Now and then, every index entry against the objects.
+    if digest % 16 == 0 {
+        let schema = txn.schema().cloned().ok_or("the handle has no schema")?;
+
+        crate::schema::objects::check_indexes(txn, &schema.schema)
+            .map_err(|message| format!("snapshot {}: {message}", txn.commit_id()))?;
     }
 
     Ok((txn.commit_id(), entries, digest))
@@ -466,7 +562,41 @@ fn check(path: &Path, stopped: &BTreeMap<u64, (Option<u64>, bool)>, rng: &mut Rn
             allowed,
             "worker {id} reported {reported:?}, killed: {killed}, and the file holds {found:?}"
         );
+
+        // Its last commit wrote an object, which is there.
+        if let Some(found) = found {
+            let events = read.collection("events").unwrap();
+            let query = crate::Query::new().filter(
+                crate::Filter::eq("worker", signed(*id))
+                    .and(crate::Filter::eq("sequence", signed(found))),
+            );
+
+            assert_eq!(events.count(&query).unwrap(), 1, "worker {id}'s last event");
+        }
     }
+
+    let schema = read.schema().cloned().unwrap();
+
+    crate::schema::objects::check_indexes(&read, &schema.schema).unwrap();
+
+    let mut tags: Vec<String> = read
+        .collection("events")
+        .unwrap()
+        .iter()
+        .unwrap()
+        .filter_map(|event| {
+            event
+                .unwrap()
+                .get("tag")
+                .and_then(|tag| tag.as_str().map(str::to_owned))
+        })
+        .collect();
+    let held = tags.len();
+
+    tags.sort();
+    tags.dedup();
+    assert_eq!(tags.len(), held, "a unique tag is held twice");
+    assert!(held > 0, "no event kept a tag");
 
     drop(read);
 
