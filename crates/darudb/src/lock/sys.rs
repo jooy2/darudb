@@ -138,34 +138,43 @@ mod platform {
     /// The lock record and the command that sets it. On 32-bit Linux and
     /// Android, `off_t` is 32 bits wide, so the lock bytes at 2^62 need the
     /// 64-bit record and command, which `libc` does not define for them. The
-    /// numbers are the kernel's, from `asm-generic/fcntl.h`, and MIPS has its
-    /// own.
+    /// numbers are the kernel's, from `asm-generic/fcntl.h`. x32 is not among
+    /// these targets: its pointers are 32 bits wide, but its `off_t` and its
+    /// system calls are the 64-bit ones.
     #[cfg(all(
         any(target_os = "linux", target_os = "android"),
         target_pointer_width = "32",
-        not(target_env = "musl")
+        not(target_env = "musl"),
+        not(target_arch = "x86_64")
     ))]
     mod calls {
         pub(super) type Record = libc::flock64;
 
-        #[cfg(any(target_arch = "mips", target_arch = "mips32r6"))]
-        pub(super) const GET: libc::c_int = 33;
-
-        #[cfg(any(target_arch = "mips", target_arch = "mips32r6"))]
-        pub(super) const SET: libc::c_int = 34;
-
-        #[cfg(not(any(target_arch = "mips", target_arch = "mips32r6")))]
         pub(super) const GET: libc::c_int = 12;
 
-        #[cfg(not(any(target_arch = "mips", target_arch = "mips32r6")))]
         pub(super) const SET: libc::c_int = 13;
     }
 
-    /// Every other Unix-like target has a 64-bit `off_t`, musl included.
+    // MIPS numbers the 64-bit commands differently, and `libc` has no 64-bit
+    // lock record for it with glibc. Guessing at the record's layout in code
+    // that nothing here can test would be worse than not building.
+    #[cfg(all(
+        target_os = "linux",
+        target_pointer_width = "32",
+        not(target_env = "musl"),
+        any(target_arch = "mips", target_arch = "mips32r6")
+    ))]
+    compile_error!(
+        "DaruDB does not build for 32-bit MIPS with glibc: the `libc` crate has no 64-bit lock record for it, which the lock bytes at 2^62 need"
+    );
+
+    /// Every other Unix-like target has a 64-bit `off_t`, musl and x32
+    /// included.
     #[cfg(not(all(
         any(target_os = "linux", target_os = "android"),
         target_pointer_width = "32",
-        not(target_env = "musl")
+        not(target_env = "musl"),
+        not(target_arch = "x86_64")
     )))]
     mod calls {
         pub(super) type Record = libc::flock;
