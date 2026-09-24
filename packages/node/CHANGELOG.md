@@ -8,4 +8,5 @@
 
 - `Database.open` opens a database file, creating it when nothing exists at the path, with `create` and `pageSize` options. `path`, `isOpen`, `pageSize` and `formatVersion` describe the open database, and `close` flushes and closes it.
 - Every error thrown by the package carries the engine's stable `code`, such as `NOT_FOUND`, `NOT_A_DATABASE` or `CLOSED`.
+- Several processes can open one database file at once, coordinated through the engine's file locks. A database on a network file system is refused with `UNSUPPORTED_FILE_SYSTEM`.
 - `engineVersion()` and `FORMAT_VERSION` report the engine inside the package and the file format version it reads and writes.
