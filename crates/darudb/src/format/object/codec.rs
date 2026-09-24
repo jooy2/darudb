@@ -119,6 +119,43 @@ pub(crate) fn read(bytes: &[u8]) -> Result<Vec<(u64, Raw)>, &'static str> {
     Ok(fields)
 }
 
+/// The fields of the record `bytes` whose ids are in `wanted`, which is
+/// sorted: the others are stepped over without being read into values, and
+/// the reading stops after the last field wanted. For a filter or a sort
+/// that needs a few fields of many records; an object that is kept is read
+/// whole, and checked whole, by [`read`].
+pub(crate) fn read_some(bytes: &[u8], wanted: &[u64]) -> Result<Vec<(u64, Raw)>, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2)?;
+    let mut fields = Vec::with_capacity(wanted.len());
+    let mut last = None;
+    let Some(&final_id) = wanted.last() else {
+        return Ok(fields);
+    };
+
+    for _ in 0..count {
+        let id = reader.varint()?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err("a record's field ids are out of order");
+        }
+
+        last = Some(id);
+
+        if id > final_id {
+            break;
+        }
+
+        if wanted.binary_search(&id).is_ok() {
+            fields.push((id, reader.value(0)?));
+        } else {
+            reader.skip(0)?;
+        }
+    }
+
+    Ok(fields)
+}
+
 /// A position in a record being read.
 struct Reader<'a> {
     bytes: &'a [u8],
@@ -197,6 +234,37 @@ impl Reader<'_> {
         }
 
         Ok(fields)
+    }
+
+    /// Steps over a value without reading it into one.
+    fn skip(&mut self, depth: usize) -> Result<(), &'static str> {
+        if depth >= MAX_DEPTH {
+            return Err("a record nests too deeply");
+        }
+
+        match self.byte()? {
+            FALSE | TRUE => {}
+            INT => {
+                self.varint()?;
+            }
+            FLOAT => {
+                self.take(8)?;
+            }
+            STRING | BYTES | OBJECT => {
+                let len = self.varint()?;
+
+                self.take(len)?;
+            }
+            LIST => {
+                for _ in 0..self.count(1)? {
+                    self.skip(depth + 1)?;
+                }
+            }
+            LINK => self.skip(depth + 1)?,
+            _ => return Err("a record has an unknown tag"),
+        }
+
+        Ok(())
     }
 
     fn value(&mut self, depth: usize) -> Result<Raw, &'static str> {
@@ -359,6 +427,35 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
 
         let value = match raw.next_if(|(id, _)| *id == field.id) {
             Some((_, value)) => from_raw(value, &field.kind)?,
+            None => match &field.default {
+                Some(default) => default.clone(),
+                None if field.optional => Value::Null,
+                None => return Err("a record lacks a required field"),
+            },
+        };
+
+        object.set(field.name.clone(), value);
+    }
+
+    Ok(object)
+}
+
+/// The fields `wanted` of the object whose record fields are `raw`, read by
+/// [`read_some`], as [`to_object`] would give them.
+pub(crate) fn to_object_some(
+    mut raw: Vec<(u64, Raw)>,
+    fields: &Fields,
+    wanted: &[u64],
+) -> Result<Object, &'static str> {
+    let mut object = Object::new();
+
+    for field in fields
+        .list
+        .iter()
+        .filter(|field| wanted.contains(&field.id))
+    {
+        let value = match raw.iter().position(|(id, _)| *id == field.id) {
+            Some(at) => from_raw(raw.swap_remove(at).1, &field.kind)?,
             None => match &field.default {
                 Some(default) => default.clone(),
                 None if field.optional => Value::Null,

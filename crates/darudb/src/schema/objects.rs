@@ -180,6 +180,19 @@ pub(crate) fn decode(
         .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
 }
 
+/// The fields `wanted`, sorted by id, of the object whose record is `bytes`:
+/// what a filter or a sort reads of an object it may not keep.
+pub(crate) fn decode_some(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    bytes: &[u8],
+    wanted: &[u64],
+) -> Result<Object> {
+    codec::read_some(bytes, wanted)
+        .and_then(|raw| codec::to_object_some(raw, &collection.fields, wanted))
+        .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
+}
+
 /// The object of `collection` whose primary key is `key`, if there is one.
 pub(crate) fn get(
     source: &dyn Source,

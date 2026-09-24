@@ -402,44 +402,102 @@ fn as_ref(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
     }
 }
 
-/// An object found: its primary key, its record, the object when it was
-/// decoded, and the values it sorts by.
+/// An object found: its primary key, its record, the fields the filter and
+/// the sort read, and the values it sorts by.
 struct Found {
     sort: Vec<Value>,
     key: Vec<u8>,
     record: Vec<u8>,
-    object: Option<Object>,
 }
 
-/// Runs `plan` and returns the objects it finds, in its order.
+/// Runs `plan` and returns the objects it finds, in its order. Only the
+/// objects in the result are decoded whole.
 pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object>> {
-    found(source, plan, true)?
+    found(source, plan)?
         .into_iter()
-        .map(|found| {
-            found
-                .object
-                .ok_or_else(|| objects::internal("an object found was not decoded"))
-        })
+        .map(|found| objects::decode(source, plan.collection, &found.record))
         .collect()
 }
 
 /// Runs `plan` and returns the records of the objects it finds, in its
-/// order, as the collection's tree holds them. An object is decoded only when
-/// the filter or the sort has to read it.
+/// order, as the collection's tree holds them.
 pub(crate) fn stored(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Vec<u8>>> {
-    Ok(found(source, plan, false)?
+    Ok(found(source, plan)?
         .into_iter()
         .map(|found| found.record)
         .collect())
 }
 
-/// What `plan` finds, in its order, with the objects decoded if `decode` is
-/// set.
-fn found(source: &dyn Source, plan: &Plan<'_>, decode: bool) -> Result<Vec<Found>> {
+/// The ids of the fields of the collection itself that the filter and the
+/// sort of `plan` read, sorted: all an object has to be decoded into for
+/// them.
+fn wanted(plan: &Plan<'_>) -> Vec<u64> {
+    fn add(fields: &mut Vec<u64>, plan: &Plan<'_>, path: &Resolved<'_>) {
+        if let Some(Step::Field(name)) = path.steps.first() {
+            if let Some(field) = plan.collection.fields.by_name(name) {
+                fields.push(field.id);
+            }
+        }
+    }
+
+    fn walk_cond(fields: &mut Vec<u64>, plan: &Plan<'_>, cond: &Cond<'_>) {
+        match cond {
+            Cond::And(terms) | Cond::Or(terms) => {
+                for term in terms {
+                    walk_cond(fields, plan, term);
+                }
+            }
+            Cond::Not(term) => walk_cond(fields, plan, term),
+            Cond::Test { path, .. } => add(fields, plan, path),
+        }
+    }
+
+    let mut fields = Vec::new();
+
+    #[cfg(test)]
+    if WHOLE.with(std::cell::Cell::get) {
+        fields.extend(plan.collection.fields.list.iter().map(|field| field.id));
+    }
+
+    if let Some(filter) = &plan.filter {
+        walk_cond(&mut fields, plan, filter);
+    }
+
+    for (path, _) in &plan.sort {
+        add(&mut fields, plan, path);
+    }
+
+    fields.sort_unstable();
+    fields.dedup();
+    fields
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the filter and the sort read whole objects, as the plain
+    /// answer the tests compare every plan with does.
+    static WHOLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `run` with the filter and the sort reading whole objects, so that a
+/// field left out of [`wanted`] shows as a difference from the plan.
+#[cfg(test)]
+pub(crate) fn whole<T>(run: impl FnOnce() -> T) -> T {
+    WHOLE.with(|whole| whole.set(true));
+
+    let result = run();
+
+    WHOLE.with(|whole| whole.set(false));
+    result
+}
+
+/// What `plan` finds, in its order.
+fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
     let reader = Reader {
         source,
         links: RefCell::new(HashMap::new()),
     };
+    let wanted = wanted(plan);
     let limit = plan.limit.map_or(usize::MAX, |limit| {
         usize::try_from(limit).unwrap_or(usize::MAX)
     });
@@ -454,7 +512,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, decode: bool) -> Result<Vec<Found
         let mut found = Vec::new();
 
         walk(source, plan, &mut |key, record| {
-            let Some(hit) = read(&reader, plan, key, record, decode)? else {
+            let Some((hit, _)) = read(&reader, plan, &wanted, key, record)? else {
                 return Ok(false);
             };
 
@@ -477,20 +535,16 @@ fn found(source: &dyn Source, plan: &Plan<'_>, decode: bool) -> Result<Vec<Found
     let mut found: Vec<Found> = Vec::new();
 
     walk(source, plan, &mut |key, record| {
-        let Some(mut hit) = read(&reader, plan, key, record, decode)? else {
+        let Some((mut hit, fields)) = read(&reader, plan, &wanted, key, record)? else {
             return Ok(false);
         };
 
-        if let Some(object) = &hit.object {
+        if let Some(fields) = &fields {
             hit.sort = plan
                 .sort
                 .iter()
-                .map(|(path, _)| reader.value_at(object, path))
+                .map(|(path, _)| reader.value_at(fields, path))
                 .collect::<Result<_>>()?;
-        }
-
-        if !decode {
-            hit.object = None;
         }
 
         found.push(hit);
@@ -525,15 +579,15 @@ fn order(plan: &Plan<'_>, a: &Found, b: &Found) -> Ordering {
 }
 
 /// The object with primary key `key`, whose record the walk may have read
-/// already, if it meets the plan's filter. The object is decoded if `decode`
-/// is set, or if the filter or the sort needs it.
+/// already, if it meets the plan's filter, with the fields `wanted` that the
+/// filter and the sort read, decoded when there are any.
 fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
+    wanted: &[u64],
     key: Vec<u8>,
     record: Option<Vec<u8>>,
-    decode: bool,
-) -> Result<Option<Found>> {
+) -> Result<Option<(Found, Option<Object>)>> {
     let record = match record {
         Some(record) => record,
         None => reader
@@ -546,24 +600,31 @@ fn read(
                 ))
             })?,
     };
-    let object = if decode || plan.filter.is_some() || !plan.sort.is_empty() {
-        Some(objects::decode(reader.source, plan.collection, &record)?)
+    let fields = if plan.filter.is_some() || !plan.sort.is_empty() {
+        Some(objects::decode_some(
+            reader.source,
+            plan.collection,
+            &record,
+            wanted,
+        )?)
     } else {
         None
     };
 
-    if let (Some(filter), Some(object)) = (&plan.filter, &object) {
-        if !reader.holds(filter, object)? {
+    if let (Some(filter), Some(fields)) = (&plan.filter, &fields) {
+        if !reader.holds(filter, fields)? {
             return Ok(None);
         }
     }
 
-    Ok(Some(Found {
-        sort: Vec::new(),
-        key,
-        record,
-        object,
-    }))
+    Ok(Some((
+        Found {
+            sort: Vec::new(),
+            key,
+            record,
+        },
+        fields,
+    )))
 }
 
 /// Runs `plan` and counts the objects it finds, after its offset and within
@@ -587,10 +648,11 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
             source,
             links: RefCell::new(HashMap::new()),
         };
+        let wanted = wanted(plan);
         let mut found = 0u64;
 
         walk(source, plan, &mut |key, record| {
-            if read(&reader, plan, key, record, false)?.is_some() {
+            if read(&reader, plan, &wanted, key, record)?.is_some() {
                 found += 1;
             }
 

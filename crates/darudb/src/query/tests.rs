@@ -283,12 +283,12 @@ fn agree(
         ),
     };
     let found = ids(&run::objects(source, &planned).unwrap());
-    let expected = ids(&run::objects(source, &scanned).unwrap());
+    let expected = ids(&run::whole(|| run::objects(source, &scanned)).unwrap());
 
     assert_eq!(found, expected, "{ir:?}\nplanned {planned:?}");
     assert_eq!(
         run::count(source, &planned).unwrap(),
-        run::count(source, &scanned).unwrap(),
+        run::whole(|| run::count(source, &scanned)).unwrap(),
         "{ir:?}\nplanned {planned:?}"
     );
     assert_eq!(
