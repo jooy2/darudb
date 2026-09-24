@@ -409,7 +409,13 @@ fn unique_value<'r>(index: &IndexDef, values: bool, range: &'r Range) -> Option<
 
 /// How many objects of one value a backward walk holds back before it goes
 /// to the value's first entry and walks its objects forwards instead.
-const GROUP: usize = 64;
+///
+/// Going there costs one more descent of the index, about what holding back
+/// 15 to 25 entries costs, and the entries held back for a value that turns
+/// out larger are read for nothing. Near that point, a value of any size
+/// costs at most about twice what it would if its size were known: 64, the
+/// size before, spent more on each large value than the descent it saved.
+const GROUP: usize = 16;
 
 /// The value an index entry holds and the primary key it names, borrowed
 /// from the entry and the value stored with it.
