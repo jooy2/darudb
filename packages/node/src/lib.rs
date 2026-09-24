@@ -16,8 +16,8 @@
 //! Every operation of a transaction has a synchronous method, and the
 //! asynchronous API runs them in batches through `run_async`, on the libuv
 //! thread pool, resolving a promise, so the event loop never waits for the
-//! disk. Opening a database, beginning a transaction, committing and closing
-//! have `…Async` methods of their own. A transaction sits behind a
+//! disk. Opening a database, beginning a write transaction, committing and
+//! closing have `…Async` methods of their own. A transaction sits behind a
 //! mutex so that a batch can take it to whichever pool thread runs it; the
 //! JavaScript side sends one batch of a transaction at a time, with its
 //! operations in the order they were called, so the mutex is never
@@ -322,18 +322,6 @@ impl NativeDatabase {
         let txn = self.database()?.begin_read().map_err(to_js_error)?;
 
         Ok(NativeTransaction::of(Txn::Read(Box::new(txn))))
-    }
-
-    #[napi(ts_return_type = "Promise<NativeTransaction | NativeFailure>")]
-    pub fn begin_read_async(&self) -> Result<AsyncTask<Work<Txn>>> {
-        let database = self.database()?.clone();
-
-        Ok(Work::task(move || {
-            database
-                .begin_read()
-                .map(|txn| Txn::Read(Box::new(txn)))
-                .map_err(to_js_error)
-        }))
     }
 
     #[napi]

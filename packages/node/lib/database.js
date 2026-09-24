@@ -479,7 +479,10 @@ class Database {
    * to. The transaction sees one commit until `fn` settles.
    */
   async readAsync(fn) {
-    const txn = settle(await this.#database().beginReadAsync());
+    // Begun here rather than on the pool: a read waits for no writer, and
+    // takes about as long as the trip there would, once the file's header
+    // is in the operating system's cache.
+    const txn = this.#database().beginRead();
     const serial = new Serial(txn);
 
     try {

@@ -116,7 +116,7 @@ const adults = await db.readAsync((txn) =>
 );
 ```
 
-- The function may be asynchronous. `writeAsync` commits when it resolves and aborts when it rejects, and takes the same `durability` option as `write`. `readAsync` sees one commit until the function settles.
+- The function may be asynchronous. `writeAsync` commits when it resolves and aborts when it rejects, and takes the same `durability` option as `write`. `readAsync` sees one commit until the function settles. It begins that read on the calling thread, as `read` does, because beginning a read waits for no writer and costs less than a trip to the pool.
 - Every collection method returns a promise. A transaction runs its operations in the order they were called, whether each was awaited or not, and commits only after the last one has settled. A rejected operation changes nothing, as in the synchronous API.
 - Operations called together, or while earlier ones are on the pool, go to the engine as one batch in one trip. A trip costs more than most operations, so starting many and awaiting them together is far cheaper than awaiting each in turn: `await Promise.all(keys.map((key) => users.get(key)))`.
 - This process's writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first without holding a thread of the pool, and so do `syncAsync` and `closeAsync`, which wait for the writer when a deferred commit is not yet durable.
