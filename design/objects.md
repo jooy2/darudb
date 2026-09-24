@@ -29,7 +29,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 | `list(T)`   | A list of values of a scalar type or of `link(C)`: a to-many link, or a list |
 | `object(E)` | An embedded object: fields of its own, stored inside the owning object       |
 
-- **Optional fields.** A field is required unless it is declared optional. An optional field may be null, which is also what it holds when it is left out. A required field may have a **default**, which it holds when it is left out.
+- **Optional fields.** A field is required unless it is declared optional. An optional field may be null, which is also what it holds when it is left out. A required field may have a **default**, which it holds when it is left out: the object is written with the default, so that changing the default later changes no object already written.
 - **Strings compare by bytes.** Their order is the order of their UTF-8 bytes, which is the order of their code points. There is no collation and no case folding in v1.
 - **Floats.** `-0.0` equals `0.0`, and every NaN equals every other and sorts after positive infinity, so that a float field has a total order an index can keep.
 - **Links** hold the target's primary key and nothing else. A link to an object that does not exist, or no longer does, is allowed and reads as the key it holds; the engine does not cascade deletes in v1.
@@ -58,7 +58,7 @@ The stored schema adds numbers the declared one does not have, assigned by the e
 - **Field ids**, unique within a collection or an embedded object, which records hold in place of field names, so that renaming a field rewrites no record.
 - **Index ids**, which name an index's tree.
 
-A declared schema matches a stored one by names: a collection or a field keeps its id for as long as it keeps its name, and a migration that renames one says so ([Migrations](#migrations)).
+A declared schema matches a stored one by names: a collection or a field keeps its id for as long as it keeps its name, and a migration that renames one says so ([Migrations](#migrations)). The stored schema lists collections, fields and indexes by id, so declaring the same ones in another order is the same schema.
 
 ## Storage
 
@@ -116,7 +116,7 @@ value   = tag payload
 | `0x09` | `object(E)`  | Length varint, then a record        |
 | `0x0A` | `link(C)`    | A value: the target's primary key   |
 
-- **Reading a record.** A field absent from a record holds its default, or null if it has none. A field id the schema no longer has belongs to a field that was removed, and is skipped. A record read from the file is untrusted input: a varint that runs out, a length past the end, a tag that does not match the field's type, or ids out of order make it `CORRUPTED`.
+- **Reading a record.** A field absent from a record, which only a record written before the field existed can be, holds its default, or null if it has none. A field id the schema no longer has belongs to a field that was removed, and is skipped. A record read from the file is untrusted input: a varint that runs out, a length past the end, a tag that does not match the field's type, or ids out of order make it `CORRUPTED`.
 - **Writing a record.** The engine checks a record it is given against the schema, types, required fields and all, before it stores it, and refuses one that does not fit with `INVALID_ARGUMENT`. A record from a binding is checked like any other.
 - **Why this format.** It is compact for the common case, small integers and short strings, and cheap to write in any language, which is what makes it the format bindings exchange with the engine. Field ids rather than names keep it short and make renaming free.
 
@@ -173,7 +173,7 @@ A write transaction offers these for a collection:
 - **Put** an object: inserts it, or replaces the object with its key.
 - **Delete** the object with a key: returns whether there was one.
 
-Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
+Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Every check that can refuse a write, the object against the schema, its key, the unique indexes and the length of every key it adds, happens before any tree changes, so a refused write leaves the transaction as it was and able to commit. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
 
 ## Queries
 
@@ -267,7 +267,7 @@ The engine chooses how to find the objects, and the choice never changes the res
 
 A count follows the same steps without decoding objects when the index answers the whole filter.
 
-Walking an index in reverse needs the kernel's trees to walk backwards, which they do not yet; phase 4 adds it to `btree/`.
+Walking an index in reverse is the kernel's backward walk of a tree, the one its `range_backward` offers.
 
 ## Migrations
 
@@ -288,18 +288,22 @@ A migration from version `m` to version `n` runs in one write transaction, and t
 1. **Renames.** Each version step from `m + 1` to `n` may name collections and fields that it renames. The stored schema takes the new names, and the ids stay.
 2. **The engine's own changes**, from the renamed stored schema to the declared one:
    - A new collection is created, empty.
-   - A new field is added. A required one needs a default, or declaring the schema fails with `INVALID_ARGUMENT`. No record is rewritten: a record without the field reads its default.
+   - A new field is added. A required one needs a default, or declaring the schema fails with `INVALID_ARGUMENT`. No record is rewritten: a record without the field reads its default. Changing the default of an existing field changes what such records read, so the indexes on that field are built again.
    - A removed field's id is retired. Records keep its value until they are next written, and the migration functions below can still read it by its old name.
    - A new index is built from the objects, which can fail with `DUPLICATE_KEY`, and a removed one is deleted.
-   - A field whose type changed, or a removed collection, is not a change the engine makes by itself: the step has to name it, as a field it replaces or a collection it deletes. A replaced field is a removed field and a new field with the same name.
-3. **The migration functions**, one per version step that has one, in version order. Each gets the write transaction under the declared schema, with the retired fields' values readable by their old names, and can read, write and delete objects to move data across.
-4. **The stored schema** becomes the declared one, with its version.
+   - A field whose type changed, or a removed collection, is not a change the engine makes by itself: the step has to name it, as a field it replaces or a collection it deletes. A replaced field is a removed field and a new field with the same name, so a required one needs a default too. A primary key cannot be replaced.
+3. **The migration functions**, one per version step that has one, in version order. Each gets the write transaction under the declared schema, and can read, write and delete objects to move data across. The objects as the schema before the migration reads them stay readable too, by the names that schema gave collections and fields, with the values of removed and replaced fields: an object reads that way as it is at the time, and one a function has already written holds null in the fields the new schema dropped.
+4. **The stored schema** becomes the declared one, with its version, and the collections the steps delete go, last, so that the functions can still read them.
+
+Inside the one write transaction, the engine stores the new schema before it runs the functions, so that they write objects through the same checks as any other transaction. Nothing outside the transaction can tell the order apart.
 
 A binding runs the migration functions in its own language, called back from the engine while the file is being opened.
 
 ### Several processes
 
-A process that opened the file with one schema can meet another process's migration. Each object transaction compares the stored schema's version with the one the handle opened with, which costs a lookup of a page that is almost always cached, and fails with `SCHEMA_MISMATCH` when they differ: the handle has to be opened again with the application's new schema. Opening while another process migrates waits for the writer lock, as any write does.
+A process that opened the file with one schema can meet another process's migration. Each time a transaction reaches a collection, it compares the stored schema's record with the one the handle opened with, which costs a lookup of a page that is almost always cached, and fails with `SCHEMA_MISMATCH` when they differ: the handle has to be opened again with the application's new schema. A read transaction compares with the commit it sees, so one that began before the migration goes on reading under the old schema. Opening while another process migrates waits for the writer lock, as any write does.
+
+The same holds between handles in one process. Each handle keeps the schema it was opened with, so a handle opened with a new schema migrates the file under the others, which fail the same way.
 
 ## Errors
 

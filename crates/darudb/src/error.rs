@@ -37,14 +37,15 @@ pub enum Error {
         /// The file that was opened.
         path: PathBuf,
     },
-    /// The file is a DaruDB database in a file format version this build of
-    /// the library cannot read.
+    /// The file is a DaruDB database in a format this build of the library
+    /// cannot read: a file format version, or an object format version of
+    /// the schema stored in it, that a newer build wrote.
     UnsupportedFormatVersion {
         /// The file that was opened.
         path: PathBuf,
-        /// The format version recorded in the file.
+        /// The version recorded in the file.
         found: u32,
-        /// The format version this build reads and writes.
+        /// The version this build reads and writes.
         supported: u32,
     },
     /// The file is a DaruDB database, but what it records is impossible, so
@@ -104,6 +105,39 @@ pub enum Error {
         /// The database's path.
         path: PathBuf,
     },
+    /// The schema an application declared differs from the one the file holds
+    /// at the same version, or another process migrated the file to a new
+    /// schema since this handle opened it.
+    SchemaMismatch {
+        /// What differs.
+        message: String,
+    },
+    /// The file holds a newer version of the schema than the application
+    /// declared: a newer application wrote it.
+    SchemaTooNew {
+        /// The version the file holds.
+        stored: u64,
+        /// The version the application declared.
+        declared: u64,
+    },
+    /// An insert found its primary key taken, or a unique index found its
+    /// value taken.
+    DuplicateKey {
+        /// Which key or value, in which collection.
+        message: String,
+    },
+    /// A query does not parse, or does not fit the schema.
+    InvalidQuery {
+        /// What is wrong, and where.
+        message: String,
+    },
+    /// An application's migration function reported an error. It constructs
+    /// this one to say why; an error of the engine's that it returns keeps its
+    /// own code.
+    MigrationFailed {
+        /// Why the migration failed.
+        message: String,
+    },
     /// An invariant of the engine does not hold, which only a bug in DaruDB can
     /// cause. Please report it.
     Internal {
@@ -131,6 +165,11 @@ impl Error {
             Error::KeyRequired { .. } => "KEY_REQUIRED",
             Error::WrongKey { .. } => "WRONG_KEY",
             Error::UnsupportedFileSystem { .. } => "UNSUPPORTED_FILE_SYSTEM",
+            Error::SchemaMismatch { .. } => "SCHEMA_MISMATCH",
+            Error::SchemaTooNew { .. } => "SCHEMA_TOO_NEW",
+            Error::DuplicateKey { .. } => "DUPLICATE_KEY",
+            Error::InvalidQuery { .. } => "INVALID_QUERY",
+            Error::MigrationFailed { .. } => "MIGRATION_FAILED",
             Error::Internal { .. } => "INTERNAL",
         }
     }
@@ -154,7 +193,7 @@ impl fmt::Display for Error {
                 supported,
             } => write!(
                 f,
-                "`{}` uses file format version {found}, and this build reads version {supported}",
+                "`{}` uses format version {found}, and this build reads version {supported}",
                 path.display()
             ),
             Error::Corrupted { path, reason } => {
@@ -192,6 +231,14 @@ impl fmt::Display for Error {
                 "`{}` is on a network file system, or on one whose file locks do not work; a database has to be on a local disk",
                 path.display()
             ),
+            Error::SchemaMismatch { message } => f.write_str(message),
+            Error::SchemaTooNew { stored, declared } => write!(
+                f,
+                "the file holds schema version {stored}, newer than the version {declared} declared"
+            ),
+            Error::DuplicateKey { message } => f.write_str(message),
+            Error::InvalidQuery { message } => write!(f, "invalid query: {message}"),
+            Error::MigrationFailed { message } => write!(f, "migration failed: {message}"),
             Error::Internal { message } => {
                 write!(f, "internal error, which is a bug in DaruDB: {message}")
             }
@@ -269,6 +316,37 @@ mod tests {
             (
                 Error::UnsupportedFileSystem { path: path.clone() },
                 "UNSUPPORTED_FILE_SYSTEM",
+            ),
+            (
+                Error::SchemaMismatch {
+                    message: "a message".to_owned(),
+                },
+                "SCHEMA_MISMATCH",
+            ),
+            (
+                Error::SchemaTooNew {
+                    stored: 2,
+                    declared: 1,
+                },
+                "SCHEMA_TOO_NEW",
+            ),
+            (
+                Error::DuplicateKey {
+                    message: "a message".to_owned(),
+                },
+                "DUPLICATE_KEY",
+            ),
+            (
+                Error::InvalidQuery {
+                    message: "a message".to_owned(),
+                },
+                "INVALID_QUERY",
+            ),
+            (
+                Error::MigrationFailed {
+                    message: "a message".to_owned(),
+                },
+                "MIGRATION_FAILED",
             ),
             (
                 Error::Internal {

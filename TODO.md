@@ -30,6 +30,8 @@ Phase 2 is done: page encryption, the key block, passwords, key changes, and the
 
 Phase 3 is done: the open, writer and snapshot locks of [design/locking.md](design/locking.md), several processes on one file, and network file systems refused. `src/processes.rs` fuzzes it: four worker processes at a time, each writing and reading through several handles and threads, with random ones killed. It passes 300 kills on a plain file and on an encrypted one. Beginning and ending a read transaction went from 38 nanoseconds to about 2 microseconds, which two reads of the header and a lock call cost, and back to about 1 when the process keeps the snapshot's lock for the next read transaction to join.
 
+Phase 4 is under way. The object layer of [design/objects.md](design/objects.md) stores a schema, writes and reads objects with their indexes in step, and migrates a file from one schema version to the next. Still to come: queries and the query language, objects in the crash suite and in the multi-process suite, the object API in the Node.js package, and the benchmarks that end the phase.
+
 ## Known gaps
 
 Confirmed by reading the code against the specification; no test reproduces them yet.

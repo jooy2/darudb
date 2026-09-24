@@ -4,12 +4,16 @@ use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 
-use super::{Range, catalog_names, check_key, check_value, find_tree, root_child, tree_key};
+use super::{
+    Range, catalog_names, check_key, check_value, engine_tree, find_tree, root_child, tree_key,
+    user_tree,
+};
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
+use crate::format::object::schema::OpenSchema;
 use crate::format::{
     CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, TXN_LIMIT,
-    decode_free_key, decode_free_value, decode_retained_key, decode_runs,
+    decode_free_key, decode_free_value, decode_retained_key, decode_runs, max_key_len,
 };
 use crate::instance::{Header, Shared, WriterGuard};
 use crate::space::Space;
@@ -61,10 +65,13 @@ pub struct WriteTransaction {
     pub(super) trees: BTreeMap<String, TreeState>,
     pub(super) next_tree_id: u64,
     pub(super) failed: bool,
+    /// The schema of the handle that began the transaction, if it declared
+    /// one.
+    pub(super) schema: Option<Arc<OpenSchema>>,
 }
 
 impl WriteTransaction {
-    pub(crate) fn begin(shared: &Arc<Shared>) -> Result<Self> {
+    pub(crate) fn begin(shared: &Arc<Shared>, schema: Option<Arc<OpenSchema>>) -> Result<Self> {
         let writer = shared.acquire_writer()?;
 
         shared.release_idle_snapshots();
@@ -183,7 +190,29 @@ impl WriteTransaction {
             trees: BTreeMap::new(),
             next_tree_id: base.next_tree_id,
             failed: false,
+            schema,
         })
+    }
+
+    /// The schema of the handle that began the transaction.
+    pub(crate) fn schema(&self) -> Option<&Arc<OpenSchema>> {
+        self.schema.as_ref()
+    }
+
+    /// Makes the transaction's collections those of `schema`, which a
+    /// migration is storing in it.
+    pub(crate) fn set_schema(&mut self, schema: Arc<OpenSchema>) {
+        self.schema = Some(schema);
+    }
+
+    /// The longest key a tree of this file holds.
+    pub(crate) fn max_key_len(&self) -> usize {
+        max_key_len(self.shared.loader.page_size())
+    }
+
+    /// The error for damage found in the file.
+    pub(crate) fn corrupted(&self, reason: String) -> Error {
+        self.shared.loader.corrupted_file(reason)
     }
 
     /// Stores `value` under `key` in tree `tree`, replacing any value already
@@ -193,6 +222,12 @@ impl WriteTransaction {
     /// with the default page size. A value is less than 4 GiB long; a value
     /// too large to keep in the tree's pages is stored in pages of its own.
     pub fn insert(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        user_tree(tree)?;
+        self.insert_in(tree, key, value)
+    }
+
+    /// [`insert`](Self::insert) into any tree, the engine's own included.
+    pub(crate) fn insert_in(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_open()?;
 
         let result = self.insert_inner(tree, key, value);
@@ -240,6 +275,12 @@ impl WriteTransaction {
     /// Removes `key` and its value from tree `tree`. Returns whether it was
     /// there.
     pub fn remove(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
+        user_tree(tree)?;
+        self.remove_in(tree, key)
+    }
+
+    /// [`remove`](Self::remove) from any tree, the engine's own included.
+    pub(crate) fn remove_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
         self.check_open()?;
 
         let result = self.remove_inner(tree, key);
@@ -278,6 +319,13 @@ impl WriteTransaction {
 
     /// Deletes tree `tree` with everything in it. Returns whether it existed.
     pub fn delete_tree(&mut self, tree: &str) -> Result<bool> {
+        user_tree(tree)?;
+        self.delete_tree_in(tree)
+    }
+
+    /// [`delete_tree`](Self::delete_tree) for any tree, the engine's own
+    /// included.
+    pub(crate) fn delete_tree_in(&mut self, tree: &str) -> Result<bool> {
         self.check_open()?;
 
         let result = self.delete_tree_inner(tree);
@@ -312,6 +360,12 @@ impl WriteTransaction {
     /// The value stored under `key` in tree `tree`, including changes made in
     /// this transaction.
     pub fn get(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        user_tree(tree)?;
+        self.get_in(tree, key)
+    }
+
+    /// [`get`](Self::get) in any tree, the engine's own included.
+    pub(crate) fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.check_open()?;
 
         let loader = &self.shared.loader;
@@ -345,7 +399,8 @@ impl WriteTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
-        self.walk(tree, &range, false)
+        user_tree(tree)?;
+        self.range_in(tree, &range, false)
     }
 
     /// The entries of tree `tree` whose keys lie within `range`, in reverse
@@ -355,10 +410,13 @@ impl WriteTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
-        self.walk(tree, &range, true)
+        user_tree(tree)?;
+        self.range_in(tree, &range, true)
     }
 
-    fn walk<K: AsRef<[u8]>>(
+    /// A range of any tree, the engine's own included, walked forwards or
+    /// backwards.
+    pub(crate) fn range_in<K: AsRef<[u8]>>(
         &self,
         tree: &str,
         range: &impl RangeBounds<K>,
@@ -384,6 +442,12 @@ impl WriteTransaction {
     /// The number of entries in tree `tree`, including changes made in this
     /// transaction.
     pub fn len(&self, tree: &str) -> Result<u64> {
+        user_tree(tree)?;
+        self.len_in(tree)
+    }
+
+    /// [`len`](Self::len) of any tree, the engine's own included.
+    pub(crate) fn len_in(&self, tree: &str) -> Result<u64> {
         self.check_open()?;
 
         let loader = &self.shared.loader;
@@ -397,7 +461,8 @@ impl WriteTransaction {
     }
 
     /// The names of every tree, including trees created and deleted in this
-    /// transaction, in byte order.
+    /// transaction, in byte order. The engine's own trees, which hold the
+    /// objects of collections, are not among them.
     pub fn tree_names(&self) -> Result<Vec<String>> {
         self.check_open()?;
 
@@ -411,6 +476,7 @@ impl WriteTransaction {
             }
         }
 
+        names.retain(|name| !engine_tree(name));
         names.sort_unstable();
 
         Ok(names)

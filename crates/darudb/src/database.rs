@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{self, DataKey, PageCipher, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
+use crate::format::object::schema::OpenSchema;
 use crate::format::{
     Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
     STATIC_LEN, Selector, StaticHeader, slot_offset,
@@ -15,6 +16,7 @@ use crate::format::{
 use crate::instance::{Entry, FileKey, Shared, find, registry};
 use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
+use crate::schema;
 use crate::storage::{self, Created, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 
@@ -27,6 +29,10 @@ use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 #[derive(Debug, Clone)]
 pub struct Database {
     shared: Arc<Shared>,
+    /// The schema this handle opened the file with, if it declared one.
+    /// Handles to one file in a process share its instance but not this: each
+    /// works with the schema it declared.
+    schema: Option<Arc<OpenSchema>>,
 }
 
 impl Database {
@@ -56,13 +62,13 @@ impl Database {
     /// Starts a read transaction: a consistent view of the database as of the
     /// last commit.
     pub fn begin_read(&self) -> Result<ReadTransaction> {
-        ReadTransaction::begin(&self.shared)
+        ReadTransaction::begin(&self.shared, self.schema.clone())
     }
 
     /// Starts the write transaction, waiting for one already running in
     /// another thread for up to the busy timeout.
     pub fn begin_write(&self) -> Result<WriteTransaction> {
-        WriteTransaction::begin(&self.shared)
+        WriteTransaction::begin(&self.shared, self.schema.clone())
     }
 
     /// Makes every commit so far durable, deferred ones included, whichever
@@ -162,105 +168,39 @@ impl Database {
         self.sync()
     }
 
-    /// Opens or creates the database, once the options are known to be valid.
-    ///
-    /// The registry of open files stays locked throughout, so two threads
-    /// opening one file end up with one instance, and the process with one
-    /// handle to the file.
+    /// Opens or creates the database, once the options are known to be valid,
+    /// and then stores, checks or migrates its schema.
     pub(crate) fn open_with(path: &Path, options: &OpenOptions) -> Result<Self> {
-        let mut instances = registry();
+        Self::with_schema(open_shared(path, options)?, options)
+    }
 
-        instances.retain(|_, entry| entry.holds());
-
-        if let Some(shared) = FileKey::of(path).and_then(|key| find(&instances, &key)) {
-            shared.admit(options.secret())?;
-
-            return Ok(Self { shared });
-        }
-
-        // Checked before anything is created, so that a refused database
-        // leaves no file behind, and again below for the file that opens.
-        if options.creates() && FileKey::of(path).is_none() && on_network_file_system(path, None) {
-            return Err(Error::UnsupportedFileSystem {
-                path: path.to_path_buf(),
-            });
-        }
-
-        let created = if options.creates() {
-            create(path, options)?
-        } else {
-            None
+    /// The handle to `shared`, once the file holds the declared schema.
+    ///
+    /// It runs after the registry of open files is unlocked: a migration can
+    /// take long, and its functions may open other databases.
+    fn with_schema(shared: Arc<Shared>, options: &OpenOptions) -> Result<Self> {
+        let schema = match options.declared() {
+            Some((declared, migrations)) => Some(schema::open(&shared, declared, migrations)?),
+            None => None,
         };
-        // The first page of a file created empty in place, which is written
-        // under the open lock.
-        let mut unwritten = None;
-        let (file, data_key) = match created {
-            Some((Created::Whole(file), data_key, _)) => (file, data_key),
-            Some((Created::Empty(file), data_key, page)) => {
-                unwritten = Some(page);
 
-                (file, data_key)
-            }
-            None => (open_file(path)?, None),
-        };
-        let file = Arc::new(file);
-
-        if on_network_file_system(path, Some(&file)) {
-            return Err(Error::UnsupportedFileSystem {
-                path: path.to_path_buf(),
-            });
-        }
-
-        let key = FileKey::of_file(&file, path).map_err(|source| io_error(path, source))?;
-
-        if let Some(shared) = find(&instances, &key) {
-            // The path led to a file this process has open after all: it was
-            // moved there after the lookup above. Closing the new handle would
-            // release the instance's locks, so the instance keeps it.
-            shared.keep_handle(file);
-            shared.admit(options.secret())?;
-
-            return Ok(Self { shared });
-        }
-
-        let locks = Locks::on(Arc::clone(&file));
-        let timeout = options.settings().busy_timeout;
-        let access = match unwritten {
-            None => locks
-                .open(timeout)
-                .map_err(|error| lock_error(path, error))?,
-            Some(page) => {
-                // Another process that opened the empty file first finds no
-                // database there and lets go of the lock.
-                locks
-                    .open_alone(timeout)
-                    .map_err(|error| lock_error(path, error))?;
-                storage::fill(&file, path, &page).map_err(|source| io_error(path, source))?;
-
-                Access::Alone
-            }
-        };
-        let shared = open_io(file, locks, access, path, options, data_key)?;
-
-        instances.insert(key, Entry::of(&shared));
-
-        Ok(Self { shared })
+        Ok(Self { shared, schema })
     }
 
     /// Opens a database whose file is `io`, bypassing the file system: the
     /// crash tests open their simulated disks with it.
     #[cfg(test)]
     pub(crate) fn open_io(io: Arc<dyn FileIo>, options: &OpenOptions) -> Result<Self> {
-        Ok(Self {
-            shared: open_io(
-                io,
-                Locks::none(),
-                Access::Alone,
-                Path::new("simulated.darudb"),
-                options,
-                None,
-            )?,
-        })
+        let shared = open_io(
+            io,
+            Locks::none(),
+            Access::Alone,
+            Path::new("simulated.darudb"),
+            options,
+            None,
+        )?;
+
+        Self::with_schema(shared, options)
     }
 
     /// Writes a new database onto the empty `io` and opens it.
@@ -277,9 +217,9 @@ impl Database {
             .map_err(|source| io_error(path, source))?;
         io.sync().map_err(|source| io_error(path, source))?;
 
-        Ok(Self {
-            shared: open_io(io, Locks::none(), Access::Alone, path, options, data_key)?,
-        })
+        let shared = open_io(io, Locks::none(), Access::Alone, path, options, data_key)?;
+
+        Self::with_schema(shared, options)
     }
 
     /// The instance behind this handle, for the engine's own tests.
@@ -287,6 +227,92 @@ impl Database {
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }
+}
+
+/// Opens or creates the database file, and returns its instance: the one
+/// this process has already, or a new one.
+///
+/// The registry of open files stays locked throughout, so two threads opening
+/// one file end up with one instance, and the process with one handle to the
+/// file.
+fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
+    let mut instances = registry();
+
+    instances.retain(|_, entry| entry.holds());
+
+    if let Some(shared) = FileKey::of(path).and_then(|key| find(&instances, &key)) {
+        shared.admit(options.secret())?;
+
+        return Ok(shared);
+    }
+
+    // Checked before anything is created, so that a refused database
+    // leaves no file behind, and again below for the file that opens.
+    if options.creates() && FileKey::of(path).is_none() && on_network_file_system(path, None) {
+        return Err(Error::UnsupportedFileSystem {
+            path: path.to_path_buf(),
+        });
+    }
+
+    let created = if options.creates() {
+        create(path, options)?
+    } else {
+        None
+    };
+    // The first page of a file created empty in place, which is written
+    // under the open lock.
+    let mut unwritten = None;
+    let (file, data_key) = match created {
+        Some((Created::Whole(file), data_key, _)) => (file, data_key),
+        Some((Created::Empty(file), data_key, page)) => {
+            unwritten = Some(page);
+
+            (file, data_key)
+        }
+        None => (open_file(path)?, None),
+    };
+    let file = Arc::new(file);
+
+    if on_network_file_system(path, Some(&file)) {
+        return Err(Error::UnsupportedFileSystem {
+            path: path.to_path_buf(),
+        });
+    }
+
+    let key = FileKey::of_file(&file, path).map_err(|source| io_error(path, source))?;
+
+    if let Some(shared) = find(&instances, &key) {
+        // The path led to a file this process has open after all: it was
+        // moved there after the lookup above. Closing the new handle would
+        // release the instance's locks, so the instance keeps it.
+        shared.keep_handle(file);
+        shared.admit(options.secret())?;
+
+        return Ok(shared);
+    }
+
+    let locks = Locks::on(Arc::clone(&file));
+    let timeout = options.settings().busy_timeout;
+    let access = match unwritten {
+        None => locks
+            .open(timeout)
+            .map_err(|error| lock_error(path, error))?,
+        Some(page) => {
+            // Another process that opened the empty file first finds no
+            // database there and lets go of the lock.
+            locks
+                .open_alone(timeout)
+                .map_err(|error| lock_error(path, error))?;
+            storage::fill(&file, path, &page).map_err(|source| io_error(path, source))?;
+
+            Access::Alone
+        }
+    };
+    let shared = open_io(file, locks, access, path, options, data_key)?;
+
+    instances.insert(key, Entry::of(&shared));
+
+    Ok(shared)
 }
 
 /// Reads the static fields of the file, unlocks an encrypted one, and builds

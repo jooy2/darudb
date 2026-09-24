@@ -90,9 +90,11 @@ fn as_bytes<K: AsRef<[u8]>>(bound: Bound<&K>) -> Bound<&[u8]> {
     }
 }
 
-/// A tree name as the catalog stores it, once it is known to be one.
+/// A tree name as the catalog stores it, once it is known to be one. The
+/// engine's own trees, whose names begin with a NUL character, pass too;
+/// [`user_tree`] keeps an application out of them.
 fn tree_key(name: &str, page_size: usize) -> Result<&[u8]> {
-    if name.is_empty() || name.starts_with('\0') || name.len() > max_key_len(page_size) {
+    if name.is_empty() || name.len() > max_key_len(page_size) {
         return Err(Error::InvalidArgument {
             message: format!(
                 "a tree name is 1 to {} bytes long and does not start with a NUL character",
@@ -102,6 +104,25 @@ fn tree_key(name: &str, page_size: usize) -> Result<&[u8]> {
     }
 
     Ok(name.as_bytes())
+}
+
+/// Refuses the name of one of the engine's own trees, which begins with a NUL
+/// character, from an application.
+fn user_tree(name: &str) -> Result<()> {
+    if name.starts_with('\0') {
+        return Err(Error::InvalidArgument {
+            message: "a tree name does not start with a NUL character: those are the engine's"
+                .to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Whether a tree is one of the engine's own, which the tree names an
+/// application sees leave out.
+fn engine_tree(name: &str) -> bool {
+    name.starts_with('\0')
 }
 
 /// A key the tree can hold.

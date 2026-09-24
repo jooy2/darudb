@@ -11,9 +11,12 @@
 //! created with a key or a password ([`OpenOptions::key`],
 //! [`OpenOptions::password`]) is encrypted and authenticated, every page of
 //! it. Several processes may have one file open at once: one writes at a
-//! time, and readers never wait for it. Typed records and queries come later,
-//! built on top. The file format will change without a migration until the
-//! first release.
+//! time, and readers never wait for it. The file format will change without a
+//! migration until the first release.
+//!
+//! A database opened with a [`Schema`] ([`OpenOptions::schema`]) also holds
+//! collections of typed [`Object`]s, with indexes kept in step with them and
+//! [`Migration`]s from one schema version to the next. Queries come next.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;
@@ -41,6 +44,9 @@
 //! - `space`: which pages a write transaction may use, and which it gives back.
 //! - `instance` and `txn`: the shared state of an open file, transactions, the
 //!   commit and recovery.
+//! - `schema`: the object layer, collections, objects, indexes and
+//!   migrations, kept in the kernel's trees. Its encodings are in
+//!   `format::object`.
 //! - [`Database`], [`OpenOptions`] and [`Error`]: the public surface.
 //!
 //! `design/` at the repository root specifies the file format and the commit
@@ -58,6 +64,7 @@ mod lock;
 mod options;
 #[cfg(test)]
 mod processes;
+mod schema;
 mod space;
 mod storage;
 #[cfg(test)]
@@ -70,7 +77,11 @@ compile_error!("DaruDB runs on Unix-like systems and Windows only.");
 pub use database::Database;
 pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
+pub use format::object::{Object, Value};
 pub use options::OpenOptions;
+pub use schema::{
+    Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
+};
 pub use txn::{Range, ReadTransaction, WriteTransaction};
 
 /// The version of this crate, as written in its `Cargo.toml`.

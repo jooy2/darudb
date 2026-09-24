@@ -55,22 +55,22 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1          |
 | `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1          |
 | `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1          |
-| `format/`     | What bytes on disk mean: every layout of `design/file-format.md`. No I/O at all          | Phase 2          |
+| `format/`     | What bytes on disk mean: the layouts of `design/`, objects in `format/object`. No I/O    | Phase 4          |
 | `lock/`       | Cross-process coordination through file range locks                                      | Phase 3          |
 | `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
-| `schema/`     | Collections, fields, indexes, schema migrations                                          | Planned, phase 4 |
+| `schema/`     | Declared schemas, migrations, and objects written with their indexes in step             | Phase 4          |
 | `query/`      | The query IR and its execution                                                           | Planned, phase 4 |
 | `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6 |
 
 From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
 
-Tests sit beside what they test, plus four places that test the whole engine:
+Tests sit beside what they test, plus these places that test the whole engine:
 
 - `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. Half the runs use an encrypted file. `DARUDB_CRASH_SEEDS` makes it longer.
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
 - `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
 - The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
-- `tests/transactions.rs` and `tests/open.rs`: the public API on real files.
+- `tests/transactions.rs`, `tests/open.rs` and `tests/objects.rs`: the public API on real files.
 
 `examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
 
@@ -226,7 +226,8 @@ Each of these was tried elsewhere and caused the problems this project exists to
 ## Things that surprise
 
 - **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
-- **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed keys, records and queries are the object layer of phase 4, built on top.
+- **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed objects are the object layer in `schema/`, built on top. Its trees have names that begin with a NUL character, which `tree_names` leaves out and the kernel's public calls refuse; the engine reaches them through the `*_in` methods of the transactions.
+- **Each handle keeps the schema it was opened with.** Handles to one file share an instance, but the schema lives on `Database`, and every transaction gets its handle's. Reaching a collection compares the stored schema's record with the handle's, which is how a handle notices another handle's or another process's migration (`SCHEMA_MISMATCH`).
 - **The header in memory is not the file's.** Another process may commit at any moment, so a reader reads the header from the file and locks its snapshot's byte, and a writer reads it again under the writer lock (`Shared::refresh_header`). The instance's copy is what this process's writer last knew, and a difference from the file is how it learns that another process committed.
 - **`lock/sys.rs` is the only module with `unsafe` code.** The crate denies `unsafe_code`, and that module allows it for the operating system's byte-range lock calls, which the standard library does not offer. Clippy requires a `SAFETY` comment on every `unsafe` block, and one unsafe operation per block.
 - **Nothing in a process may open a database file that the process has open**, tests included. On Unix-like systems, closing any descriptor of a file releases every lock the process holds on it. `tests/transactions.rs` reads the selector byte from another process for that reason.

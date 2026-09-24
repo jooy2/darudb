@@ -10,6 +10,7 @@ use crate::database::Database;
 use crate::error::{Error, Result};
 use crate::format::{self, Cipher, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 use crate::instance::Settings;
+use crate::schema::{self, Migration, Schema};
 
 /// Options for opening a database, in the style of [`std::fs::OpenOptions`].
 ///
@@ -31,6 +32,8 @@ pub struct OpenOptions {
     /// The page cipher of a new encrypted file, when the engine's own tests
     /// pin it; otherwise the one the machine prefers.
     page_cipher: Option<Cipher>,
+    schema: Option<Schema>,
+    migrations: Vec<Migration>,
 }
 
 impl OpenOptions {
@@ -46,6 +49,8 @@ impl OpenOptions {
             secret: None,
             password_cost: PasswordCost::DEFAULT,
             page_cipher: None,
+            schema: None,
+            migrations: Vec::new(),
         }
     }
 
@@ -156,6 +161,56 @@ impl OpenOptions {
         self
     }
 
+    /// Declares the collections of the database, and what their objects hold,
+    /// at a version.
+    ///
+    /// Opening a file stores the schema in it the first time. Later, a file
+    /// holding the same version opens if the schema is the same, and fails
+    /// with [`Error::SchemaMismatch`] if it is not: a changed schema needs a
+    /// new version. A file holding an older version is migrated to this one
+    /// ([`migration`](Self::migration)) before the open returns, and one
+    /// holding a newer version fails with [`Error::SchemaTooNew`].
+    ///
+    /// Without a schema, the database has no collections, and only its trees
+    /// of bytes are reachable.
+    ///
+    /// ```no_run
+    /// use darudb::{Collection, Object, OpenOptions, Schema, Type};
+    ///
+    /// let schema = Schema::new(1).collection(
+    ///     Collection::new("users")
+    ///         .field("name", Type::String)
+    ///         .optional("email", Type::String)
+    ///         .unique("email"),
+    /// );
+    /// let db = OpenOptions::new().schema(schema).open("app.darudb")?;
+    /// let mut txn = db.begin_write()?;
+    /// let id = txn
+    ///     .collection("users")?
+    ///     .insert(Object::new().with("name", "Alice"))?;
+    ///
+    /// txn.commit()?;
+    ///
+    /// let read = db.begin_read()?;
+    /// let alice = read.collection("users")?.get(id)?;
+    ///
+    /// assert_eq!(alice.and_then(|user| user.get("name").cloned()), Some("Alice".into()));
+    /// # Ok::<(), darudb::Error>(())
+    /// ```
+    pub fn schema(&mut self, schema: Schema) -> &mut Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// Adds a migration: what schema version `n` changes from version `n − 1`
+    /// beyond what the engine works out by itself. Opening a file holding an
+    /// older version runs the migrations up to the declared version, in
+    /// order, in one write transaction; see [`Migration`].
+    pub fn migration(&mut self, migration: Migration) -> &mut Self {
+        self.migrations.push(migration);
+        self
+    }
+
     /// Opens the database at `path` with these options.
     pub fn open(&self, path: impl AsRef<Path>) -> Result<Database> {
         self.validate()?;
@@ -188,6 +243,13 @@ impl OpenOptions {
         self.page_cipher
     }
 
+    /// The declared schema and its migrations, if there is a schema.
+    pub(crate) fn declared(&self) -> Option<(&Schema, &[Migration])> {
+        self.schema
+            .as_ref()
+            .map(|schema| (schema, self.migrations.as_slice()))
+    }
+
     /// Pins the page cipher of a new encrypted file, so the tests cover both
     /// ciphers on any machine.
     #[cfg(test)]
@@ -212,6 +274,14 @@ impl OpenOptions {
                     message: "the password is empty".to_owned(),
                 });
             }
+        }
+
+        if let Some((declared, migrations)) = self.declared() {
+            schema::check(declared, migrations)?;
+        } else if !self.migrations.is_empty() {
+            return Err(Error::InvalidArgument {
+                message: "migrations are declared without a schema to migrate to".to_owned(),
+            });
         }
 
         self.password_cost

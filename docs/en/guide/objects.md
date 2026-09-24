@@ -1,0 +1,154 @@
+---
+title: Collections and objects
+order: 3
+---
+
+# Collections and objects
+
+A database opened with a schema holds collections of typed objects, with indexes the engine keeps in step and migrations from one schema version to the next. This page shows the Rust API; the Node.js package does not have it yet.
+
+## Declare a schema
+
+A schema has a version, from 1 up, and collections. Each collection has fields of a type, a primary key, and any indexes.
+
+```rust
+use darudb::{Collection, OpenOptions, Schema, Type};
+
+fn schema() -> Schema {
+    Schema::new(1)
+        .collection(
+            Collection::new("users")
+                .field("name", Type::String)
+                .optional("email", Type::String)
+                .with_default("age", Type::Int, 0)
+                .unique("email"),
+        )
+        .collection(
+            Collection::new("posts")
+                .primary_key("slug", Type::String)
+                .field("author", Type::link("users"))
+                .optional("tags", Type::list(Type::String))
+                .index("author")
+                .index("tags"),
+        )
+}
+
+fn main() -> Result<(), darudb::Error> {
+    let db = OpenOptions::new().schema(schema()).open("app.darudb")?;
+    db.close()
+}
+```
+
+The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, a link to another collection's object, a list of any of those, and an embedded object with fields of its own (`Type::object(Embedded::new().field(...))`).
+
+- **Required and optional fields.** `field` is required, and writing an object without it fails. `optional` may be null, which is what it holds when it is left out. `with_default` is required, and an object written without it gets the default.
+- **Primary keys.** `primary_key` names a field of type `Int`, `String` or `Bytes`. Without one, the collection gets an `Int` field called `id`, and an object written without an `id` gets the next number, from 1 up. A number is never given twice in one file, even after its object is deleted.
+- **Links** hold the primary key of an object in the linked collection. A link to an object that does not exist is allowed.
+- **Indexes.** `index` keeps an index on a field so that queries on it will not have to read every object, and `unique` also refuses two objects with the same value. Any number of objects can hold null in a unique field. An index on a list has an entry for each element.
+
+The first open stores the schema in the file. Every later open compares the declared schema with the stored one: the same version with a different schema fails with `SCHEMA_MISMATCH`, and a file holding a newer version fails with `SCHEMA_TOO_NEW`. Declaring collections or indexes in another order is not a change.
+
+## Read and write objects
+
+An object is a set of named values. Inside a write transaction, `collection` gives a collection's objects and the calls that change them.
+
+```rust
+use darudb::{Database, Object, Value};
+
+fn write(db: &Database) -> Result<(), darudb::Error> {
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection("users")?;
+
+    let alice = users.insert(Object::new().with("name", "Alice").with("email", "alice@example.com"))?;
+    users.insert(Object::new().with("name", "Bob"))?;
+
+    // `put` replaces the object with the same key.
+    users.put(Object::new().with("id", alice.clone()).with("name", "Alice").with("age", 31))?;
+
+    let mut posts = txn.collection("posts")?;
+    posts.insert(
+        Object::new()
+            .with("slug", "hello")
+            .with("author", alice)
+            .with("tags", vec![Value::from("intro")]),
+    )?;
+
+    txn.commit()
+}
+
+fn read(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let users = read.collection("users")?;
+
+    if let Some(user) = users.get(1)? {
+        println!("{:?}", user.get("name"));
+    }
+
+    for user in users.iter()? {
+        println!("{:?}", user?);
+    }
+
+    println!("{} users", users.len()?);
+    Ok(())
+}
+```
+
+- `insert` fails with `DUPLICATE_KEY` if the key is taken, or if a unique index finds one of the object's values taken. `put` inserts or replaces. `delete` takes a key and returns whether there was an object.
+- An object that does not fit the schema, with a value of the wrong type or without a required field, fails with `INVALID_ARGUMENT`.
+- A refused write changes nothing, and the transaction can go on and commit.
+- Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.
+
+Queries over indexes are the next part of the object layer, and are not in the API yet.
+
+## Migrate to a new version
+
+Changing the schema means raising its version. Opening a file that holds an older version migrates it, in one write transaction that either commits whole or leaves the file as it was.
+
+The engine makes some changes by itself: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten; an object written before a field existed reads its default. Anything else is named in a `Migration`:
+
+```rust
+use darudb::{Collection, Migration, OpenOptions, Schema, Type};
+
+fn main() -> Result<(), darudb::Error> {
+    let v2 = Schema::new(2).collection(
+        Collection::new("people")
+            .field("full_name", Type::String)
+            .optional("email", Type::String)
+            .with_default("age", Type::String, "")
+            .unique("email"),
+    );
+    let migration = Migration::to(2)
+        .rename_collection("users", "people")
+        .rename_field("users", "name", "full_name")
+        .replace_field("users", "age")
+        .delete_collection("posts")
+        .run(|migrating| {
+            for key in migrating.previous_keys("users")? {
+                let before = migrating.previous("users", key.clone())?;
+                let age = before.and_then(|user| user.get("age")?.as_int()).unwrap_or(0);
+                let mut people = migrating.collection("people")?;
+
+                if let Some(mut person) = people.get(key)? {
+                    person.set("age", format!("{age} years"));
+                    people.put(person)?;
+                }
+            }
+
+            Ok(())
+        });
+
+    let db = OpenOptions::new().schema(v2).migration(migration).open("app.darudb")?;
+    db.close()
+}
+```
+
+- **Renames** keep the data where it is, so they cost nothing however many objects there are.
+- **A replaced field** is a new field with the old name, for a change of type. **A deleted collection** goes with its objects and indexes.
+- **The migration function** runs under the new schema. `previous` reads an object as the old schema did, with the old names and the values of removed and replaced fields, so read an object that way before writing it. A deleted collection can still be read that way until the migration commits.
+- A function that fails returns its error, and the open fails with it. `Error::MigrationFailed` carries the application's own reason.
+
+Migrations to several versions run in version order. A file two versions behind runs both steps, and one already at the declared version runs none.
+
+## Several processes and handles
+
+Each handle keeps the schema it was opened with. When another process, or another handle in the same process, migrates the file, the next transaction to reach a collection through the old handle fails with `SCHEMA_MISMATCH`, and the handle has to be opened again with the new schema. A read transaction that began before the migration goes on reading under the old schema, since it sees the commit it began at.

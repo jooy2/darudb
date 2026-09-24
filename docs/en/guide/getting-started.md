@@ -96,7 +96,7 @@ A write transaction dropped without `commit` is aborted, and nothing it did reac
 
 Several processes can have one file open at once. Each sees the others' commits as soon as they are made, one writes at a time, and a reader never waits for a writer. `begin_write` waits for a writer in another process as it does for one in its own, up to the busy timeout. The processes coordinate through the operating system's file locks and nothing else, so a process that dies at any moment leaves nothing the others have to clean up. Those locks, and the syncs a commit waits for, work only on a local disk: a database on a network file system such as NFS or SMB is refused with `UNSUPPORTED_FILE_SYSTEM`. Two more rules come with the locks. Nothing else in a process that has a database open may open the file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. And on iOS, an app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
 
-Typed records and queries come later, built on top of these trees.
+Opened with a schema, a database also holds collections of typed objects, kept in trees of the engine's own that `tree_names` does not list. [Collections and objects](./objects.md) shows how.
 
 #### Encryption
 
@@ -138,15 +138,19 @@ Every error carries a `code` that names the failure. The code is the same in Rus
 | --- | --- |
 | `NOT_FOUND` | Nothing exists at the path, and creating a database was not allowed. |
 | `NOT_A_DATABASE` | The file exists but is not a DaruDB database. |
-| `UNSUPPORTED_FORMAT_VERSION` | The file is a DaruDB database in a file format version this build cannot read. |
+| `UNSUPPORTED_FORMAT_VERSION` | The file is a DaruDB database in a format version this build cannot read: a newer build wrote it. |
 | `CORRUPTED` | The file is a DaruDB database, but part of it has been damaged. |
-| `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two. |
+| `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two, or an object does not fit the schema. |
 | `CLOSED` | A Node.js database object was used after `close`. |
 | `BUSY` | The database stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it. |
 | `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
 | `KEY_REQUIRED` | The database is encrypted, and it was opened without a key or password. |
 | `WRONG_KEY` | The key or password does not open the database. |
 | `UNSUPPORTED_FILE_SYSTEM` | The database is on a network file system, or on one whose file locks do not work. It has to be on a local disk. |
+| `SCHEMA_MISMATCH` | The declared schema differs from the one the file holds at the same version, or the file was migrated since this handle opened it. |
+| `SCHEMA_TOO_NEW` | The file holds a newer schema version than the one declared: a newer application wrote it. |
+| `DUPLICATE_KEY` | An insert found its primary key taken, or a unique index found a value taken. |
+| `MIGRATION_FAILED` | A migration function reported that it failed. The file keeps its old schema and data. |
 | `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |
 

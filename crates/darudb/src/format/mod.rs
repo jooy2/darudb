@@ -10,11 +10,16 @@
 //! Any change to what is written to disk changes [`FORMAT_VERSION`]. Until the
 //! first release there are no migrations between versions: a file in another
 //! version is refused when it is opened.
+//!
+//! `object` holds the object layer's encodings of `design/objects.md`, kept in
+//! the kernel's trees. They change nothing the kernel reads, and the stored
+//! schema carries a version of its own for them.
 
 mod check;
 mod header;
 mod key_block;
 mod node;
+pub(crate) mod object;
 mod page;
 mod pointer;
 mod record;

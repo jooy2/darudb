@@ -3,10 +3,11 @@
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use super::{Range, catalog_names, find_tree, root_child, tree_key};
+use super::{Range, catalog_names, engine_tree, find_tree, root_child, tree_key, user_tree};
 use crate::btree::{self, Load};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::format::CommitRecord;
+use crate::format::object::schema::OpenSchema;
 use crate::instance::Shared;
 
 /// A consistent view of the database as of one commit.
@@ -19,16 +20,30 @@ use crate::instance::Shared;
 pub struct ReadTransaction {
     shared: Arc<Shared>,
     record: CommitRecord,
+    /// The schema of the handle that began the transaction, if it declared
+    /// one.
+    schema: Option<Arc<OpenSchema>>,
 }
 
 impl ReadTransaction {
-    pub(crate) fn begin(shared: &Arc<Shared>) -> Result<Self> {
+    pub(crate) fn begin(shared: &Arc<Shared>, schema: Option<Arc<OpenSchema>>) -> Result<Self> {
         let record = shared.begin_snapshot()?;
 
         Ok(Self {
             shared: Arc::clone(shared),
             record,
+            schema,
         })
+    }
+
+    /// The schema of the handle that began the transaction.
+    pub(crate) fn schema(&self) -> Option<&Arc<OpenSchema>> {
+        self.schema.as_ref()
+    }
+
+    /// The error for damage found in the file.
+    pub(crate) fn corrupted(&self, reason: String) -> Error {
+        self.shared.loader.corrupted_file(reason)
     }
 
     /// The transaction id of the commit this transaction sees.
@@ -42,6 +57,12 @@ impl ReadTransaction {
     /// The value stored under `key` in tree `tree`, if there is one. A tree
     /// that does not exist holds nothing.
     pub fn get(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        user_tree(tree)?;
+        self.get_in(tree, key)
+    }
+
+    /// [`get`](Self::get) in any tree, the engine's own included.
+    pub(crate) fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
@@ -73,7 +94,8 @@ impl ReadTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
-        self.walk(tree, &range, false)
+        user_tree(tree)?;
+        self.range_in(tree, &range, false)
     }
 
     /// The entries of tree `tree` whose keys lie within `range`, in reverse
@@ -83,10 +105,13 @@ impl ReadTransaction {
         tree: &str,
         range: impl RangeBounds<K>,
     ) -> Result<Range<'_>> {
-        self.walk(tree, &range, true)
+        user_tree(tree)?;
+        self.range_in(tree, &range, true)
     }
 
-    fn walk<K: AsRef<[u8]>>(
+    /// A range of any tree, the engine's own included, walked forwards or
+    /// backwards.
+    pub(crate) fn range_in<K: AsRef<[u8]>>(
         &self,
         tree: &str,
         range: &impl RangeBounds<K>,
@@ -106,6 +131,12 @@ impl ReadTransaction {
 
     /// The number of entries in tree `tree`, 0 if it does not exist.
     pub fn len(&self, tree: &str) -> Result<u64> {
+        user_tree(tree)?;
+        self.len_in(tree)
+    }
+
+    /// [`len`](Self::len) of any tree, the engine's own included.
+    pub(crate) fn len_in(&self, tree: &str) -> Result<u64> {
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
@@ -113,12 +144,17 @@ impl ReadTransaction {
         Ok(find_tree(loader, catalog.as_ref(), name)?.map_or(0, |descriptor| descriptor.entries))
     }
 
-    /// The names of every tree, in byte order.
+    /// The names of every tree, in byte order. The engine's own trees, which
+    /// hold the objects of collections, are not among them.
     pub fn tree_names(&self) -> Result<Vec<String>> {
-        catalog_names(
+        let mut names = catalog_names(
             &self.shared.loader,
             root_child(self.record.catalog).as_ref(),
-        )
+        )?;
+
+        names.retain(|name| !engine_tree(name));
+
+        Ok(names)
     }
 }
 
