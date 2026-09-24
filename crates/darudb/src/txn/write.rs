@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use super::{
-    Range, catalog_names, check_key, check_value, engine_tree, find_tree, root_child, tree_key,
-    user_tree,
+    Descriptors, Range, catalog_names, check_key, check_value, engine_tree, find_tree, root_child,
+    tree_key, user_tree,
 };
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
@@ -64,6 +64,8 @@ pub struct WriteTransaction {
     /// The retained groups this transaction reclaims, by key.
     pub(super) reclaimed: Vec<Vec<u8>>,
     pub(super) trees: BTreeMap<String, TreeState>,
+    /// The trees looked up in the catalog without being changed.
+    pub(super) descriptors: Descriptors,
     pub(super) next_tree_id: u64,
     pub(super) failed: bool,
     /// The schema of the handle that began the transaction, if it declared
@@ -193,6 +195,7 @@ impl WriteTransaction {
             key_block: base.key_block,
             reclaimed,
             trees: BTreeMap::new(),
+            descriptors: Descriptors::default(),
             next_tree_id: base.next_tree_id,
             failed: false,
             schema,
@@ -387,7 +390,7 @@ impl WriteTransaction {
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(None),
             Some(state) => btree::get(loader, state.id, state.root.as_ref(), key),
-            None => match find_tree(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
                 Some(descriptor) => btree::get(
                     loader,
                     descriptor.id,
@@ -443,7 +446,7 @@ impl WriteTransaction {
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(Range::empty()),
             Some(state) => Range::over(loader, state.id, state.root.as_ref(), range, backward),
-            None => match find_tree(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
                 Some(descriptor) if !descriptor.root.is_null() => {
                     Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
                 }
@@ -468,7 +471,9 @@ impl WriteTransaction {
 
         match self.trees.get(tree) {
             Some(state) => Ok(state.entries),
-            None => Ok(find_tree(loader, self.catalog.as_ref(), name)?
+            None => Ok(self
+                .descriptors
+                .find(loader, self.catalog.as_ref(), name)?
                 .map_or(0, |descriptor| descriptor.entries)),
         }
     }

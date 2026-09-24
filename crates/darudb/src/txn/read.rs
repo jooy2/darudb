@@ -4,7 +4,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::{Range, catalog_names, engine_tree, find_tree, root_child, tree_key, user_tree};
+use super::{Descriptors, Range, catalog_names, engine_tree, root_child, tree_key, user_tree};
 use crate::btree::{self, Load};
 use crate::error::{Error, Result};
 use crate::format::CommitRecord;
@@ -28,6 +28,8 @@ pub struct ReadTransaction {
     /// collection has checked. The commit does not change, so neither does
     /// the answer.
     schema_checked: AtomicBool,
+    /// The trees looked up in the catalog so far.
+    descriptors: Descriptors,
 }
 
 impl ReadTransaction {
@@ -39,6 +41,7 @@ impl ReadTransaction {
             record,
             schema,
             schema_checked: AtomicBool::new(false),
+            descriptors: Descriptors::default(),
         })
     }
 
@@ -79,7 +82,7 @@ impl ReadTransaction {
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
 
-        let Some(descriptor) = find_tree(loader, catalog.as_ref(), name)? else {
+        let Some(descriptor) = self.descriptors.find(loader, catalog.as_ref(), name)? else {
             return Ok(None);
         };
 
@@ -133,7 +136,7 @@ impl ReadTransaction {
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
 
-        match find_tree(loader, catalog.as_ref(), name)? {
+        match self.descriptors.find(loader, catalog.as_ref(), name)? {
             Some(descriptor) if !descriptor.root.is_null() => {
                 Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
             }
@@ -153,7 +156,10 @@ impl ReadTransaction {
         let name = tree_key(tree, loader.page_size())?;
         let catalog = root_child(self.record.catalog);
 
-        Ok(find_tree(loader, catalog.as_ref(), name)?.map_or(0, |descriptor| descriptor.entries))
+        Ok(self
+            .descriptors
+            .find(loader, catalog.as_ref(), name)?
+            .map_or(0, |descriptor| descriptor.entries))
     }
 
     /// The names of every tree, in byte order. The engine's own trees, which

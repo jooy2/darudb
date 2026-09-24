@@ -14,6 +14,7 @@ pub(crate) mod recovery;
 mod write;
 
 use std::ops::{Bound, RangeBounds};
+use std::sync::{Mutex, PoisonError};
 
 use crate::btree::{self, Child, Loader};
 use crate::error::{Error, Result};
@@ -158,6 +159,49 @@ fn check_value(value: &[u8]) -> Result<()> {
 }
 
 /// The descriptor the catalog rooted at `catalog` keeps for `name`.
+/// The trees a transaction has looked up in its catalog, by name, with what
+/// the catalog says of each, nothing included.
+///
+/// A lookup walks the catalog's tree and decodes a descriptor, which a
+/// transaction reading one tree many times would otherwise repeat for every
+/// read: two of the five nodes a lookup of one object visits. A transaction's
+/// catalog does not change while it lives, and a write transaction keeps a
+/// tree it changes apart, in its own state, which it consults first.
+#[derive(Debug, Default)]
+pub(crate) struct Descriptors(Mutex<Vec<Known>>);
+
+/// A tree's name, and what the catalog says of it.
+type Known = (Box<[u8]>, Option<TreeDescriptor>);
+
+/// How many trees a transaction remembers; the few a query reads fit.
+const DESCRIPTORS: usize = 32;
+
+impl Descriptors {
+    fn find(
+        &self,
+        loader: &Loader,
+        catalog: Option<&Child>,
+        name: &[u8],
+    ) -> Result<Option<TreeDescriptor>> {
+        {
+            let known = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+
+            if let Some((_, descriptor)) = known.iter().find(|(known, _)| **known == *name) {
+                return Ok(*descriptor);
+            }
+        }
+
+        let descriptor = find_tree(loader, catalog, name)?;
+        let mut known = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if known.len() < DESCRIPTORS {
+            known.push((name.into(), descriptor));
+        }
+
+        Ok(descriptor)
+    }
+}
+
 fn find_tree(
     loader: &Loader,
     catalog: Option<&Child>,
