@@ -45,32 +45,187 @@ const KIND_CODES = {
   list: 7,
   object: 8
 };
+// `Object.entries` types the names as strings and `fromEntries` the keys;
+// these are the names of `KIND_CODES` by their codes.
 const KIND_NAMES = Object.fromEntries(
   Object.entries(KIND_CODES).map(([name, code]) => [code, name])
-);
+) as Partial<Record<number, Kind['type']>>;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
 /** An `Error` with a `code`, as every error the package throws has. */
-function codeError(code, message) {
-  const error = new Error(message);
+export interface CodeError extends Error {
+  code: string;
+}
+
+/** The kind of a field as the stored schema gives it, and how the field reads it. */
+export type Kind =
+  | { type: 'bool' }
+  | IntKind
+  | { type: 'float' }
+  | { type: 'string' }
+  | { type: 'bytes' }
+  | LinkKind
+  | { type: 'list'; element: Kind }
+  | { type: 'object'; fields: Layout };
+
+/**
+ * An int kind. `big` marks a field declared with `t.bigint()`, which reads a
+ * `bigint` always, and `anyInt` one that reads a number up to 2^53 and a
+ * `bigint` beyond, as a key does.
+ */
+export interface IntKind {
+  type: 'int';
+  big?: boolean;
+  anyInt?: boolean;
+}
+
+/** A link kind: the collection whose primary key it holds. */
+export interface LinkKind {
+  type: 'link';
+  target: CollectionLayout;
+}
+
+/**
+ * A field of a stored schema: its id, name and kind, whether it may be null,
+ * and its default, `undefined` for none.
+ */
+export interface FieldLayout {
+  id: number;
+  name: string;
+  kind: Kind;
+  optional: boolean;
+  default: unknown;
+}
+
+/** Makes an object of a layout from its fields' values, in the layout's order. */
+export type Builder = (values: unknown[]) => Record<string, unknown>;
+
+/**
+ * The fields of a collection or an embedded object, as `fieldsOf` makes them
+ * ready to read and write: in id order, with the position of each id, the
+ * names, whether one is `__proto__`, and the function `builderOf` makes for
+ * the layout, `undefined` until it has been made.
+ */
+export interface Layout {
+  list: FieldLayout[];
+  positions: Map<number, number>;
+  names: Set<string>;
+  hasProto: boolean;
+  build: Builder | null | undefined;
+}
+
+/**
+ * A collection of a stored schema: its id, name and fields, its key field,
+ * and whether the engine numbers its keys.
+ */
+export interface CollectionLayout {
+  id: number | bigint;
+  name: string;
+  fields: Layout;
+  key: FieldLayout;
+  auto: boolean;
+}
+
+/** A stored schema as `decodeSchema` reads it: its version and its collections by name. */
+export interface SchemaLayout {
+  version: number | bigint;
+  collections: Map<string, CollectionLayout>;
+}
+
+/** A value read with `readAny`, tagged with its type. */
+export type Tagged =
+  | { tag: 'bool'; value: boolean }
+  | { tag: 'int'; value: number | bigint }
+  | { tag: 'float'; value: number }
+  | { tag: 'string'; value: string }
+  | { tag: 'bytes'; value: Uint8Array }
+  | { tag: 'list'; value: Tagged[] }
+  | { tag: 'object'; value: AnyRecord }
+  | { tag: 'link'; value: Tagged };
+
+/** A record read with `readAny`: its values by field id. */
+export type AnyRecord = Map<number | bigint, Tagged>;
+
+/** The value a `Tagged` of tag `T` holds. */
+type TaggedValue<T extends Tagged['tag']> = Extract<Tagged, { tag: T }>['value'];
+
+/**
+ * A declared field's type and how the field holds it, as `t` and the
+ * modifiers of a field type make it.
+ */
+export type Spec = (
+  | { type: 'bool' }
+  | { type: 'int'; big?: boolean }
+  | { type: 'float' }
+  | { type: 'string' }
+  | { type: 'bytes' }
+  | { type: 'link'; target: string }
+  | { type: 'list'; element: Spec }
+  | { type: 'object'; fields: DeclaredFields }
+) & {
+  optional?: boolean;
+  default?: unknown;
+  index?: boolean;
+  unique?: boolean;
+  primaryKey?: boolean;
+};
+
+/** The declared fields of a collection or an embedded object, by name. */
+export type DeclaredFields = Readonly<Record<string, { readonly spec: Spec }>>;
+
+/** A declared collection, as `collection` makes it. */
+export interface DeclaredCollection {
+  readonly fields: DeclaredFields;
+}
+
+/** A declared schema, as `schema` makes it. */
+export interface DeclaredSchema {
+  readonly version: number;
+  readonly collections: Readonly<Record<string, DeclaredCollection>>;
+}
+
+/**
+ * A node of a query's filter: a test of a field, with its operator's number
+ * and the values it compares with, or `and`, `or` or `not` of other nodes.
+ */
+export type FilterNode =
+  | { kind: 'test'; op: number; path: string[]; values: unknown[] }
+  | { kind: 'and' | 'or'; terms: FilterNode[] }
+  | { kind: 'not'; term: FilterNode };
+
+/**
+ * A query as `encodeQuery` takes it: its filter, its sort as paths each with
+ * whether it descends, its offset, and its limit, `null` for none.
+ */
+export interface QueryParts {
+  filter: FilterNode | null;
+  sort: [string[], boolean][];
+  offset: number;
+  limit: number | null;
+}
+
+/** An `Error` with a `code`, as every error the package throws has. */
+function codeError(code: string, message: string): CodeError {
+  // Its code is set on the next line.
+  const error = new Error(message) as CodeError;
 
   error.code = code;
 
   return error;
 }
 
-function invalid(message) {
+function invalid(message: string): CodeError {
   return codeError('INVALID_ARGUMENT', message);
 }
 
-function corrupted(message) {
+function corrupted(message: string): CodeError {
   return codeError('CORRUPTED', `a record read from the database is damaged: ${message}`);
 }
 
 /** How a value looks, for an error message. */
-function describe(value) {
+function describe(value: unknown): string {
   if (value === null) {
     return 'null';
   }
@@ -88,6 +243,10 @@ function describe(value) {
 
 /** A growing buffer that records and IR are written into. */
 class Writer {
+  declare bytes: Uint8Array;
+  declare at: number;
+  declare floats: DataView | null;
+
   constructor(size = 256) {
     this.bytes = new Uint8Array(size);
     this.at = 0;
@@ -95,7 +254,7 @@ class Writer {
   }
 
   /** A view for writing floats, made the first time one is written. */
-  get view() {
+  get view(): DataView {
     if (this.floats === null || this.floats.buffer !== this.bytes.buffer) {
       this.floats = new DataView(this.bytes.buffer);
     }
@@ -103,7 +262,7 @@ class Writer {
     return this.floats;
   }
 
-  reserve(extra) {
+  reserve(extra: number): void {
     if (this.at + extra <= this.bytes.length) {
       return;
     }
@@ -125,7 +284,7 @@ class Writer {
    * `close` writes once the object has been written. An object written this
    * way needs no buffer of its own.
    */
-  open() {
+  open(): number {
     this.reserve(11);
     this.bytes[this.at++] = OBJECT;
 
@@ -137,7 +296,7 @@ class Writer {
   }
 
   /** Ends the object `open` started at `mark`, moving it next to its length. */
-  close(mark) {
+  close(mark: number): void {
     const start = mark + 10;
     const length = this.at - start;
     let size = 1;
@@ -152,13 +311,13 @@ class Writer {
     this.at += length;
   }
 
-  byte(value) {
+  byte(value: number): void {
     this.reserve(1);
     this.bytes[this.at++] = value;
   }
 
   /** An unsigned LEB128 varint of a non-negative number or `bigint`. */
-  varint(value) {
+  varint(value: number | bigint): void {
     this.reserve(10);
 
     if (typeof value === 'bigint') {
@@ -181,7 +340,7 @@ class Writer {
   }
 
   /** A zigzag varint of an int: a whole number or a 64-bit `bigint`. */
-  int(value) {
+  int(value: number | bigint): void {
     if (typeof value === 'number') {
       if (value >= -EXACT_DOUBLE && value <= EXACT_DOUBLE) {
         this.varint(value >= 0 ? value * 2 : -value * 2 - 1);
@@ -195,13 +354,13 @@ class Writer {
     this.varint(value >= 0n ? value << 1n : (-value << 1n) - 1n);
   }
 
-  float(value) {
+  float(value: number): void {
     this.reserve(8);
     this.view.setFloat64(this.at, value, true);
     this.at += 8;
   }
 
-  string(value) {
+  string(value: string): void {
     const length = value.length;
     let ascii = true;
 
@@ -234,7 +393,7 @@ class Writer {
     }
   }
 
-  bytesOf(value) {
+  bytesOf(value: Uint8Array): void {
     this.varint(value.length);
     this.reserve(value.length);
     this.bytes.set(value, this.at);
@@ -242,7 +401,7 @@ class Writer {
   }
 
   /** What has been written, copied out. */
-  finish() {
+  finish(): Uint8Array {
     return this.bytes.slice(0, this.at);
   }
 }
@@ -253,7 +412,12 @@ const floatBytes = new Uint8Array(8);
 const floatView = new DataView(floatBytes.buffer);
 
 class Reader {
-  constructor(bytes, start = 0, end = bytes.length) {
+  declare bytes: Uint8Array;
+  declare at: number;
+  declare end: number;
+  declare floats: DataView | null;
+
+  constructor(bytes: Uint8Array, start = 0, end = bytes.length) {
     this.bytes = bytes;
     this.at = start;
     this.end = end;
@@ -261,7 +425,7 @@ class Reader {
   }
 
   /** A view for reading floats, made the first time one is read. */
-  get view() {
+  get view(): DataView {
     if (this.floats === null) {
       this.floats = new DataView(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength);
     }
@@ -269,7 +433,7 @@ class Reader {
     return this.floats;
   }
 
-  byte() {
+  byte(): number {
     if (this.at >= this.end) {
       throw corrupted('it ends inside a value');
     }
@@ -278,7 +442,7 @@ class Reader {
   }
 
   /** A varint, as a number while it fits in one exactly, a `bigint` after. */
-  varint() {
+  varint(): number | bigint {
     let result = 0;
     let scale = 1;
 
@@ -317,7 +481,7 @@ class Reader {
   }
 
   /** A varint that counts bytes or values still ahead. */
-  count(each = 1) {
+  count(each = 1): number {
     const count = this.varint();
 
     if (typeof count !== 'number' || count * each > this.end - this.at) {
@@ -327,7 +491,7 @@ class Reader {
     return count;
   }
 
-  int() {
+  int(): number | bigint {
     const zigzag = this.varint();
 
     if (typeof zigzag === 'number') {
@@ -339,7 +503,7 @@ class Reader {
     return value >= -BIG_SAFE && value <= BIG_SAFE ? Number(value) : value;
   }
 
-  float() {
+  float(): number {
     if (this.end - this.at < 8) {
       throw corrupted('it ends inside a float');
     }
@@ -355,7 +519,7 @@ class Reader {
     return floatView.getFloat64(0, true);
   }
 
-  string() {
+  string(): string {
     const length = this.count();
     const start = this.at;
 
@@ -374,9 +538,13 @@ class Reader {
       // A `Buffer` makes a string of it in one call, at a cost that does
       // not grow with its length as building one from its codes does.
       if (ascii) {
+        // `apply` takes any array-like, a `Uint8Array` as well as an array.
         return Buffer.isBuffer(this.bytes)
           ? this.bytes.toString('latin1', start, this.at)
-          : String.fromCharCode.apply(null, this.bytes.subarray(start, this.at));
+          : String.fromCharCode.apply(
+              null,
+              this.bytes.subarray(start, this.at) as unknown as number[]
+            );
       }
     }
 
@@ -388,7 +556,7 @@ class Reader {
   }
 
   /** Bytes, copied into a `Uint8Array` of their own. */
-  bytesValue() {
+  bytesValue(): Uint8Array {
     const length = this.count();
     const value = new Uint8Array(length);
 
@@ -400,7 +568,7 @@ class Reader {
 }
 
 /** Whether `value` is a whole number that a 64-bit int holds. */
-function isInt(value) {
+function isInt(value: unknown): value is number | bigint {
   return (
     (typeof value === 'number' && Number.isSafeInteger(value)) ||
     (typeof value === 'bigint' && value >= I64_MIN && value <= I64_MAX)
@@ -411,7 +579,7 @@ function isInt(value) {
  * Writes `value` as a value of `kind`, a type of the schema. `where` names it
  * in an error.
  */
-function writeValue(writer, kind, value, where) {
+function writeValue(writer: Writer, kind: Kind, value: unknown, where: string): void {
   switch (kind.type) {
     case 'bool':
       if (typeof value !== 'boolean') {
@@ -513,7 +681,7 @@ function writeValue(writer, kind, value, where) {
  * Writes the fields of `object` that `fields` names and that are not null,
  * by id in ascending order: a record.
  */
-function writeFields(writer, fields, object, where) {
+function writeFields(writer: Writer, fields: Layout, object: object, where: string): void {
   // A property the schema does not have is refused, as the engine refuses
   // it, rather than dropped: it is a typo, or a name a migration changed.
   for (const name of Object.keys(object)) {
@@ -545,15 +713,16 @@ function writeFields(writer, fields, object, where) {
 }
 
 /** Property `name` of `object` itself, never one it inherits such as `constructor`. */
-function own(object, name) {
-  return Object.hasOwn(object, name) ? object[name] : undefined;
+function own(object: object, name: string): unknown {
+  // Any object's properties can be read by name.
+  return Object.hasOwn(object, name) ? (object as Record<string, unknown>)[name] : undefined;
 }
 
 /**
  * Writes the records of `objects` into one buffer, each after its length,
  * for a batch write.
  */
-function encodeRecords(collection, objects) {
+function encodeRecords(collection: CollectionLayout, objects: readonly unknown[]): Uint8Array {
   const writer = new Writer(64 * objects.length + 64);
 
   for (const object of objects) {
@@ -584,7 +753,7 @@ function encodeRecords(collection, objects) {
 }
 
 /** Skips a value of any type, as a record read with an older schema holds. */
-function skipValue(reader, depth) {
+function skipValue(reader: Reader, depth: number): void {
   if (depth >= MAX_DEPTH) {
     throw corrupted('it nests too deeply');
   }
@@ -633,7 +802,7 @@ function skipValue(reader, depth) {
 }
 
 /** Reads a value of `kind`. */
-function readValue(reader, kind, depth) {
+function readValue(reader: Reader, kind: Kind, depth: number): unknown {
   if (depth >= MAX_DEPTH) {
     throw corrupted('it nests too deeply');
   }
@@ -695,7 +864,7 @@ function readValue(reader, kind, depth) {
     case 'list':
       if (tag === LIST) {
         const count = reader.count();
-        const values = new Array(count);
+        const values = new Array<unknown>(count);
 
         for (let index = 0; index < count; index++) {
           values[index] = readValue(reader, kind.element, depth + 1);
@@ -729,10 +898,10 @@ function readValue(reader, kind, depth) {
 }
 
 /** An int read as a number, or a `bigint` beyond 2^53, as keys are. */
-const ANY_INT = Object.freeze({ type: 'int', anyInt: true });
+const ANY_INT: IntKind = Object.freeze({ type: 'int', anyInt: true });
 
 /** A default as a field reads it, a fresh copy of a list or bytes. */
-function defaultOf(field) {
+function defaultOf(field: FieldLayout): unknown {
   const value = field.default;
 
   if (Array.isArray(value)) {
@@ -748,9 +917,14 @@ function defaultOf(field) {
  * required field may be missing too, as in an object a migration has
  * rewritten; otherwise that is damage.
  */
-function readFields(reader, fields, lenient, depth) {
+function readFields(
+  reader: Reader,
+  fields: Layout,
+  lenient: boolean,
+  depth: number
+): Record<string, unknown> {
   const count = reader.count(2);
-  const values = new Array(fields.list.length);
+  const values = new Array<unknown>(fields.list.length);
   let last = -1;
 
   for (let index = 0; index < count; index++) {
@@ -785,7 +959,7 @@ function readFields(reader, fields, lenient, depth) {
     return fields.build(values);
   }
 
-  const object = {};
+  const object: Record<string, unknown> = {};
 
   for (let index = 0; index < fields.list.length; index++) {
     const field = fields.list[index];
@@ -807,7 +981,7 @@ function readFields(reader, fields, lenient, depth) {
 }
 
 /** The value of a field a record lacks: its default, or null if it may be. */
-function missing(field, lenient) {
+function missing(field: FieldLayout, lenient: boolean): unknown {
   if (field.default !== undefined) {
     return defaultOf(field);
   }
@@ -837,7 +1011,7 @@ const MAX_BUILT_FIELDS = 256;
  * key in a literal sets the object's prototype; nor is one in a process that
  * forbids making code from strings.
  */
-function builderOf(fields) {
+function builderOf(fields: Layout): Builder | null {
   if (fields.hasProto || fields.list.length > MAX_BUILT_FIELDS) {
     return null;
   }
@@ -847,7 +1021,8 @@ function builderOf(fields) {
   );
 
   try {
-    return new Function('values', `'use strict';\nreturn { ${entries.join(', ')} };`);
+    // The body below takes `values` and returns an object literal.
+    return new Function('values', `'use strict';\nreturn { ${entries.join(', ')} };`) as Builder;
   } catch (error) {
     // Only a process that forbids it fails to make the function.
     if (error instanceof EvalError) {
@@ -859,7 +1034,11 @@ function builderOf(fields) {
 }
 
 /** The object whose record is `bytes`. */
-function decodeRecord(collection, bytes, lenient = false) {
+function decodeRecord(
+  collection: CollectionLayout,
+  bytes: Uint8Array,
+  lenient = false
+): Record<string, unknown> {
   const reader = new Reader(bytes);
   const object = readFields(reader, collection.fields, lenient, 0);
 
@@ -871,11 +1050,11 @@ function decodeRecord(collection, bytes, lenient = false) {
 }
 
 /** The objects of records one after another, each after its length. */
-function decodeRecords(collection, bytes) {
+function decodeRecords(collection: CollectionLayout, bytes: Uint8Array): Record<string, unknown>[] {
   const reader = new Reader(bytes);
   // One reader for every record, moved from each to the next.
   const record = new Reader(bytes, 0, 0);
-  const objects = [];
+  const objects: Record<string, unknown>[] = [];
 
   while (reader.at < reader.end) {
     const length = reader.count();
@@ -900,7 +1079,7 @@ function decodeRecords(collection, bytes) {
  * A value of any type, tagged with it, for records whose schema is known
  * only once they are read: the stored schema itself.
  */
-function readAny(reader, depth) {
+function readAny(reader: Reader, depth: number): Tagged {
   if (depth >= MAX_DEPTH) {
     throw corrupted('it nests too deeply');
   }
@@ -921,7 +1100,7 @@ function readAny(reader, depth) {
       return { tag: 'bytes', value: reader.bytesValue() };
     case LIST: {
       const count = reader.count();
-      const values = [];
+      const values: Tagged[] = [];
 
       for (let index = 0; index < count; index++) {
         values.push(readAny(reader, depth + 1));
@@ -945,9 +1124,9 @@ function readAny(reader, depth) {
   }
 }
 
-function readAnyFields(reader, depth) {
+function readAnyFields(reader: Reader, depth: number): AnyRecord {
   const count = reader.count(2);
-  const fields = new Map();
+  const fields: AnyRecord = new Map();
 
   for (let index = 0; index < count; index++) {
     fields.set(reader.varint(), readAny(reader, depth));
@@ -961,7 +1140,7 @@ function readAnyFields(reader, depth) {
 }
 
 /** A tagged value as the JavaScript value it holds. */
-function untag(tagged) {
+function untag(tagged: Tagged): unknown {
   switch (tagged.tag) {
     case 'list':
       return tagged.value.map(untag);
@@ -973,18 +1152,20 @@ function untag(tagged) {
 }
 
 /** Field `id` of a record read with `readAny`, which has to be there. */
-function field(record, id, tag) {
+function field<T extends Tagged['tag']>(record: AnyRecord, id: number, tag: T): TaggedValue<T> {
   const value = record.get(id);
 
   if (value === undefined || value.tag !== tag) {
     throw corrupted(`the schema lacks a ${tag} in field ${id}`);
   }
 
-  return value.value;
+  // The check above holds its tag to `tag`, but a type parameter does not
+  // narrow the union.
+  return value.value as TaggedValue<T>;
 }
 
 /** The fields of a collection or an embedded object, ready to read and write. */
-function fieldsOf(list) {
+function fieldsOf(list: FieldLayout[]): Layout {
   list.sort((a, b) => a.id - b.id);
 
   return {
@@ -1002,33 +1183,41 @@ function fieldsOf(list) {
  * their ids and types, its key, and its indexes, with links resolved to the
  * collections they name.
  */
-function decodeSchema(bytes) {
+function decodeSchema(bytes: Uint8Array): SchemaLayout {
   try {
     return decodeSchemaFields(bytes);
   } catch (error) {
-    if (error.code !== undefined) {
+    // What fails here is an `Error`: one of this package's, with a code, or
+    // one the language throws where a value has the wrong type.
+    if ((error as CodeError).code !== undefined) {
       throw error;
     }
 
-    throw corrupted(`the stored schema does not decode: ${error.message}`);
+    throw corrupted(`the stored schema does not decode: ${(error as Error).message}`);
   }
 }
 
-function decodeSchemaFields(bytes) {
-  const record = readAnyFields(new Reader(bytes), 0);
-  const byId = new Map();
-  const links = [];
+/** A link kind while its schema is read, until its target is resolved. */
+type PendingLink = { type: 'link'; target: CollectionLayout | null | undefined };
 
-  const kindOf = (raw) => {
-    const type = KIND_NAMES[field(raw, 1, 'int')];
+function decodeSchemaFields(bytes: Uint8Array): SchemaLayout {
+  const record = readAnyFields(new Reader(bytes), 0);
+  const byId = new Map<number | bigint, CollectionLayout>();
+  const links: [PendingLink, number | bigint][] = [];
+
+  const kindOf = (raw: AnyRecord): Kind => {
+    // An int read as a `bigint` is beyond 2^53 and names no kind: indexing
+    // with it reads `undefined`, as with any unknown code.
+    const type = KIND_NAMES[field(raw, 1, 'int') as number];
 
     switch (type) {
       case 'link': {
-        const kind = { type, target: null };
+        const kind: PendingLink = { type, target: null };
 
         links.push([kind, field(raw, 2, 'int')]);
 
-        return kind;
+        // Its target is resolved once every collection has been read.
+        return kind as LinkKind;
       }
       case 'list':
         return { type, element: kindOf(field(raw, 3, 'object')) };
@@ -1040,22 +1229,28 @@ function decodeSchemaFields(bytes) {
         return { type };
     }
   };
-  const fieldOf = (raw) => {
-    const fields = raw.value;
+  const fieldOf = (raw: Tagged): FieldLayout => {
+    // A value that is not an object fails at `get`, which `decodeSchema`
+    // reports as damage. An id read as a `bigint`, beyond 2^53, fails the
+    // sort in `fieldsOf` beside any other id, and `readFields` refuses a
+    // record that holds it.
+    const fields = raw.value as AnyRecord;
     const defaultValue = fields.get(5);
 
     return {
-      id: field(fields, 1, 'int'),
+      id: field(fields, 1, 'int') as number,
       name: field(fields, 2, 'string'),
       kind: kindOf(field(fields, 3, 'object')),
       optional: field(fields, 4, 'bool'),
       default: defaultValue === undefined ? undefined : untag(defaultValue)
     };
   };
-  const collections = new Map();
+  const collections = new Map<string, CollectionLayout>();
 
   for (const raw of field(record, 3, 'list')) {
-    const fields = raw.value;
+    // A value that is not an object fails at `get`, which `decodeSchema`
+    // reports as damage.
+    const fields = raw.value as AnyRecord;
     const list = field(fields, 3, 'list').map(fieldOf);
     const key = field(fields, 5, 'int');
     const collection = {
@@ -1070,8 +1265,9 @@ function decodeSchemaFields(bytes) {
       throw corrupted(`\`${collection.name}\` has no key field`);
     }
 
-    byId.set(collection.id, collection);
-    collections.set(collection.name, collection);
+    // Its key has been found just above.
+    byId.set(collection.id, collection as CollectionLayout);
+    collections.set(collection.name, collection as CollectionLayout);
   }
 
   for (const [kind, id] of links) {
@@ -1086,18 +1282,34 @@ function decodeSchemaFields(bytes) {
 }
 
 /**
+ * An entry of a record `encodeSchema` writes: the field id, what the value
+ * is, and the value, or for `raw` the function that writes it.
+ */
+type Entry =
+  | [number, 'int', number | bigint]
+  | [number, 'bool', boolean]
+  | [number, 'string', string]
+  | [number, 'type', Spec]
+  | [number, 'fields', DeclaredFields]
+  | [number, 'default', Spec]
+  | [number, 'raw', (writer: Writer) => void];
+
+/** A field `encodeSchema` writes: its id, its name and its declared type. */
+type FieldEntry = [number, string, Spec];
+
+/**
  * The record of a schema declared with this package, encoded as the file
  * stores a schema, with ids given in the order of declaration. The engine
  * reads it with `Schema::decode` and gives the file's ids its own way.
  */
-function encodeSchema(declared) {
+function encodeSchema(declared: DeclaredSchema): Uint8Array {
   const names = Object.keys(declared.collections);
   const ids = new Map(names.map((name, index) => [name, index + 1]));
   let nextIndex = 1;
   const writer = new Writer(1024);
 
-  const writeType = (w, spec, where) => {
-    const entries = [[1, 'int', KIND_CODES[spec.type]]];
+  const writeType = (w: Writer, spec: Spec, where: string): void => {
+    const entries: Entry[] = [[1, 'int', KIND_CODES[spec.type]]];
 
     if (spec.type === 'link') {
       const target = ids.get(spec.target);
@@ -1121,7 +1333,12 @@ function encodeSchema(declared) {
 
     writeEntries(w, entries, where);
   };
-  const writeFieldList = (w, fields, where, embedded) => {
+  const writeFieldList = (
+    w: Writer,
+    fields: FieldEntry[],
+    where: string,
+    embedded: boolean
+  ): void => {
     w.byte(LIST);
     w.varint(fields.length);
 
@@ -1132,7 +1349,7 @@ function encodeSchema(declared) {
         );
       }
 
-      const entries = [
+      const entries: Entry[] = [
         [1, 'int', id],
         [2, 'string', name],
         [3, 'type', spec],
@@ -1151,7 +1368,7 @@ function encodeSchema(declared) {
       w.bytesOf(inner.bytes.subarray(0, inner.at));
     }
   };
-  const writeEntries = (w, entries, where) => {
+  const writeEntries = (w: Writer, entries: Entry[], where: string): void => {
     w.varint(entries.length);
 
     for (const [id, what, value] of entries) {
@@ -1180,7 +1397,11 @@ function encodeSchema(declared) {
         case 'fields':
           writeFieldList(
             w,
-            Object.entries(value).map(([name, type], index) => [index + 1, name, type.spec]),
+            Object.entries(value).map(([name, type], index): FieldEntry => [
+              index + 1,
+              name,
+              type.spec
+            ]),
             where,
             true
           );
@@ -1207,7 +1428,7 @@ function encodeSchema(declared) {
 
     const auto = keys.length === 0;
     const offset = auto ? 2 : 1;
-    const fields = declaredFields.map(([fieldName, type], index) => [
+    const fields = declaredFields.map(([fieldName, type], index): FieldEntry => [
       index + offset,
       fieldName,
       type.spec
@@ -1217,12 +1438,14 @@ function encodeSchema(declared) {
       fields.unshift([1, 'id', { type: 'int', optional: false }]);
     }
 
-    const key = auto ? 1 : fields.find(([, fieldName]) => fieldName === keys[0][0])[0];
+    // Without `auto`, `keys[0]` is one of the fields.
+    const key = auto ? 1 : fields.find(([, fieldName]) => fieldName === keys[0][0])![0];
     const indexes = fields
       .filter(([, , spec]) => spec.index || spec.unique)
-      .map(([id, , spec]) => [nextIndex++, id, spec.unique === true]);
+      .map(([id, , spec]): [number, number, boolean] => [nextIndex++, id, spec.unique === true]);
 
-    return { id: ids.get(name), name, fields, key, auto, indexes };
+    // Every name has an id.
+    return { id: ids.get(name)!, name, fields, key, auto, indexes };
   });
 
   writeEntries(
@@ -1291,7 +1514,7 @@ function encodeSchema(declared) {
 }
 
 /** The kind of a declared type, for writing its default. */
-function kindOfSpec(spec, ids) {
+function kindOfSpec(spec: Spec, ids: Map<string, number>): Kind {
   switch (spec.type) {
     case 'list':
       return { type: 'list', element: kindOfSpec(spec.element, ids) };
@@ -1309,14 +1532,16 @@ function kindOfSpec(spec, ids) {
  * is the first. The IR holds one as an object whose field 1 is its number.
  */
 class Param {
-  constructor(index) {
+  declare readonly index: number;
+
+  constructor(index: number) {
     this.index = index;
     Object.freeze(this);
   }
 }
 
 /** Writes a value a query compares with, by its JavaScript type, or a parameter. */
-function writeQueryValue(writer, value) {
+function writeQueryValue(writer: Writer, value: unknown): void {
   if (value instanceof Param) {
     const mark = writer.open();
 
@@ -1357,7 +1582,7 @@ const AND = 1;
 const OR = 2;
 const NOT = 3;
 
-function writePath(writer, path) {
+function writePath(writer: Writer, path: string[]): void {
   writer.byte(LIST);
   writer.varint(path.length);
 
@@ -1370,7 +1595,7 @@ function writePath(writer, path) {
 /** How deeply a filter may nest, as the engine holds every query to. */
 const MAX_FILTER_DEPTH = 24;
 
-function writeExpression(writer, node, depth = 1) {
+function writeExpression(writer: Writer, node: FilterNode, depth = 1): void {
   if (depth > MAX_FILTER_DEPTH) {
     throw codeError('INVALID_QUERY', `the filter nests more than ${MAX_FILTER_DEPTH} levels deep`);
   }
@@ -1437,7 +1662,7 @@ const parameterWriter = new Writer(64);
  * record holds no null. The buffer is lent: the next parameters are encoded
  * in it, so the caller hands it to the engine at once.
  */
-function encodeParameters(parameters) {
+function encodeParameters(parameters: readonly unknown[]): Buffer {
   const writer = parameterWriter;
   let present = 0;
 
@@ -1474,7 +1699,7 @@ const queryWriter = new Writer(256);
  * a view of the buffer the next query is encoded in, for a caller that
  * hands it to the engine at once; otherwise it is a copy.
  */
-function encodeQuery(collection, query, count, lend = false) {
+function encodeQuery(collection: string, query: QueryParts, count: boolean, lend = false): Buffer {
   const writer = queryWriter;
 
   writer.at = 0;
@@ -1511,7 +1736,8 @@ function encodeQuery(collection, query, count, lend = false) {
         writer.string(collection);
         break;
       case 2:
-        writeExpression(writer, query.filter);
+        // Entry 2 is there only with a filter.
+        writeExpression(writer, query.filter!);
         break;
       case 3:
         writer.byte(LIST);
@@ -1535,7 +1761,8 @@ function encodeQuery(collection, query, count, lend = false) {
         break;
       case 5:
         writer.byte(INT);
-        writer.int(query.limit);
+        // Entry 5 is there only with a limit.
+        writer.int(query.limit!);
         break;
       default:
         writer.byte(TRUE);
@@ -1550,7 +1777,7 @@ function encodeQuery(collection, query, count, lend = false) {
   return Buffer.from(writer.bytes.subarray(0, writer.at));
 }
 
-module.exports = {
+export {
   Reader,
   Param,
   codeError,

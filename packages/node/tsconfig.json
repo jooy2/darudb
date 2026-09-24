@@ -6,6 +6,9 @@
     "rootDir": "lib",
     "outDir": "dist",
     "target": "es2022",
+    // `String.prototype.isWellFormed` is ES2024, and Node.js 20, the oldest
+    // the package supports, has it.
+    "lib": ["es2022", "es2024.string"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "types": ["node"],

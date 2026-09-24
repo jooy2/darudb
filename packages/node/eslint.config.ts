@@ -60,7 +60,13 @@ export default pluginTypeScriptESLint.config(
       sourceType: 'commonjs'
     },
     rules: {
-      '@typescript-eslint/no-require-imports': 'off'
+      '@typescript-eslint/no-require-imports': 'off',
+      // A module that has moved to TypeScript is required by the name its
+      // output has in `dist`, and is found here by its source.
+      'n/no-missing-require': [
+        'error',
+        { tryExtensions: ['.js', '.json', '.node', '.mjs', '.cjs', '.ts'] }
+      ]
     }
   },
   configPrettier
