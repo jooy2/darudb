@@ -208,28 +208,25 @@ impl Drop for Helper {
     }
 }
 
-/// Whether [`widen_race`] pauses. A process sets it once, before it opens a
-/// database.
-pub(crate) static WIDEN_RACES: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Set, a pause for the next reader that registers a snapshot afresh: it
+/// says so on the first channel after its first read of the header, and waits
+/// for the second before it takes the snapshot's lock. The one test of the
+/// second read sets it; it catches one reader and is gone.
+pub(crate) static PAUSE_BEFORE_REGISTERING: std::sync::Mutex<
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+> = std::sync::Mutex::new(None);
 
-/// Pauses where the engine's own tests want a race to be likely rather than
-/// rare, if [`WIDEN_RACES`] is set: one call in four, for up to 20
-/// milliseconds, long enough for other processes to publish, sync and reclaim
-/// meanwhile. Only test builds call it: between a reader's first read of the
-/// header and the registration of its snapshot, which is the window the
-/// second read exists for.
-pub(crate) fn widen_race() {
-    use std::sync::atomic::{AtomicU64, Ordering};
+/// Where a reader stops if [`PAUSE_BEFORE_REGISTERING`] is set. Only test
+/// builds call it.
+pub(crate) fn pause_before_registering() {
+    let pause = PAUSE_BEFORE_REGISTERING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
 
-    static CALLS: AtomicU64 = AtomicU64::new(0);
-
-    if WIDEN_RACES.load(Ordering::Relaxed) {
-        let mut rng = Rng::new(CALLS.fetch_add(1, Ordering::Relaxed));
-
-        if rng.below(4) == 0 {
-            std::thread::sleep(std::time::Duration::from_micros(rng.below(20_000)));
-        }
+    if let Some((paused, resume)) = pause {
+        let _ = paused.send(());
+        let _ = resume.recv();
     }
 }
 
@@ -251,3 +248,10 @@ pub(crate) fn pause_in_recovery() {
         }
     }
 }
+
+/// Whether snapshot locks are kept for a moment after their last reader, as
+/// they are outside the tests. The multi-process suite turns it off in half
+/// its workers, whose readers would otherwise join kept locks and seldom
+/// register a snapshot afresh.
+pub(crate) static KEEP_SNAPSHOT_LOCKS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);

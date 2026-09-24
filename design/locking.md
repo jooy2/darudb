@@ -65,18 +65,21 @@ When the last `Database` object for the file in a process closes, the instance e
 
 A reader takes no lock on the header. Instead it reads, registers, and reads again:
 
-1. Read bytes 0 to 2047 of the file: the static fields, the selector and the three slots.
+1. Lock the process's registry of snapshots, and read bytes 0 to 2047 of the file: the static fields, the selector and the three slots.
 1. Take the record in the slot the selector names. If its check fails, read again: the reader may be holding a stale selector that points at a slot the writer is filling. If the check still fails after a few attempts, the header is damaged: `CORRUPTED`.
-1. Register the snapshot `s`, the record's transaction id. The first registration of `s` in the process takes a shared lock on `s`'s snapshot byte; later ones only count up in the process's registry.
+1. If the process holds the lock on the snapshot `s`, the record's transaction id, already, for another read transaction or kept after one ([Ending a read](#ending-a-read)), count this one in, and the snapshot is safe to use.
+1. Otherwise, take a shared lock on `s`'s snapshot byte, register it, and unlock the registry.
 1. Read the selector and the published record's transaction id again. If they are unchanged, the snapshot is safe to use. Otherwise, unregister `s` and start over.
 
-**Why this is safe.** A page that snapshot `s` can reach is overwritten only after some commit `F > s` stops using it and a writer reclaims group `F`. A writer reclaims `F` only in a transaction that starts after `F` was published, and it looks for registered snapshots when it starts. Step 4 saw `s` still published, so `F` was published after step 4, which came after the lock of step 3. The writer's search therefore finds that lock.
+**Why this is safe.** A page that snapshot `s` can reach is overwritten only after some commit `F > s` stops using it and a writer reclaims group `F`. A writer reclaims `F` only in a transaction that starts after `F` was published, and it looks for registered snapshots when it starts. Step 5 saw `s` still published, so `F` was published after step 5, which came after the lock of step 4. The writer's search therefore finds that lock. In step 3, the lock was held throughout the read of step 1, since the registry was locked and a lock leaves only through it, so the read serves as step 5 does.
 
-**What it costs.** Two reads of the first 2048 bytes of the file, and one lock call, which is skipped when another transaction in the process already holds `s`. A reader never waits for a write transaction; at most, on Windows, it waits an instant while a writer probes the snapshot bytes.
+**What it costs.** One read of the first 2048 bytes of the file when the process holds the snapshot's lock already, and otherwise two reads and one lock call. A reader never waits for a write transaction; at most, on Windows, it waits an instant while a writer probes the snapshot bytes. A record whose bytes the process has checked before is not decoded and checked again, which in an encrypted file saves checking its MAC.
 
 ## Ending a read
 
-The reader unregisters its snapshot. When the process's count for `s` reaches zero, the lock on `s`'s snapshot byte is released.
+The reader unregisters its snapshot. When the process's count for `s` reaches zero, the lock on `s`'s snapshot byte is kept for 20 milliseconds, in case the next read transaction is on the same snapshot and can join it. A thread of the engine's releases it after that. It goes at once when the process registers a newer snapshot, since the published commit only grows and no new read transaction can use an older one, and when the process begins a write transaction, so that it holds back none of that writer's pages.
+
+**Why keep it.** Joining a held lock skips a lock call, the unlock that would follow it, and the second read of the header, which is most of what beginning a read costs: about 1 microsecond instead of 2 on one Apple silicon machine. A kept lock holds pages back from reuse, in every process, as a read transaction on its snapshot would, which is why it is kept only that long.
 
 A read transaction that is never ended keeps every page it can reach from being reused, so the file grows while it lives. A binding should make leaking one hard: by closing it when its object is collected, and by warning about read transactions that stay open for a long time.
 

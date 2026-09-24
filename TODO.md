@@ -28,7 +28,7 @@ Phase 1 is done: the file format for plain files, the copy-on-write B+tree, sync
 
 Phase 2 is done: page encryption, the key block, passwords, key changes, and the crash suites running with encryption on and off. `examples/kernel_bench.rs` measures both kinds of file. On one Apple silicon machine, with XAES-256-GCM, a read that misses the page cache went from 4 to 6 microseconds and reading a 256 KiB value from 41 to 141.
 
-Phase 3 is done: the open, writer and snapshot locks of [design/locking.md](design/locking.md), several processes on one file, and network file systems refused. `src/processes.rs` fuzzes it: four worker processes at a time, each writing and reading through several handles and threads, with random ones killed. It passes 300 kills on a plain file and on an encrypted one. Beginning and ending a read transaction went from 38 nanoseconds to about 2 microseconds, which two reads of the header and a lock call cost.
+Phase 3 is done: the open, writer and snapshot locks of [design/locking.md](design/locking.md), several processes on one file, and network file systems refused. `src/processes.rs` fuzzes it: four worker processes at a time, each writing and reading through several handles and threads, with random ones killed. It passes 300 kills on a plain file and on an encrypted one. Beginning and ending a read transaction went from 38 nanoseconds to about 2 microseconds, which two reads of the header and a lock call cost, and back to about 1 when the process keeps the snapshot's lock for the next read transaction to join.
 
 ## Known gaps
 
@@ -49,7 +49,6 @@ Confirmed by reading the code against the specification; no test reproduces them
 - **Schema migrations**: how they are declared and when they run.
 - **File format versioning**: the forward and backward compatibility policy, and whether an older file is upgraded on open or by an explicit call. The design settles only the pre-release rule: no migrations until the first release.
 - **Busy timeout**: how long opening and writing wait for another process by default before failing with `BUSY`.
-- **Cost of beginning a read.** About 2 microseconds against 38 nanoseconds before phase 3. Whether to cut it, for example by skipping the second read of the header and the lock call when another read transaction in the process already holds the snapshot, is open.
 - **The barrier after another process's commit.** A writer that does not know which selector a power cut would bring back issues a barrier before its record, so processes that take turns committing pay one barrier each time the writer changes. The turn lock waits 50 milliseconds for that reason: at 5, two processes committing in tight loops made a twentieth of their commits. Whether the writer can tell that selector from the records instead, and skip the barrier, is open, and would let the turn come sooner.
 - **Unsynced window limits**: how many pages and how much time deferred commits may accumulate before the engine issues a barrier of its own.
 - **iOS App Group containers**: iOS terminates a suspended app that holds a file lock in one, and the open lock is held while a database is open. Whether to offer a mode for such apps that does without it.

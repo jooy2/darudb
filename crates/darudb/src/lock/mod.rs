@@ -40,7 +40,7 @@ mod sys;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -118,6 +118,86 @@ pub(crate) enum Access {
     Shared,
 }
 
+/// A snapshot this process holds a lock on.
+#[derive(Debug, Clone, Copy)]
+struct Registration {
+    /// The read transactions on the snapshot.
+    readers: usize,
+    /// Since when the lock has been kept with no reader, if it has.
+    idle: Option<Instant>,
+}
+
+/// This process's registry of snapshots, locked for as long as this lives.
+///
+/// A reader reads the header while it holds this, so that a snapshot lock it
+/// finds held was held throughout the read: every writer that could reclaim
+/// the snapshot's pages starts after the read and finds the lock. Such a
+/// reader needs neither a lock call nor a second read of the header.
+#[derive(Debug)]
+pub(crate) struct Registry<'a> {
+    locks: &'a Locks,
+    snapshots: MutexGuard<'a, BTreeMap<u64, Registration>>,
+}
+
+impl Registry<'_> {
+    /// Registers a read transaction on snapshot `txn` if this process holds
+    /// the snapshot's lock already, for another read transaction or kept
+    /// after one; `false` if it does not.
+    pub(crate) fn join(&mut self, txn: u64) -> bool {
+        match self.snapshots.get_mut(&txn) {
+            Some(registration) => {
+                registration.readers += 1;
+                registration.idle = None;
+
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Registers a read transaction on snapshot `txn`, which this process
+    /// holds no lock on yet, and takes the lock.
+    ///
+    /// The lock is shared and no one else takes it exclusively, apart from a
+    /// writer probing the snapshot bytes on Windows for an instant; this waits
+    /// that out, up to `deadline`. The idle locks kept on older snapshots go:
+    /// the published commit only grows, so no new read transaction can use
+    /// them.
+    pub(crate) fn register(
+        &mut self,
+        txn: u64,
+        deadline: Option<Instant>,
+    ) -> Result<(), LockError> {
+        let byte = snapshot_byte(txn)?;
+
+        poll(deadline, || {
+            self.locks
+                .try_lock(byte, 1, Mode::Shared)
+                .map_err(LockError::Io)
+        })?;
+        self.snapshots.insert(
+            txn,
+            Registration {
+                readers: 1,
+                idle: None,
+            },
+        );
+
+        let older: Vec<u64> = self
+            .snapshots
+            .range(..txn)
+            .filter(|(_, registration)| registration.readers == 0)
+            .map(|(older, _)| *older)
+            .collect();
+
+        for older in older {
+            self.locks.release(&mut self.snapshots, older);
+        }
+
+        Ok(())
+    }
+}
+
 /// Why a lock was not taken.
 #[derive(Debug)]
 pub(crate) enum LockError {
@@ -140,10 +220,11 @@ pub(crate) struct Locks {
     open: Mutex<bool>,
     /// Whether this process holds the recovery lock.
     recovery: Mutex<bool>,
-    /// The snapshots in use in this process, with the number of read
-    /// transactions on each. The first registration of a snapshot takes a
-    /// shared lock on its byte, and the last one to end releases it.
-    snapshots: Mutex<BTreeMap<u64, usize>>,
+    /// The snapshots this process holds a lock on. The first registration of
+    /// a snapshot takes a shared lock on its byte. When the last read
+    /// transaction on it ends, the lock is kept for a moment, idle, in case the
+    /// next read transaction is on the same snapshot.
+    snapshots: Mutex<BTreeMap<u64, Registration>>,
     /// The process that opened the file. A process forked from it inherits
     /// this value, but not the locks.
     owner: u32,
@@ -361,47 +442,76 @@ impl Locks {
         let _ = self.unlock(WRITER_BYTE, 1);
     }
 
-    /// Registers a read transaction on snapshot `txn`, taking the snapshot's
-    /// lock if no other read transaction in this process holds it already.
-    ///
-    /// The lock is shared and no one else takes it exclusively, apart from a
-    /// writer probing the snapshot bytes on Windows for an instant; this waits
-    /// that out, up to `deadline`.
-    pub(crate) fn register(&self, txn: u64, deadline: Option<Instant>) -> Result<(), LockError> {
-        let byte = snapshot_byte(txn)?;
-        let mut snapshots = lock(&self.snapshots);
-
-        if let Some(count) = snapshots.get_mut(&txn) {
-            *count += 1;
-
-            return Ok(());
+    /// Locks this process's registry of snapshots.
+    pub(crate) fn registry(&self) -> Registry<'_> {
+        Registry {
+            locks: self,
+            snapshots: lock(&self.snapshots),
         }
-
-        poll(deadline, || {
-            self.try_lock(byte, 1, Mode::Shared).map_err(LockError::Io)
-        })?;
-        snapshots.insert(txn, 1);
-
-        Ok(())
     }
 
-    /// Ends a read transaction on snapshot `txn`, releasing the snapshot's
-    /// lock if it was the last one in this process.
-    pub(crate) fn unregister(&self, txn: u64) {
+    /// Ends a read transaction on snapshot `txn`. Returns whether that left
+    /// the snapshot's lock idle, to be released by
+    /// [`release_idle`](Self::release_idle) unless another read transaction
+    /// takes it up first.
+    pub(crate) fn unregister(&self, txn: u64) -> bool {
         let mut snapshots = lock(&self.snapshots);
+        let Some(registration) = snapshots.get_mut(&txn) else {
+            return false;
+        };
 
-        if let Some(count) = snapshots.get_mut(&txn) {
-            *count -= 1;
+        registration.readers -= 1;
 
-            if *count == 0 {
-                snapshots.remove(&txn);
+        if registration.readers > 0 {
+            return false;
+        }
 
-                // A lock left behind holds pages back from reuse, and
-                // nothing more; it goes when the file closes.
-                if let Ok(byte) = snapshot_byte(txn) {
-                    let _ = self.unlock(byte, 1);
-                }
-            }
+        #[cfg(test)]
+        if !crate::testing::KEEP_SNAPSHOT_LOCKS.load(std::sync::atomic::Ordering::Relaxed) {
+            self.release(&mut snapshots, txn);
+
+            return false;
+        }
+
+        registration.idle = Some(Instant::now());
+
+        true
+    }
+
+    /// Releases the idle snapshot locks kept since before `before`, or all of
+    /// them with no time given. An idle lock holds pages back from reuse, in
+    /// every process, so it is kept only briefly. Returns since when the
+    /// oldest idle lock left has been kept, if any is.
+    pub(crate) fn release_idle(&self, before: Option<Instant>) -> Option<Instant> {
+        let mut snapshots = lock(&self.snapshots);
+        let expired: Vec<u64> = snapshots
+            .iter()
+            .filter(|(_, registration)| {
+                registration
+                    .idle
+                    .is_some_and(|idle| before.is_none_or(|before| idle < before))
+            })
+            .map(|(txn, _)| *txn)
+            .collect();
+
+        for txn in expired {
+            self.release(&mut snapshots, txn);
+        }
+
+        snapshots
+            .values()
+            .filter_map(|registration| registration.idle)
+            .min()
+    }
+
+    /// Forgets snapshot `txn` and releases its lock.
+    fn release(&self, snapshots: &mut BTreeMap<u64, Registration>, txn: u64) {
+        snapshots.remove(&txn);
+
+        // A lock left behind holds pages back from reuse, and nothing more;
+        // it goes when the file closes.
+        if let Ok(byte) = snapshot_byte(txn) {
+            let _ = self.unlock(byte, 1);
         }
     }
 

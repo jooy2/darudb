@@ -35,8 +35,12 @@ fn options_for(path: &Path) -> OpenOptions {
 ///
 /// - `put <key> <value>` commits `value` under `key` in tree `t`.
 /// - `defer <key> <value>` does the same with a deferred commit.
+/// - `fill <byte>` sets the 300 keys of tree `r` to a value of that byte, in
+///   one sync commit.
 /// - `snapshot` begins a read transaction and keeps it.
 /// - `get <key>` reads through the kept read transaction, or a new one.
+/// - `read-id` begins and ends a read transaction, and answers with the
+///   snapshot it saw.
 /// - `sum` counts the entries of tree `t` in the kept read transaction and
 ///   adds up the first byte of every value.
 /// - `hold-writer` begins a write transaction and keeps it.
@@ -44,7 +48,8 @@ fn options_for(path: &Path) -> OpenOptions {
 ///   another, each holding the writer lock for a millisecond and the next
 ///   taking it again at once, and `stop-loop` stops it and answers with how
 ///   many it made.
-/// - `release` ends what it keeps.
+/// - `release` ends what it keeps, and releases the snapshot lock the engine
+///   would keep for a moment, as a write transaction beginning would.
 /// - `fork <marker>` forks and answers `forked`; see [`forked_child`] for
 ///   what the child does and answers.
 /// - `reap` waits for the forked child and answers with its exit code.
@@ -76,6 +81,17 @@ fn helper_running_commands() {
 
                 Ok("done".to_owned())
             }),
+            ["fill", byte] => db.begin_write().and_then(|mut txn| {
+                let byte: u8 = byte.parse().unwrap();
+
+                for key in 0..300u32 {
+                    txn.insert("r", &key.to_be_bytes(), &[byte; 100])?;
+                }
+
+                txn.commit()?;
+
+                Ok("done".to_owned())
+            }),
             ["defer", key, value] => db.begin_write().and_then(|mut txn| {
                 txn.insert("t", key.as_bytes(), value.as_bytes())?;
                 txn.commit_deferred()?;
@@ -102,6 +118,7 @@ fn helper_running_commands() {
                     value.map_or("none".to_owned(), |value| String::from_utf8(value).unwrap())
                 })
             }
+            ["read-id"] => db.begin_read().map(|txn| txn.commit_id().to_string()),
             ["sum"] => snapshot.as_ref().unwrap().iter("t").and_then(|entries| {
                 let mut count = 0u64;
                 let mut sum = 0u64;
@@ -123,6 +140,7 @@ fn helper_running_commands() {
             ["release"] => {
                 snapshot = None;
                 writer = None;
+                db.shared().release_idle_snapshots();
 
                 Ok("done".to_owned())
             }
@@ -401,7 +419,9 @@ fn soon() -> Option<Instant> {
 }
 
 /// The helper: takes the writer lock and a snapshot, and holds them until
-/// told to let the snapshot go, one registration at a time.
+/// told to let the snapshot go, one registration at a time. It releases the
+/// idle lock the last one leaves itself, as the keeper thread of a database
+/// would a moment later.
 #[test]
 fn helper_holding_the_writer_lock_and_a_snapshot() {
     let Ok(path) = env::var(HELPER_PATH) else {
@@ -410,16 +430,17 @@ fn helper_holding_the_writer_lock_and_a_snapshot() {
     let locks = locks_on(path.as_ref());
 
     locks.lock_writer(None).unwrap();
-    locks.register(10, None).unwrap();
-    locks.register(10, None).unwrap();
+    locks.registry().register(10, None).unwrap();
+    assert!(locks.registry().join(10));
     println!("locked");
 
     wait_to_be_told();
-    locks.unregister(10);
+    assert!(!locks.unregister(10), "a reader is left");
     println!("one-left");
 
     wait_to_be_told();
-    locks.unregister(10);
+    assert!(locks.unregister(10), "the lock is kept");
+    locks.release_idle(None);
     println!("none-left");
 
     loop {
@@ -478,11 +499,16 @@ fn this_process_s_own_snapshots_hold_back_what_they_reach() {
 
     let locks = locks_on(&path);
 
-    locks.register(7, None).unwrap();
+    locks.registry().register(7, None).unwrap();
 
     assert_eq!(locks.reclaimable(&[3, 7, 8, 12]).unwrap(), Some(7));
 
-    locks.unregister(7);
+    // Kept for a moment after its last reader, the lock still holds pages
+    // back, until it is released.
+    assert!(locks.unregister(7));
+    assert_eq!(locks.reclaimable(&[3, 7, 8, 12]).unwrap(), Some(7));
+
+    locks.release_idle(None);
 
     assert_eq!(locks.reclaimable(&[3, 7, 8, 12]).unwrap(), Some(12));
     assert_eq!(locks.reclaimable(&[]).unwrap(), None);
@@ -743,4 +769,77 @@ fn a_writer_that_commits_again_and_again_lets_another_process_s_writer_in() {
         longest < Duration::from_millis(500),
         "a writer waited {longest:?}"
     );
+}
+
+#[test]
+fn a_snapshot_lock_outlives_its_last_reader_only_for_a_moment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("put k 1"), "done");
+
+    let snapshot: u64 = other.ask("read-id").parse().unwrap();
+    let locks = locks_on(&path);
+
+    // Kept for the next read transaction to join...
+    assert!(locks.snapshot_below(snapshot + 1).unwrap());
+
+    // ...and released by the keeper thread soon after.
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    while locks.snapshot_below(snapshot + 1).unwrap() {
+        assert!(
+            Instant::now() < deadline,
+            "the kept lock was never released"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    assert_eq!(other.ask("read-id"), snapshot.to_string());
+}
+
+#[test]
+fn a_reader_reads_the_header_again_after_it_registers_its_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut other = helper(&path);
+    let db = options_for(&path).open(&path).unwrap();
+
+    assert_eq!(other.ask("fill 1"), "done");
+
+    // A reader stops after reading the header, before its snapshot is
+    // registered anywhere.
+    let (paused, reader_paused) = std::sync::mpsc::channel();
+    let (resume, resumed) = std::sync::mpsc::channel();
+
+    *crate::testing::PAUSE_BEFORE_REGISTERING.lock().unwrap() = Some((paused, resumed));
+
+    let reader = {
+        let db = db.clone();
+
+        thread::spawn(move || {
+            let read = db.begin_read()?;
+
+            read.iter("r")?
+                .map(|entry| entry.map(|(_, value)| value[0]))
+                .collect::<crate::Result<Vec<u8>>>()
+        })
+    };
+
+    reader_paused.recv().unwrap();
+
+    // Meanwhile the other process rewrites every page, twice. Nothing holds
+    // the snapshot the reader saw, so the second commit reclaims the pages
+    // only that snapshot reaches, and writes over them.
+    assert_eq!(other.ask("fill 2"), "done");
+    assert_eq!(other.ask("fill 3"), "done");
+
+    resume.send(()).unwrap();
+
+    // Its second read finds that snapshot gone, and it starts again from the
+    // new one; without it, it would read the pages written over.
+    let values = reader.join().unwrap().unwrap();
+
+    assert_eq!(values, vec![3; 300]);
 }

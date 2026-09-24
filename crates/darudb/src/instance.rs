@@ -19,8 +19,8 @@ use crate::btree::{LoadedNode, Loader};
 use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, HEADER_LEN, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT, Selector, StaticHeader,
-    slot_offset,
+    CommitRecord, HEADER_LEN, KeyBlock, RECORD_LEN, SELECTOR_OFFSET, SLOT_COUNT, Selector,
+    StaticHeader, slot_offset,
 };
 use crate::lock::{LockError, Locks};
 use crate::storage::{Cache, DbFile, Pager};
@@ -107,9 +107,23 @@ pub(crate) struct Shared {
     writer: Mutex<bool>,
     writer_free: Condvar,
     sync_failed: AtomicBool,
+    /// The published record a reader last found valid, as the slot and the
+    /// bytes it was read from. The same bytes in the same slot are the same
+    /// valid record, so the next reader that finds them skips decoding and
+    /// checking them, and in an encrypted file the MAC, which costs a
+    /// microsecond.
+    verified: Mutex<Option<Verified>>,
     /// Declared last, so that it is dropped last, once the handle has closed
     /// and the locks are released; see [`Hold`].
     hold: Arc<Hold>,
+}
+
+/// A published record known to be valid, and the bytes it was read from.
+#[derive(Debug, Clone, Copy)]
+struct Verified {
+    slot: usize,
+    bytes: [u8; RECORD_LEN],
+    record: CommitRecord,
 }
 
 /// Lives for exactly as long as an instance holds its file. The registry keeps
@@ -156,6 +170,7 @@ impl Shared {
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             sync_failed: AtomicBool::new(false),
+            verified: Mutex::new(None),
             hold: Arc::new(Hold),
         }
     }
@@ -286,6 +301,11 @@ impl Shared {
     /// published, and so after the second read, which saw the snapshot still
     /// published, and after the registration, which the writer therefore sees
     /// (`design/locking.md`, "Beginning a read").
+    ///
+    /// The first read happens with the registry of snapshots locked. If this
+    /// process holds the snapshot's lock already, for another read transaction
+    /// or kept after one, the lock was held throughout the read, and the
+    /// reader joins it with neither a lock call nor a second read.
     pub(crate) fn begin_snapshot(&self) -> Result<CommitRecord> {
         self.check_owner()?;
         self.check_usable()?;
@@ -293,16 +313,21 @@ impl Shared {
         let deadline = Instant::now().checked_add(self.settings.busy_timeout);
 
         loop {
+            let mut registry = self.locks.registry();
             let (bytes, slot, record) = self.read_published()?;
 
-            // The multi-process suite pauses here in some workers, to test
-            // the second read below.
-            #[cfg(test)]
-            crate::testing::widen_race();
+            if registry.join(record.txn) {
+                return Ok(record);
+            }
 
-            self.locks
+            // The test of the second read below stops a reader here.
+            #[cfg(test)]
+            crate::testing::pause_before_registering();
+
+            registry
                 .register(record.txn, deadline)
                 .map_err(|error| self.lock_error(error))?;
+            drop(registry);
 
             // A snapshot left registered would hold pages back for as long as
             // the file is open.
@@ -368,14 +393,31 @@ impl Shared {
         bytes: &[u8],
     ) -> std::result::Result<(usize, CommitRecord), &'static str> {
         let selector = Selector::decode(bytes[SELECTOR_OFFSET])?;
-        let record = CommitRecord::decode(selector.slot, &bytes[slot_offset(selector.slot)..])?
-            .ok_or("the selector names an empty slot")?;
+        let slot = selector.slot;
+        let raw = &bytes[slot_offset(slot)..slot_offset(slot) + RECORD_LEN];
 
-        if !self.signed(selector.slot, &record) {
+        if let Some(verified) = *lock(&self.verified) {
+            if verified.slot == slot && verified.bytes == raw {
+                return Ok((slot, verified.record));
+            }
+        }
+
+        let record = CommitRecord::decode(slot, raw)?.ok_or("the selector names an empty slot")?;
+
+        if !self.signed(slot, &record) {
             return Err("the published commit record fails its MAC");
         }
 
-        Ok((selector.slot, record))
+        let mut copy = [0u8; RECORD_LEN];
+
+        copy.copy_from_slice(raw);
+        *lock(&self.verified) = Some(Verified {
+            slot,
+            bytes: copy,
+            record,
+        });
+
+        Ok((slot, record))
     }
 
     /// Whether `record`, read from slot `slot`, carries the MAC of this file's
@@ -392,8 +434,19 @@ impl Shared {
         })
     }
 
-    pub(crate) fn end_snapshot(&self, txn: u64) {
-        self.locks.unregister(txn);
+    /// Ends a read transaction on snapshot `txn`. The snapshot's lock may be
+    /// kept for a moment, for the next read transaction to join; a thread of
+    /// the engine's releases it if none does ([`KEEP_SNAPSHOT_LOCK`]).
+    pub(crate) fn end_snapshot(self: &Arc<Self>, txn: u64) {
+        if self.locks.unregister(txn) {
+            keep_for_a_moment(self);
+        }
+    }
+
+    /// Releases the snapshot locks this process keeps with no reader, so that
+    /// they hold no page back from the writer that is starting.
+    pub(crate) fn release_idle_snapshots(&self) {
+        self.locks.release_idle(None);
     }
 
     /// The largest of `groups`, retained group ids in ascending order, that no
@@ -745,6 +798,121 @@ fn flush_when_due(shared: &Weak<Shared>) {
 
             return;
         }
+    }
+}
+
+/// How long a snapshot lock outlives the last read transaction on it, for the
+/// next one to join. Joining skips a lock call, its unlock and a read of the
+/// header, which is most of what beginning a read costs; keeping the lock holds
+/// back the reuse of pages newer than the snapshot, in every process, so it is
+/// kept only for a moment.
+pub(crate) const KEEP_SNAPSHOT_LOCK: Duration = Duration::from_millis(20);
+
+/// How long the thread that releases kept snapshot locks waits for more work
+/// before it ends.
+const KEEPER_IDLE: Duration = Duration::from_secs(10);
+
+/// The instances that keep idle snapshot locks, and the one thread in the
+/// process that releases them once they have been kept long enough.
+#[derive(Debug, Default)]
+struct Keeper {
+    /// Every instance that has kept a lock, until it closes.
+    instances: Vec<Weak<Shared>>,
+    /// The thread, and the process it runs in: a forked process inherits the
+    /// record of it, but not the thread.
+    thread: Option<(u32, Thread)>,
+    /// Whether a lock was kept since the thread last looked, which keeps it
+    /// from ending.
+    pending: bool,
+}
+
+static KEEPER: Mutex<Keeper> = Mutex::new(Keeper {
+    instances: Vec::new(),
+    thread: None,
+    pending: false,
+});
+
+/// Makes sure the idle snapshot locks of `shared` are released in a moment.
+fn keep_for_a_moment(shared: &Arc<Shared>) {
+    let mut keeper = lock(&KEEPER);
+
+    keeper.pending = true;
+
+    if !keeper
+        .instances
+        .iter()
+        .any(|kept| std::ptr::eq(kept.as_ptr(), Arc::as_ptr(shared)))
+    {
+        keeper.instances.push(Arc::downgrade(shared));
+    }
+
+    match &keeper.thread {
+        Some((owner, thread)) if *owner == std::process::id() => thread.unpark(),
+        _ => {
+            let spawned = thread::Builder::new()
+                .name("darudb-keeper".to_owned())
+                .spawn(release_kept_locks);
+
+            // Without the thread, the locks go at the next registration of a
+            // newer snapshot, the next write transaction, or closing.
+            keeper.thread = spawned
+                .ok()
+                .map(|handle| (std::process::id(), handle.thread().clone()));
+        }
+    }
+}
+
+/// The body of the thread that releases kept snapshot locks. It holds an
+/// instance only while it works on it, never while it holds the list, and
+/// ends once it has had nothing to do for [`KEEPER_IDLE`].
+fn release_kept_locks() {
+    let mut quiet_since = Instant::now();
+
+    loop {
+        let instances = {
+            let mut keeper = lock(&KEEPER);
+
+            keeper.pending = false;
+            keeper.instances.retain(|kept| kept.strong_count() > 0);
+            keeper.instances.clone()
+        };
+        let now = Instant::now();
+        let mut next: Option<Instant> = None;
+
+        for kept in &instances {
+            let Some(shared) = kept.upgrade() else {
+                continue;
+            };
+
+            if let Some(oldest) = shared
+                .locks
+                .release_idle(now.checked_sub(KEEP_SNAPSHOT_LOCK))
+            {
+                let due = oldest + KEEP_SNAPSHOT_LOCK;
+
+                next = Some(next.map_or(due, |next| next.min(due)));
+            }
+        }
+
+        if next.is_some() {
+            quiet_since = now;
+        } else {
+            let mut keeper = lock(&KEEPER);
+
+            // A lock kept since this pass began sets `pending`, and the next
+            // pass sees it.
+            if !keeper.pending && quiet_since.elapsed() >= KEEPER_IDLE {
+                keeper.thread = None;
+
+                return;
+            }
+        }
+
+        let wait = next.map_or(KEEPER_IDLE, |next| {
+            next.saturating_duration_since(Instant::now())
+        });
+
+        thread::park_timeout(wait.max(Duration::from_millis(1)));
     }
 }
 

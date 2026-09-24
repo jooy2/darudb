@@ -30,10 +30,11 @@
 //!   for long in any thread, so that its instance closes, often while another
 //!   of its threads opens the file again.
 //!
-//! Half the workers pause for a moment between a reader's first read of the
-//! header and the registration of its snapshot ([`crate::testing::widen_race`]).
-//! That window is a few microseconds long otherwise, and the second read that
-//! closes it would go untested.
+//! Half the workers release a snapshot lock with its last reader rather than
+//! keep it for the next one to join, so that their readers register snapshots
+//! afresh; the other half keep them, and test the joining. The window between
+//! a reader's first read of the header and its registration is too short for
+//! a suite this size to hit; `lock/tests.rs` stops a reader in it on purpose.
 //!
 //! `DARUDB_PROCESS_KILLS` sets how many workers are killed in each of the two
 //! runs, one on a plain file and one on an encrypted file. The default keeps
@@ -113,7 +114,7 @@ fn worker() {
     let mut rng = Rng::new(id);
     let options = options(path, &mut rng);
 
-    crate::testing::WIDEN_RACES.store(id % 2 == 0, Ordering::Relaxed);
+    crate::testing::KEEP_SNAPSHOT_LOCKS.store(id % 2 == 1, Ordering::Relaxed);
 
     let churn = id % 3 == 0;
     let stop = Arc::new(AtomicBool::new(false));

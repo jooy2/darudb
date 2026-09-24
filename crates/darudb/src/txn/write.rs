@@ -66,6 +66,9 @@ pub struct WriteTransaction {
 impl WriteTransaction {
     pub(crate) fn begin(shared: &Arc<Shared>) -> Result<Self> {
         let writer = shared.acquire_writer()?;
+
+        shared.release_idle_snapshots();
+
         let header = shared.refresh_header()?;
         let base = header.published()?;
         let durable = if header.selector.unsynced {
