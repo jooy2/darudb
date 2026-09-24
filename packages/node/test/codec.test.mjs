@@ -5,6 +5,7 @@
  * since the records it reads come from a file.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
 
@@ -18,7 +19,7 @@ const layoutOf = (list) => ({
     list,
     positions: new Map(list.map((field, index) => [field.id, index])),
     names: new Set(list.map((field) => field.name)),
-    hasProto: false
+    hasProto: list.some((field) => field.name === '__proto__')
   }
 });
 
@@ -130,6 +131,68 @@ describe('records', () => {
         assert.equal(error.code, 'CORRUPTED', `${bytes}: ${error.stack}`);
       }
     }
+  });
+
+  it('read every field under its own name, whatever the name holds', () => {
+    // Names from a file, which the generated code that makes objects must
+    // hold as names and never run.
+    const names = [
+      'x": (globalThis.injected = true), "y',
+      '}); globalThis.injected = true; ({',
+      '"; globalThis.injected = true; "',
+      "'; globalThis.injected = true; '",
+      '\\',
+      'a"b\\c',
+      '\u2028line\u2029',
+      '\ud800',
+      '',
+      'constructor',
+      '0',
+      'values'
+    ];
+    const odd = layoutOf(names.map((name, index) => field(index + 1, name, { type: 'int' })));
+    const object = Object.fromEntries(names.map((name, index) => [name, index]));
+    const [back] = decodeRecords(odd, encodeRecords(odd, [object]));
+
+    assert.equal(globalThis.injected, undefined);
+    assert.equal(Object.getPrototypeOf(back), Object.prototype);
+    assert.deepEqual(Object.keys(back).sort(), [...names].sort());
+
+    for (const [index, name] of names.entries()) {
+      assert.equal(Object.getOwnPropertyDescriptor(back, name)?.value, index, name);
+    }
+  });
+
+  it('read a field named `__proto__` as a field, not as the prototype', () => {
+    const proto = layoutOf([
+      field(1, '__proto__', { type: 'string' }),
+      field(2, 'x', { type: 'int' })
+    ]);
+    const object = { x: 1 };
+
+    Object.defineProperty(object, '__proto__', { value: 'p', enumerable: true });
+
+    const [back] = decodeRecords(proto, encodeRecords(proto, [object]));
+
+    assert.equal(Object.getPrototypeOf(back), Object.prototype);
+    assert.equal(Object.hasOwn(back, '__proto__'), true);
+    assert.equal(back.x, 1);
+  });
+
+  it('read records where a process forbids making code from strings', () => {
+    const script = `
+      const { decodeRecords, encodeRecords } = require(${JSON.stringify(require.resolve('../lib/codec.js'))});
+      const list = [{ id: 1, name: 'a', kind: { type: 'int' }, optional: true, default: undefined }];
+      const layout = { name: 't', fields: { list, positions: new Map([[1, 0]]), names: new Set(['a']), hasProto: false } };
+      process.stdout.write(JSON.stringify(decodeRecords(layout, encodeRecords(layout, [{ a: 7 }]))));
+    `;
+    const output = execFileSync(process.execPath, [
+      '--disallow-code-generation-from-strings',
+      '-e',
+      script
+    ]);
+
+    assert.equal(output.toString(), '[{"a":7}]');
   });
 
   it('refuse a value of another type with the field it is in', () => {

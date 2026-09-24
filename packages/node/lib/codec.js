@@ -771,36 +771,91 @@ function readFields(reader, fields, lenient, depth) {
     }
   }
 
+  for (let index = 0; index < fields.list.length; index++) {
+    if (values[index] === undefined) {
+      values[index] = missing(fields.list[index], lenient);
+    }
+  }
+
+  if (fields.build === undefined) {
+    fields.build = builderOf(fields);
+  }
+
+  if (fields.build !== null) {
+    return fields.build(values);
+  }
+
   const object = {};
 
   for (let index = 0; index < fields.list.length; index++) {
     const field = fields.list[index];
-    let value = values[index];
-
-    if (value === undefined) {
-      if (field.default !== undefined) {
-        value = defaultOf(field);
-      } else if (field.optional || lenient) {
-        value = null;
-      } else {
-        throw corrupted(`it lacks the required field \`${field.name}\``);
-      }
-    }
 
     if (fields.hasProto && field.name === '__proto__') {
       // Assigning it would set the object's prototype instead.
       Object.defineProperty(object, field.name, {
-        value,
+        value: values[index],
         writable: true,
         enumerable: true,
         configurable: true
       });
     } else {
-      object[field.name] = value;
+      object[field.name] = values[index];
     }
   }
 
   return object;
+}
+
+/** The value of a field a record lacks: its default, or null if it may be. */
+function missing(field, lenient) {
+  if (field.default !== undefined) {
+    return defaultOf(field);
+  }
+
+  if (field.optional || lenient) {
+    return null;
+  }
+
+  throw corrupted(`it lacks the required field \`${field.name}\``);
+}
+
+/** The most fields a layout makes its objects with generated code for. */
+const MAX_BUILT_FIELDS = 256;
+
+/**
+ * A function that makes an object of the layout `fields` from its fields'
+ * values, in the layout's order, with one object literal; or `null`, where
+ * `readFields` assigns the fields one by one instead.
+ *
+ * Assigning each field under its name is a store whose key changes from one
+ * field to the next, which the JavaScript engine cannot specialise, and each
+ * adds a property to the object; a literal makes the object whole, in its
+ * final shape, several times faster. The names come from the file, so they
+ * reach the generated code only through `JSON.stringify`, which keeps each
+ * inside its string literal, and nothing else from the file is written into
+ * it. A layout with a field named `__proto__` is not generated, since that
+ * key in a literal sets the object's prototype; nor is one in a process that
+ * forbids making code from strings.
+ */
+function builderOf(fields) {
+  if (fields.hasProto || fields.list.length > MAX_BUILT_FIELDS) {
+    return null;
+  }
+
+  const entries = fields.list.map(
+    (field, index) => `${JSON.stringify(field.name)}: values[${index}]`
+  );
+
+  try {
+    return new Function('values', `'use strict';\nreturn { ${entries.join(', ')} };`);
+  } catch (error) {
+    // Only a process that forbids it fails to make the function.
+    if (error instanceof EvalError) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 /** The object whose record is `bytes`. */
@@ -936,7 +991,9 @@ function fieldsOf(list) {
     list,
     positions: new Map(list.map((field, index) => [field.id, index])),
     names: new Set(list.map((field) => field.name)),
-    hasProto: list.some((field) => field.name === '__proto__')
+    hasProto: list.some((field) => field.name === '__proto__'),
+    // Made by `builderOf` when the first object of the layout is read.
+    build: undefined
   };
 }
 
