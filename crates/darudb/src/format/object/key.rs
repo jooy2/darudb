@@ -96,6 +96,42 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Value, usize), &'static str> {
     }
 }
 
+/// How many bytes the key encoding at the start of `bytes` takes, found
+/// without decoding the value, for a caller that needs only where it ends.
+pub(crate) fn length(bytes: &[u8]) -> Result<usize, &'static str> {
+    let (&tag, rest) = bytes.split_first().ok_or("a key ends before its tag")?;
+
+    match tag {
+        NULL | FALSE | TRUE => Ok(1),
+        INT | FLOAT if rest.len() >= 8 => Ok(9),
+        INT | FLOAT => Err("a key ends inside a number"),
+        STRING | BYTES => escaped_length(rest).map(|used| 1 + used),
+        _ => Err("a key has an unknown tag"),
+    }
+}
+
+/// How many bytes an escaped string at the start of `bytes` takes, its end
+/// included, as [`unescape`] would count them.
+fn escaped_length(bytes: &[u8]) -> Result<usize, &'static str> {
+    let mut index = 0;
+
+    loop {
+        let zero = bytes[index..]
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or("a key ends inside a string")?;
+
+        index += zero;
+
+        match bytes.get(index + 1) {
+            Some(0) => return Ok(index + 2),
+            Some(0xFF) => index += 2,
+            Some(_) => return Err("a key has a zero byte out of place"),
+            None => return Err("a key ends inside a string"),
+        }
+    }
+}
+
 /// Compares two scalar values as their encodings compare: null first, then
 /// by type in the order of the tags, then by value, with floats in the
 /// canonical order. A list or an object sorts after everything, though no
@@ -326,6 +362,7 @@ mod tests {
 
             assert_eq!(order(&read, &value), Ordering::Equal, "{value:?}");
             assert_eq!(&bytes[used..], b"rest");
+            assert_eq!(length(&bytes), Ok(used), "{value:?}");
         }
     }
 

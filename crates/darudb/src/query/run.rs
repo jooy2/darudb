@@ -368,12 +368,12 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
                 ordered.reverse();
             }
 
-            let mut give = |key: Vec<u8>, seen: &mut HashSet<Vec<u8>>| -> Result<bool> {
-                if *repeats && !seen.insert(key.clone()) {
+            let mut give = |key: &[u8], seen: &mut HashSet<Vec<u8>>| -> Result<bool> {
+                if *repeats && !seen.insert(key.to_vec()) {
                     return Ok(false);
                 }
 
-                visit(&key, None)
+                visit(key, None)
             };
 
             for range in ordered {
@@ -382,15 +382,13 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
                     // the value and whose value is the object's key: looked
                     // up, not walked.
                     match source.get_in(&tree, value)? {
-                        Some(key) => give(key, &mut seen)?,
+                        Some(key) => give(&key, &mut seen)?,
                         None => false,
                     }
                 } else if *backward {
                     walk_back(source, index, &tree, range, &mut |key| give(key, &mut seen))?
                 } else {
-                    walk_entries(source, index, &tree, range, *backward, &mut |key| {
-                        give(key, &mut seen)
-                    })?
+                    walk_entries(source, index, &tree, range, &mut |key| give(key, &mut seen))?
                 };
 
                 if stop {
@@ -421,44 +419,45 @@ fn unique_value<'r>(index: &IndexDef, values: bool, range: &'r Range) -> Option<
 /// to the value's first entry and walks its objects forwards instead.
 const GROUP: usize = 64;
 
-/// The primary key an index entry names, and how many bytes of the entry
-/// its value takes.
-fn entry_key(
+/// The value an index entry holds and the primary key it names, borrowed
+/// from the entry and the value stored with it.
+fn entry_parts<'e>(
     source: &dyn Source,
     index: &IndexDef,
-    entry: Vec<u8>,
-    value: Vec<u8>,
-) -> Result<(Vec<u8>, Vec<u8>)> {
-    let (_, used) = key::decode(&entry)
+    entry: &'e [u8],
+    stored: &'e [u8],
+) -> Result<(&'e [u8], &'e [u8])> {
+    let used = key::length(entry)
         .map_err(|reason| source.corrupted(format!("an entry of index {}: {reason}", index.id)))?;
-    let mut entry = entry;
-    let key = entry.split_off(used);
+    let (value, key) = entry.split_at(used);
 
     // A unique index keeps the key in the entry's value, and after the
     // value only where values repeat: null.
-    Ok((entry, if index.unique { value } else { key }))
+    Ok((value, if index.unique { stored } else { key }))
 }
 
-/// Gives the primary keys of the entries of `range`, in the walk's order,
-/// until `give` says to stop, and returns whether it did.
+/// Gives the primary keys of the entries of `range`, forwards, until `give`
+/// says to stop, and returns whether it did.
 fn walk_entries(
     source: &dyn Source,
     index: &IndexDef,
     tree: &str,
     range: &Range,
-    backward: bool,
-    give: &mut dyn FnMut(Vec<u8>) -> Result<bool>,
+    give: &mut dyn FnMut(&[u8]) -> Result<bool>,
 ) -> Result<bool> {
-    for entry in source.range_in(tree, as_ref(&range.0), as_ref(&range.1), backward)? {
-        let (entry, value) = entry?;
-        let (_, key) = entry_key(source, index, entry, value)?;
+    let mut stopped = false;
 
-        if give(key)? {
-            return Ok(true);
-        }
-    }
+    source
+        .range_in(tree, as_ref(&range.0), as_ref(&range.1), false)?
+        .for_each(&mut |entry, stored| {
+            let (_, key) = entry_parts(source, index, entry, stored)?;
 
-    Ok(false)
+            stopped = give(key)?;
+
+            Ok(stopped)
+        })?;
+
+    Ok(stopped)
 }
 
 /// Walks a range of an index backwards, giving each value's objects in
@@ -475,71 +474,80 @@ fn walk_back(
     index: &IndexDef,
     tree: &str,
     range: &Range,
-    give: &mut dyn FnMut(Vec<u8>) -> Result<bool>,
+    give: &mut dyn FnMut(&[u8]) -> Result<bool>,
 ) -> Result<bool> {
     let mut high = range.1.clone();
 
-    'values: loop {
+    loop {
         let mut group: Vec<Vec<u8>> = Vec::new();
         let mut value: Vec<u8> = Vec::new();
+        let mut stopped = false;
+        let mut large = false;
 
-        for entry in source.range_in(tree, as_ref(&range.0), as_ref(&high), true)? {
-            let (entry, key) = {
-                let (entry, stored) = entry?;
+        source
+            .range_in(tree, as_ref(&range.0), as_ref(&high), true)?
+            .for_each(&mut |entry, stored| {
+                let (entry, key) = entry_parts(source, index, entry, stored)?;
 
-                entry_key(source, index, entry, stored)?
-            };
+                if entry != value.as_slice() {
+                    while let Some(key) = group.pop() {
+                        if give(&key)? {
+                            stopped = true;
 
-            if entry != value {
-                while let Some(key) = group.pop() {
-                    if give(key)? {
-                        return Ok(true);
+                            return Ok(true);
+                        }
                     }
+
+                    value.clear();
+                    value.extend_from_slice(entry);
                 }
 
-                value = entry;
-            }
+                group.push(key.to_vec());
+                large = group.len() >= GROUP;
 
-            group.push(key);
+                Ok(large)
+            })?;
 
-            if group.len() < GROUP {
-                continue;
-            }
+        if stopped {
+            return Ok(true);
+        }
 
-            // A large value: its objects, forwards from the first.
-            let start = match &range.0 {
-                Bound::Included(start) | Bound::Excluded(start) if *start > value => {
-                    range.0.clone()
-                }
-                _ => Bound::Included(value.clone()),
-            };
-
-            for entry in source.range_in(tree, as_ref(&start), as_ref(&range.1), false)? {
-                let (entry, stored) = entry?;
-                let (entry, key) = entry_key(source, index, entry, stored)?;
-
-                if entry != value {
-                    break;
-                }
-
-                if give(key)? {
+        if !large {
+            while let Some(key) = group.pop() {
+                if give(&key)? {
                     return Ok(true);
                 }
             }
 
-            // Every entry of the value is greater than the value alone.
-            high = Bound::Excluded(value);
-
-            continue 'values;
+            return Ok(false);
         }
 
-        while let Some(key) = group.pop() {
-            if give(key)? {
-                return Ok(true);
-            }
+        // A large value: its objects, forwards from the first.
+        let start = match &range.0 {
+            Bound::Included(start) | Bound::Excluded(start) if *start > value => range.0.clone(),
+            _ => Bound::Included(value.clone()),
+        };
+
+        source
+            .range_in(tree, as_ref(&start), as_ref(&range.1), false)?
+            .for_each(&mut |entry, stored| {
+                let (entry, key) = entry_parts(source, index, entry, stored)?;
+
+                if entry != value.as_slice() {
+                    return Ok(true);
+                }
+
+                stopped = give(key)?;
+
+                Ok(stopped)
+            })?;
+
+        if stopped {
+            return Ok(true);
         }
 
-        return Ok(false);
+        // Every entry of the value is greater than the value alone.
+        high = Bound::Excluded(value);
     }
 }
 
