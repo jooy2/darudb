@@ -254,6 +254,31 @@ describe('objects', () => {
     });
   });
 
+  it('read the same whether their records fit the reused buffer or not', (context) => {
+    const { db } = withData(context);
+    const note = 'x'.repeat(200);
+
+    db.write((txn) => {
+      txn
+        .collection('teams')
+        .insertMany(Array.from({ length: 1000 }, (_, n) => ({ name: `team ${n}`, city: note })));
+    });
+
+    db.read((txn) => {
+      const teams = txn.collection('teams');
+      const first = teams.get('north');
+      // Over 200 KB of records, more than the buffer small reads reuse.
+      const all = teams.find();
+      const again = teams.get('north');
+
+      assert.equal(all.length, 1002);
+      assert.ok(all.every((team) => team.city === null || typeof team.city === 'string'));
+      assert.equal(all.filter((team) => team.city === note).length, 1000);
+      assert.deepEqual(first, { name: 'north', city: 'Seoul' });
+      assert.deepEqual(again, first, 'an object read before is not changed by a later read');
+    });
+  });
+
   it('keep each text prepared on its own collection', (context) => {
     const { db } = withData(context);
 

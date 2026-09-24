@@ -17,6 +17,19 @@ function toBuffer(bytes) {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
 }
 
+/**
+ * The buffer synchronous reads are copied into, reused: the native layer
+ * returns how many bytes it wrote there, or a `Buffer` of their own when
+ * they do not fit. What it holds is decoded at once, before the next call
+ * writes it again; decoding copies out every string and byte value.
+ */
+const scratch = Buffer.allocUnsafe(1 << 16);
+
+/** The bytes a synchronous read delivered, as `scratch` says. */
+function delivered(out) {
+  return typeof out === 'number' ? scratch.subarray(0, out) : out;
+}
+
 /** Refuses a promise where a transaction's function returns. */
 function synchronous(result) {
   if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
@@ -335,6 +348,8 @@ function collectionOf(layout, name) {
 
 module.exports = {
   toBuffer,
+  scratch,
+  delivered,
   synchronous,
   nativeMigration,
   keyOf,

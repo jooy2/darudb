@@ -611,49 +611,66 @@ impl NativeTransaction {
         }))
     }
 
-    #[napi(ts_return_type = "Buffer | null")]
+    /// The record of the object whose key is `key`, delivered as
+    /// [`delivered`] says, or `null`.
+    #[napi(ts_return_type = "number | Buffer | null")]
     pub fn get_record<'env>(
         &self,
         env: &'env Env,
         collection: String,
         key: JsKey,
-    ) -> Result<Option<BufferSlice<'env>>> {
+        mut scratch: BufferSlice<'_>,
+    ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
         let key = key_in(key)?;
 
         self.now(|txn| txn.get_record(&collection, key))?
-            .map(|record| js_bytes(env, record))
+            .map(|record| delivered(env, record, &mut scratch))
             .transpose()
     }
 
     /// The records a query finds, one after another, each after its length;
-    /// only the first with `first`.
-    #[napi(ts_return_type = "Buffer")]
-    pub fn find<'env>(&self, env: &'env Env, ir: Buffer, first: bool) -> Result<BufferSlice<'env>> {
-        js_bytes(env, self.now(|txn| txn.find_ir(&ir, first))?)
+    /// only the first with `first`. Delivered as [`delivered`] says.
+    #[napi(ts_return_type = "number | Buffer")]
+    pub fn find<'env>(
+        &self,
+        env: &'env Env,
+        ir: BufferSlice<'_>,
+        first: bool,
+        mut scratch: BufferSlice<'_>,
+    ) -> Result<Either<u32, BufferSlice<'env>>> {
+        let records = self.now(|txn| txn.find_ir(&ir, first))?;
+
+        delivered(env, records, &mut scratch)
     }
 
     #[napi]
-    pub fn count(&self, ir: Buffer) -> Result<f64> {
+    pub fn count(&self, ir: BufferSlice<'_>) -> Result<f64> {
         self.now(|txn| txn.count_ir(&ir))
     }
 
     /// The records a prepared query finds with `parameters`, encoded as
-    /// `Query::bind_encoded` reads them, as `find` returns them.
-    #[napi(ts_return_type = "Buffer")]
+    /// `Query::bind_encoded` reads them, as `find` delivers them.
+    #[napi(ts_return_type = "number | Buffer")]
     pub fn find_prepared<'env>(
         &self,
         env: &'env Env,
         prepared: &NativePrepared,
-        parameters: Buffer,
+        parameters: BufferSlice<'_>,
         first: bool,
-    ) -> Result<BufferSlice<'env>> {
+        mut scratch: BufferSlice<'_>,
+    ) -> Result<Either<u32, BufferSlice<'env>>> {
         let query = prepared.bound(&parameters, first)?;
+        let records = self.now(|txn| txn.find(&prepared.collection, &query))?;
 
-        js_bytes(env, self.now(|txn| txn.find(&prepared.collection, &query))?)
+        delivered(env, records, &mut scratch)
     }
 
     #[napi]
-    pub fn count_prepared(&self, prepared: &NativePrepared, parameters: Buffer) -> Result<f64> {
+    pub fn count_prepared(
+        &self,
+        prepared: &NativePrepared,
+        parameters: BufferSlice<'_>,
+    ) -> Result<f64> {
         let query = prepared.bound(&parameters, false)?;
 
         self.now(|txn| txn.count(&prepared.collection, &query))
@@ -663,7 +680,7 @@ impl NativeTransaction {
     pub fn write_records(
         &self,
         collection: String,
-        records: Buffer,
+        records: BufferSlice<'_>,
         replace: bool,
     ) -> Result<Vec<JsKeyOut>> {
         self.now(|txn| txn.write_records(&collection, &records, replace))?
@@ -964,7 +981,7 @@ fn with<T>(held: &Mutex<Option<Txn>>, operation: impl FnOnce(&mut Txn) -> Result
 pub fn parse_query(
     collection: String,
     text: String,
-    parameters: Buffer,
+    parameters: BufferSlice<'_>,
     count: bool,
 ) -> Result<Buffer> {
     let request = darudb::QueryRequest {
@@ -990,7 +1007,7 @@ pub struct NativePrepared {
 impl NativePrepared {
     /// Prepares the query in `ir`, whose parameters stay parameters.
     #[napi(factory)]
-    pub fn from_ir(ir: Buffer) -> Result<Self> {
+    pub fn from_ir(ir: BufferSlice<'_>) -> Result<Self> {
         let request = darudb::QueryRequest::decode(&ir).map_err(to_js_error)?;
 
         Ok(Self {
@@ -1011,7 +1028,7 @@ impl NativePrepared {
     /// The IR of the query with `parameters` for its parameters, for the
     /// asynchronous API, which passes queries to the thread pool as IR.
     #[napi]
-    pub fn bind(&self, parameters: Buffer, count: bool) -> Result<Buffer> {
+    pub fn bind(&self, parameters: BufferSlice<'_>, count: bool) -> Result<Buffer> {
         let request = darudb::QueryRequest {
             collection: self.collection.clone(),
             query: self.bound(&parameters, false)?,
@@ -1170,6 +1187,26 @@ fn key_out(key: darudb::Value) -> Result<JsKeyOut> {
 /// costs more than copying a record or two: V8 registers the allocation, and
 /// a finalizer frees it.
 const COPY_LIMIT: usize = 1 << 20;
+
+/// What a synchronous read hands JavaScript: the length of `bytes` once
+/// they are copied into `scratch`, a buffer the JavaScript side keeps for
+/// the purpose and reads before its next call, or a `Buffer` of their own
+/// when they do not fit. A new `Buffer` for every read cost JavaScript an
+/// allocation and a collection each time.
+fn delivered<'env>(
+    env: &'env Env,
+    bytes: Vec<u8>,
+    scratch: &mut [u8],
+) -> Result<Either<u32, BufferSlice<'env>>> {
+    match (scratch.get_mut(..bytes.len()), u32::try_from(bytes.len())) {
+        (Some(room), Ok(len)) => {
+            room.copy_from_slice(&bytes);
+
+            Ok(Either::A(len))
+        }
+        _ => js_bytes(env, bytes).map(Either::B),
+    }
+}
 
 /// `bytes` as a JavaScript `Buffer`.
 fn js_bytes(env: &Env, bytes: Vec<u8>) -> Result<BufferSlice<'_>> {

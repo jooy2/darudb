@@ -27,6 +27,8 @@ const {
 } = require('./codec');
 const {
   toBuffer,
+  scratch,
+  delivered,
   synchronous,
   nativeMigration,
   keyOf,
@@ -74,9 +76,9 @@ class ReadCollection {
 
   /** The object whose primary key is `key`, or `null`. */
   get(key) {
-    const record = this.#txn.getRecord(this.#layout.name, keyOf(key));
+    const record = this.#txn.getRecord(this.#layout.name, keyOf(key), scratch);
 
-    return record === null ? null : decodeRecord(this.#layout, record);
+    return record === null ? null : decodeRecord(this.#layout, delivered(record));
   }
 
   /** The objects a query finds, in its order; every object without one. */
@@ -107,11 +109,13 @@ class ReadCollection {
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
-      return this.#txn.findPrepared(prepared, parametersOf(parameters), first);
+      return delivered(this.#txn.findPrepared(prepared, parametersOf(parameters), first, scratch));
     }
 
     // The IR is lent: the engine reads it before the call returns.
-    return this.#txn.find(irOf(name, query, parameters, false, first, true), first);
+    return delivered(
+      this.#txn.find(irOf(name, query, parameters, false, first, true), first, scratch)
+    );
   }
 
   get [TXN]() {
