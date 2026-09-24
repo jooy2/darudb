@@ -90,8 +90,17 @@ function describe(value) {
 class Writer {
   constructor(size = 256) {
     this.bytes = new Uint8Array(size);
-    this.view = new DataView(this.bytes.buffer);
     this.at = 0;
+    this.floats = null;
+  }
+
+  /** A view for writing floats, made the first time one is written. */
+  get view() {
+    if (this.floats === null || this.floats.buffer !== this.bytes.buffer) {
+      this.floats = new DataView(this.bytes.buffer);
+    }
+
+    return this.floats;
   }
 
   reserve(extra) {
@@ -109,7 +118,38 @@ class Writer {
 
     bigger.set(this.bytes.subarray(0, this.at));
     this.bytes = bigger;
-    this.view = new DataView(bigger.buffer);
+  }
+
+  /**
+   * Starts an embedded object: its tag, and room for its length, which
+   * `close` writes once the object has been written. An object written this
+   * way needs no buffer of its own.
+   */
+  open() {
+    this.reserve(11);
+    this.bytes[this.at++] = OBJECT;
+
+    const mark = this.at;
+
+    this.at += 10;
+
+    return mark;
+  }
+
+  /** Ends the object `open` started at `mark`, moving it next to its length. */
+  close(mark) {
+    const start = mark + 10;
+    const length = this.at - start;
+    let size = 1;
+
+    for (let rest = length; rest >= 0x80; rest = Math.floor(rest / 0x80)) {
+      size++;
+    }
+
+    this.bytes.copyWithin(mark + size, start, this.at);
+    this.at = mark;
+    this.varint(length);
+    this.at += length;
   }
 
   byte(value) {
@@ -211,9 +251,18 @@ class Writer {
 class Reader {
   constructor(bytes, start = 0, end = bytes.length) {
     this.bytes = bytes;
-    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     this.at = start;
     this.end = end;
+    this.floats = null;
+  }
+
+  /** A view for reading floats, made the first time one is read. */
+  get view() {
+    if (this.floats === null) {
+      this.floats = new DataView(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength);
+    }
+
+    return this.floats;
   }
 
   byte() {
@@ -436,11 +485,10 @@ function writeValue(writer, kind, value, where) {
         throw invalid(`\`${where}\` holds an object, not ${describe(value)}`);
       }
 
-      const inner = new Writer(64);
+      const mark = writer.open();
 
-      writeFields(inner, kind.fields, value, where);
-      writer.byte(OBJECT);
-      writer.bytesOf(inner.bytes.subarray(0, inner.at));
+      writeFields(writer, kind.fields, value, where);
+      writer.close(mark);
 
       return;
     }
@@ -758,11 +806,16 @@ function decodeRecord(collection, bytes, lenient = false) {
 /** The objects of records one after another, each after its length. */
 function decodeRecords(collection, bytes) {
   const reader = new Reader(bytes);
+  // One reader for every record, moved from each to the next.
+  const record = new Reader(bytes, 0, 0);
   const objects = [];
 
   while (reader.at < reader.end) {
     const length = reader.count();
-    const record = new Reader(bytes, reader.at, reader.at + length);
+
+    record.at = reader.at;
+    record.end = reader.at + length;
+
     const object = readFields(record, collection.fields, false, 0);
 
     if (record.at !== record.end) {
@@ -1234,7 +1287,8 @@ function writeExpression(writer, node, depth = 1) {
     throw codeError('INVALID_QUERY', `the filter nests more than ${MAX_FILTER_DEPTH} levels deep`);
   }
 
-  const inner = new Writer(64);
+  const inner = writer;
+  const mark = writer.open();
 
   switch (node.kind) {
     case 'and':
@@ -1282,16 +1336,22 @@ function writeExpression(writer, node, depth = 1) {
       throw codeError('INVALID_QUERY', 'a filter holds something that is not a condition');
   }
 
-  writer.byte(OBJECT);
-  writer.bytesOf(inner.bytes.subarray(0, inner.at));
+  writer.close(mark);
 }
+
+/** The buffer queries are encoded in, reused: a query is copied out of it. */
+const queryWriter = new Writer(256);
 
 /**
  * The IR of a query on `collection`: its filter, sort, offset and limit, and
- * whether it counts rather than returns the objects.
+ * whether it counts rather than returns the objects. With `lend`, the IR is
+ * a view of the buffer the next query is encoded in, for a caller that
+ * hands it to the engine at once; otherwise it is a copy.
  */
-function encodeQuery(collection, query, count) {
-  const writer = new Writer(128);
+function encodeQuery(collection, query, count, lend = false) {
+  const writer = queryWriter;
+
+  writer.at = 0;
   const entries = [1];
 
   if (query.filter !== null) {
@@ -1332,15 +1392,14 @@ function encodeQuery(collection, query, count) {
         writer.varint(query.sort.length);
 
         for (const [path, descending] of query.sort) {
-          const key = new Writer(32);
+          const mark = writer.open();
 
-          key.varint(2);
-          key.varint(1);
-          writePath(key, path);
-          key.varint(2);
-          key.byte(descending ? TRUE : FALSE);
-          writer.byte(OBJECT);
-          writer.bytesOf(key.bytes.subarray(0, key.at));
+          writer.varint(2);
+          writer.varint(1);
+          writePath(writer, path);
+          writer.varint(2);
+          writer.byte(descending ? TRUE : FALSE);
+          writer.close(mark);
         }
 
         break;
@@ -1358,7 +1417,11 @@ function encodeQuery(collection, query, count) {
     }
   }
 
-  return writer.finish();
+  if (lend) {
+    return Buffer.from(writer.bytes.buffer, writer.bytes.byteOffset, writer.at);
+  }
+
+  return Buffer.from(writer.bytes.subarray(0, writer.at));
 }
 
 module.exports = {

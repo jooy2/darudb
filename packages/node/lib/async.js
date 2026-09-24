@@ -440,14 +440,14 @@ class AsyncReadCollection {
 
   /** The objects a query finds, in its order; every object without one. */
   async find(query, parameters) {
-    const ir = toBuffer(irOf(this.#layout.name, query, parameters, false));
+    const ir = irOf(this.#layout.name, query, parameters, false);
 
     return decodeRecords(this.#layout, await this.#serial.call(FIND, '', null, ir));
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
   async findOne(query, parameters) {
-    const ir = toBuffer(irOf(this.#layout.name, query, parameters, false, true));
+    const ir = irOf(this.#layout.name, query, parameters, false, true);
     const records = await this.#serial.call(FIND_FIRST, '', null, ir);
 
     return decodeRecords(this.#layout, records)[0] ?? null;
@@ -455,7 +455,7 @@ class AsyncReadCollection {
 
   /** How many objects a query finds, after its offset and within its limit. */
   async count(query, parameters) {
-    const ir = toBuffer(irOf(this.#layout.name, query, parameters, true));
+    const ir = irOf(this.#layout.name, query, parameters, true);
 
     return this.#serial.call(COUNT, '', null, ir);
   }

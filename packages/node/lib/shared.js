@@ -108,7 +108,7 @@ function keyOf(key) {
  * `first`, a query built here keeps only its first object; text leaves that
  * to the native layer.
  */
-function irOf(collection, query, parameters, count, first = false) {
+function irOf(collection, query, parameters, count, first = false, lend = false) {
   if (typeof query === 'string') {
     if (parameters !== undefined && !Array.isArray(parameters)) {
       throw codeError('INVALID_QUERY', "a query's parameters are an array");
@@ -147,7 +147,7 @@ function irOf(collection, query, parameters, count, first = false) {
     parts.limit = parts.limit === null ? 1 : Math.min(parts.limit, 1);
   }
 
-  return toBuffer(encodeQuery(collection, parts, count));
+  return encodeQuery(collection, parts, count, lend);
 }
 
 /** Calls `mark` with every int kind among `fields`, in lists and embedded objects too. */

@@ -78,21 +78,23 @@ class ReadCollection {
 
   /** The objects a query finds, in its order; every object without one. */
   find(query, parameters) {
-    const records = this.#txn.find(irOf(this.#layout.name, query, parameters, false), false);
+    // The IR is lent: the engine reads it before the call returns.
+    const ir = irOf(this.#layout.name, query, parameters, false, false, true);
+    const records = this.#txn.find(ir, false);
 
     return decodeRecords(this.#layout, records);
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
   findOne(query, parameters) {
-    const ir = irOf(this.#layout.name, query, parameters, false, true);
+    const ir = irOf(this.#layout.name, query, parameters, false, true, true);
 
     return decodeRecords(this.#layout, this.#txn.find(ir, true))[0] ?? null;
   }
 
   /** How many objects a query finds, after its offset and within its limit. */
   count(query, parameters) {
-    return this.#txn.count(irOf(this.#layout.name, query, parameters, true));
+    return this.#txn.count(irOf(this.#layout.name, query, parameters, true, false, true));
   }
 
   get [TXN]() {
