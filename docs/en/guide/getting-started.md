@@ -92,7 +92,7 @@ A write transaction dropped without `commit` is aborted, and nothing it did reac
 
 `commit` waits for the disk before it returns. `commit_deferred` does not: readers see the changes at once, and they reach the disk together with later commits, at the next `commit`, at `Database::sync`, when the database is closed, or once they have waited one second by default. A crash of the process loses none of them. A power cut can undo the newest ones, but never leaves a gap and never damages the file. `OpenOptions::max_unsynced_time` and `OpenOptions::max_unsynced_pages` set how much may wait.
 
-Several processes can have one file open at once. Each sees the others' commits as soon as they are made, one writes at a time, and a reader never waits for a writer. `begin_write` waits for a writer in another process as it does for one in its own, up to the busy timeout. The processes coordinate through the operating system's file locks and nothing else, so a process that dies at any moment leaves nothing the others have to clean up. Two rules come with that. Nothing else in a process that has a database open may open the file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. And on iOS, an app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
+Several processes can have one file open at once. Each sees the others' commits as soon as they are made, one writes at a time, and a reader never waits for a writer. `begin_write` waits for a writer in another process as it does for one in its own, up to the busy timeout. The processes coordinate through the operating system's file locks and nothing else, so a process that dies at any moment leaves nothing the others have to clean up. Those locks, and the syncs a commit waits for, work only on a local disk: a database on a network file system such as NFS or SMB is refused with `UNSUPPORTED_FILE_SYSTEM`. Two more rules come with the locks. Nothing else in a process that has a database open may open the file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. And on iOS, an app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
 
 Typed records and queries come later, built on top of these trees.
 
@@ -144,6 +144,7 @@ Every error carries a `code` that names the failure. The code is the same in Rus
 | `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
 | `KEY_REQUIRED` | The database is encrypted, and it was opened without a key or password. |
 | `WRONG_KEY` | The key or password does not open the database. |
+| `UNSUPPORTED_FILE_SYSTEM` | The database is on a network file system, or on one whose file locks do not work. It has to be on a local disk. |
 | `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |
 

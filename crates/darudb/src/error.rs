@@ -97,6 +97,13 @@ pub enum Error {
         /// The database's path.
         path: PathBuf,
     },
+    /// The database is on a network file system, or on one whose file locks
+    /// do not work. Neither keeps the promises about locks and syncs that
+    /// DaruDB relies on, so the database has to be on a local disk.
+    UnsupportedFileSystem {
+        /// The database's path.
+        path: PathBuf,
+    },
     /// An invariant of the engine does not hold, which only a bug in DaruDB can
     /// cause. Please report it.
     Internal {
@@ -123,6 +130,7 @@ impl Error {
             Error::SyncFailed { .. } => "SYNC_FAILED",
             Error::KeyRequired { .. } => "KEY_REQUIRED",
             Error::WrongKey { .. } => "WRONG_KEY",
+            Error::UnsupportedFileSystem { .. } => "UNSUPPORTED_FILE_SYSTEM",
             Error::Internal { .. } => "INTERNAL",
         }
     }
@@ -179,6 +187,11 @@ impl fmt::Display for Error {
             Error::WrongKey { path } => {
                 write!(f, "the key or password does not open `{}`", path.display())
             }
+            Error::UnsupportedFileSystem { path } => write!(
+                f,
+                "`{}` is on a network file system, or on one whose file locks do not work; a database has to be on a local disk",
+                path.display()
+            ),
             Error::Internal { message } => {
                 write!(f, "internal error, which is a bug in DaruDB: {message}")
             }
@@ -254,6 +267,10 @@ mod tests {
             (Error::KeyRequired { path: path.clone() }, "KEY_REQUIRED"),
             (Error::WrongKey { path: path.clone() }, "WRONG_KEY"),
             (
+                Error::UnsupportedFileSystem { path: path.clone() },
+                "UNSUPPORTED_FILE_SYSTEM",
+            ),
+            (
                 Error::Internal {
                     message: "a message".to_owned(),
                 },
@@ -297,6 +314,7 @@ mod tests {
                     | Error::Corrupted { .. }
                     | Error::Busy { .. }
                     | Error::SyncFailed { .. }
+                    | Error::UnsupportedFileSystem { .. }
             );
 
             if named {

@@ -1,12 +1,15 @@
 //! The operating system's byte-range locks, called directly: `fcntl` record
 //! locks on Unix-like systems, `LockFileEx` and `UnlockFileEx` on Windows.
+//! Also the question those locks depend on: whether a file is on a network
+//! file system, where they do not work.
 //!
 //! This is the one module of the engine allowed `unsafe` code. The standard
 //! library locks only whole files, and the crates that wrap byte-range locks
 //! either lock whole files too or limit offsets to 32 bits, which the lock
 //! bytes at 2^62 do not fit. Every `unsafe` block here is one call into the C
-//! library or the Windows API, and its `SAFETY` comment says why what it passes
-//! is valid. No pointer outlives the call it is passed to.
+//! library or the Windows API, or the zeroing of a C struct for one, and its
+//! `SAFETY` comment says why that is sound. No pointer outlives the call it is
+//! passed to.
 //!
 //! Nothing here waits. A lock is granted at once or refused, and the callers
 //! poll, which is what gives every wait a timeout on every platform. It also
@@ -17,6 +20,7 @@
 
 use std::fs::File;
 use std::io;
+use std::path::Path;
 
 /// What a lock admits alongside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +59,19 @@ pub(super) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
 /// exclusive, loses the exclusive lock first.
 pub(super) fn unlock(file: &File, start: u64, len: u64) -> io::Result<()> {
     platform::unlock(file, start, len)
+}
+
+/// Whether the file system that holds `path` is a network one. `file` is the
+/// file at `path` once it is open; before it exists, the directory it goes
+/// into answers for it.
+///
+/// Linux and Android ask the file system for its type, macOS and iOS for its
+/// name, and Windows looks for a UNC path or a drive the system reports as
+/// remote. The answer is a best effort: a network file system these do not
+/// recognise is still not supported, and a question the system fails to
+/// answer counts as a local file system.
+pub(super) fn is_remote(file: Option<&File>, path: &Path) -> bool {
+    platform::is_remote(file, path).unwrap_or(false)
 }
 
 /// The error for a file system whose locks do not work.
@@ -211,6 +228,83 @@ mod platform {
 
         fcntl(file, calls::SET, &mut record)
     }
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    pub(super) fn is_remote(file: Option<&File>, path: &std::path::Path) -> io::Result<bool> {
+        let directory;
+        let file = match file {
+            Some(file) => file,
+            None => {
+                let parent = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(std::path::Path::new("."));
+
+                directory = File::open(parent)?;
+
+                &directory
+            }
+        };
+        // SAFETY: `statfs` is a plain C struct of integers and characters, for
+        // which all zeros is a valid value; the call below fills it in.
+        let mut stat: libc::statfs = unsafe { mem::zeroed() };
+        // SAFETY: the descriptor belongs to `file`, which is open for the
+        // whole call, and `stat` is a valid, exclusively borrowed `statfs`.
+        let result = unsafe { libc::fstatfs(file.as_raw_fd(), &raw mut stat) };
+
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let remote = super::is_network_type(stat.f_type);
+
+        #[cfg(target_vendor = "apple")]
+        let remote = super::is_network_name(
+            &stat
+                .f_fstypename
+                .iter()
+                .take_while(|character| **character != 0)
+                .map(|character| character.to_ne_bytes()[0])
+                .collect::<Vec<u8>>(),
+        );
+
+        Ok(remote)
+    }
+
+    /// Other Unix-like systems are not checked.
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+    pub(super) fn is_remote(_file: Option<&File>, _path: &std::path::Path) -> io::Result<bool> {
+        Ok(false)
+    }
+}
+
+/// Whether a Linux file system type, as `statfs` reports it, is a network
+/// one: NFS, SMB in its three generations, NCP, Coda, and AFS in its two.
+/// FUSE is left alone; a FUSE file system whose locks do not work, such as
+/// shared storage on some Android devices, fails the lock call instead.
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+pub(super) fn is_network_type(kind: impl Into<i128>) -> bool {
+    const NETWORK: [u32; 8] = [
+        0x0000_6969, // NFS
+        0x0000_517B, // SMB
+        0xFF53_4D42, // CIFS
+        0xFE53_4D42, // SMB2 and later
+        0x0000_564C, // NCP
+        0x7375_7245, // Coda
+        0x5346_414F, // AFS
+        0x6B41_4653, // kAFS
+    ];
+
+    // The type is a 32-bit number, kept in a field whose width and sign vary
+    // between systems.
+    u32::try_from(kind.into() & 0xFFFF_FFFF).is_ok_and(|kind| NETWORK.contains(&kind))
+}
+
+/// Whether a file system name, as macOS and iOS report it, is a network one.
+#[cfg(any(target_vendor = "apple", test))]
+pub(super) fn is_network_name(name: &[u8]) -> bool {
+    [b"nfs".as_slice(), b"smbfs", b"afpfs", b"webdav"].contains(&name)
 }
 
 #[cfg(windows)]
@@ -223,9 +317,10 @@ mod platform {
         ERROR_INVALID_FUNCTION, ERROR_LOCK_VIOLATION, ERROR_NOT_SUPPORTED,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, UnlockFileEx,
+        GetDriveTypeW, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, UnlockFileEx,
     };
     use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0};
+    use windows_sys::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 
     use super::{Mode, unsupported};
 
@@ -314,5 +409,29 @@ mod platform {
         }
 
         Ok(())
+    }
+
+    /// A UNC path is a network share, and so is a drive letter the system
+    /// reports as remote, such as a mapped network drive.
+    pub(super) fn is_remote(_file: Option<&File>, path: &std::path::Path) -> io::Result<bool> {
+        use std::path::{Component, Prefix};
+
+        let absolute = std::path::absolute(path)?;
+        let Some(Component::Prefix(prefix)) = absolute.components().next() else {
+            return Ok(false);
+        };
+
+        match prefix.kind() {
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) => Ok(true),
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                let root = [u16::from(letter), u16::from(b':'), u16::from(b'\\'), 0];
+                // SAFETY: `root` is a wide string ending in a zero, as the
+                // call expects, and it lives past the call.
+                let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
+
+                Ok(kind == DRIVE_REMOTE)
+            }
+            _ => Ok(false),
+        }
     }
 }

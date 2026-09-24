@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{LockError, Locks, last_unreached};
+use super::sys::{is_network_name, is_network_type};
+use super::{LockError, Locks, last_unreached, on_network_file_system};
 use crate::format::{SELECTOR_OFFSET, Selector};
 use crate::storage::DbFile;
 use crate::testing::{HELPER_PATH, Helper, wait_to_be_told};
@@ -395,4 +396,34 @@ fn the_search_asks_once_when_nothing_is_held_back_and_bisects_otherwise() {
             assert!(questions <= 4, "{questions} questions for {oldest}");
         }
     }
+}
+
+#[test]
+fn network_file_systems_are_told_apart_from_local_ones() {
+    // NFS, and CIFS as a signed 32-bit and a 64-bit field report it.
+    assert!(is_network_type(0x6969_i64));
+    assert!(is_network_type(-11_317_950_i32));
+    assert!(is_network_type(0xFF53_4D42_u32));
+    // ext4, and FUSE, which is left to the lock call.
+    assert!(!is_network_type(0xEF53_i64));
+    assert!(!is_network_type(0x6573_5546_i64));
+
+    assert!(is_network_name(b"smbfs"));
+    assert!(is_network_name(b"nfs"));
+    assert!(!is_network_name(b"apfs"));
+    assert!(!is_network_name(b"nfsx"));
+
+    // A temporary directory is on a local disk, before a file exists in it
+    // and after.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file");
+
+    assert!(!on_network_file_system(&path, None));
+
+    std::fs::write(&path, b"").unwrap();
+
+    assert!(!on_network_file_system(
+        &path,
+        Some(&DbFile::open(&path).unwrap())
+    ));
 }

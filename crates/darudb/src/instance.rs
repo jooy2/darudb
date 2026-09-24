@@ -379,12 +379,18 @@ impl Shared {
             .map_err(|error| self.lock_error(error))
     }
 
-    /// A lock that was not taken, as the error the caller sees.
+    /// A lock that was not taken, as the error the caller sees. A file system
+    /// that reports it has no working locks is one the engine cannot use.
     pub(crate) fn lock_error(&self, error: LockError) -> Error {
         match error {
             LockError::Busy => Error::Busy {
                 path: self.path.clone(),
             },
+            LockError::Io(source) if source.kind() == std::io::ErrorKind::Unsupported => {
+                Error::UnsupportedFileSystem {
+                    path: self.path.clone(),
+                }
+            }
             LockError::Io(source) => self.pager.io_error(source),
         }
     }

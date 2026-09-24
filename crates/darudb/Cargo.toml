@@ -36,13 +36,15 @@ blake2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # The C library's `fcntl` record locks, which the standard library does not
-# expose: it locks whole files only. MIT OR Apache-2.0, with no dependencies,
-# and already in the build through `getrandom`.
+# expose: it locks whole files only. `fstatfs` tells a network file system
+# apart. MIT OR Apache-2.0, with no dependencies, and already in the build
+# through `getrandom`.
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# `LockFileEx` and `UnlockFileEx`, the byte-range locks of Windows. MIT OR
-# Apache-2.0, published by Microsoft, and it brings only `windows-link`.
+# `LockFileEx` and `UnlockFileEx`, the byte-range locks of Windows, and
+# `GetDriveTypeW`, which tells a network drive apart. MIT OR Apache-2.0,
+# published by Microsoft, and it brings only `windows-link`.
 windows-sys.workspace = true
 
 [dev-dependencies]

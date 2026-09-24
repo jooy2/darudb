@@ -13,7 +13,7 @@ use crate::format::{
     STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
 use crate::instance::{FileKey, Shared, find, registry};
-use crate::lock::{Access, LockError, Locks};
+use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
 use crate::storage::{self, Created, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
@@ -178,6 +178,14 @@ impl Database {
             return Ok(Self { shared });
         }
 
+        // Checked before anything is created, so that a refused database
+        // leaves no file behind, and again below for the file that opens.
+        if options.creates() && FileKey::of(path).is_none() && on_network_file_system(path, None) {
+            return Err(Error::UnsupportedFileSystem {
+                path: path.to_path_buf(),
+            });
+        }
+
         let created = if options.creates() {
             create(path, options)?
         } else {
@@ -196,6 +204,13 @@ impl Database {
             None => (open_file(path)?, None),
         };
         let file = Arc::new(file);
+
+        if on_network_file_system(path, Some(&file)) {
+            return Err(Error::UnsupportedFileSystem {
+                path: path.to_path_buf(),
+            });
+        }
+
         let key = FileKey::of_file(&file, path).map_err(|source| io_error(path, source))?;
 
         if let Some(shared) = find(&instances, &key) {
@@ -533,12 +548,18 @@ fn open_file(path: &Path) -> Result<DbFile> {
     })
 }
 
-/// A lock that was not taken, as the error the caller sees.
+/// A lock that was not taken, as the error the caller sees. A file system
+/// that reports it has no working locks is one the engine cannot use.
 fn lock_error(path: &Path, error: LockError) -> Error {
     match error {
         LockError::Busy => Error::Busy {
             path: path.to_path_buf(),
         },
+        LockError::Io(source) if source.kind() == io::ErrorKind::Unsupported => {
+            Error::UnsupportedFileSystem {
+                path: path.to_path_buf(),
+            }
+        }
         LockError::Io(source) => io_error(path, source),
     }
 }

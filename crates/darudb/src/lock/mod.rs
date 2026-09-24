@@ -34,6 +34,7 @@ mod sys;
 
 use std::collections::BTreeMap;
 use std::io;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,6 +61,15 @@ const FIRST_PAUSE: Duration = Duration::from_micros(20);
 /// The longest pause between two attempts: short enough to notice a released
 /// lock soon, long enough not to keep a processor busy.
 const LAST_PAUSE: Duration = Duration::from_millis(10);
+
+/// Whether the database at `path` is on a network file system, where the
+/// engine refuses to open it: such file systems break the locks and the
+/// barriers the engine relies on (`design/README.md`). `file` is the database
+/// file once it is open; before, the directory it is created in is checked,
+/// so that nothing is created there. A best effort; see [`sys::is_remote`].
+pub(crate) fn on_network_file_system(path: &Path, file: Option<&DbFile>) -> bool {
+    sys::is_remote(file.map(DbFile::as_file), path)
+}
 
 /// How the open lock was granted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
