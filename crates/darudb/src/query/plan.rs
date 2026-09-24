@@ -256,7 +256,7 @@ impl<'s> Resolver<'s> {
             }
             Expr::Test { op, path, values } => {
                 let resolved = self.path(path)?;
-                let test = test(*op, &resolved, values, &path.join("."))?;
+                let test = test(*op, &resolved, values, path)?;
 
                 Cond::Test {
                     path: resolved,
@@ -274,7 +274,8 @@ impl<'s> Resolver<'s> {
             )));
         }
 
-        let text = path.join(".");
+        // Joined only for an error.
+        let text = || path.join(".");
         let mut fields = &self.collection.fields;
         let mut steps = Vec::new();
         let mut many = false;
@@ -284,7 +285,8 @@ impl<'s> Resolver<'s> {
             let last = position + 1 == path.len();
             let field = fields.by_name(name).ok_or_else(|| {
                 invalid(format!(
-                    "`{text}` names `{name}`, which is not a field there"
+                    "`{}` names `{name}`, which is not a field there",
+                    text()
                 ))
             })?;
 
@@ -307,12 +309,16 @@ impl<'s> Resolver<'s> {
                 Kind::Object(inner) if !last => fields = inner,
                 Kind::Object(_) => {
                     return Err(invalid(format!(
-                        "`{text}` is an embedded object; a query tests one of its fields"
+                        "`{}` is an embedded object; a query tests one of its fields",
+                        text()
                     )));
                 }
                 Kind::Link { collection } => {
                     let target = self.schema.collection_by_id(*collection).ok_or_else(|| {
-                        invalid(format!("`{text}` links to a collection the schema lacks"))
+                        invalid(format!(
+                            "`{}` links to a collection the schema lacks",
+                            text()
+                        ))
                     })?;
 
                     if last {
@@ -321,7 +327,7 @@ impl<'s> Resolver<'s> {
                                 .key_field()
                                 .map(|key| key.kind.clone())
                                 .ok_or_else(|| {
-                                    invalid(format!("`{text}` links to a keyless collection"))
+                                    invalid(format!("`{}` links to a keyless collection", text()))
                                 })?;
 
                         return Ok(Resolved {
@@ -347,7 +353,8 @@ impl<'s> Resolver<'s> {
                 }
                 _ => {
                     return Err(invalid(format!(
-                        "`{text}` goes on past `{name}`, which has no fields"
+                        "`{}` goes on past `{name}`, which has no fields",
+                        text()
                     )));
                 }
             }
@@ -390,7 +397,10 @@ fn fits(value: &Value, kind: &Kind) -> bool {
     )
 }
 
-fn test(op: Op, path: &Resolved<'_>, values: &[Value], text: &str) -> Result<Test> {
+/// The test of `values` with `op` at `path`, whose names are `names`: those
+/// are joined only for an error, since a query that plans joins none.
+fn test(op: Op, path: &Resolved<'_>, values: &[Value], names: &[String]) -> Result<Test> {
+    let text = || names.join(".");
     let check = |value: &Value| {
         if fits(value, &path.leaf) {
             Ok(value.clone())
@@ -398,12 +408,14 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], text: &str) -> Result<Tes
             Ok(float)
         } else if value.is_null() {
             Err(invalid(format!(
-                "`{text}` is tested with `{}` against null, which only `==` and `!=` do",
+                "`{}` is tested with `{}` against null, which only `==` and `!=` do",
+                text(),
                 op.text()
             )))
         } else {
             Err(invalid(format!(
-                "`{text}` holds {}, and the query tests it with `{}` against {value:?}",
+                "`{}` holds {}, and the query tests it with `{}` against {value:?}",
+                text(),
                 path.leaf.describe(),
                 op.text()
             )))
@@ -412,8 +424,9 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], text: &str) -> Result<Tes
     let string = |value: &Value| match (&path.leaf, value) {
         (Kind::String, Value::String(text)) => Ok(text.clone()),
         _ => Err(invalid(format!(
-            "`{}` tests strings, and `{text}` holds {} or it is tested against {value:?}",
+            "`{}` tests strings, and `{}` holds {} or it is tested against {value:?}",
             op.text(),
+            text(),
             path.leaf.describe()
         ))),
     };
@@ -438,8 +451,9 @@ fn test(op: Op, path: &Resolved<'_>, values: &[Value], text: &str) -> Result<Tes
         }
         _ => {
             return Err(invalid(format!(
-                "`{}` on `{text}` has the wrong number of values",
-                op.text()
+                "`{}` on `{}` has the wrong number of values",
+                op.text(),
+                text()
             )));
         }
     })
@@ -485,24 +499,28 @@ enum Lookup {
     Range,
 }
 
-/// A term of the filter that the primary key or an index answers.
-struct Candidate<'s> {
+/// A term of the filter that the primary key or an index answers, borrowed
+/// from the term, so that choosing among them copies no value.
+struct Candidate<'s, 'c> {
     term: usize,
     field: &'s FieldDef,
     /// The type of the field's values, a link's being its target's key type.
-    leaf: Kind,
+    leaf: &'c Kind,
     source: Source,
     index: Option<&'s IndexDef>,
     lookup: Lookup,
     /// The values looked up, for `Equal` and `Several`.
-    values: Vec<Value>,
+    values: &'c [Value],
     /// The range of values, for `Range`, as bounds on the values.
-    low: Bound<Value>,
-    high: Bound<Value>,
-    prefix: Option<String>,
+    low: Bound<&'c Value>,
+    high: Bound<&'c Value>,
+    prefix: Option<&'c str>,
 }
 
-impl Candidate<'_> {
+/// The value an `IS NULL` on an index looks up.
+const NULL: &[Value] = &[Value::Null];
+
+impl Candidate<'_, '_> {
     /// How good the lookup is: equality before several values before a
     /// range, and within each, the primary key before a unique index before
     /// another.
@@ -519,11 +537,11 @@ impl Candidate<'_> {
     }
 }
 
-fn candidate<'s>(
+fn candidate<'s, 'c>(
     collection: &'s CollectionDef,
     term: usize,
-    cond: &Cond<'s>,
-) -> Option<Candidate<'s>> {
+    cond: &'c Cond<'s>,
+) -> Option<Candidate<'s, 'c>> {
     let Cond::Test { path, test } = cond else {
         return None;
     };
@@ -548,11 +566,11 @@ fn candidate<'s>(
     let mut found = Candidate {
         term,
         field,
-        leaf: path.leaf.clone(),
+        leaf: &path.leaf,
         source,
         index,
         lookup: Lookup::Range,
-        values: Vec::new(),
+        values: &[],
         low: Bound::Unbounded,
         high: Bound::Unbounded,
         prefix: None,
@@ -561,25 +579,25 @@ fn candidate<'s>(
     match test {
         Test::Compare(Op::Eq, value) | Test::Element(value) => {
             found.lookup = Lookup::Equal;
-            found.values = vec![value.clone()];
+            found.values = std::slice::from_ref(value);
         }
         Test::IsNull if source != Source::Key => {
             found.lookup = Lookup::Equal;
-            found.values = vec![Value::Null];
+            found.values = NULL;
         }
         Test::In(values) => {
             found.lookup = Lookup::Several;
-            found.values.clone_from(values);
+            found.values = values;
         }
-        Test::Compare(Op::Lt, value) => found.high = Bound::Excluded(value.clone()),
-        Test::Compare(Op::Le, value) => found.high = Bound::Included(value.clone()),
-        Test::Compare(Op::Gt, value) => found.low = Bound::Excluded(value.clone()),
-        Test::Compare(Op::Ge, value) => found.low = Bound::Included(value.clone()),
+        Test::Compare(Op::Lt, value) => found.high = Bound::Excluded(value),
+        Test::Compare(Op::Le, value) => found.high = Bound::Included(value),
+        Test::Compare(Op::Gt, value) => found.low = Bound::Excluded(value),
+        Test::Compare(Op::Ge, value) => found.low = Bound::Included(value),
         Test::Between(low, high) => {
-            found.low = Bound::Included(low.clone());
-            found.high = Bound::Included(high.clone());
+            found.low = Bound::Included(low);
+            found.high = Bound::Included(high);
         }
-        Test::StartsWith(prefix) => found.prefix = Some(prefix.clone()),
+        Test::StartsWith(prefix) => found.prefix = Some(prefix),
         _ => return None,
     }
 
@@ -587,7 +605,7 @@ fn candidate<'s>(
 }
 
 /// The tighter of two lower bounds on values.
-fn higher_low(a: Bound<Value>, b: Bound<Value>) -> Bound<Value> {
+fn higher_low<'v>(a: Bound<&'v Value>, b: Bound<&'v Value>) -> Bound<&'v Value> {
     match (&a, &b) {
         (Bound::Unbounded, _) => b,
         (_, Bound::Unbounded) => a,
@@ -603,7 +621,7 @@ fn higher_low(a: Bound<Value>, b: Bound<Value>) -> Bound<Value> {
 }
 
 /// The tighter of two upper bounds on values.
-fn lower_high(a: Bound<Value>, b: Bound<Value>) -> Bound<Value> {
+fn lower_high<'v>(a: Bound<&'v Value>, b: Bound<&'v Value>) -> Bound<&'v Value> {
     match (&a, &b) {
         (Bound::Unbounded, _) => b,
         (_, Bound::Unbounded) => a,
@@ -624,8 +642,8 @@ fn lower_high(a: Bound<Value>, b: Bound<Value>) -> Bound<Value> {
 /// is placed after every entry of it.
 fn range(
     kind: &Kind,
-    low: &Bound<Value>,
-    high: &Bound<Value>,
+    low: Bound<&Value>,
+    high: Bound<&Value>,
     prefix: Option<&str>,
     entries: bool,
 ) -> Range {
@@ -701,7 +719,7 @@ fn choose<'s>(
         Some(cond) => vec![cond],
         None => Vec::new(),
     };
-    let candidates: Vec<Candidate<'s>> = terms
+    let candidates: Vec<Candidate<'s, '_>> = terms
         .iter()
         .enumerate()
         .filter_map(|(position, cond)| candidate(collection, position, cond))
@@ -766,7 +784,7 @@ fn choose<'s>(
             // elements can meet two terms that no one value meets together.
             let mut low = Bound::Unbounded;
             let mut high = Bound::Unbounded;
-            let mut prefix: Option<String> = None;
+            let mut prefix: Option<&str> = None;
             let mut consumed = Vec::new();
 
             for candidate in &candidates {
@@ -781,14 +799,14 @@ fn choose<'s>(
                     continue;
                 }
 
-                low = higher_low(low, candidate.low.clone());
-                high = lower_high(high, candidate.high.clone());
-                prefix = prefix.or_else(|| candidate.prefix.clone());
+                low = higher_low(low, candidate.low);
+                high = lower_high(high, candidate.high);
+                prefix = prefix.or(candidate.prefix);
                 consumed.push(candidate.term);
             }
 
             let entries = source != Source::Key;
-            let range = range(&best.leaf, &low, &high, prefix.as_deref(), entries);
+            let range = range(best.leaf, low, high, prefix, entries);
 
             match best.index {
                 None => (
