@@ -6,7 +6,7 @@
 //! tree and an [`Object`] with the fields of a schema: the conversion checks
 //! types, fills defaults, and skips the fields a schema no longer has.
 
-use super::schema::{Fields, Kind};
+use super::schema::{FieldDef, Fields, Kind};
 use super::value::{Name, Object, Value};
 
 const FALSE: u8 = 0x02;
@@ -117,6 +117,29 @@ pub(crate) fn read(bytes: &[u8]) -> Result<Vec<(u64, Raw)>, &'static str> {
     }
 
     Ok(fields)
+}
+
+/// The object whose record is `bytes`, under `fields`, read straight into
+/// values: what [`read`] and then [`to_object`] give, without the record's
+/// fields in between, which every object read would allocate and move.
+pub(crate) fn object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let object = reader.object(fields, 0)?;
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
+    }
+
+    Ok(object)
+}
+
+/// The value of a field the record leaves out: its default, or null.
+fn absent(field: &FieldDef) -> Result<Value, &'static str> {
+    match &field.default {
+        Some(default) => Ok(default.clone()),
+        None if field.optional => Ok(Value::Null),
+        None => Err("a record lacks a required field"),
+    }
 }
 
 /// A field's value as a record holds it, borrowed from the record: a scalar,
@@ -262,6 +285,28 @@ impl<'a> Reader<'a> {
         Err("a record has a number too long")
     }
 
+    /// A float's eight bytes, after its tag.
+    fn float(&mut self) -> Result<f64, &'static str> {
+        let mut exact = [0u8; 8];
+
+        exact.copy_from_slice(self.take(8)?);
+
+        Ok(f64::from_le_bytes(exact))
+    }
+
+    /// A string's length and bytes, after its tag.
+    fn string(&mut self) -> Result<String, &'static str> {
+        String::from_utf8(self.byte_string()?)
+            .map_err(|_| "a record holds a string that is not UTF-8")
+    }
+
+    /// A byte string's length and bytes, after its tag.
+    fn byte_string(&mut self) -> Result<Vec<u8>, &'static str> {
+        let len = self.varint()?;
+
+        Ok(self.take(len)?.to_vec())
+    }
+
     /// A count of things each at least `each` bytes long, which a damaged
     /// record cannot make larger than what is left of it.
     fn count(&mut self, each: usize) -> Result<usize, &'static str> {
@@ -271,6 +316,91 @@ impl<'a> Reader<'a> {
             .ok()
             .filter(|count| count.saturating_mul(each) <= self.left())
             .ok_or("a record counts more than it holds")
+    }
+
+    /// The fields of a record under `fields`, as [`object_of`] reads them.
+    fn object(&mut self, fields: &Fields, depth: usize) -> Result<Object, &'static str> {
+        let count = self.count(2)?;
+        let mut object = Vec::with_capacity(fields.list.len());
+        let mut schema = fields.list.iter().peekable();
+        let mut last = None;
+
+        for _ in 0..count {
+            let id = self.varint()?;
+
+            if last.is_some_and(|last| last >= id) {
+                return Err("a record's field ids are out of order");
+            }
+
+            last = Some(id);
+
+            while let Some(field) = schema.next_if(|field| field.id < id) {
+                object.push((Name::from(field.name.as_str()), absent(field)?));
+            }
+
+            match schema.next_if(|field| field.id == id) {
+                Some(field) => {
+                    let value = self.value_as(&field.kind, depth)?;
+
+                    object.push((Name::from(field.name.as_str()), value));
+                }
+                // A field the schema no longer has, read to be checked like
+                // the rest of the record.
+                None => {
+                    self.value(depth)?;
+                }
+            }
+        }
+
+        for field in schema {
+            object.push((Name::from(field.name.as_str()), absent(field)?));
+        }
+
+        Ok(Object::from_fields(object))
+    }
+
+    /// A value of kind `kind`, read straight into one where the kind is a
+    /// scalar or an embedded object, as [`from_raw`] would make it.
+    fn value_as(&mut self, kind: &Kind, depth: usize) -> Result<Value, &'static str> {
+        if depth >= MAX_DEPTH {
+            return Err("a record nests too deeply");
+        }
+
+        let start = self.at;
+
+        match (kind, self.byte()?) {
+            (Kind::Bool, FALSE) => Ok(Value::Bool(false)),
+            (Kind::Bool, TRUE) => Ok(Value::Bool(true)),
+            (Kind::Int, INT) => Ok(Value::Int(unzigzag(self.varint()?))),
+            (Kind::Float, FLOAT) => self.float().map(Value::Float),
+            (Kind::String, STRING) => self.string().map(Value::String),
+            (Kind::Bytes, BYTES) => self.byte_string().map(Value::Bytes),
+            (Kind::Link { .. }, LINK) if depth + 1 < MAX_DEPTH => match self.byte()? {
+                INT => Ok(Value::Int(unzigzag(self.varint()?))),
+                STRING => self.string().map(Value::String),
+                BYTES => self.byte_string().map(Value::Bytes),
+                _ => {
+                    self.at = start;
+                    from_raw(self.value(depth)?, kind)
+                }
+            },
+            (Kind::Object(fields), OBJECT) => {
+                let len = self.varint()?;
+                let bytes = self.take(len)?;
+                let mut inner = Reader { bytes, at: 0 };
+                let object = inner.object(fields, depth + 1)?;
+
+                if inner.at != bytes.len() {
+                    return Err("an embedded record has bytes after its last field");
+                }
+
+                Ok(Value::Object(object))
+            }
+            _ => {
+                self.at = start;
+                from_raw(self.value(depth)?, kind)
+            }
+        }
     }
 
     fn fields(&mut self, depth: usize) -> Result<Vec<(u64, Raw)>, &'static str> {
@@ -330,27 +460,9 @@ impl<'a> Reader<'a> {
             FALSE => Ok(Raw::Bool(false)),
             TRUE => Ok(Raw::Bool(true)),
             INT => Ok(Raw::Int(unzigzag(self.varint()?))),
-            FLOAT => {
-                let bytes = self.take(8)?;
-                let mut exact = [0u8; 8];
-
-                exact.copy_from_slice(bytes);
-
-                Ok(Raw::Float(f64::from_le_bytes(exact)))
-            }
-            STRING => {
-                let len = self.varint()?;
-                let bytes = self.take(len)?.to_vec();
-
-                String::from_utf8(bytes)
-                    .map(Raw::String)
-                    .map_err(|_| "a record holds a string that is not UTF-8")
-            }
-            BYTES => {
-                let len = self.varint()?;
-
-                Ok(Raw::Bytes(self.take(len)?.to_vec()))
-            }
+            FLOAT => self.float().map(Raw::Float),
+            STRING => self.string().map(Raw::String),
+            BYTES => self.byte_string().map(Raw::Bytes),
             LIST => {
                 let count = self.count(1)?;
                 let mut values = Vec::with_capacity(count.min(RESERVE));
@@ -617,17 +729,17 @@ mod tests {
         let read = to_object(read(&bytes).unwrap(), &fields).unwrap();
 
         assert_eq!(read, full());
+        assert_eq!(object_of(&bytes, &fields).unwrap(), full());
     }
 
     #[test]
     fn left_out_fields_read_as_their_default_or_null() {
         let fields = fields();
         let written = Object::new().with("id", 1).with("name", "B");
-        let read = to_object(
-            super::read(&write(&from_object(&written, &fields, &keys).unwrap())).unwrap(),
-            &fields,
-        )
-        .unwrap();
+        let bytes = write(&from_object(&written, &fields, &keys).unwrap());
+        let read = to_object(super::read(&bytes).unwrap(), &fields).unwrap();
+
+        assert_eq!(object_of(&bytes, &fields).unwrap(), read);
 
         assert_eq!(read.get("age"), Some(&Value::Int(0)));
         assert_eq!(read.get("email"), Some(&Value::Null));
@@ -670,6 +782,7 @@ mod tests {
 
         let read = to_object(read(&write(&raw)).unwrap(), &fewer).unwrap();
 
+        assert_eq!(object_of(&write(&raw), &fewer).unwrap(), read);
         assert!(read.get("name").is_none());
         assert_eq!(read.get("id"), Some(&Value::Int(7)));
         assert_eq!(read.get("admin"), Some(&Value::Bool(true)));
@@ -713,8 +826,15 @@ mod tests {
                 }
             }
 
-            if let Ok(raw) = read(&bytes) {
-                let _ = to_object(raw, &fields);
+            let staged = read(&bytes).and_then(|raw| to_object(raw, &fields));
+            let direct = object_of(&bytes, &fields);
+
+            match (staged, direct) {
+                (Ok(staged), Ok(direct)) => assert_eq!(staged, direct, "{bytes:?}"),
+                (Err(_), Err(_)) => {}
+                (staged, direct) => {
+                    panic!("{bytes:?}: {staged:?} read in two steps, {direct:?} at once")
+                }
             }
         }
 

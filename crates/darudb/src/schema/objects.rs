@@ -227,8 +227,7 @@ pub(crate) fn decode(
     collection: &CollectionDef,
     bytes: &[u8],
 ) -> Result<Object> {
-    codec::read(bytes)
-        .and_then(|raw| codec::to_object(raw, &collection.fields))
+    codec::object_of(bytes, &collection.fields)
         .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
 }
 
