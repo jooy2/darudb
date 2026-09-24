@@ -70,6 +70,9 @@ fn run(directory: &Path, label: &str, options: &OpenOptions) -> Outcome {
         txn.insert("t", &(1_000_000 + round).to_be_bytes(), &VALUE)?;
         txn.commit_deferred()
     })?;
+    measure("read transaction, begun and ended", 100_000, |_| {
+        db.begin_read().map(drop)
+    })?;
     db.close()?;
 
     let db = open("bulk.darudb")?;
