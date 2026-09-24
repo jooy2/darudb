@@ -4,7 +4,7 @@
  * field the collection lacks or a value of another type, and each line below
  * marked `@ts-expect-error` stays an error. Nothing here runs.
  */
-import { collection, conditions, Database, Query, schema, t } from '../index.js';
+import { collection, conditions, Database, param, Query, schema, t } from '../index.js';
 import type { Key } from '../index.js';
 
 const app = schema(1, {
@@ -90,6 +90,32 @@ db.read((txn) => {
 
 new Query().where(conditions.not(conditions.eq('a', 1))).limit(3);
 
+// A prepared query finds the objects of the collection it was prepared on.
+const byEmail = db.prepare('users', (q) => q.where('email', '==', param(0)).sortBy('age'));
+const inRange = db.prepare('users', (q) =>
+  q.where('age', 'between', [param(0), 30]).where((c) => c.in('name', [param(1), 'Bob']))
+);
+const byName = db.prepare('teams', 'name == $0');
+const preparedCount: number = db.read((txn) => {
+  const users = txn.collection('users');
+  const found: typeof first | null = users.findOne(byEmail, ['alice@example.com']);
+  const inTeam: string | null | undefined = txn
+    .collection('teams')
+    .find(byName, ['north'])[0]?.city;
+
+  users.find(inRange, [18, 'Alice']);
+  // @ts-expect-error a query prepared on `teams` finds teams.
+  users.find(byName, ['north']);
+  // @ts-expect-error a parameter is a single value.
+  users.find(byEmail, [{}]);
+  // @ts-expect-error `age` holds numbers, and a parameter does not change that.
+  db.prepare('users', (q) => q.where('age', '>=', 'old').where('name', '==', param(0)));
+  // @ts-expect-error the schema has no such collection.
+  db.prepare('orders', 'name == $0');
+
+  return found === null || inTeam === undefined ? 0 : users.count(byEmail, [null]);
+});
+
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 
@@ -126,6 +152,9 @@ async function asynchronous() {
     txn.collection('users').find((q) => q.where('age', '>=', 18))
   );
   const total: number = await opened.readAsync(async (txn) => txn.collection('users').count());
+  const prepared = await opened.readAsync((txn) =>
+    txn.collection('users').find(byEmail, ['alice@example.com'])
+  );
   const one = await opened.readAsync((txn) => txn.collection('users').get(key));
   // @ts-expect-error `get` may find nothing.
   const oneAge: number = one.age;
@@ -142,7 +171,19 @@ async function asynchronous() {
   await opened.syncAsync();
   await opened.closeAsync();
 
-  return [found[0].visits, total, oneAge] as const;
+  return [found[0].visits, total, oneAge, prepared[0]?.age] as const;
 }
 
-export { app, age, email, id, city, visits, friends, embeddedId, version, asynchronous };
+export {
+  app,
+  age,
+  email,
+  id,
+  city,
+  visits,
+  friends,
+  embeddedId,
+  version,
+  preparedCount,
+  asynchronous
+};

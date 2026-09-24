@@ -93,6 +93,24 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 
 A value that comes from outside the program belongs in a parameter, never in the text.
 
+The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A query that runs many times can also be prepared once with `db.prepare`, as text or built with `param` in place of the values that change. `find`, `findOne` and `count` take the prepared query and the values, in any transaction, synchronous or asynchronous.
+
+```ts
+import { param } from 'darudb';
+
+const byEmail = db.prepare('users', (q) => q.where('email', '==', param(0)));
+const inAges = db.prepare('users', 'age BETWEEN $0 AND $1 SORT BY age');
+
+db.read((txn) => {
+  const users = txn.collection('users');
+
+  users.findOne(byEmail, ['alice@example.com']);
+  users.find(inAges, [18, 30]);
+});
+```
+
+A prepared query runs only on the collection it was prepared on, and a run that leaves a parameter without a value fails with `INVALID_QUERY`. Preparing saves parsing or encoding the query on each run, which matters most for text; the engine still plans each run for its values.
+
 ## Use the asynchronous API
 
 Each method of `Database` has a twin whose name ends in `Async`: `openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync`. The twin does the engine's work on the libuv thread pool and resolves a promise, so the event loop keeps running while the engine waits for the disk or for another process's writer. A server should use it.

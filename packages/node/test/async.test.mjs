@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { collection, Database, schema, t } from '../index.js';
+import { collection, Database, param, schema, t } from '../index.js';
 
 /** A path in a directory of the test's own, removed when the test ends. */
 const tempPath = (context) => {
@@ -65,6 +65,7 @@ const withData = async (context) => {
 describe('asynchronous transactions', () => {
   it('read and write what the synchronous API does', async (context) => {
     const { db } = await withData(context);
+    const byAge = db.prepare('users', (q) => q.where('age', '>=', param(0)).sortBy('name'));
 
     const found = await db.readAsync(async (txn) => {
       const users = txn.collection('users');
@@ -74,7 +75,9 @@ describe('asynchronous transactions', () => {
         missing: await users.get(9),
         adults: await users.find((q) => q.where('age', '>=', 18).sortBy('age', 'desc')),
         first: await users.findOne('age < $0', [20]),
-        count: await users.count((q) => q.where('name', 'startsWith', 'A'))
+        count: await users.count((q) => q.where('name', 'startsWith', 'A')),
+        prepared: await users.find(byAge, [18]),
+        preparedCount: await users.count(byAge, [0])
       };
     });
 
@@ -93,6 +96,11 @@ describe('asynchronous transactions', () => {
     );
     assert.equal(found.first.name, 'Bob');
     assert.equal(found.count, 1);
+    assert.deepEqual(
+      found.prepared.map((user) => user.name),
+      ['Alice', 'Carol']
+    );
+    assert.equal(found.preparedCount, 3);
     assert.deepEqual(
       db.read((txn) => txn.collection('users').find()),
       await db.readAsync((txn) => txn.collection('users').find()),

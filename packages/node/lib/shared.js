@@ -3,8 +3,9 @@
 /**
  * What the synchronous and the asynchronous API share: checking what a
  * caller passes before it reaches the native layer, building the IR of a
- * query in any form it is given, and the layouts of a stored schema that
- * records are read and written with.
+ * query in any form it is given, preparing queries and keeping the texts
+ * prepared, and the layouts of a stored schema that records are read and
+ * written with.
  */
 
 const native = require('../native.js');
@@ -103,27 +104,42 @@ function keyOf(key) {
   return key;
 }
 
+/** A query's parameters, checked before they reach the native layer. */
+function parametersOf(parameters) {
+  if (parameters === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(parameters)) {
+    throw codeError('INVALID_QUERY', "a query's parameters are an array");
+  }
+
+  for (const parameter of parameters) {
+    if (parameter !== null && parameter !== undefined && !isScalar(parameter)) {
+      throw codeError(
+        'INVALID_QUERY',
+        `a query's parameter is a single value, not ${typeof parameter}`
+      );
+    }
+  }
+
+  return parameters;
+}
+
 /**
  * The IR of a query given in any of the forms `find` and `count` take. With
  * `first`, a query built here keeps only its first object; text leaves that
- * to the native layer.
+ * to the native layer, and so does a prepared query.
  */
 function irOf(collection, query, parameters, count, first = false, lend = false) {
+  const prepared = preparedOf(collection, query);
+
+  if (prepared !== null) {
+    return prepared.bind(parametersOf(parameters), count);
+  }
+
   if (typeof query === 'string') {
-    if (parameters !== undefined && !Array.isArray(parameters)) {
-      throw codeError('INVALID_QUERY', "a query's parameters are an array");
-    }
-
-    for (const parameter of parameters ?? []) {
-      if (parameter !== null && parameter !== undefined && !isScalar(parameter)) {
-        throw codeError(
-          'INVALID_QUERY',
-          `a query's parameter is a single value, not ${typeof parameter}`
-        );
-      }
-    }
-
-    return native.parseQuery(collection, query, parameters ?? [], count);
+    return native.parseQuery(collection, query, parametersOf(parameters), count);
   }
 
   let built = query ?? new Query();
@@ -137,7 +153,7 @@ function irOf(collection, query, parameters, count, first = false, lend = false)
   if (!(built instanceof Query)) {
     throw codeError(
       'INVALID_QUERY',
-      'a query is a function that builds one, a `Query`, or text in the query language'
+      'a query is a function that builds one, a `Query`, text in the query language, or a prepared query'
     );
   }
 
@@ -148,6 +164,96 @@ function irOf(collection, query, parameters, count, first = false, lend = false)
   }
 
   return encodeQuery(collection, parts, count, lend);
+}
+
+const PREPARE = Symbol('prepare');
+const NATIVE = Symbol('native');
+
+/**
+ * A query parsed once, on one collection, that runs with values for its
+ * parameters each time: `Database.prepare` makes one. It holds no database.
+ */
+class Prepared {
+  #collection;
+  #native;
+
+  constructor(token, collection, prepared) {
+    if (token !== PREPARE) {
+      throw invalid('a query is prepared with `Database.prepare`');
+    }
+
+    this.#collection = collection;
+    this.#native = prepared;
+  }
+
+  /** The collection the query runs on. */
+  get collection() {
+    return this.#collection;
+  }
+
+  get [NATIVE]() {
+    return this.#native;
+  }
+}
+
+/** Prepares `query`, text or built, on `collection`. */
+function prepare(collection, query) {
+  const prepared =
+    typeof query === 'string'
+      ? native.NativePrepared.fromText(collection, query)
+      : native.NativePrepared.fromIr(irOf(collection, query, undefined, false, false, true));
+
+  return new Prepared(PREPARE, collection, prepared);
+}
+
+/** How many texts `preparedOf` keeps prepared, and how long each may be. */
+const KEPT_TEXTS = 256;
+const KEPT_LENGTH = 4096;
+
+/**
+ * Texts of queries prepared once and kept, by text, each with the native
+ * query and the collection it was prepared on. The oldest goes first when
+ * the map is full. A longer text is parsed each time instead, so that what
+ * is kept stays small.
+ */
+const texts = new Map();
+
+/**
+ * The native prepared query to run `query` on `collection` with: a
+ * `Prepared`, which has to be on `collection`, or text, which is prepared
+ * the first time and kept. `null` for a query to encode as IR.
+ */
+function preparedOf(collection, query) {
+  if (query instanceof Prepared) {
+    if (query.collection !== collection) {
+      throw codeError(
+        'INVALID_QUERY',
+        `the query was prepared on \`${query.collection}\`, not on \`${collection}\``
+      );
+    }
+
+    return query[NATIVE];
+  }
+
+  if (typeof query !== 'string' || query.length > KEPT_LENGTH) {
+    return null;
+  }
+
+  const kept = texts.get(query);
+
+  if (kept !== undefined && kept.collection === collection) {
+    return kept.prepared;
+  }
+
+  const prepared = native.NativePrepared.fromText(collection, query);
+
+  if (kept === undefined && texts.size >= KEPT_TEXTS) {
+    texts.delete(texts.keys().next().value);
+  }
+
+  texts.set(query, { collection, prepared });
+
+  return prepared;
 }
 
 /** Calls `mark` with every int kind among `fields`, in lists and embedded objects too. */
@@ -229,7 +335,10 @@ module.exports = {
   synchronous,
   nativeMigration,
   keyOf,
+  parametersOf,
   irOf,
+  prepare,
+  preparedOf,
   layoutOf,
   looseLayoutOf,
   collectionOf

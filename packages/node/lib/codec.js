@@ -1235,9 +1235,28 @@ function kindOfSpec(spec, ids) {
   }
 }
 
-/** Writes a value a query compares with, by its JavaScript type. */
+/**
+ * A parameter of a prepared query, which each run gives a value: `param(0)`
+ * is the first. The IR holds one as an object whose field 1 is its number.
+ */
+class Param {
+  constructor(index) {
+    this.index = index;
+    Object.freeze(this);
+  }
+}
+
+/** Writes a value a query compares with, by its JavaScript type, or a parameter. */
 function writeQueryValue(writer, value) {
-  if (typeof value === 'boolean') {
+  if (value instanceof Param) {
+    const mark = writer.open();
+
+    writer.varint(1);
+    writer.varint(1);
+    writer.byte(INT);
+    writer.int(value.index);
+    writer.close(mark);
+  } else if (typeof value === 'boolean') {
     writer.byte(value ? TRUE : FALSE);
   } else if (typeof value === 'number') {
     if (Number.isSafeInteger(value)) {
@@ -1426,6 +1445,7 @@ function encodeQuery(collection, query, count, lend = false) {
 
 module.exports = {
   Reader,
+  Param,
   codeError,
   invalid,
   encodeRecords,

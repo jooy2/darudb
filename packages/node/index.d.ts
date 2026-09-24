@@ -190,6 +190,20 @@ type FieldsOf<S, N extends NameOf<S>> =
 /** A value a query compares with. */
 export type QueryValue = boolean | number | bigint | string | Uint8Array;
 
+/**
+ * A parameter in place of a value, in a query that `Database.prepare`
+ * prepares: each run gives its value. `param(0)` is the first.
+ */
+export interface Param {
+  readonly index: number;
+}
+
+/** Parameter `index` of a prepared query, counted from 0. */
+export declare function param(index: number): Param;
+
+/** A value of a condition, or a parameter in its place. */
+type Operand<T> = T | Param;
+
 /** The value a condition on a field of type `T` compares with: an element for a list. */
 type ElementOf<T> = T extends readonly (infer E)[] ? E : Exclude<T, null>;
 
@@ -210,33 +224,33 @@ export interface Condition {
 
 /** The conditions a filter is made of. */
 export interface Conditions<O = Record<string, unknown>> {
-  eq<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]> | null): Condition;
-  eq(path: DottedPath, value: QueryValue | null): Condition;
-  ne<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]> | null): Condition;
-  ne(path: DottedPath, value: QueryValue | null): Condition;
-  lt<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]>): Condition;
-  lt(path: DottedPath, value: QueryValue): Condition;
-  le<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]>): Condition;
-  le(path: DottedPath, value: QueryValue): Condition;
-  gt<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]>): Condition;
-  gt(path: DottedPath, value: QueryValue): Condition;
-  ge<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]>): Condition;
-  ge(path: DottedPath, value: QueryValue): Condition;
+  eq<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]> | null>): Condition;
+  eq(path: DottedPath, value: Operand<QueryValue | null>): Condition;
+  ne<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]> | null>): Condition;
+  ne(path: DottedPath, value: Operand<QueryValue | null>): Condition;
+  lt<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]>>): Condition;
+  lt(path: DottedPath, value: Operand<QueryValue>): Condition;
+  le<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]>>): Condition;
+  le(path: DottedPath, value: Operand<QueryValue>): Condition;
+  gt<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]>>): Condition;
+  gt(path: DottedPath, value: Operand<QueryValue>): Condition;
+  ge<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]>>): Condition;
+  ge(path: DottedPath, value: Operand<QueryValue>): Condition;
   between<K extends FieldNames<O>>(
     field: K,
-    low: ElementOf<O[K]>,
-    high: ElementOf<O[K]>
+    low: Operand<ElementOf<O[K]>>,
+    high: Operand<ElementOf<O[K]>>
   ): Condition;
-  between(path: DottedPath, low: QueryValue, high: QueryValue): Condition;
-  in<K extends FieldNames<O>>(field: K, values: readonly ElementOf<O[K]>[]): Condition;
-  in(path: DottedPath, values: readonly QueryValue[]): Condition;
+  between(path: DottedPath, low: Operand<QueryValue>, high: Operand<QueryValue>): Condition;
+  in<K extends FieldNames<O>>(field: K, values: readonly Operand<ElementOf<O[K]>>[]): Condition;
+  in(path: DottedPath, values: readonly Operand<QueryValue>[]): Condition;
   /** A string field contains `value`, or a list holds the element `value`. */
-  contains<K extends FieldNames<O>>(field: K, value: ElementOf<O[K]>): Condition;
-  contains(path: DottedPath, value: QueryValue): Condition;
-  startsWith<K extends FieldNames<O>>(field: K, value: string): Condition;
-  startsWith(path: DottedPath, value: string): Condition;
-  endsWith<K extends FieldNames<O>>(field: K, value: string): Condition;
-  endsWith(path: DottedPath, value: string): Condition;
+  contains<K extends FieldNames<O>>(field: K, value: Operand<ElementOf<O[K]>>): Condition;
+  contains(path: DottedPath, value: Operand<QueryValue>): Condition;
+  startsWith<K extends FieldNames<O>>(field: K, value: Operand<string>): Condition;
+  startsWith(path: DottedPath, value: Operand<string>): Condition;
+  endsWith<K extends FieldNames<O>>(field: K, value: Operand<string>): Condition;
+  endsWith(path: DottedPath, value: Operand<string>): Condition;
   isNull(field: FieldNames<O> | DottedPath): Condition;
   isNotNull(field: FieldNames<O> | DottedPath): Condition;
   and(...conditions: Condition[]): Condition;
@@ -257,27 +271,39 @@ export declare class Query<O = Record<string, unknown>> {
   where<K extends FieldNames<O>>(
     field: K,
     op: '==' | '!=',
-    value: ElementOf<O[K]> | null
+    value: Operand<ElementOf<O[K]> | null>
   ): Query<O>;
-  where<K extends FieldNames<O>>(field: K, op: Comparison, value: ElementOf<O[K]>): Query<O>;
+  where<K extends FieldNames<O>>(
+    field: K,
+    op: Comparison,
+    value: Operand<ElementOf<O[K]>>
+  ): Query<O>;
   where<K extends FieldNames<O>>(
     field: K,
     op: 'between',
-    value: readonly [ElementOf<O[K]>, ElementOf<O[K]>]
+    value: readonly [Operand<ElementOf<O[K]>>, Operand<ElementOf<O[K]>>]
   ): Query<O>;
-  where<K extends FieldNames<O>>(field: K, op: 'in', value: readonly ElementOf<O[K]>[]): Query<O>;
+  where<K extends FieldNames<O>>(
+    field: K,
+    op: 'in',
+    value: readonly Operand<ElementOf<O[K]>>[]
+  ): Query<O>;
   where<K extends FieldNames<O>>(
     field: K,
     op: 'contains' | 'startsWith' | 'endsWith',
-    value: ElementOf<O[K]>
+    value: Operand<ElementOf<O[K]>>
   ): Query<O>;
   where(
     path: DottedPath,
     op: Comparison | 'contains' | 'startsWith' | 'endsWith',
-    value: QueryValue | null
+    value: Operand<QueryValue | null>
   ): Query<O>;
-  where(path: DottedPath, op: 'between', value: readonly [QueryValue, QueryValue]): Query<O>;
-  where(path: DottedPath, op: 'in', value: readonly QueryValue[]): Query<O>;
+  where(
+    path: DottedPath,
+    op: 'between',
+    value: readonly [Operand<QueryValue>, Operand<QueryValue>]
+  ): Query<O>;
+  where(path: DottedPath, op: 'in', value: readonly Operand<QueryValue>[]): Query<O>;
   where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<O>;
   /** Sorts by a field, ascending unless told otherwise, after any sort before. */
   sortBy(field: FieldNames<O> | DottedPath, direction?: 'asc' | 'desc'): Query<O>;
@@ -290,6 +316,23 @@ export declare class Query<O = Record<string, unknown>> {
 /** A query as `find` and `count` take it. */
 export type QueryInput<O> = ((query: Query<O>) => Query<O> | void) | Query<O>;
 
+/** What a prepared query's type carries for the objects it finds. */
+declare const objects: unique symbol;
+
+/**
+ * A query parsed once, on one collection, that each run gives values for
+ * its parameters: `Database.prepare` makes one. It holds no database or
+ * transaction, so it runs in any.
+ */
+export interface Prepared<O> {
+  /** The collection the query runs on. */
+  readonly collection: string;
+  readonly [objects]?: O;
+}
+
+/** The values of a query's parameters, `$0` or `param(0)` first. */
+export type QueryParameters = readonly (QueryValue | null)[];
+
 /** A collection of a transaction, for reading its objects. */
 export interface ReadCollection<O> {
   /** The collection's name. */
@@ -299,13 +342,17 @@ export interface ReadCollection<O> {
   /** The objects a query finds, in its order; every object without one. */
   find(query?: QueryInput<O>): O[];
   /** The objects a query in the query language finds, with `$0`, `$1` and on. */
-  find(text: string, parameters?: readonly (QueryValue | null)[]): O[];
+  find(text: string, parameters?: QueryParameters): O[];
+  /** The objects a prepared query finds with these values for its parameters. */
+  find(prepared: Prepared<O>, parameters?: QueryParameters): O[];
   /** The first object a query finds, or `null`. */
   findOne(query?: QueryInput<O>): O | null;
-  findOne(text: string, parameters?: readonly (QueryValue | null)[]): O | null;
+  findOne(text: string, parameters?: QueryParameters): O | null;
+  findOne(prepared: Prepared<O>, parameters?: QueryParameters): O | null;
   /** How many objects a query finds, after its offset and within its limit. */
   count(query?: QueryInput<O>): number;
-  count(text: string, parameters?: readonly (QueryValue | null)[]): number;
+  count(text: string, parameters?: QueryParameters): number;
+  count(prepared: Prepared<O>, parameters?: QueryParameters): number;
 }
 
 /** A collection of a write transaction, for reading and writing its objects. */
@@ -346,13 +393,17 @@ export interface AsyncReadCollection<O> {
   /** The objects a query finds, in its order; every object without one. */
   find(query?: QueryInput<O>): Promise<O[]>;
   /** The objects a query in the query language finds, with `$0`, `$1` and on. */
-  find(text: string, parameters?: readonly (QueryValue | null)[]): Promise<O[]>;
+  find(text: string, parameters?: QueryParameters): Promise<O[]>;
+  /** The objects a prepared query finds with these values for its parameters. */
+  find(prepared: Prepared<O>, parameters?: QueryParameters): Promise<O[]>;
   /** The first object a query finds, or `null`. */
   findOne(query?: QueryInput<O>): Promise<O | null>;
-  findOne(text: string, parameters?: readonly (QueryValue | null)[]): Promise<O | null>;
+  findOne(text: string, parameters?: QueryParameters): Promise<O | null>;
+  findOne(prepared: Prepared<O>, parameters?: QueryParameters): Promise<O | null>;
   /** How many objects a query finds, after its offset and within its limit. */
   count(query?: QueryInput<O>): Promise<number>;
-  count(text: string, parameters?: readonly (QueryValue | null)[]): Promise<number>;
+  count(text: string, parameters?: QueryParameters): Promise<number>;
+  count(prepared: Prepared<O>, parameters?: QueryParameters): Promise<number>;
 }
 
 /** A collection of an asynchronous write transaction, for reading and writing. */
@@ -518,6 +569,16 @@ export declare class Database<S extends Schema<any> = Schema> {
   readonly formatVersion: number;
   /** The schema version the file holds, or `null` without a schema. */
   readonly schemaVersion: number | null;
+  /**
+   * Prepares a query on collection `collection`: text in the query language
+   * with `$0`, `$1` and on, or a query built with `param` in place of values.
+   * It is parsed once here, and each `find`, `findOne` or `count` gives its
+   * parameters' values.
+   */
+  prepare<N extends NameOf<S>>(
+    collection: N,
+    query: QueryInput<ObjectOf<FieldsOf<S, N>>> | string
+  ): Prepared<ObjectOf<FieldsOf<S, N>>>;
   /** Runs `fn` in a read transaction and returns what it returns. */
   read<R>(fn: (txn: ReadTransaction<S>) => R): R;
   /**

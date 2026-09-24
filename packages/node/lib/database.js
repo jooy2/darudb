@@ -30,7 +30,10 @@ const {
   synchronous,
   nativeMigration,
   keyOf,
+  parametersOf,
   irOf,
+  prepare,
+  preparedOf,
   layoutOf,
   looseLayoutOf,
   collectionOf
@@ -78,23 +81,37 @@ class ReadCollection {
 
   /** The objects a query finds, in its order; every object without one. */
   find(query, parameters) {
-    // The IR is lent: the engine reads it before the call returns.
-    const ir = irOf(this.#layout.name, query, parameters, false, false, true);
-    const records = this.#txn.find(ir, false);
-
-    return decodeRecords(this.#layout, records);
+    return decodeRecords(this.#layout, this.#find(query, parameters, false));
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
   findOne(query, parameters) {
-    const ir = irOf(this.#layout.name, query, parameters, false, true, true);
-
-    return decodeRecords(this.#layout, this.#txn.find(ir, true))[0] ?? null;
+    return decodeRecords(this.#layout, this.#find(query, parameters, true))[0] ?? null;
   }
 
   /** How many objects a query finds, after its offset and within its limit. */
   count(query, parameters) {
-    return this.#txn.count(irOf(this.#layout.name, query, parameters, true, false, true));
+    const name = this.#layout.name;
+    const prepared = preparedOf(name, query);
+
+    if (prepared !== null) {
+      return this.#txn.countPrepared(prepared, parametersOf(parameters));
+    }
+
+    return this.#txn.count(irOf(name, query, parameters, true, false, true));
+  }
+
+  /** The records a query finds; only the first with `first`. */
+  #find(query, parameters, first) {
+    const name = this.#layout.name;
+    const prepared = preparedOf(name, query);
+
+    if (prepared !== null) {
+      return this.#txn.findPrepared(prepared, parametersOf(parameters), first);
+    }
+
+    // The IR is lent: the engine reads it before the call returns.
+    return this.#txn.find(irOf(name, query, parameters, false, first, true), first);
   }
 
   get [TXN]() {
@@ -426,6 +443,18 @@ class Database {
     this.#database();
 
     return this.#layout === null ? null : this.#layout.version;
+  }
+
+  /**
+   * Prepares `query` on collection `collection` of the schema: text in the
+   * query language, or a query built with `param` in place of its values.
+   * It is parsed once here, and each run gives values for its parameters.
+   */
+  prepare(collection, query) {
+    this.#database();
+    collectionOf(this.#layout, collection);
+
+    return prepare(collection, query);
   }
 
   /**

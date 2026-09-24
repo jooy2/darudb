@@ -93,6 +93,24 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 
 프로그램 바깥에서 들어온 값은 문자열에 끼워 넣지 말고 매개변수로 넘기세요.
 
+패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. 여러 번 실행할 쿼리는 `db.prepare`로 미리 준비해 둘 수도 있습니다. 문자열로 써도 되고, 바뀌는 값 자리에 `param`을 넣어 만들어도 됩니다. 준비한 쿼리와 값을 `find`, `findOne`, `count`에 넘기면 되며, 동기와 비동기 트랜잭션 어디서든 쓸 수 있습니다.
+
+```ts
+import { param } from 'darudb';
+
+const byEmail = db.prepare('users', (q) => q.where('email', '==', param(0)));
+const inAges = db.prepare('users', 'age BETWEEN $0 AND $1 SORT BY age');
+
+db.read((txn) => {
+  const users = txn.collection('users');
+
+  users.findOne(byEmail, ['alice@example.com']);
+  users.find(inAges, [18, 30]);
+});
+```
+
+준비한 쿼리는 준비할 때 정한 컬렉션에서만 실행됩니다. 값을 받지 못한 매개변수가 있으면 `INVALID_QUERY`로 실패합니다. 준비해 두면 실행할 때마다 쿼리를 해석하거나 인코딩하는 비용이 빠지고, 문자열 쿼리에서 효과가 가장 큽니다. 실행 계획은 값에 맞춰 매번 새로 세웁니다.
+
 ## 비동기 API 쓰기
 
 `Database`의 메서드마다 이름이 `Async`로 끝나는 짝이 있습니다. `openAsync`, `readAsync`, `writeAsync`, `syncAsync`, `closeAsync`입니다. 이 메서드들은 엔진의 일을 libuv 스레드 풀에서 하고 promise로 결과를 돌려줍니다. 엔진이 디스크나 다른 프로세스의 쓰기를 기다리는 동안에도 이벤트 루프는 계속 돕니다. 서버라면 이쪽을 쓰세요.

@@ -7,7 +7,7 @@
  * language parses into, and the engine checks it against the schema.
  */
 
-const { codeError } = require('./codec');
+const { Param, codeError } = require('./codec');
 
 const OPS = Object.freeze({
   '==': 4,
@@ -39,6 +39,18 @@ function pathOf(field) {
   }
 
   throw invalidQuery('a field is named by a string, or an array of names');
+}
+
+/**
+ * A parameter in place of a value, for a query that `Database.prepare`
+ * prepares once and each run gives values: `param(0)` is the first.
+ */
+function param(index) {
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw invalidQuery("a parameter's number is a whole number from 0 up");
+  }
+
+  return new Param(index);
 }
 
 /** A condition, as the filter holds it. */
@@ -207,4 +219,4 @@ class Query {
   }
 }
 
-module.exports = { Query, Condition, conditions };
+module.exports = { Query, Condition, Param, conditions, param };

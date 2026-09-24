@@ -11,7 +11,8 @@
 //! `index.d.ts`. Objects cross as records and queries as IR, the byte formats
 //! of `design/objects.md`, which `lib/codec.js` writes and reads, so that a
 //! batch of objects costs one call and one buffer rather than a call per
-//! field.
+//! field. A prepared query is parsed once into a [`NativePrepared`], which
+//! the synchronous methods run with its parameters' values.
 //!
 //! Every operation of a transaction has a synchronous method, and the
 //! asynchronous API runs them in batches through `run_async`, on the libuv
@@ -409,36 +410,46 @@ impl Txn {
         .map_err(to_js_error)
     }
 
-    fn find(&mut self, ir: &[u8], first: bool) -> Result<Vec<u8>> {
-        let request = request_of(ir, first)?;
+    fn find(&mut self, collection: &str, query: &darudb::Query) -> Result<Vec<u8>> {
         let records = match self {
             Txn::Read(txn) => txn
-                .collection(&request.collection)
-                .and_then(|collection| collection.query_records(&request.query)),
+                .collection(collection)
+                .and_then(|collection| collection.query_records(query)),
             _ => self
                 .writing()?
-                .collection(&request.collection)
-                .and_then(|collection| collection.query_records(&request.query)),
+                .collection(collection)
+                .and_then(|collection| collection.query_records(query)),
         }
         .map_err(to_js_error)?;
 
         Ok(concatenate(records))
     }
 
-    fn count(&mut self, ir: &[u8]) -> Result<f64> {
-        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
-
+    fn count(&mut self, collection: &str, query: &darudb::Query) -> Result<f64> {
         match self {
             Txn::Read(txn) => txn
-                .collection(&request.collection)
-                .and_then(|collection| collection.count(&request.query)),
+                .collection(collection)
+                .and_then(|collection| collection.count(query)),
             _ => self
                 .writing()?
-                .collection(&request.collection)
-                .and_then(|collection| collection.count(&request.query)),
+                .collection(collection)
+                .and_then(|collection| collection.count(query)),
         }
         .map(u64_number)
         .map_err(to_js_error)
+    }
+
+    /// The records the query in `ir` finds; only the first with `first`.
+    fn find_ir(&mut self, ir: &[u8], first: bool) -> Result<Vec<u8>> {
+        let request = request_of(ir, first)?;
+
+        self.find(&request.collection, &request.query)
+    }
+
+    fn count_ir(&mut self, ir: &[u8]) -> Result<f64> {
+        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+
+        self.count(&request.collection, &request.query)
     }
 
     /// Writes the records in `records`, each after its length, and returns
@@ -607,12 +618,38 @@ impl NativeTransaction {
     /// only the first with `first`.
     #[napi(ts_return_type = "Buffer")]
     pub fn find<'env>(&self, env: &'env Env, ir: Buffer, first: bool) -> Result<BufferSlice<'env>> {
-        js_bytes(env, self.now(|txn| txn.find(&ir, first))?)
+        js_bytes(env, self.now(|txn| txn.find_ir(&ir, first))?)
     }
 
     #[napi]
     pub fn count(&self, ir: Buffer) -> Result<f64> {
-        self.now(|txn| txn.count(&ir))
+        self.now(|txn| txn.count_ir(&ir))
+    }
+
+    /// The records a prepared query finds with `parameters`, as `find`
+    /// returns them.
+    #[napi(ts_return_type = "Buffer")]
+    pub fn find_prepared<'env>(
+        &self,
+        env: &'env Env,
+        prepared: &NativePrepared,
+        parameters: Vec<Option<JsParameter>>,
+        first: bool,
+    ) -> Result<BufferSlice<'env>> {
+        let query = prepared.bound(parameters, first)?;
+
+        js_bytes(env, self.now(|txn| txn.find(&prepared.collection, &query))?)
+    }
+
+    #[napi]
+    pub fn count_prepared(
+        &self,
+        prepared: &NativePrepared,
+        parameters: Vec<Option<JsParameter>>,
+    ) -> Result<f64> {
+        let query = prepared.bound(parameters, false)?;
+
+        self.now(|txn| txn.count(&prepared.collection, &query))
     }
 
     #[napi]
@@ -772,8 +809,8 @@ impl Op {
     fn run(self, txn: &mut Txn) -> Result<Outcome> {
         Ok(match self {
             Op::Get(collection, key) => Outcome::Record(txn.get_record(&collection, key)?),
-            Op::Find(ir, first) => Outcome::Bytes(txn.find(&ir, first)?),
-            Op::Count(ir) => Outcome::Number(txn.count(&ir)?),
+            Op::Find(ir, first) => Outcome::Bytes(txn.find_ir(&ir, first)?),
+            Op::Count(ir) => Outcome::Number(txn.count_ir(&ir)?),
             Op::Write(collection, records, replace) => {
                 Outcome::Keys(txn.write_records(&collection, &records, replace)?.0)
             }
@@ -922,7 +959,18 @@ pub fn parse_query(
     parameters: Vec<Option<JsParameter>>,
     count: bool,
 ) -> Result<Buffer> {
-    let parameters = parameters
+    let request = darudb::QueryRequest {
+        collection,
+        query: darudb::Query::parse(&text, &values_of(parameters)?).map_err(to_js_error)?,
+        count,
+    };
+
+    Ok(request.encode().map_err(to_js_error)?.into())
+}
+
+/// A query's parameters as the engine takes them.
+fn values_of(parameters: Vec<Option<JsParameter>>) -> Result<Vec<darudb::Value>> {
+    parameters
         .into_iter()
         .map(|parameter| match parameter {
             None => Ok(darudb::Value::Null),
@@ -932,14 +980,62 @@ pub fn parse_query(
             Some(Either5::D(value)) => Ok(darudb::Value::String(value)),
             Some(Either5::E(value)) => Ok(darudb::Value::Bytes(value.to_vec())),
         })
-        .collect::<Result<Vec<_>>>()?;
-    let request = darudb::QueryRequest {
-        collection,
-        query: darudb::Query::parse(&text, &parameters).map_err(to_js_error)?,
-        count,
-    };
+        .collect()
+}
 
-    Ok(request.encode().map_err(to_js_error)?.into())
+/// A query parsed once, whose parameters are given values each time it runs.
+/// It holds no database, so one runs in any transaction.
+#[napi]
+pub struct NativePrepared {
+    collection: String,
+    query: darudb::Query,
+}
+
+#[napi]
+impl NativePrepared {
+    /// Prepares the query in `ir`, whose parameters stay parameters.
+    #[napi(factory)]
+    pub fn from_ir(ir: Buffer) -> Result<Self> {
+        let request = darudb::QueryRequest::decode(&ir).map_err(to_js_error)?;
+
+        Ok(Self {
+            collection: request.collection,
+            query: request.query,
+        })
+    }
+
+    /// Prepares `text` in the query language, on `collection`.
+    #[napi(factory)]
+    pub fn from_text(collection: String, text: String) -> Result<Self> {
+        Ok(Self {
+            collection,
+            query: darudb::Query::prepare(&text).map_err(to_js_error)?,
+        })
+    }
+
+    /// The IR of the query with `parameters` for its parameters, for the
+    /// asynchronous API, which passes queries to the thread pool as IR.
+    #[napi]
+    pub fn bind(&self, parameters: Vec<Option<JsParameter>>, count: bool) -> Result<Buffer> {
+        let request = darudb::QueryRequest {
+            collection: self.collection.clone(),
+            query: self.bound(parameters, false)?,
+            count,
+        };
+
+        Ok(request.encode().map_err(to_js_error)?.into())
+    }
+
+    /// The query with `parameters` for its parameters, cut to its first
+    /// object with `first`.
+    fn bound(&self, parameters: Vec<Option<JsParameter>>, first: bool) -> Result<darudb::Query> {
+        let query = self
+            .query
+            .bind(&values_of(parameters)?)
+            .map_err(to_js_error)?;
+
+        Ok(if first { query.first() } else { query })
+    }
 }
 
 /// The query in `ir`, cut to its first object with `first`.

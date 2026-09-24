@@ -10,7 +10,7 @@
 
 const native = require('./native.js');
 const { t, collection, schema } = require('./lib/schema');
-const { Query, conditions } = require('./lib/query');
+const { Query, conditions, param } = require('./lib/query');
 const { Database } = require('./lib/database');
 
 exports.Database = Database;
@@ -19,5 +19,6 @@ exports.collection = collection;
 exports.schema = schema;
 exports.Query = Query;
 exports.conditions = conditions;
+exports.param = param;
 exports.engineVersion = native.engineVersion;
 exports.FORMAT_VERSION = native.FORMAT_VERSION;

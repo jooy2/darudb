@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { collection, conditions, Database, Query, schema, t } from '../index.js';
+import { collection, conditions, Database, param, Query, schema, t } from '../index.js';
 
 /** A path in a directory of the test's own, removed when the test ends. */
 const tempPath = (context) => {
@@ -220,6 +220,75 @@ describe('objects', () => {
       assert.equal(users.findOne('tags CONTAINS "blue"').name, 'Alice');
       assert.equal(users.count('email == $0', [null]), 2);
     });
+  });
+
+  it('are found by prepared queries, with values given each run', (context) => {
+    const { db } = withData(context);
+    const adults = db.prepare('users', (q) =>
+      q.where('age', '>=', param(0)).where('name', '!=', param(1)).sortBy('age', 'desc')
+    );
+    const within = db.prepare('users', (q) =>
+      q.where((c) => c.or(c.between('age', param(0), param(1)), c.in('name', [param(2), 'Zed'])))
+    );
+    const byEmail = db.prepare('users', 'email == $0');
+
+    assert.equal(adults.collection, 'users');
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+      const names = (found) => found.map((user) => user.name);
+
+      assert.deepEqual(names(users.find(adults, [18, 'Nobody'])), ['Carol', 'Alice']);
+      assert.deepEqual(names(users.find(adults, [35, 'Nobody'])), ['Carol']);
+      assert.deepEqual(names(users.find(adults, [18, 'Carol'])), ['Alice']);
+      assert.equal(users.findOne(adults, [0, 'Carol']).name, 'Alice');
+      assert.equal(users.count(adults, [0, 'Nobody']), 3);
+      assert.deepEqual(names(users.find(within, [30, 35, 'Bob'])), ['Alice', 'Bob']);
+      assert.equal(users.findOne(byEmail, ['alice@example.com']).name, 'Alice');
+      assert.equal(users.count(byEmail, [null]), 2, 'equal to null is a null test');
+    });
+
+    // A prepared query is not tied to a transaction, or to a kind of one.
+    db.write((txn) => {
+      assert.equal(txn.collection('users').count(adults, [40, 'Nobody']), 1);
+    });
+  });
+
+  it('keep each text prepared on its own collection', (context) => {
+    const { db } = withData(context);
+
+    db.read((txn) => {
+      const text = 'name == $0';
+
+      assert.equal(txn.collection('users').findOne(text, ['Bob']).age, 17);
+      assert.equal(txn.collection('teams').findOne(text, ['north']).city, 'Seoul');
+      assert.equal(txn.collection('users').count(text, ['north']), 0);
+    });
+  });
+
+  it("are refused, with the engine's codes, when a prepared query does not fit", (context) => {
+    const { db } = withData(context);
+    const byName = db.prepare('users', (q) => q.where('name', '==', param(0)));
+
+    assertCode(() => param(-1), 'INVALID_QUERY');
+    assertCode(() => param(0.5), 'INVALID_QUERY');
+    assertCode(() => db.prepare('orders', 'name == $0'), 'INVALID_ARGUMENT');
+    assertCode(() => db.prepare('users', 'name =='), 'INVALID_QUERY');
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+
+      assertCode(() => users.find(byName), 'INVALID_QUERY');
+      assertCode(() => users.find(byName, [{}]), 'INVALID_QUERY');
+      assertCode(() => users.find(byName, 'Bob'), 'INVALID_QUERY');
+      assertCode(() => users.find(byName, [3]), 'INVALID_QUERY');
+      assertCode(() => txn.collection('teams').find(byName, ['Bob']), 'INVALID_QUERY');
+      assertCode(() => users.find((q) => q.where('name', '==', param(0))), 'INVALID_QUERY');
+      assertCode(() => users.find('name == $1', ['Bob']), 'INVALID_QUERY');
+    });
+
+    db.close();
+    assertCode(() => db.prepare('users', 'name == $0'), 'CLOSED');
   });
 
   it("are refused, with the engine's codes, when they do not fit", (context) => {
