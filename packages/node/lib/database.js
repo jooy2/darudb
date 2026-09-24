@@ -257,16 +257,21 @@ class Migrating {
 
 /** What `open` and `openAsync` pass to the native layer, checked. */
 function nativeOptions(options) {
-  const { create, pageSize, busyTimeout, schema, migrations = [] } = options;
+  const { create, pageSize, busyTimeout, cacheSize, schema, migrations = [] } = options;
 
   if (!Array.isArray(migrations)) {
     throw invalid('`migrations` is an array');
+  }
+
+  if (cacheSize !== undefined && (!Number.isSafeInteger(cacheSize) || cacheSize < 0)) {
+    throw invalid('`cacheSize` is a whole number of bytes from 0 up');
   }
 
   return {
     create,
     pageSize,
     busyTimeout,
+    cacheSize,
     schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
     migrations: migrations.map(nativeMigration)
   };

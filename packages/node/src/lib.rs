@@ -98,6 +98,9 @@ pub struct NativeOptions {
     pub page_size: Option<u32>,
     /// How long to wait for another writer, in milliseconds.
     pub busy_timeout: Option<u32>,
+    /// The memory the page cache may take, in bytes: a whole number, which
+    /// the JavaScript side checks.
+    pub cache_size: Option<f64>,
     /// The declared schema, as `Schema::decode` reads it.
     pub schema: Option<Buffer>,
     pub migrations: Option<Vec<NativeMigration>>,
@@ -218,6 +221,17 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
 
     if let Some(milliseconds) = options.busy_timeout {
         open_options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
+    }
+
+    if let Some(bytes) = options.cache_size {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a cast saturates, so a size beyond the address space asks for all of it"
+        )]
+        let bytes = bytes as usize;
+
+        open_options.cache_size(bytes);
     }
 
     if let Some(schema) = &options.schema {

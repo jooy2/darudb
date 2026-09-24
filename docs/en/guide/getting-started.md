@@ -130,7 +130,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, and `pageSize` sets the page size of a new one. With a `schema`, the database holds collections of objects that transactions read and write and queries find: [Node.js](./nodejs.md) shows how.
+`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, `pageSize` sets the page size of a new one, and `cacheSize` the memory the page cache may take, in bytes. With a `schema`, the database holds collections of objects that transactions read and write and queries find: [Node.js](./nodejs.md) shows how.
 
 ## Errors
 

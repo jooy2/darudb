@@ -512,6 +512,12 @@ export interface OpenOptions<S = Schema> {
    * another process's writer before failing with `BUSY`. 5000 by default.
    */
   busyTimeout?: number;
+  /**
+   * How much memory the page cache may take, in bytes. 32 MiB by default. It
+   * holds at least 16 pages, and fills only as pages are read. Every
+   * `Database` of one file in a process shares the cache of the first.
+   */
+  cacheSize?: number;
   /** The collections the database holds. */
   schema?: S;
   /** How an older schema version becomes this one. */

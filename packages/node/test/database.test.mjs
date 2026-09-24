@@ -93,6 +93,24 @@ describe('Database.open', () => {
     }
   });
 
+  it('takes a cache size in bytes, and refuses one that is not a whole number', (context) => {
+    const dir = tempDir(context);
+
+    for (const cacheSize of [0, 1 << 20, 2 ** 40]) {
+      const db = Database.open(join(dir, `app-${cacheSize}.darudb`), { cacheSize });
+
+      assert.equal(db.isOpen, true);
+      db.close();
+    }
+
+    for (const cacheSize of [-1, 1.5, '1024', Number.NaN, Infinity]) {
+      assertCode(
+        () => Database.open(join(dir, 'refused.darudb'), { cacheSize }),
+        'INVALID_ARGUMENT'
+      );
+    }
+  });
+
   it('refuses a file that is not a database', (context) => {
     const path = join(tempDir(context), 'notes.txt');
 
