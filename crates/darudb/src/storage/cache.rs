@@ -4,10 +4,13 @@
 //! the page, so a cached copy of an older page at the same number never
 //! matches. Nothing is invalidated when a commit is published: entries that no
 //! longer match anything simply age out.
+//!
+//! The cache counts the bytes its entries hold, as [`Weigh`] reports them,
+//! rather than the entries themselves, since a node keeps more than its page.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::format::Check;
 
@@ -15,13 +18,23 @@ use crate::format::Check;
 #[derive(Debug)]
 pub(crate) struct Cache<V> {
     inner: Mutex<Inner<V>>,
+    /// The bytes the entries may hold.
     capacity: usize,
+    /// The entries the cache keeps whatever they hold.
+    least: usize,
 }
 
 #[derive(Debug)]
 struct Inner<V> {
     entries: HashMap<(u64, Check), Arc<V>, BuildHasherDefault<Fold>>,
     order: VecDeque<(u64, Check)>,
+    /// The bytes the entries hold.
+    used: usize,
+}
+
+/// What a cached value holds, in bytes.
+pub(crate) trait Weigh {
+    fn weight(&self) -> usize;
 }
 
 /// The hash of a cache key: its words folded together.
@@ -58,45 +71,67 @@ impl Hasher for Fold {
     }
 }
 
-impl<V> Cache<V> {
-    /// A cache that holds up to `capacity` pages.
-    pub(crate) fn new(capacity: usize) -> Self {
+impl<V: Weigh> Cache<V> {
+    /// A cache whose entries hold up to `capacity` bytes, which keeps its
+    /// newest `least` entries whatever they hold.
+    pub(crate) fn new(capacity: usize, least: usize) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 entries: HashMap::default(),
                 order: VecDeque::new(),
+                used: 0,
             }),
             capacity,
+            least,
         }
     }
 
-    /// How many pages the cache holds at most.
+    /// How many bytes the entries may hold.
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
+    /// How many entries the cache holds.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.lock().entries.len()
+    }
+
+    /// How many bytes the entries hold.
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> usize {
+        self.lock().used
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Inner<V>> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The cached copy of page `page` with check `check`, if there is one.
     pub(crate) fn get(&self, page: u64, check: &Check) -> Option<Arc<V>> {
-        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-
-        inner.entries.get(&(page, *check)).cloned()
+        self.lock().entries.get(&(page, *check)).cloned()
     }
 
     /// Remembers `value` as page `page` with check `check`.
     pub(crate) fn insert(&self, page: u64, check: Check, value: Arc<V>) {
-        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut inner = self.lock();
 
-        if inner.entries.insert((page, check), value).is_none() {
-            inner.order.push_back((page, check));
+        inner.used += value.weight();
+
+        match inner.entries.insert((page, check), value) {
+            Some(old) => inner.used -= old.weight(),
+            None => inner.order.push_back((page, check)),
         }
 
-        while inner.entries.len() > self.capacity {
+        while inner.used > self.capacity && inner.entries.len() > self.least {
             let Some(oldest) = inner.order.pop_front() else {
                 break;
             };
 
-            inner.entries.remove(&oldest);
+            if let Some(old) = inner.entries.remove(&oldest) {
+                inner.used -= old.weight();
+            }
         }
     }
 }
@@ -105,9 +140,15 @@ impl<V> Cache<V> {
 mod tests {
     use super::*;
 
+    impl Weigh for &str {
+        fn weight(&self) -> usize {
+            self.len()
+        }
+    }
+
     #[test]
     fn a_page_is_found_only_under_its_own_check() {
-        let cache = Cache::new(4);
+        let cache = Cache::new(8, 1);
         let old = Check::of(&[b"old"]);
         let new = Check::of(&[b"new"]);
 
@@ -121,13 +162,40 @@ mod tests {
     }
 
     #[test]
-    fn the_oldest_entry_goes_first() {
-        let cache = Cache::new(2);
+    fn the_oldest_entries_go_first_until_the_rest_fit() {
+        let cache = Cache::new(6, 1);
         let check = Check::ZERO;
 
-        cache.insert(1, check, Arc::new(1));
-        cache.insert(2, check, Arc::new(2));
-        cache.insert(3, check, Arc::new(3));
+        cache.insert(1, check, Arc::new("ab"));
+        cache.insert(2, check, Arc::new("cd"));
+        cache.insert(3, check, Arc::new("ef"));
+
+        assert!(cache.get(1, &check).is_some(), "six bytes fit");
+
+        cache.insert(4, check, Arc::new("ghij"));
+
+        assert!(cache.get(1, &check).is_none());
+        assert!(cache.get(2, &check).is_none());
+        assert!(cache.get(3, &check).is_some());
+        assert!(cache.get(4, &check).is_some());
+
+        // An entry again under its key counts once, at its new weight.
+        cache.insert(3, check, Arc::new("e"));
+        cache.insert(5, check, Arc::new("k"));
+
+        assert!(cache.get(3, &check).is_some());
+        assert!(cache.get(4, &check).is_some());
+        assert!(cache.get(5, &check).is_some());
+    }
+
+    #[test]
+    fn the_least_entries_stay_whatever_they_hold() {
+        let cache = Cache::new(1, 2);
+        let check = Check::ZERO;
+
+        cache.insert(1, check, Arc::new("abc"));
+        cache.insert(2, check, Arc::new("def"));
+        cache.insert(3, check, Arc::new("ghi"));
 
         assert!(cache.get(1, &check).is_none());
         assert!(cache.get(2, &check).is_some());

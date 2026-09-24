@@ -154,10 +154,7 @@ impl Shared {
             },
             records: [None; SLOT_COUNT],
         };
-        let page_size = usize::try_from(static_header.page_size).unwrap_or(usize::MAX);
-        let cache = Arc::new(Cache::new(
-            (settings.cache_size / page_size).max(MIN_CACHE_PAGES),
-        ));
+        let cache = Arc::new(Cache::new(settings.cache_size, MIN_CACHE_PAGES));
         let loader = Loader::new(Arc::clone(&pager), Arc::clone(&cache));
 
         Self {
@@ -1067,26 +1064,36 @@ mod tests {
     use crate::{Database, OpenOptions};
 
     #[test]
-    fn the_cache_holds_the_pages_its_size_fits_and_never_fewer_than_the_least() {
-        for (page_size, bytes, pages) in [
-            (4096, 16 << 20, 4096),
-            (65536, 16 << 20, 256),
-            (16384, 1 << 20, 64),
-            (65536, 3 * 65536, MIN_CACHE_PAGES),
-            (4096, 0, MIN_CACHE_PAGES),
-        ] {
+    fn the_cache_holds_what_its_size_fits_and_never_fewer_than_the_least_pages() {
+        for bytes in [1 << 20, 0] {
             let db = Database::create_io(
                 Arc::new(SimDisk::default()),
-                page_size,
+                4096,
                 OpenOptions::new().cache_size(bytes),
             )
             .unwrap();
+            let mut txn = db.begin_write().unwrap();
 
-            assert_eq!(
-                db.shared().cache.capacity(),
-                pages,
-                "{bytes} bytes of {page_size}-byte pages"
-            );
+            // About 350 leaves of 175 entries each.
+            for n in 0..60_000u32 {
+                txn.insert("t", &n.to_be_bytes(), &[0; 12]).unwrap();
+            }
+
+            txn.commit().unwrap();
+            assert_eq!(db.begin_read().unwrap().iter("t").unwrap().count(), 60_000);
+
+            let cache = &db.shared().cache;
+
+            assert_eq!(cache.capacity(), bytes);
+
+            if bytes == 0 {
+                assert_eq!(cache.len(), MIN_CACHE_PAGES);
+            } else {
+                // Each node counts the heads it keeps beside its page, so
+                // fewer than the 256 pages alone fit.
+                assert!(cache.used() <= bytes);
+                assert!((200..256).contains(&cache.len()), "{}", cache.len());
+            }
         }
     }
 

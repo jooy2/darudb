@@ -86,7 +86,8 @@ impl Harness {
         ));
 
         Self {
-            loader: Loader::new(Arc::clone(&pager), Arc::new(Cache::new(64))),
+            // About 64 pages, so that the tests evict and read pages again.
+            loader: Loader::new(Arc::clone(&pager), Arc::new(Cache::new(64 * page_size, 16))),
             store: TestStore {
                 pager,
                 txn: 1,

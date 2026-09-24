@@ -20,7 +20,7 @@ pub(crate) mod sim;
 use std::fmt::Debug;
 use std::io;
 
-pub(crate) use cache::Cache;
+pub(crate) use cache::{Cache, Weigh};
 pub(crate) use create::{Created, create_file, fill};
 pub(crate) use file::DbFile;
 pub(crate) use pager::Pager;
