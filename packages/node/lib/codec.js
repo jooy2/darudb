@@ -248,6 +248,10 @@ class Writer {
 }
 
 /** Reads what the engine gives back, checking every length and tag. */
+/** The bytes of a float being read, and the view that reads them. */
+const floatBytes = new Uint8Array(8);
+const floatView = new DataView(floatBytes.buffer);
+
 class Reader {
   constructor(bytes, start = 0, end = bytes.length) {
     this.bytes = bytes;
@@ -340,11 +344,15 @@ class Reader {
       throw corrupted('it ends inside a float');
     }
 
-    const value = this.view.getFloat64(this.at, true);
+    // Copied into one shared view, rather than a view of this reader's bytes
+    // made for the purpose, which cost more than reading a small record.
+    for (let index = 0; index < 8; index++) {
+      floatBytes[index] = this.bytes[this.at + index];
+    }
 
     this.at += 8;
 
-    return value;
+    return floatView.getFloat64(0, true);
   }
 
   string() {
@@ -363,8 +371,12 @@ class Reader {
         }
       }
 
+      // A `Buffer` makes a string of it in one call, at a cost that does
+      // not grow with its length as building one from its codes does.
       if (ascii) {
-        return String.fromCharCode.apply(null, this.bytes.subarray(start, this.at));
+        return Buffer.isBuffer(this.bytes)
+          ? this.bytes.toString('latin1', start, this.at)
+          : String.fromCharCode.apply(null, this.bytes.subarray(start, this.at));
       }
     }
 
