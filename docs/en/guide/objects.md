@@ -130,6 +130,23 @@ fn adults(db: &Database) -> Result<(), darudb::Error> {
 - **Types.** A value has the field's type: an `Int` field compares with an int, never a float, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
 - **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.
 
+The same query can be written as text, which is convenient for queries that do not change and is how the other languages will write them too:
+
+```rust
+use darudb::Query;
+
+fn main() -> Result<(), darudb::Error> {
+    let query = Query::parse(
+        r#"age >= $0 AND name STARTSWITH "A" SORT BY age DESC LIMIT 10"#,
+        &[18.into()],
+    )?;
+    let _ = query;
+    Ok(())
+}
+```
+
+A filter comes first, then `SORT BY`, `LIMIT` and `OFFSET`, each optional. Keywords are case-insensitive, strings are in double quotes, and a field named like a keyword, such as `limit`, goes in backticks. `$0`, `$1` and on take the values passed with the text. A value that comes from outside the program belongs in a parameter, never in the text. Text that does not parse fails with `INVALID_QUERY`, and the message names the character where it went wrong.
+
 A condition on the primary key or on an indexed field, joined to the rest of the filter with `and`, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.
 
 ## Migrate to a new version

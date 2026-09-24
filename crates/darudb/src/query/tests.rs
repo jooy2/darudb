@@ -528,3 +528,247 @@ fn a_filter_nested_too_deeply_is_refused() {
         Some("INVALID_QUERY")
     );
 }
+
+/// `ir` in the query language. Floats and bytes, which have no literal that
+/// keeps every value, go into `parameters`; other values are written out.
+fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
+    fn name(name: &str) -> String {
+        let plain = name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_alphabetic() || first == '_')
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+            && !super::parse::is_keyword(name);
+
+        if plain {
+            name.to_owned()
+        } else {
+            format!("`{name}`")
+        }
+    }
+
+    fn path(path: &[String]) -> String {
+        path.iter()
+            .map(|part| name(part))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    fn value(value: &Value, parameters: &mut Vec<Value>) -> String {
+        match value {
+            Value::Null => "null".to_owned(),
+            Value::Bool(value) => value.to_string(),
+            Value::Int(value) => value.to_string(),
+            Value::String(text) => {
+                let mut out = String::from("\"");
+
+                for c in text.chars() {
+                    match c {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", u32::from(c))),
+                        c => out.push(c),
+                    }
+                }
+
+                out.push('"');
+                out
+            }
+            other => {
+                parameters.push(other.clone());
+                format!("${}", parameters.len() - 1)
+            }
+        }
+    }
+
+    fn expr(node: &ir::Expr, parameters: &mut Vec<Value>) -> String {
+        match node {
+            ir::Expr::And(terms) | ir::Expr::Or(terms) => {
+                let joint = if matches!(node, ir::Expr::And(_)) {
+                    " AND "
+                } else {
+                    " OR "
+                };
+                let terms: Vec<String> = terms.iter().map(|term| expr(term, parameters)).collect();
+
+                format!("({})", terms.join(joint))
+            }
+            ir::Expr::Not(term) => format!("NOT ({})", expr(term, parameters)),
+            ir::Expr::Test {
+                op,
+                path: at,
+                values,
+            } => {
+                let at = path(at);
+
+                match (op, values.as_slice()) {
+                    (ir::Op::IsNull, _) => format!("{at} is null"),
+                    (ir::Op::Between, [low, high]) => {
+                        let (low, high) = (value(low, parameters), value(high, parameters));
+
+                        format!("{at} BETWEEN {low} AND {high}")
+                    }
+                    (ir::Op::In, values) => {
+                        let values: Vec<String> =
+                            values.iter().map(|each| value(each, parameters)).collect();
+
+                        format!("{at} in [{}]", values.join(", "))
+                    }
+                    (op, [one]) => format!("{at} {} {}", op.text(), value(one, parameters)),
+                    _ => unreachable!("a builder's test has its values"),
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+
+    if let Some(filter) = &ir.filter {
+        out.push(expr(filter, parameters));
+    }
+
+    if !ir.sort.is_empty() {
+        let keys: Vec<String> = ir
+            .sort
+            .iter()
+            .map(|(at, descending)| {
+                format!("{} {}", path(at), if *descending { "desc" } else { "ASC" })
+            })
+            .collect();
+
+        out.push(format!("SORT BY {}", keys.join(", ")));
+    }
+
+    if let Some(limit) = ir.limit {
+        out.push(format!("Limit {limit}"));
+    }
+
+    if ir.offset > 0 {
+        out.push(format!("OFFSET {}", ir.offset));
+    }
+
+    out.join(" ")
+}
+
+#[test]
+fn the_query_language_builds_the_builders_query() {
+    let mut rng = Rng::new(7);
+
+    for _ in 0..3000 {
+        let built = query(&mut rng);
+        let mut parameters = Vec::new();
+        let written = text(&built.ir, &mut parameters);
+        let parsed = Query::parse(&written, &parameters)
+            .unwrap_or_else(|error| panic!("{written}: {error}"));
+
+        // Compared as IR, where NaN equals itself.
+        assert_eq!(
+            ir::encode("players", &parsed.ir, false).unwrap(),
+            ir::encode("players", &built.ir, false).unwrap(),
+            "{written}"
+        );
+    }
+
+    let same = [
+        (
+            "score >= 1 AND handle STARTSWITH \"a\" OR NOT tags CONTAINS \"red\"",
+            Query::new().filter(
+                Filter::ge("score", 1)
+                    .and(Filter::starts_with("handle", "a"))
+                    .or(!Filter::contains("tags", "red")),
+            ),
+        ),
+        (
+            "score == null and (`handle` != NULL) SORT BY team.city, score DESC LIMIT 3",
+            Query::new()
+                .filter(Filter::is_null("score").and(Filter::is_not_null("handle")))
+                .sort_by("team.city")
+                .sort_by_desc("score")
+                .limit(3),
+        ),
+        (
+            "rating between -1.5 and 2e3 AND address.zip IN [] AND note == $0",
+            Query::new().filter(
+                Filter::between("rating", -1.5, 2000.0)
+                    .and(Filter::is_in("address.zip", Vec::<Value>::new()))
+                    .and(Filter::eq("note", vec![1u8, 2])),
+            ),
+        ),
+        ("OFFSET 4", Query::new().offset(4)),
+        ("", Query::new()),
+        (
+            "`limit`.`and` == \"\\u{0}\\\"\\\\\\n\\t\" AND a.limit IS NOT NULL",
+            Query::new()
+                .filter(Filter::eq("limit.and", "\0\"\\\n\t").and(Filter::is_not_null("a.limit"))),
+        ),
+    ];
+
+    for (written, built) in same {
+        assert_eq!(
+            Query::parse(written, &[Value::Bytes(vec![1, 2])]).unwrap(),
+            built,
+            "{written}"
+        );
+    }
+}
+
+#[test]
+fn text_that_does_not_parse_names_where() {
+    let broken = [
+        ("score >", "at character 8: expected a value, found the end"),
+        ("score = 1", "at character 7: `=` has no meaning here"),
+        ("score == 1 LIMIT", "at character 17: expected a number"),
+        ("(score == 1", "at character 12: expected `)`"),
+        ("score IN [1 2]", "at character 13: expected `,`"),
+        ("score BETWEEN 1 OR 2", "at character 17: expected `AND`"),
+        // A field called `limit` needs backticks: the word starts a clause.
+        (
+            "limit == 1",
+            "at character 7: expected a number, found `==`",
+        ),
+        (
+            "score == 1 AND limit == 1",
+            "at character 16: expected a field name",
+        ),
+        (
+            "score == $2",
+            "at character 10: `$2` names a parameter, and 1 were given",
+        ),
+        ("name == \"open", "at character 9: a string does not end"),
+        ("name == \"\\x\"", "at character 10: a string escapes only"),
+        (
+            "score == 99999999999999999999",
+            "at character 10: `99999999999999999999` does not fit",
+        ),
+        ("score == 1 SORT score", "at character 17: expected `BY`"),
+        (
+            "score == 1 LIMIT -1",
+            "at character 18: a limit or an offset is not negative",
+        ),
+        ("score IS 1", "at character 10: expected `NULL`"),
+        ("score LIKE 1", "at character 7: expected a comparison"),
+        (
+            "score == 1 score == 2",
+            "at character 12: expected `AND`, `OR`",
+        ),
+        ("`` == 1", "at character 1: a name in backticks is empty"),
+    ];
+
+    for (written, message) in broken {
+        let error = Query::parse(written, &[Value::Int(1)]).unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY", "{written}");
+        assert!(
+            error.to_string().contains(message),
+            "{written}: {error} does not say {message}"
+        );
+    }
+
+    let deep = format!("{}score == 1", "NOT ".repeat(200));
+
+    assert_eq!(
+        Query::parse(&deep, &[]).err().map(|error| error.code()),
+        Some("INVALID_QUERY")
+    );
+}

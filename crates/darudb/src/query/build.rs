@@ -3,6 +3,7 @@
 use std::ops::Not;
 
 use super::ir::{Expr, Ir, Op};
+use crate::error::Result;
 use crate::format::object::Value;
 
 /// A path to a field: its name, or names joined by `.` through embedded
@@ -188,5 +189,33 @@ impl Query {
     pub fn limit(mut self, count: u64) -> Self {
         self.ir.limit = Some(count);
         self
+    }
+
+    /// Parses `text` in the query language, with `parameters` for `$0`, `$1`
+    /// and on. It builds the same query the builder methods would.
+    ///
+    /// A filter comes first, then `SORT BY`, `LIMIT` and `OFFSET`, each
+    /// optional. Keywords are case-insensitive, strings are in double
+    /// quotes, and a name that is a keyword or not a plain word goes in
+    /// backticks. A value that comes from outside the application belongs in
+    /// a parameter, never in the text. Text that does not parse fails with
+    /// [`Error::InvalidQuery`](crate::Error::InvalidQuery), naming the
+    /// character where it went wrong.
+    ///
+    /// ```
+    /// use darudb::Query;
+    ///
+    /// let query = Query::parse(
+    ///     r#"age >= $0 AND (name STARTSWITH "A" OR tags CONTAINS "admin")
+    ///        SORT BY age DESC LIMIT 10"#,
+    ///     &[18.into()],
+    /// )?;
+    /// # let _ = query;
+    /// # Ok::<(), darudb::Error>(())
+    /// ```
+    pub fn parse(text: &str, parameters: &[Value]) -> Result<Self> {
+        Ok(Self {
+            ir: super::parse::parse(text, parameters)?,
+        })
     }
 }

@@ -251,10 +251,11 @@ path        = name { "." name }
 value       = int | float | string | "true" | "false" | "null" | "$" digits
 ```
 
-- **Keywords** are case-insensitive. A **name** is letters, digits and `_`, not starting with a digit, or any text in backticks.
-- **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent.
+- **Keywords** are case-insensitive: `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`.
+- **A name** is letters, digits and `_`, not starting with a digit, or any text in backticks. Where a path starts, a keyword is a keyword, so a field with a keyword's name goes in backticks there; after a `.`, every word is a name.
+- **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent, and either may start with `-`.
 - **Parameters** `$0`, `$1` and so on take the values passed with the call, in order and with their types. A value that comes from outside the application belongs in a parameter, never in the text.
-- **A query that does not parse**, or does not fit the schema, fails with `INVALID_QUERY`, naming the position and what was expected.
+- **A query that does not parse**, or does not fit the schema, fails with `INVALID_QUERY`, naming the position, as a character counted from 1, and what was expected. Parentheses and `NOT` nest at most 48 levels in the text, twice the filter's own limit, so that parsing stops before the filter would be refused anyway.
 
 ## Running a query
 

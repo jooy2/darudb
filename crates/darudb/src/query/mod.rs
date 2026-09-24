@@ -4,6 +4,7 @@
 //! - `ir`: the tree every query becomes, and its encoding for the language
 //!   boundary.
 //! - `build`: [`Query`] and [`Filter`], which build that tree in Rust.
+//! - `parse`: the query language, which builds the same tree from text.
 //! - `plan`: checking a query against the schema, and choosing whether a key
 //!   range, an index or a walk of every object finds its objects.
 //! - `run`: reading the objects, testing them, sorting, and counting.
@@ -13,6 +14,7 @@
 
 mod build;
 pub(crate) mod ir;
+mod parse;
 mod plan;
 mod run;
 #[cfg(test)]
