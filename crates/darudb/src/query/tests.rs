@@ -635,6 +635,7 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>) -> String {
                 format!("({})", terms.join(joint))
             }
             ir::Expr::Not(term) => format!("NOT ({})", expr(term, parameters)),
+            ir::Expr::Prepared { .. } => unreachable!("a builder's query has no parameters"),
             ir::Expr::Test {
                 op,
                 path: at,
@@ -915,5 +916,76 @@ fn a_field_added_later_reads_as_its_default_in_a_query() {
             .count(&Query::new().filter(Filter::gt("size", 5)))
             .unwrap(),
         2
+    );
+}
+
+/// A prepared query given values finds what the same text parsed with them
+/// does, and keeps its parameters through the IR a binding sends.
+#[test]
+fn a_prepared_query_runs_as_the_parsed_one_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let texts = [
+        ("score == $0", vec![Value::Int(3)]),
+        (
+            "score >= $0 AND handle STARTSWITH $1",
+            vec![Value::Int(1), "a".into()],
+        ),
+        ("handle == $0", vec![Value::Null]),
+        ("handle != $0", vec![Value::Null]),
+        (
+            "score IN [$0, 1, $1] SORT BY score DESC",
+            vec![Value::Int(3), Value::Int(7)],
+        ),
+        (
+            "rating BETWEEN $1 AND $0",
+            vec![Value::Float(1.0), Value::Float(-1.0)],
+        ),
+        (
+            "tags CONTAINS $0 OR NOT (team == $1)",
+            vec!["red".into(), "north".into()],
+        ),
+    ];
+
+    for (text, parameters) in texts {
+        let prepared = Query::prepare(text).unwrap();
+        let bound = prepared.bind(&parameters).unwrap();
+        let parsed = Query::parse(text, &parameters).unwrap();
+
+        assert_eq!(bound, parsed, "{text}");
+        assert_eq!(find(&db, bound), find(&db, parsed), "{text}");
+
+        // Through the IR, as a binding sends a prepared query.
+        let bytes = ir::encode("players", &prepared.ir, false).unwrap();
+        let (_, decoded, _) = ir::decode(&bytes).unwrap();
+
+        assert_eq!(decoded, prepared.ir, "{text}");
+        assert_eq!(
+            Query { ir: decoded }.bind(&parameters).unwrap(),
+            Query::parse(text, &parameters).unwrap()
+        );
+    }
+
+    let prepared = Query::prepare("score == $0 AND handle == $2").unwrap();
+
+    assert_eq!(
+        prepared.bind(&[Value::Int(1)]).unwrap_err().code(),
+        "INVALID_QUERY",
+        "a parameter without a value"
+    );
+
+    let read = db.begin_read().unwrap();
+    let error = read
+        .collection("players")
+        .unwrap()
+        .query(&prepared)
+        .unwrap_err();
+
+    assert_eq!(error.code(), "INVALID_QUERY");
+    assert!(error.to_string().contains("$0"), "{error}");
+    assert_eq!(
+        Query::prepare("score == 3").unwrap(),
+        Query::parse("score == 3", &[]).unwrap(),
+        "a query without parameters prepares as it parses"
     );
 }

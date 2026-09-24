@@ -216,7 +216,7 @@ A query is a tree that every binding builds and the engine executes. It crosses 
 | 5     | limit      | `int`                                                              |
 | 6     | count      | `bool`: count the objects rather than return them                  |
 
-An expression is an object: field 1 is its operator, field 2 the path it tests as a `list(string)`, field 3 its values as a list of the field's type, and field 4 its sub-expressions as a `list(object)`. Parameters are resolved before a query becomes IR, so the IR holds values only.
+An expression is an object: field 1 is its operator, field 2 the path it tests as a `list(string)`, field 3 its values as a list of the field's type, and field 4 its sub-expressions as a `list(object)`. A value may instead be a **parameter**: an `object` whose field 1 is the parameter's number as an `int`, which no value a query compares with is. A query with parameters is a **prepared** one: it is kept, and given values each time it runs, without being built, sent or parsed again. Giving it values makes the tests they complete what the same values in the text would, `== null` becoming `IS NULL` among them; running it with a parameter that has no value is `INVALID_QUERY`.
 
 | Operator | Code | Uses               | Operator     | Code | Uses             |
 | -------- | ---- | ------------------ | ------------ | ---- | ---------------- |
@@ -254,7 +254,7 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 - **Keywords** are case-insensitive: `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`.
 - **A name** is letters, digits and `_`, not starting with a digit, or any text in backticks. Where a path starts, a keyword is a keyword, so a field with a keyword's name goes in backticks there; after a `.`, every word is a name.
 - **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent, and either may start with `-`.
-- **Parameters** `$0`, `$1` and so on take the values passed with the call, in order and with their types. A value that comes from outside the application belongs in a parameter, never in the text.
+- **Parameters** `$0`, `$1` and so on take the values passed with the call, in order and with their types. Text parsed without values keeps them as parameters, for a prepared query. A value that comes from outside the application belongs in a parameter, never in the text.
 - **A query that does not parse**, or does not fit the schema, fails with `INVALID_QUERY`, naming the position, as a character counted from 1, and what was expected. Parentheses and `NOT` nest at most 48 levels in the text, twice the filter's own limit, so that parsing stops before the filter would be refused anyway.
 
 ## Running a query

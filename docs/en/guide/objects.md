@@ -147,6 +147,19 @@ fn main() -> Result<(), darudb::Error> {
 
 A filter comes first, then `SORT BY`, `LIMIT` and `OFFSET`, each optional. Keywords are case-insensitive, strings are in double quotes, and a field named like a keyword, such as `limit`, goes in backticks. `$0`, `$1` and on take the values passed with the text. A value that comes from outside the program belongs in a parameter, never in the text. Text that does not parse fails with `INVALID_QUERY`, and the message names the character where it went wrong.
 
+A query that runs many times with different values can be parsed once: `Query::prepare` keeps `$0`, `$1` and on as parameters, and `bind` gives them values without parsing the text again. A prepared query run without values for all its parameters fails with `INVALID_QUERY`.
+
+```rust
+use darudb::Query;
+
+fn main() -> Result<(), darudb::Error> {
+    let by_email = Query::prepare("email == $0")?;
+    let query = by_email.bind(&["alice@example.com".into()])?;
+    let _ = query;
+    Ok(())
+}
+```
+
 A condition on the primary key or on an indexed field, joined to the rest of the filter with `and`, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.
 
 ## Migrate to a new version

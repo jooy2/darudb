@@ -245,6 +245,12 @@ impl<'s> Resolver<'s> {
                     .collect::<Result<_>>()?,
             ),
             Expr::Not(term) => Cond::Not(Box::new(self.cond(term, depth + 1)?)),
+            Expr::Prepared { .. } => {
+                return Err(invalid(format!(
+                    "`${}` has no value: a prepared query runs with its parameters",
+                    expr.first_param().unwrap_or_default()
+                )));
+            }
             Expr::Test { op, path, values } => {
                 let resolved = self.path(path)?;
                 let test = test(*op, &resolved, values, &path.join("."))?;

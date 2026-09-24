@@ -260,7 +260,36 @@ impl Query {
     /// ```
     pub fn parse(text: &str, parameters: &[Value]) -> Result<Self> {
         Ok(Self {
-            ir: super::parse::parse(text, parameters)?,
+            ir: super::parse::parse(text, Some(parameters))?,
+        })
+    }
+
+    /// Parses `text` in the query language as [`parse`](Self::parse) does,
+    /// keeping `$0`, `$1` and on as parameters, for a query that runs many
+    /// times with different values: [`bind`](Self::bind) gives it values
+    /// without parsing it again. A query with a parameter that has no value
+    /// fails with [`Error::InvalidQuery`](crate::Error::InvalidQuery) when it
+    /// runs.
+    ///
+    /// ```
+    /// use darudb::Query;
+    ///
+    /// let by_email = Query::prepare("email == $0")?;
+    /// let query = by_email.bind(&["alice@example.com".into()])?;
+    /// # let _ = query;
+    /// # Ok::<(), darudb::Error>(())
+    /// ```
+    pub fn prepare(text: &str) -> Result<Self> {
+        Ok(Self {
+            ir: super::parse::parse(text, None)?,
+        })
+    }
+
+    /// This query with `parameters` for its `$0`, `$1` and on. A query without
+    /// parameters comes back as it is.
+    pub fn bind(&self, parameters: &[Value]) -> Result<Self> {
+        Ok(Self {
+            ir: self.ir.bind(parameters)?,
         })
     }
 }

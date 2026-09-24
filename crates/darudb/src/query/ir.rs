@@ -109,6 +109,20 @@ pub(crate) enum Expr {
         path: Vec<String>,
         values: Vec<Value>,
     },
+    /// A test with a parameter among its values, which a prepared query is
+    /// given when it runs ([`Ir::bind`]). Planning refuses one.
+    Prepared {
+        op: Op,
+        path: Vec<String>,
+        values: Vec<Operand>,
+    },
+}
+
+/// A value of a prepared test: a value, or the number of a parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Operand {
+    Value(Value),
+    Param(usize),
 }
 
 impl Expr {
@@ -127,6 +141,76 @@ impl Expr {
             Expr::Or(terms) => Ok(terms),
             other => Err(other),
         }))
+    }
+
+    /// A test whose values may be parameters: a prepared test if any is,
+    /// and a plain one otherwise.
+    pub(crate) fn operands(op: Op, path: Vec<String>, values: Vec<Operand>) -> Expr {
+        if values
+            .iter()
+            .any(|value| matches!(value, Operand::Param(_)))
+        {
+            return Expr::Prepared { op, path, values };
+        }
+
+        let values = values
+            .into_iter()
+            .map(|value| match value {
+                Operand::Value(value) => value,
+                Operand::Param(_) => unreachable!("a test without parameters"),
+            })
+            .collect();
+
+        Expr::test(op, path, values)
+    }
+
+    /// The expression with `parameters` in place of its parameters.
+    fn bind(&self, parameters: &[Value]) -> Result<Expr> {
+        Ok(match self {
+            Expr::And(terms) => Expr::and(
+                terms
+                    .iter()
+                    .map(|term| term.bind(parameters))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Expr::Or(terms) => Expr::or(
+                terms
+                    .iter()
+                    .map(|term| term.bind(parameters))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            Expr::Not(term) => Expr::Not(Box::new(term.bind(parameters)?)),
+            Expr::Test { .. } => self.clone(),
+            Expr::Prepared { op, path, values } => Expr::test(
+                *op,
+                path.clone(),
+                values
+                    .iter()
+                    .map(|value| match value {
+                        Operand::Value(value) => Ok(value.clone()),
+                        Operand::Param(index) => parameters.get(*index).cloned().ok_or_else(|| {
+                            invalid(format!(
+                                "`${index}` names a parameter, and {} were given",
+                                parameters.len()
+                            ))
+                        }),
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+        })
+    }
+
+    /// The number of the first parameter in the expression, if it has one.
+    pub(crate) fn first_param(&self) -> Option<usize> {
+        match self {
+            Expr::And(terms) | Expr::Or(terms) => terms.iter().find_map(Expr::first_param),
+            Expr::Not(term) => term.first_param(),
+            Expr::Test { .. } => None,
+            Expr::Prepared { values, .. } => values.iter().find_map(|value| match value {
+                Operand::Param(index) => Some(*index),
+                Operand::Value(_) => None,
+            }),
+        }
     }
 
     /// A test, with `== null` and `!= null` made the null tests they mean.
@@ -173,6 +257,23 @@ pub(crate) struct Ir {
     pub(crate) sort: Vec<SortKey>,
     pub(crate) offset: u64,
     pub(crate) limit: Option<u64>,
+}
+
+impl Ir {
+    /// The query with `parameters` in place of its parameters; the query
+    /// itself if it has none.
+    pub(crate) fn bind(&self, parameters: &[Value]) -> Result<Ir> {
+        Ok(Ir {
+            filter: self
+                .filter
+                .as_ref()
+                .map(|filter| filter.bind(parameters))
+                .transpose()?,
+            sort: self.sort.clone(),
+            offset: self.offset,
+            limit: self.limit,
+        })
+    }
 }
 
 fn invalid(message: impl Into<String>) -> Error {
@@ -235,17 +336,11 @@ fn encode_expr(expr: &Expr) -> Result<Raw> {
         Expr::Or(terms) => (OR, terms.as_slice()),
         Expr::Not(term) => (NOT, std::slice::from_ref(term.as_ref())),
         Expr::Test { op, path, values } => {
-            let mut fields = vec![(1, Raw::Int(op.code())), (2, encode_path(path))];
+            let values: Vec<Operand> = values.iter().cloned().map(Operand::Value).collect();
 
-            if !values.is_empty() {
-                fields.push((
-                    3,
-                    Raw::List(values.iter().map(value_raw).collect::<Result<_>>()?),
-                ));
-            }
-
-            return Ok(Raw::Object(fields));
+            return encode_test(*op, path, &values);
         }
+        Expr::Prepared { op, path, values } => return encode_test(*op, path, values),
     };
     let mut fields = vec![(1, Raw::Int(code))];
 
@@ -256,6 +351,35 @@ fn encode_expr(expr: &Expr) -> Result<Raw> {
                 subexpressions
                     .iter()
                     .map(encode_expr)
+                    .collect::<Result<_>>()?,
+            ),
+        ));
+    }
+
+    Ok(Raw::Object(fields))
+}
+
+fn encode_test(op: Op, path: &[String], values: &[Operand]) -> Result<Raw> {
+    let mut fields = vec![(1, Raw::Int(op.code())), (2, encode_path(path))];
+
+    if !values.is_empty() {
+        fields.push((
+            3,
+            Raw::List(
+                values
+                    .iter()
+                    .map(|value| match value {
+                        Operand::Value(value) => value_raw(value),
+                        // A parameter is an object holding its number, which
+                        // no value a query compares with is.
+                        Operand::Param(index) => Ok(Raw::Object(vec![(
+                            1,
+                            Raw::Int(
+                                i64::try_from(*index)
+                                    .map_err(|_| invalid("a parameter's number is too large"))?,
+                            ),
+                        )])),
+                    })
                     .collect::<Result<_>>()?,
             ),
         ));
@@ -366,7 +490,7 @@ fn decode_expr(raw: &Raw) -> Result<Expr> {
             (1, Raw::Int(value)) => code = Some(*value),
             (2, raw) => path = Some(decode_path(raw)?),
             (3, Raw::List(raw)) => {
-                values = raw.iter().map(raw_value).collect::<Result<_>>()?;
+                values = raw.iter().map(raw_operand).collect::<Result<_>>()?;
             }
             (4, Raw::List(raw)) => {
                 terms = raw.iter().map(decode_expr).collect::<Result<_>>()?;
@@ -400,8 +524,40 @@ fn decode_expr(raw: &Raw) -> Result<Expr> {
                 )));
             }
 
-            Ok(Expr::Test { op, path, values })
+            Ok(
+                if values
+                    .iter()
+                    .any(|value| matches!(value, Operand::Param(_)))
+                {
+                    Expr::Prepared { op, path, values }
+                } else {
+                    Expr::Test {
+                        op,
+                        path,
+                        values: values
+                            .into_iter()
+                            .filter_map(|value| match value {
+                                Operand::Value(value) => Some(value),
+                                Operand::Param(_) => None,
+                            })
+                            .collect(),
+                    }
+                },
+            )
         }
+    }
+}
+
+/// A value of a test as the IR holds it, or a parameter.
+fn raw_operand(raw: &Raw) -> Result<Operand> {
+    match raw {
+        Raw::Object(fields) => match fields.as_slice() {
+            [(1, Raw::Int(index))] => usize::try_from(*index)
+                .map(Operand::Param)
+                .map_err(|_| invalid("the IR holds a parameter with a negative number")),
+            _ => Err(invalid("the IR holds a value that is not a single value")),
+        },
+        raw => raw_value(raw).map(Operand::Value),
     }
 }
 

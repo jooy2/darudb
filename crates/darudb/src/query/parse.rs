@@ -3,7 +3,7 @@
 //!
 //! [`Query`]: super::Query
 
-use super::ir::{Expr, Ir, MAX_DEPTH, Op};
+use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 
@@ -263,7 +263,9 @@ fn number(chars: &[char], start: usize) -> Result<(Token, usize)> {
 struct Parser<'a> {
     tokens: Vec<(Token, usize)>,
     at: usize,
-    parameters: &'a [Value],
+    /// The parameters' values, or `None` to keep them as parameters, for a
+    /// prepared query.
+    parameters: Option<&'a [Value]>,
     nesting: usize,
 }
 
@@ -462,7 +464,7 @@ impl Parser<'_> {
 
                     let high = self.value()?;
 
-                    return Ok(Expr::test(Op::Between, path, vec![low, high]));
+                    return Ok(Expr::operands(Op::Between, path, vec![low, high]));
                 }
                 "IN" => {
                     self.advance();
@@ -482,7 +484,7 @@ impl Parser<'_> {
                         }
                     }
 
-                    return Ok(Expr::test(Op::In, path, values));
+                    return Ok(Expr::operands(Op::In, path, values));
                 }
                 "IS" => {
                     self.advance();
@@ -507,7 +509,7 @@ impl Parser<'_> {
 
         let value = self.value()?;
 
-        Ok(Expr::test(op, path, vec![value]))
+        Ok(Expr::operands(op, path, vec![value]))
     }
 
     fn path(&mut self) -> Result<Vec<String>> {
@@ -532,7 +534,7 @@ impl Parser<'_> {
         Ok(path)
     }
 
-    fn value(&mut self) -> Result<Value> {
+    fn value(&mut self) -> Result<Operand> {
         let value = match self.peek() {
             Token::Int(value) => Value::Int(*value),
             Token::Float(value) => Value::Float(*value),
@@ -540,26 +542,36 @@ impl Parser<'_> {
             Token::Word(word) if word.eq_ignore_ascii_case("true") => Value::Bool(true),
             Token::Word(word) if word.eq_ignore_ascii_case("false") => Value::Bool(false),
             Token::Word(word) if word.eq_ignore_ascii_case("null") => Value::Null,
-            Token::Parameter(index) => self.parameters.get(*index).cloned().ok_or_else(|| {
-                invalid(
-                    self.position(),
-                    format!(
-                        "`${index}` names a parameter, and {} were given",
-                        self.parameters.len()
-                    ),
-                )
-            })?,
+            Token::Parameter(index) => match self.parameters {
+                None => {
+                    let index = *index;
+
+                    self.advance();
+
+                    return Ok(Operand::Param(index));
+                }
+                Some(parameters) => parameters.get(*index).cloned().ok_or_else(|| {
+                    invalid(
+                        self.position(),
+                        format!(
+                            "`${index}` names a parameter, and {} were given",
+                            parameters.len()
+                        ),
+                    )
+                })?,
+            },
             _ => return Err(self.expected("a value")),
         };
 
         self.advance();
 
-        Ok(value)
+        Ok(Operand::Value(value))
     }
 }
 
-/// Parses `text` into a query, with `parameters` for `$0`, `$1` and on.
-pub(crate) fn parse(text: &str, parameters: &[Value]) -> Result<Ir> {
+/// Parses `text` into a query, with `parameters` for `$0`, `$1` and on, or
+/// keeping them as parameters if there are none to give.
+pub(crate) fn parse(text: &str, parameters: Option<&[Value]>) -> Result<Ir> {
     let mut parser = Parser {
         tokens: tokens(text)?,
         at: 0,
