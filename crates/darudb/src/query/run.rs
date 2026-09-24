@@ -641,16 +641,37 @@ fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
     // an object that sorts after it cannot be in the result, and is not
     // copied.
     let mut trimmed = false;
+    // Without a sort the result is in primary key order, so a key alone says
+    // whether its object can still be in the result, and one that cannot is
+    // not read. When the index answers the filter too, its entries decide
+    // which objects are found, and only the records of the result are read.
+    let by_key = plan.sort.is_empty();
+    let deferred = by_key && plan.filter.is_none() && matches!(plan.access, Access::Index { .. });
 
     walk(source, plan, &mut |key, record| {
         let bound = trimmed.then(|| &found[keep - 1]);
-        let admit = |values: &[Value], key: &[u8]| {
-            bound.is_none_or(|bound| {
-                order_of(plan, (values, key), (&bound.sort, &bound.key)).is_lt()
-            })
-        };
-        let Some(hit) = read(&reader, plan, key, record, Some(&admit))? else {
+
+        if by_key && bound.is_some_and(|bound| key >= bound.key.as_slice()) {
             return Ok(false);
+        }
+
+        let hit = if deferred {
+            Found {
+                sort: Vec::new(),
+                key: key.to_vec(),
+                record: Vec::new(),
+            }
+        } else {
+            let admit = |values: &[Value], key: &[u8]| {
+                bound.is_none_or(|bound| {
+                    order_of(plan, (values, key), (&bound.sort, &bound.key)).is_lt()
+                })
+            };
+            let Some(hit) = read(&reader, plan, key, record, Some(&admit))? else {
+                return Ok(false);
+            };
+
+            hit
         };
 
         found.push(hit);
@@ -668,7 +689,15 @@ fn found(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Found>> {
 
     found.sort_by(compare);
 
-    Ok(found.into_iter().skip(offset).take(limit).collect())
+    let mut result: Vec<Found> = found.into_iter().skip(offset).take(limit).collect();
+
+    if deferred {
+        for hit in &mut result {
+            hit.record = record_of(source, plan, &hit.key)?;
+        }
+    }
+
+    Ok(result)
 }
 
 /// The order of the result: the sort keys, then the primary key.
@@ -709,17 +738,7 @@ fn read(
 ) -> Result<Option<Found>> {
     let fetched = match walked {
         Some(_) => None,
-        None => Some(
-            reader
-                .source
-                .get_in(&records(plan.collection.id), key)?
-                .ok_or_else(|| {
-                    reader.source.corrupted(format!(
-                        "an index of `{}` names an object that is not there",
-                        plan.collection.name
-                    ))
-                })?,
-        ),
+        None => Some(record_of(reader.source, plan, key)?),
     };
     let Some(values) = meets(reader, plan, walked.or(fetched.as_deref()), sort.is_some())? else {
         return Ok(None);
@@ -738,6 +757,18 @@ fn read(
             .or_else(|| walked.map(<[u8]>::to_vec))
             .unwrap_or_default(),
     }))
+}
+
+/// The record of the object with primary key `key`, which an index named.
+fn record_of(source: &dyn Source, plan: &Plan<'_>, key: &[u8]) -> Result<Vec<u8>> {
+    source
+        .get_in(&records(plan.collection.id), key)?
+        .ok_or_else(|| {
+            source.corrupted(format!(
+                "an index of `{}` names an object that is not there",
+                plan.collection.name
+            ))
+        })
 }
 
 /// Whether the object whose record is `record` meets the plan's filter, with
