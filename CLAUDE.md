@@ -72,7 +72,7 @@ Tests sit beside what they test, plus these places that test the whole engine:
 - The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
 - `tests/transactions.rs`, `tests/open.rs` and `tests/objects.rs`: the public API on real files.
 
-`examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. It is for comparing two builds on one machine, and a performance change quotes its numbers from before and after.
+`examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. `examples/object_bench.rs` measures the object layer: inserts, reads by key and by index, queries with and without an index, updates and deletes; its doc comment spells out the workloads, so that they can be run against other databases outside this repository. Both are for comparing two builds on one machine, and a performance change quotes their numbers from before and after.
 
 ## Scope **[Decided]**
 
