@@ -634,15 +634,47 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
         // No filter at all: the tree knows how many records it holds.
         source.len_in(&records(plan.collection.id))?
     } else if plan.exact {
-        let mut found = 0u64;
+        match &plan.access {
+            // Each object has one entry in the ranges, which do not overlap,
+            // so the count is the entries', which the tree gives a leaf at a
+            // time.
+            Access::Index {
+                index,
+                ranges,
+                repeats: false,
+                ..
+            } => {
+                let tree = index_tree(index.id);
+                let mut found = 0u64;
 
-        walk(source, plan, &mut |_, _| {
-            found += 1;
+                for range in ranges {
+                    found += source
+                        .range_in(&tree, as_ref(&range.0), as_ref(&range.1), false)?
+                        .count_entries()?;
+                }
 
-            Ok(false)
-        })?;
+                found
+            }
+            Access::Records { range, .. } => source
+                .range_in(
+                    &records(plan.collection.id),
+                    as_ref(&range.0),
+                    as_ref(&range.1),
+                    false,
+                )?
+                .count_entries()?,
+            _ => {
+                let mut found = 0u64;
 
-        found
+                walk(source, plan, &mut |_, _| {
+                    found += 1;
+
+                    Ok(false)
+                })?;
+
+                found
+            }
+        }
     } else {
         let reader = Reader {
             source,

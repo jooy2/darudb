@@ -133,6 +133,16 @@ impl Harness {
             .unwrap()
     }
 
+    fn count(&self, start: Bound<&[u8]>, end: Bound<&[u8]>, backward: bool) -> u64 {
+        let range = if backward {
+            Range::new_backward(&self.loader, TREE, self.root.as_ref(), start, end)
+        } else {
+            Range::new(&self.loader, TREE, self.root.as_ref(), start, end)
+        };
+
+        range.unwrap().count_entries().unwrap()
+    }
+
     /// Writes every page the transaction changed and starts the next one.
     fn commit(&mut self) {
         let mut pages = Vec::new();
@@ -476,6 +486,8 @@ fn a_value_just_past_the_inline_limit_goes_to_an_overflow_run() {
     assert_eq!(harness.get(b"k"), Some(big));
 }
 
+/// Also: counting the entries of a range a leaf at a time gives the number
+/// a walk gives, both ways.
 #[test]
 fn a_backward_walk_gives_the_forward_walk_in_reverse() {
     let mut rng = Rng::new(11);
@@ -513,6 +525,15 @@ fn a_backward_walk_gives_the_forward_walk_in_reverse() {
                 let start = bound(&mut rng, &low);
                 let end = bound(&mut rng, &high);
                 let mut forward = harness.entries(as_slice(&start), as_slice(&end));
+                let len = u64::try_from(forward.len()).unwrap();
+
+                for backward in [false, true] {
+                    assert_eq!(
+                        harness.count(as_slice(&start), as_slice(&end), backward),
+                        len,
+                        "page size {page_size}, {start:?} to {end:?}, backward {backward}"
+                    );
+                }
 
                 forward.reverse();
 

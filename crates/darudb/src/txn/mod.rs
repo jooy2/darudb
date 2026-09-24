@@ -46,6 +46,12 @@ impl<'a> Range<'a> {
         Self { inner: None }
     }
 
+    /// The number of entries the walk has left, counted without reading
+    /// them out.
+    pub(crate) fn count_entries(self) -> Result<u64> {
+        self.inner.map_or(Ok(0), btree::Range::count_entries)
+    }
+
     fn over<K: AsRef<[u8]>>(
         loader: &'a Loader,
         tree: u64,

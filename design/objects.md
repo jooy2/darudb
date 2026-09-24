@@ -267,7 +267,7 @@ The engine chooses how to find the objects, and the choice never changes the res
 4. **Sort.** When the access path already delivers the query's order, the objects stream in that order and the limit stops the reading early. That holds when the sort is on the path's field alone and the field is not a list, and when there is no sort and the path is the primary key or one value of an index. An index walked in reverse gives the objects of one value in descending key order, so they are held back and given in ascending key order; a value with more than 64 objects is instead walked forwards from its first entry, so that a limit stops the reading there too. Otherwise the matching objects are sorted in memory, keeping only the best `offset + limit` when there is a limit.
 5. **Skip the offset and stop at the limit.**
 
-When the access path answers the whole filter, the rest of the filter is empty. A count then follows the same steps without reading the objects, and a count without a filter reads only the number of records the collection's tree keeps.
+When the access path answers the whole filter, the rest of the filter is empty. A count then adds up the entries of the path's ranges a leaf of the tree at a time, without reading them out or reading the objects, unless an object can have several entries there, as in the index of a list field, where it follows the same steps without reading the objects. A count without a filter reads only the number of records the collection's tree keeps.
 
 Walking an index in reverse is the kernel's backward walk of a tree, the one its `range_backward` offers.
 

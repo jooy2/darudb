@@ -430,6 +430,47 @@ impl<'a, L: Load> Range<'a, L> {
         }
     }
 
+    /// The number of entries the walk has left, counted a leaf at a time
+    /// rather than an entry at a time, and without copying any.
+    pub(crate) fn count_entries(mut self) -> Result<u64> {
+        let mut count = 0u64;
+
+        loop {
+            let (within, done) = {
+                let Some((node, index)) = self.stack.last() else {
+                    return Ok(count);
+                };
+                let Node::Leaf(entries) = &**node else {
+                    return Err(internal("a range stopped on a branch"));
+                };
+
+                if self.backward {
+                    let before = &entries[..*index];
+                    let first = before.partition_point(|entry| self.beyond_stop(&entry.key));
+
+                    (before.len() - first, first > 0)
+                } else {
+                    let after = &entries[*index..];
+                    let within = after.partition_point(|entry| !self.beyond_stop(&entry.key));
+
+                    (within, within < after.len())
+                }
+            };
+
+            count += within as u64;
+
+            if done {
+                return Ok(count);
+            }
+
+            if self.backward {
+                self.previous_leaf()?;
+            } else {
+                self.next_leaf()?;
+            }
+        }
+    }
+
     /// Whether `key` lies past the bound the walk stops at: beyond the end
     /// forwards, before the start backwards.
     fn beyond_stop(&self, key: &[u8]) -> bool {
