@@ -305,7 +305,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
     for (id, raw) in fields {
         match (id, raw) {
             (1, Raw::String(name)) => collection = Some(name),
-            (2, raw) => ir.filter = Some(decode_expr(&raw, 1)?),
+            (2, raw) => ir.filter = Some(decode_expr(&raw)?),
             (3, Raw::List(keys)) => {
                 for key in keys {
                     let Raw::Object(fields) = key else {
@@ -363,13 +363,10 @@ fn decode_path(raw: &Raw) -> Result<Vec<String>> {
     Ok(path)
 }
 
-fn decode_expr(raw: &Raw, depth: usize) -> Result<Expr> {
-    if depth > MAX_DEPTH {
-        return Err(invalid(format!(
-            "the filter nests more than {MAX_DEPTH} levels deep"
-        )));
-    }
-
+/// Reads an expression. Its recursion is bounded by the nesting a record
+/// allows, which `codec::read` has already held the IR to; the filter's own
+/// limit is checked on the flattened tree when the query is planned.
+fn decode_expr(raw: &Raw) -> Result<Expr> {
     let Raw::Object(fields) = raw else {
         return Err(invalid("the IR holds an expression that is not an object"));
     };
@@ -386,10 +383,7 @@ fn decode_expr(raw: &Raw, depth: usize) -> Result<Expr> {
                 values = raw.iter().map(raw_value).collect::<Result<_>>()?;
             }
             (4, Raw::List(raw)) => {
-                terms = raw
-                    .iter()
-                    .map(|raw| decode_expr(raw, depth + 1))
-                    .collect::<Result<_>>()?;
+                terms = raw.iter().map(decode_expr).collect::<Result<_>>()?;
             }
             _ => return Err(invalid("the IR holds an expression it cannot read")),
         }
@@ -401,8 +395,8 @@ fn decode_expr(raw: &Raw, depth: usize) -> Result<Expr> {
         AND | OR | NOT if path.is_some() || !values.is_empty() => Err(invalid(
             "the IR holds `AND`, `OR` or `NOT` with a path or values",
         )),
-        AND => Ok(Expr::And(terms)),
-        OR => Ok(Expr::Or(terms)),
+        AND => Ok(Expr::and(terms)),
+        OR => Ok(Expr::or(terms)),
         NOT if terms.len() == 1 => Ok(Expr::Not(Box::new(terms.remove(0)))),
         NOT => Err(invalid(
             "the IR holds a `NOT` without exactly one expression",
@@ -479,6 +473,23 @@ mod tests {
     }
 
     #[test]
+    fn an_and_inside_an_and_decodes_flattened() {
+        let a = Expr::test(Op::Eq, path("a"), vec![Value::Int(1)]);
+        let b = Expr::test(Op::Eq, path("b"), vec![Value::Int(2)]);
+        let c = Expr::test(Op::Eq, path("c"), vec![Value::Int(3)]);
+        let nested = Ir {
+            filter: Some(Expr::And(vec![
+                Expr::And(vec![a.clone(), Expr::And(vec![b.clone()])]),
+                c.clone(),
+            ])),
+            ..Ir::default()
+        };
+        let (_, decoded, _) = decode(&encode("c", &nested, false).unwrap()).unwrap();
+
+        assert_eq!(decoded.filter, Some(Expr::And(vec![a, b, c])));
+    }
+
+    #[test]
     fn groupings_of_one_query_make_one_tree() {
         let a = Expr::test(Op::Eq, path("a"), vec![Value::Int(1)]);
         let b = Expr::test(Op::Eq, path("b"), vec![Value::Int(2)]);
@@ -535,10 +546,10 @@ mod tests {
             );
         }
 
-        // Nesting past the limit.
+        // Nesting past what a record holds.
         let mut expr = Raw::Object(vec![(1, Raw::Int(15)), path.clone()]);
 
-        for _ in 0..MAX_DEPTH + 1 {
+        for _ in 0..40 {
             expr = Raw::Object(vec![(1, Raw::Int(3)), (4, Raw::List(vec![expr]))]);
         }
 

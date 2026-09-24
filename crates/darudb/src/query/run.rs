@@ -87,7 +87,14 @@ impl Reader<'_> {
     /// The object of `target` that `key` names, from the cache when it has
     /// been read before.
     fn linked(&self, target: &CollectionDef, key: &Value) -> Result<Option<Object>> {
-        let encoded = objects::key_bytes(target, key)?;
+        // Writes check a link's key against its target, so another type
+        // here is damage.
+        let encoded = objects::key_bytes(target, key).map_err(|_| {
+            self.source.corrupted(format!(
+                "a link to `{}` holds a key of another type",
+                target.name
+            ))
+        })?;
         let cache_key = (target.id, encoded);
 
         if let Some(object) = self.links.borrow().get(&cache_key) {

@@ -452,6 +452,20 @@ fn queries_follow_the_documented_rules() {
         Vec::<i64>::new()
     );
     assert_eq!(find(&db, q(Filter::starts_with("tags", "re"))), [1]);
+
+    // Two range terms on a list can hold for two different elements.
+    let both = Filter::ge("tags", "red").and(Filter::le("tags", "blue"));
+
+    assert_eq!(find(&db, q(both.clone())), [1]);
+    assert_eq!(
+        db.begin_read()
+            .unwrap()
+            .collection("players")
+            .unwrap()
+            .count(&q(both))
+            .unwrap(),
+        1
+    );
     assert_eq!(find(&db, q(Filter::is_null("tags"))), [3, 4]);
 
     // `-0.0` equals `0.0`, and NaN equals NaN and sorts after infinity.
@@ -498,6 +512,10 @@ fn queries_follow_the_documented_rules() {
         q(Filter::eq("tags", vec![Value::from("red")])),
         Query::new().sort_by("tags"),
         Query::new().sort_by("friends.score"),
+        // Long enough to recurse without end, were paths not bounded.
+        q(Filter::is_null(
+            &vec!["friends"; plan::MAX_PATH + 1].join("."),
+        )),
     ] {
         assert_eq!(
             players.query(&broken).err().map(|error| error.code()),
@@ -770,5 +788,41 @@ fn text_that_does_not_parse_names_where() {
     assert_eq!(
         Query::parse(&deep, &[]).err().map(|error| error.code()),
         Some("INVALID_QUERY")
+    );
+}
+
+#[test]
+fn a_link_holding_a_key_of_another_type_is_damage() {
+    use crate::format::object::codec::{self, Raw};
+    use crate::format::object::key;
+    use crate::schema::objects::records;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let players = open.schema.collection("players").unwrap();
+    let team = players.fields.by_name("team").unwrap().id;
+    // A player whose team, a link to a collection keyed by strings, holds
+    // an int: something no write lets through.
+    let record = codec::write(&[
+        (players.key, Raw::Int(9)),
+        (team, Raw::Link(Box::new(Raw::Int(5)))),
+    ]);
+
+    txn.insert_in(
+        &records(players.id),
+        &key::encoded(&Value::Int(9)).unwrap(),
+        &record,
+    )
+    .unwrap();
+
+    assert_eq!(
+        txn.collection("players")
+            .unwrap()
+            .query(&Query::new().filter(Filter::eq("team.city", "Seoul")))
+            .err()
+            .map(|error| error.code()),
+        Some("CORRUPTED")
     );
 }

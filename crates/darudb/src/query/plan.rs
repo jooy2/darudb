@@ -17,6 +17,11 @@ use crate::format::object::Value;
 use crate::format::object::key;
 use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind, StoredSchema};
 
+/// How many names a path may have. A path through a link back into its own
+/// collection could otherwise go on for as long as the text does, and reading
+/// it recurses once a step.
+pub(crate) const MAX_PATH: usize = 32;
+
 fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidQuery {
         message: message.into(),
@@ -253,6 +258,13 @@ impl<'s> Resolver<'s> {
     }
 
     fn path(&self, path: &[String]) -> Result<Resolved<'s>> {
+        if path.len() > MAX_PATH {
+            return Err(invalid(format!(
+                "a path has at most {MAX_PATH} names, and one has {}",
+                path.len()
+            )));
+        }
+
         let text = path.join(".");
         let mut fields = &self.collection.fields;
         let mut steps = Vec::new();
@@ -716,14 +728,19 @@ fn choose<'s>(
             )
         }
         (Lookup::Range, source) => {
-            // Every range term on the same field narrows the one range.
+            // Every range term on the same field narrows the one range. Not
+            // on a list: each term holds when any element meets it, and two
+            // elements can meet two terms that no one value meets together.
             let mut low = Bound::Unbounded;
             let mut high = Bound::Unbounded;
             let mut prefix: Option<String> = None;
             let mut consumed = Vec::new();
 
             for candidate in &candidates {
-                if candidate.lookup != Lookup::Range || candidate.field.id != best.field.id {
+                let merges =
+                    candidate.term == best.term || (!list && candidate.field.id == best.field.id);
+
+                if candidate.lookup != Lookup::Range || !merges {
                     continue;
                 }
 
