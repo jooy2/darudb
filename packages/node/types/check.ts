@@ -4,8 +4,8 @@
  * field the collection lacks or a value of another type, and each line below
  * marked `@ts-expect-error` stays an error. Nothing here runs.
  */
-import { collection, conditions, Database, param, Query, schema, t } from '../index.js';
-import type { Key } from '../index.js';
+import { collection, conditions, Database, param, Query, schema, t } from '../dist/index.js';
+import type { Key } from '../dist/index.js';
 
 const app = schema(1, {
   teams: collection({ name: t.string().primaryKey(), city: t.string().optional() }),

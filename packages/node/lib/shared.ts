@@ -407,3 +407,4 @@ export {
   looseLayoutOf,
   collectionOf
 };
+export type { Prepared };

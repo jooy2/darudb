@@ -1,17 +1,12 @@
 /**
- * DaruDB for Node.js: an embedded database that keeps an application's data
- * in one local file.
- *
- * A schema declared with `t`, `collection` and `schema` types every object
- * the database reads and writes: `Database.open` with a schema gives a
+ * The types of the package's API, which `index.ts` gives its exports: a
+ * schema declared with `t`, `collection` and `schema` types every object
+ * the database reads and writes, and `Database.open` with a schema gives a
  * `Database` whose collections know their objects' fields.
+ *
+ * The types carry what the type checker needs and nothing the code reads:
+ * a field type's value type, for one, is a property that never exists.
  */
-
-/** The file format version this build of the engine reads and writes. */
-export declare const FORMAT_VERSION: number;
-
-/** The version of the DaruDB engine inside this package. */
-export declare function engineVersion(): string;
 
 /**
  * A primary key: an int, as a number or a `bigint` beyond 2^53, a string, or
@@ -130,8 +125,8 @@ export type InsertOf<F extends Fields> = Simplify<
   EmbeddedInputOf<F> & (HasKey<F> extends true ? unknown : { id?: number })
 >;
 
-/** The types of fields. */
-export declare const t: {
+/** The types of fields, as `t` makes them. */
+export interface TypeBuilders {
   bool(): FieldType<boolean>;
   /**
    * A 64-bit int read as a number. A value beyond 2^53, which a number does
@@ -154,33 +149,18 @@ export declare const t: {
   list(element: LinkType): FieldType<Key[]>;
   /** An embedded object with fields of its own. */
   object<F extends Fields>(fields: F): EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>;
-};
+}
 
 /** A collection: its fields. */
 export interface Collection<F extends Fields = Fields> {
   readonly fields: F;
 }
 
-/**
- * A collection with `fields`. A field marked `primaryKey()` is the key;
- * without one, the collection gets an `id` that the engine numbers from 1.
- */
-export declare function collection<F extends Fields>(fields: F): Collection<F>;
-
 /** The collections of a database, at a version. */
 export interface Schema<C extends Record<string, Collection<any>> = Record<string, Collection>> {
   readonly version: number;
   readonly collections: C;
 }
-
-/**
- * A schema: `collections` by name, at `version`, from 1 up. Raise the
- * version whenever the schema changes.
- */
-export declare function schema<C extends Record<string, Collection<any>>>(
-  version: number,
-  collections: C
-): Schema<C>;
 
 type CollectionsOf<S> = S extends Schema<infer C> ? C : Record<string, Collection>;
 type NameOf<S> = keyof CollectionsOf<S> & string;
@@ -197,9 +177,6 @@ export type QueryValue = boolean | number | bigint | string | Uint8Array;
 export interface Param {
   readonly index: number;
 }
-
-/** Parameter `index` of a prepared query, counted from 0. */
-export declare function param(index: number): Param;
 
 /** A value of a condition, or a parameter in its place. */
 type Operand<T> = T | Param;
@@ -258,16 +235,12 @@ export interface Conditions<O = Record<string, unknown>> {
   not(condition: Condition): Condition;
 }
 
-/** The conditions a filter is made of, for building one outside a query. */
-export declare const conditions: Conditions;
-
 /**
  * What to find, in what order, and how many. Without a sort, objects come in
  * primary key order, and objects that sort equal come in primary key order
  * too. Each method adds to the query and returns it.
  */
-export declare class Query<O = Record<string, unknown>> {
-  constructor();
+export interface Query<O = Record<string, unknown>> {
   where<K extends FieldNames<O>>(
     field: K,
     op: '==' | '!=',
@@ -311,6 +284,11 @@ export declare class Query<O = Record<string, unknown>> {
   limit(count: number): Query<O>;
   /** Skips the first `count` objects. */
   offset(count: number): Query<O>;
+}
+
+/** How `Query` makes a query. */
+export interface QueryConstructor {
+  new <O = Record<string, unknown>>(): Query<O>;
 }
 
 /** A query as `find` and `count` take it. */
@@ -548,23 +526,7 @@ export interface WriteOptions {
  * does the engine's work on the thread pool and resolves a promise, so the
  * event loop never waits for the disk or for another process's writer.
  */
-export declare class Database<S extends Schema<any> = Schema> {
-  private constructor();
-  /**
-   * Opens the database at `path`, creating it if nothing exists there, and
-   * stores, checks or migrates its schema.
-   */
-  static open<S extends Schema<any>>(
-    path: string,
-    options: OpenOptions<S> & { schema: S }
-  ): Database<S>;
-  static open(path: string, options?: OpenOptions<never>): Database;
-  /** `open` on the thread pool, with asynchronous migration functions. */
-  static openAsync<S extends Schema<any>>(
-    path: string,
-    options: AsyncOpenOptions<S> & { schema: S }
-  ): Promise<Database<S>>;
-  static openAsync(path: string, options?: AsyncOpenOptions<never>): Promise<Database>;
+export interface Database<S extends Schema<any> = Schema> {
   /** The path the database was opened at. Still readable after `close`. */
   readonly path: string;
   /** Whether `close` has not been called. */
@@ -618,4 +580,20 @@ export declare class Database<S extends Schema<any> = Schema> {
    * database refuses new work at once.
    */
   closeAsync(): Promise<void>;
+}
+
+/** How `Database` opens a database: it has no constructor. */
+export interface DatabaseOpener {
+  /**
+   * Opens the database at `path`, creating it if nothing exists there, and
+   * stores, checks or migrates its schema.
+   */
+  open<S extends Schema<any>>(path: string, options: OpenOptions<S> & { schema: S }): Database<S>;
+  open(path: string, options?: OpenOptions<never>): Database;
+  /** `open` on the thread pool, with asynchronous migration functions. */
+  openAsync<S extends Schema<any>>(
+    path: string,
+    options: AsyncOpenOptions<S> & { schema: S }
+  ): Promise<Database<S>>;
+  openAsync(path: string, options?: AsyncOpenOptions<never>): Promise<Database>;
 }

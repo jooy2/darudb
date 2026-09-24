@@ -13,7 +13,7 @@
     "moduleResolution": "nodenext",
     "types": ["node"],
     "strict": true,
-    "declaration": false,
+    "declaration": true,
     "removeComments": false,
     "newLine": "lf",
     "skipLibCheck": false

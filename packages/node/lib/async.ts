@@ -667,3 +667,5 @@ export {
   AsyncWriteTransaction,
   AsyncMigrating
 };
+// For `index.ts` to check the declared API against, and nothing at run time.
+export type { AsyncReadCollection, AsyncWriteCollection };

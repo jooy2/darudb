@@ -40,7 +40,7 @@ import {
   looseLayoutOf,
   collectionOf
 } from './shared.js';
-import type { Migration, QueryInput } from './shared.js';
+import type { Migration, Prepared, QueryInput } from './shared.js';
 import {
   settle,
   hold,
@@ -498,7 +498,7 @@ class Database {
    * query language, or a query built with `param` in place of its values.
    * It is parsed once here, and each run gives values for its parameters.
    */
-  prepare(collection: string, query: QueryInput) {
+  prepare(collection: string, query: QueryInput): Prepared {
     this.#database();
     collectionOf(this.#layout, collection);
 
@@ -693,3 +693,5 @@ function deferredOf(options: WriteOptions): boolean {
 }
 
 export { Database };
+// For `index.ts` to check the declared API against, and nothing at run time.
+export type { ReadCollection, WriteCollection, ReadTransaction, WriteTransaction, Migrating };
