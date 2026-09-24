@@ -292,4 +292,12 @@ impl Query {
             ir: self.ir.bind(parameters)?,
         })
     }
+
+    /// [`bind`](Self::bind) with the parameters as a language binding sends
+    /// them, in one buffer: a record whose field 0 is how many there are and
+    /// field `n + 1` the value of parameter `n`, a null one left out
+    /// (`design/objects.md`, "The IR").
+    pub fn bind_encoded(&self, parameters: &[u8]) -> Result<Self> {
+        self.bind(&super::ir::decode_parameters(parameters)?)
+    }
 }

@@ -561,6 +561,50 @@ fn raw_operand(raw: &Raw) -> Result<Operand> {
     }
 }
 
+/// The most parameters a record of parameters may count, so that a damaged
+/// count cannot make reading one reserve more than it holds.
+const MAX_PARAMETERS: usize = 1 << 16;
+
+/// Reads the values of a prepared query's parameters as a binding sends
+/// them: a record whose field 0 is how many there are, as an `int`, and field
+/// `n + 1` the value of parameter `n`, a null one left out.
+pub(crate) fn decode_parameters(bytes: &[u8]) -> Result<Vec<Value>> {
+    let mut fields = codec::read(bytes)
+        .map_err(|reason| invalid(format!("the parameters: {reason}")))?
+        .into_iter();
+    let count = match fields.next() {
+        Some((0, Raw::Int(count))) => usize::try_from(count)
+            .ok()
+            .filter(|count| *count <= MAX_PARAMETERS)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "a query takes from 0 to {MAX_PARAMETERS} parameters"
+                ))
+            })?,
+        _ => return Err(invalid("the parameters do not say how many there are")),
+    };
+    let mut values = vec![Value::Null; count];
+
+    // Field ids ascend from 0, so every one left is at least 1.
+    for (id, raw) in fields {
+        let slot = usize::try_from(id - 1)
+            .ok()
+            .and_then(|at| values.get_mut(at))
+            .ok_or_else(|| invalid("the parameters hold more values than they count"))?;
+
+        *slot = match raw {
+            Raw::Bool(value) => Value::Bool(value),
+            Raw::Int(value) => Value::Int(value),
+            Raw::Float(value) => Value::Float(value),
+            Raw::String(value) => Value::String(value),
+            Raw::Bytes(value) => Value::Bytes(value),
+            _ => return Err(invalid("a parameter's value is not a single value")),
+        };
+    }
+
+    Ok(values)
+}
+
 fn raw_value(raw: &Raw) -> Result<Value> {
     Ok(match raw {
         Raw::Bool(value) => Value::Bool(*value),
@@ -578,6 +622,38 @@ mod tests {
 
     fn path(text: &str) -> Vec<String> {
         text.split('.').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn parameters_read_back_with_their_nulls() {
+        let bytes = codec::write(&[
+            (0, Raw::Int(4)),
+            (1, Raw::String("a".into())),
+            (3, Raw::Float(0.5)),
+        ]);
+
+        assert_eq!(
+            decode_parameters(&bytes).unwrap(),
+            [
+                Value::from("a"),
+                Value::Null,
+                Value::Float(0.5),
+                Value::Null
+            ]
+        );
+
+        for refused in [
+            codec::write(&[(1, Raw::Int(1))]),
+            codec::write(&[(0, Raw::Int(-1))]),
+            codec::write(&[(0, Raw::Int(1 << 20))]),
+            codec::write(&[(0, Raw::Int(1)), (2, Raw::Int(1))]),
+            codec::write(&[(0, Raw::Int(1)), (1, Raw::List(Vec::new()))]),
+            vec![0xFF],
+        ] {
+            let error = decode_parameters(&refused).unwrap_err();
+
+            assert_eq!(error.code(), "INVALID_QUERY", "{refused:?}");
+        }
     }
 
     #[test]
