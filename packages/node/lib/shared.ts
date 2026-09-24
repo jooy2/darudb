@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * What the synchronous and the asynchronous API share: checking what a
  * caller passes before it reaches the native layer, building the IR of a
@@ -8,12 +6,40 @@
  * written with.
  */
 
-const native = require('../native.js');
-const { codeError, invalid, decodeSchema, encodeQuery, encodeParameters } = require('./codec');
-const { Query } = require('./query');
+import native = require('../native.js');
+import { codeError, invalid, decodeSchema, encodeQuery, encodeParameters } from './codec.js';
+import type { CollectionLayout, IntKind, Layout, SchemaLayout } from './codec.js';
+import { Query } from './query.js';
+import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
+
+/** A primary key as the native layer takes one: an int, a string or bytes. */
+export type Key = number | bigint | string | Uint8Array;
+
+/**
+ * A migration as the caller declares it. Its function gets `M`, the
+ * migration's write transaction, synchronous or asynchronous.
+ */
+export interface Migration<M> {
+  version: number;
+  renameCollections?: string[][];
+  renameFields?: string[][];
+  deleteCollections?: string[];
+  replaceFields?: string[][];
+  run?: (migrating: M) => unknown;
+}
+
+/**
+ * A query in any of the forms `find` and `count` take: text in the query
+ * language, a prepared query, a `Query`, a function that builds one, or
+ * nothing, for every object.
+ */
+export type QueryInput = string | Prepared | Query | ((query: Query) => unknown) | null | undefined;
+
+/** The declared type of kind `T`. */
+type SpecOf<T extends Spec['type']> = Extract<Spec, { type: T }>;
 
 /** A view of `bytes` as the `Buffer` the native layer takes, without a copy. */
-function toBuffer(bytes) {
+function toBuffer(bytes: Uint8Array): Buffer {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
 }
 
@@ -26,16 +52,22 @@ function toBuffer(bytes) {
 const scratch = Buffer.allocUnsafe(1 << 16);
 
 /** The bytes a synchronous read delivered, as `scratch` says. */
-function delivered(out) {
+function delivered(out: number | Buffer): Buffer {
   return typeof out === 'number' ? scratch.subarray(0, out) : out;
 }
 
 /** Refuses a promise where a transaction's function returns. */
-function synchronous(result) {
-  if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
+function synchronous(result: unknown): void {
+  if (
+    result !== null &&
+    typeof result === 'object' &&
+    // Any object's `then` can be read, whether it has one or not.
+    typeof (result as { then?: unknown }).then === 'function'
+  ) {
     // The function goes on running after the transaction has ended, and
     // fails there; its rejection is this error's, not an unhandled one.
-    result.then(undefined, () => {});
+    // Its `then` is a function, as checked above.
+    (result as PromiseLike<unknown>).then(undefined, () => {});
 
     throw invalid(
       "a transaction's function returned a promise; transactions are synchronous, so it has to finish before it returns"
@@ -47,7 +79,7 @@ function synchronous(result) {
 const MAX_VERSION = 2 ** 32 - 1;
 
 /** A migration as the native layer takes it: everything but its function. */
-function nativeMigration(migration) {
+function nativeMigration(migration: Migration<never>): native.NativeMigration {
   if (typeof migration !== 'object' || migration === null) {
     throw invalid('a migration is an object with a `version`');
   }
@@ -61,12 +93,12 @@ function nativeMigration(migration) {
   }
 
   // Each entry is an array of `size` names.
-  const list = (value, name, size) => {
+  const list = <T>(value: T[] | undefined, name: string, size: number): T[] => {
     if (value === undefined) {
       return [];
     }
 
-    const fits = (entry) =>
+    const fits = (entry: unknown) =>
       size === 1
         ? typeof entry === 'string'
         : Array.isArray(entry) &&
@@ -96,7 +128,7 @@ function nativeMigration(migration) {
 }
 
 /** Whether `value` is a value the native layer takes as a key or a parameter. */
-function isScalar(value) {
+function isScalar(value: unknown): value is number | bigint | string | boolean | Uint8Array {
   return (
     typeof value === 'number' ||
     typeof value === 'bigint' ||
@@ -107,7 +139,7 @@ function isScalar(value) {
 }
 
 /** Refuses what cannot be a primary key before it reaches the native layer. */
-function keyOf(key) {
+function keyOf(key: unknown): Key {
   if (!isScalar(key) || typeof key === 'boolean') {
     throw invalid(
       `a primary key is an int, a string or bytes, not ${key === null ? 'null' : typeof key}`
@@ -121,7 +153,7 @@ function keyOf(key) {
  * A query's parameters, checked and encoded as the engine reads them. The
  * buffer is lent, as `encodeParameters` says.
  */
-function parametersOf(parameters) {
+function parametersOf(parameters: unknown): Buffer {
   if (parameters === undefined) {
     return encodeParameters([]);
   }
@@ -147,7 +179,14 @@ function parametersOf(parameters) {
  * `first`, a query built here keeps only its first object; text leaves that
  * to the native layer, and so does a prepared query.
  */
-function irOf(collection, query, parameters, count, first = false, lend = false) {
+function irOf(
+  collection: string,
+  query: QueryInput,
+  parameters: unknown,
+  count: boolean,
+  first = false,
+  lend = false
+): Buffer {
   const prepared = preparedOf(collection, query);
 
   if (prepared !== null) {
@@ -158,7 +197,7 @@ function irOf(collection, query, parameters, count, first = false, lend = false)
     return native.parseQuery(collection, query, parametersOf(parameters), count);
   }
 
-  let built = query ?? new Query();
+  let built: unknown = query ?? new Query();
 
   if (typeof query === 'function') {
     const fresh = new Query();
@@ -190,10 +229,10 @@ const NATIVE = Symbol('native');
  * parameters each time: `Database.prepare` makes one. It holds no database.
  */
 class Prepared {
-  #collection;
-  #native;
+  #collection: string;
+  #native: native.NativePrepared;
 
-  constructor(token, collection, prepared) {
+  constructor(token: symbol, collection: string, prepared: native.NativePrepared) {
     if (token !== PREPARE) {
       throw invalid('a query is prepared with `Database.prepare`');
     }
@@ -203,17 +242,17 @@ class Prepared {
   }
 
   /** The collection the query runs on. */
-  get collection() {
+  get collection(): string {
     return this.#collection;
   }
 
-  get [NATIVE]() {
+  get [NATIVE](): native.NativePrepared {
     return this.#native;
   }
 }
 
 /** Prepares `query`, text or built, on `collection`. */
-function prepare(collection, query) {
+function prepare(collection: string, query: QueryInput): Prepared {
   const prepared =
     typeof query === 'string'
       ? native.NativePrepared.fromText(collection, query)
@@ -232,14 +271,14 @@ const KEPT_LENGTH = 4096;
  * the map is full. A longer text is parsed each time instead, so that what
  * is kept stays small.
  */
-const texts = new Map();
+const texts = new Map<string, { collection: string; prepared: native.NativePrepared }>();
 
 /**
  * The native prepared query to run `query` on `collection` with: a
  * `Prepared`, which has to be on `collection`, or text, which is prepared
  * the first time and kept. `null` for a query to encode as IR.
  */
-function preparedOf(collection, query) {
+function preparedOf(collection: string, query: QueryInput): native.NativePrepared | null {
   if (query instanceof Prepared) {
     if (query.collection !== collection) {
       throw codeError(
@@ -264,7 +303,8 @@ function preparedOf(collection, query) {
   const prepared = native.NativePrepared.fromText(collection, query);
 
   if (kept === undefined && texts.size >= KEPT_TEXTS) {
-    texts.delete(texts.keys().next().value);
+    // The map is full, so it has a first key.
+    texts.delete(texts.keys().next().value!);
   }
 
   texts.set(query, { collection, prepared });
@@ -273,21 +313,27 @@ function preparedOf(collection, query) {
 }
 
 /** Calls `mark` with every int kind among `fields`, in lists and embedded objects too. */
-function eachInt(fields, mark, declared) {
+function eachInt(
+  fields: Layout,
+  mark: (kind: IntKind, spec: SpecOf<'int'> | undefined) => void,
+  declared?: DeclaredFields
+): void {
   for (const field of fields.list) {
     const spec = declared === undefined ? undefined : declared[field.name]?.spec;
     let kind = field.kind;
     let specKind = spec;
 
+    // A declaration matches the stored schema, as the engine has checked, so
+    // the declared type of each kind below is a type of the same kind.
     if (kind.type === 'list') {
       kind = kind.element;
-      specKind = spec?.element;
+      specKind = (spec as SpecOf<'list'> | undefined)?.element;
     }
 
     if (kind.type === 'int') {
-      mark(kind, specKind);
+      mark(kind, specKind as SpecOf<'int'> | undefined);
     } else if (kind.type === 'object') {
-      eachInt(kind.fields, mark, specKind?.fields);
+      eachInt(kind.fields, mark, (specKind as SpecOf<'object'> | undefined)?.fields);
     }
   }
 }
@@ -296,7 +342,7 @@ function eachInt(fields, mark, declared) {
  * The layout of the stored schema's record, with the fields declared with
  * `t.bigint()` marked, since the file stores one type of int.
  */
-function layoutOf(record, declared) {
+function layoutOf(record: Uint8Array, declared: DeclaredSchema | undefined): SchemaLayout {
   const layout = decodeSchema(record);
 
   for (const [name, collection] of layout.collections) {
@@ -317,7 +363,7 @@ function layoutOf(record, declared) {
 }
 
 /** The layout of a schema no declaration describes: every int may be a `bigint`. */
-function looseLayoutOf(record) {
+function looseLayoutOf(record: Uint8Array): SchemaLayout {
   const layout = decodeSchema(record);
 
   for (const collection of layout.collections.values()) {
@@ -330,7 +376,7 @@ function looseLayoutOf(record) {
 }
 
 /** The collection `name` of `layout`, or an error. */
-function collectionOf(layout, name) {
+function collectionOf(layout: SchemaLayout | null, name: string): CollectionLayout {
   if (layout === null) {
     throw invalid(
       'the database was opened without a schema, so it has no collections; declare one with the `schema` option'
@@ -346,7 +392,7 @@ function collectionOf(layout, name) {
   return collection;
 }
 
-module.exports = {
+export {
   toBuffer,
   scratch,
   delivered,

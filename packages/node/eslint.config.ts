@@ -69,5 +69,15 @@ export default pluginTypeScriptESLint.config(
       ]
     }
   },
+  {
+    // `native.js` is loaded with `import native = require(...)`, which `tsc`
+    // compiles to a plain `require`. A namespace import would wrap the module
+    // in an object of getters, which every call into the engine would then go
+    // through.
+    files: ['lib/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-require-imports': ['error', { allowAsImport: true }]
+    }
+  },
   configPrettier
 );
