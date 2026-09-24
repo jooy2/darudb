@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 use super::declare::{Collection, Field, Migration, MigrationFn, Schema, Type};
 use crate::error::{Error, Result};
+use crate::format::object::Value;
+use crate::format::object::key;
 use crate::format::object::schema::{
     CollectionDef, FieldDef, Fields, IndexDef, Kind, StoredSchema,
 };
@@ -329,8 +331,15 @@ fn merge_collection(
         // default, so an index on a field whose default changed is built
         // again, with the new default for those records.
         let kept = existing.and_then(|existing| {
-            let same_default = existing.fields.by_id(field).map(|old| &old.default)
-                == fields.by_id(field).map(|new| &new.default);
+            let old = existing
+                .fields
+                .by_id(field)
+                .and_then(|old| old.default.as_ref());
+            let new = fields.by_id(field).and_then(|new| new.default.as_ref());
+            let same_default = match (old, new) {
+                (Some(old), Some(new)) => same_value(old, new),
+                (old, new) => old.is_none() && new.is_none(),
+            };
 
             existing
                 .indexes
@@ -419,6 +428,15 @@ fn merge_fields(
                     )));
                 }
 
+                // A record written before the field existed holds no value
+                // for it and reads the default, so a default, once given,
+                // stays.
+                if kept.default.is_some() && !field.optional && field.default.is_none() {
+                    return Err(invalid(format!(
+                        "`{path}` lost its default; objects written before it existed read the default, so it has to keep one"
+                    )));
+                }
+
                 (kept.id, kind)
             }
             None => {
@@ -439,7 +457,7 @@ fn merge_fields(
             name: name.clone(),
             kind,
             optional: field.optional,
-            default: field.default.clone(),
+            default: field.default.as_ref().map(canonical),
         });
     }
 
@@ -474,6 +492,29 @@ fn to_kind(
             Kind::Object(merge_fields(path, &embedded.fields, existing, &[], ids)?)
         }
     })
+}
+
+/// `value` with its floats canonical, as the key encoding makes them, so that
+/// a default of NaN or `-0.0` is stored the same way every time it is
+/// declared.
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Float(value) => Value::Float(key::canonical_float(*value)),
+        Value::List(values) => Value::List(values.iter().map(canonical).collect()),
+        value => value.clone(),
+    }
+}
+
+/// Whether two defaults are the same value, NaN included: scalars as the key
+/// encoding compares them, lists element by element.
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::List(a), Value::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_value(a, b))
+        }
+        (Value::List(_), _) | (_, Value::List(_)) => false,
+        (a, b) => key::compare(a, b).is_eq(),
+    }
 }
 
 /// Whether two kinds hold the same values: equal, except that an embedded
@@ -658,6 +699,58 @@ mod tests {
         .unwrap();
 
         assert_eq!(deleted.delete, [2]);
+    }
+
+    #[test]
+    fn a_default_once_given_stays() {
+        let v1 = Schema::new(1).collection(Collection::new("u").field("name", Type::String));
+        let v2 = Schema::new(2).collection(
+            Collection::new("u")
+                .field("name", Type::String)
+                .with_default("age", Type::Int, 0),
+        );
+        let v3 = Schema::new(3).collection(
+            Collection::new("u")
+                .field("name", Type::String)
+                .field("age", Type::Int),
+        );
+        let stored_v2 = plan_of(&v2, &stored(&v1), &[]).unwrap().to;
+
+        // Objects written at version 1 have no age and read the default.
+        assert_eq!(
+            plan_of(&v3, &stored_v2, &[])
+                .err()
+                .map(|error| error.code()),
+            Some("INVALID_ARGUMENT")
+        );
+    }
+
+    #[test]
+    fn a_float_default_that_is_nan_or_negative_zero_is_the_same_every_time() {
+        for default in [f64::NAN, -f64::NAN, -0.0] {
+            let schema = |version| {
+                Schema::new(version).collection(
+                    Collection::new("u")
+                        .with_default("x", Type::Float, default)
+                        .with_default("xs", Type::list(Type::Float), vec![Value::Float(default)])
+                        .index("x"),
+                )
+            };
+            let first = stored(&schema(1));
+
+            assert!(
+                matches!(
+                    resolve(&schema(1), Some(&first), &[]),
+                    Ok(Resolution::Unchanged)
+                ),
+                "{default}"
+            );
+
+            let migrated = plan_of(&schema(2), &first, &[]).unwrap();
+
+            assert!(migrated.build.is_empty(), "{default}: the index is kept");
+            assert!(migrated.drop.is_empty(), "{default}");
+        }
     }
 
     #[test]

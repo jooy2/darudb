@@ -311,7 +311,8 @@ impl Migrating<'_> {
     ///
     /// It reads the object as it is now. Writing an object keeps only the
     /// fields of the new schema, so read an object this way before writing
-    /// it: afterwards, the fields the migration dropped read as null.
+    /// it: afterwards, the fields the migration dropped read as a record
+    /// without them does, as their defaults or null.
     pub fn previous(&self, collection: &str, key: impl Into<Value>) -> Result<Option<Object>> {
         let definition = &self.previous.collections[objects::position(&self.previous, collection)?];
 

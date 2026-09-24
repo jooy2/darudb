@@ -153,7 +153,7 @@ A condition on the primary key or on an indexed field, joined to the rest of the
 
 Changing the schema means raising its version. Opening a file that holds an older version migrates it, in one write transaction that either commits whole or leaves the file as it was.
 
-The engine makes some changes by itself: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten; an object written before a field existed reads its default. Anything else is named in a `Migration`:
+The engine makes some changes by itself: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten; an object written before a field existed reads its default, which is why a required field keeps its default once it has one. Anything else is named in a `Migration`:
 
 ```rust
 use darudb::{Collection, Migration, OpenOptions, Schema, Type};
