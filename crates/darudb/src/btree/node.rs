@@ -1,5 +1,6 @@
 //! A B+tree node in memory, and the reference a branch or a root keeps to it.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::format::{
@@ -263,9 +264,13 @@ impl NodeRef<'_> {
 
         while low < high {
             let middle = low + (high - low) / 2;
-            let other = self.key(middle);
+            let below = match self.key(middle).cmp(key) {
+                Ordering::Less => true,
+                Ordering::Equal => or_equal,
+                Ordering::Greater => false,
+            };
 
-            if other < key || (or_equal && other == key) {
+            if below {
                 low = middle + 1;
             } else {
                 high = middle;

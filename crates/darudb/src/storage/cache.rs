@@ -6,6 +6,7 @@
 //! longer match anything simply age out.
 
 use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::format::Check;
@@ -19,8 +20,42 @@ pub(crate) struct Cache<V> {
 
 #[derive(Debug)]
 struct Inner<V> {
-    entries: HashMap<(u64, Check), Arc<V>>,
+    entries: HashMap<(u64, Check), Arc<V>, BuildHasherDefault<Fold>>,
     order: VecDeque<(u64, Check)>,
+}
+
+/// The hash of a cache key: its words folded together.
+///
+/// The check in every key is already a hash of the page, so a hash built to
+/// resist chosen keys would spend its time for nothing on every lookup. A
+/// file crafted to make keys collide can slow the cache down, but not by
+/// more than the few thousand entries it holds.
+#[derive(Debug, Default)]
+struct Fold(u64);
+
+impl Fold {
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517C_C1B7_2722_0A95);
+    }
+}
+
+impl Hasher for Fold {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.add(word);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
 impl<V> Cache<V> {
@@ -28,7 +63,7 @@ impl<V> Cache<V> {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             inner: Mutex::new(Inner {
-                entries: HashMap::new(),
+                entries: HashMap::default(),
                 order: VecDeque::new(),
             }),
             capacity,
