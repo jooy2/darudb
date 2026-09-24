@@ -848,3 +848,72 @@ fn a_link_holding_a_key_of_another_type_is_damage() {
         Some("CORRUPTED")
     );
 }
+
+/// Objects written before a field was added do not hold it, and read its
+/// default in a filter and a sort as they do when read whole.
+#[test]
+fn a_field_added_later_reads_as_its_default_in_a_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("added.darudb");
+    let things = |version: u64, size: Option<i64>| {
+        let collection = Collection::new("things").field("name", Type::String);
+        let collection = match size {
+            Some(size) => collection.with_default("size", Type::Int, size),
+            None => collection,
+        };
+
+        Schema::new(version).collection(collection)
+    };
+
+    {
+        let db = OpenOptions::new()
+            .schema(things(1, None))
+            .open(&path)
+            .unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        for name in ["a", "b"] {
+            txn.collection("things")
+                .unwrap()
+                .insert(Object::new().with("name", name))
+                .unwrap();
+        }
+
+        txn.commit().unwrap();
+    }
+
+    let db = OpenOptions::new()
+        .schema(things(2, Some(7)))
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.collection("things")
+        .unwrap()
+        .insert(Object::new().with("name", "c").with("size", 3))
+        .unwrap();
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let things = read.collection("things").unwrap();
+    let names = |query: Query| -> Vec<String> {
+        things
+            .query(&query)
+            .unwrap()
+            .iter()
+            .map(|object| object.get("name").unwrap().as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    assert_eq!(
+        names(Query::new().filter(Filter::eq("size", 7))),
+        ["a", "b"]
+    );
+    assert_eq!(names(Query::new().sort_by_desc("size")), ["a", "b", "c"]);
+    assert_eq!(
+        things
+            .count(&Query::new().filter(Filter::gt("size", 5)))
+            .unwrap(),
+        2
+    );
+}

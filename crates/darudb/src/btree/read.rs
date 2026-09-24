@@ -97,6 +97,10 @@ pub(crate) fn get<L: Load>(
     }
 }
 
+/// What [`Range::for_each`] gives each entry to: a key and a value, borrowed.
+/// It returns whether to stop.
+pub(crate) type Visit<'v> = dyn FnMut(&[u8], &[u8]) -> Result<bool> + 'v;
+
 /// The entries of a tree from one bound to another, in key order or, walking
 /// backwards, in reverse.
 #[derive(Debug)]
@@ -461,6 +465,51 @@ impl<'a, L: Load> Range<'a, L> {
 
             if done {
                 return Ok(count);
+            }
+
+            if self.backward {
+                self.previous_leaf()?;
+            } else {
+                self.next_leaf()?;
+            }
+        }
+    }
+
+    /// Gives each entry the walk has left to `visit`, borrowed from its leaf,
+    /// until `visit` returns true. Nothing is copied out of a leaf, except a
+    /// value kept in overflow pages, which is read.
+    pub(crate) fn for_each(mut self, visit: &mut Visit<'_>) -> Result<()> {
+        loop {
+            let Some((node, index)) = self.stack.last() else {
+                return Ok(());
+            };
+            let (node, index) = (node.clone(), *index);
+            let Node::Leaf(entries) = &*node else {
+                return Err(internal("a range stopped on a branch"));
+            };
+            let order: Box<dyn Iterator<Item = usize>> = if self.backward {
+                Box::new((0..index).rev())
+            } else {
+                Box::new(index..entries.len())
+            };
+
+            for at in order {
+                let entry = &entries[at];
+
+                if self.beyond_stop(&entry.key) {
+                    return Ok(());
+                }
+
+                let stop = match &entry.value {
+                    StoredValue::Inline(value) => visit(&entry.key, value)?,
+                    StoredValue::Overflow(reference) => {
+                        visit(&entry.key, &self.load.read_overflow(reference, self.tree)?)?
+                    }
+                };
+
+                if stop {
+                    return Ok(());
+                }
             }
 
             if self.backward {

@@ -119,41 +119,93 @@ pub(crate) fn read(bytes: &[u8]) -> Result<Vec<(u64, Raw)>, &'static str> {
     Ok(fields)
 }
 
-/// The fields of the record `bytes` whose ids are in `wanted`, which is
-/// sorted: the others are stepped over without being read into values, and
-/// the reading stops after the last field wanted. For a filter or a sort
-/// that needs a few fields of many records; an object that is kept is read
-/// whole, and checked whole, by [`read`].
-pub(crate) fn read_some(bytes: &[u8], wanted: &[u64]) -> Result<Vec<(u64, Raw)>, &'static str> {
+/// A field's value as a record holds it, borrowed from the record: a scalar,
+/// or the encoding of a list, an embedded object or a link, tag included,
+/// for [`value_of`] to read.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum FieldRef<'a> {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(&'a str),
+    Bytes(&'a [u8]),
+    Encoded(&'a [u8]),
+}
+
+/// The value of field `id` in the record `bytes`, if the record holds it,
+/// found by stepping over the fields before it without reading them into
+/// values. For a filter or a sort that reads a field or two of many records;
+/// an object that is kept is read whole, and checked whole, by [`read`].
+pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, &'static str> {
     let mut reader = Reader { bytes, at: 0 };
-    let count = reader.count(2)?;
-    let mut fields = Vec::with_capacity(wanted.len());
     let mut last = None;
-    let Some(&final_id) = wanted.last() else {
-        return Ok(fields);
-    };
 
-    for _ in 0..count {
-        let id = reader.varint()?;
+    for _ in 0..reader.count(2)? {
+        let field = reader.varint()?;
 
-        if last.is_some_and(|last| last >= id) {
+        if last.is_some_and(|last| last >= field) {
             return Err("a record's field ids are out of order");
         }
 
-        last = Some(id);
+        last = Some(field);
 
-        if id > final_id {
+        if field > id {
             break;
         }
 
-        if wanted.binary_search(&id).is_ok() {
-            fields.push((id, reader.value(0)?));
-        } else {
+        if field < id {
             reader.skip(0)?;
+
+            continue;
         }
+
+        let start = reader.at;
+
+        return Ok(Some(match reader.byte()? {
+            FALSE => FieldRef::Bool(false),
+            TRUE => FieldRef::Bool(true),
+            INT => FieldRef::Int(unzigzag(reader.varint()?)),
+            FLOAT => {
+                let mut exact = [0u8; 8];
+
+                exact.copy_from_slice(reader.take(8)?);
+                FieldRef::Float(f64::from_le_bytes(exact))
+            }
+            STRING => {
+                let len = reader.varint()?;
+
+                FieldRef::String(
+                    std::str::from_utf8(reader.take(len)?)
+                        .map_err(|_| "a record holds a string that is not UTF-8")?,
+                )
+            }
+            BYTES => {
+                let len = reader.varint()?;
+
+                FieldRef::Bytes(reader.take(len)?)
+            }
+            _ => {
+                reader.at = start;
+                reader.skip(0)?;
+                FieldRef::Encoded(&bytes[start..reader.at])
+            }
+        }));
     }
 
-    Ok(fields)
+    Ok(None)
+}
+
+/// The value whose encoding `bytes` [`find_field`] gave, as a field of kind
+/// `kind`.
+pub(crate) fn value_of(bytes: &[u8], kind: &Kind) -> Result<Value, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let raw = reader.value(0)?;
+
+    if reader.at != bytes.len() {
+        return Err("a record's value has bytes after its end");
+    }
+
+    from_raw(raw, kind)
 }
 
 /// A position in a record being read.
@@ -162,7 +214,7 @@ struct Reader<'a> {
     at: usize,
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
     fn left(&self) -> usize {
         self.bytes.len() - self.at
     }
@@ -175,16 +227,18 @@ impl Reader<'_> {
         Ok(byte)
     }
 
-    fn take(&mut self, len: u64) -> Result<&[u8], &'static str> {
+    fn take(&mut self, len: u64) -> Result<&'a [u8], &'static str> {
         let len = usize::try_from(len).map_err(|_| "a record ends early")?;
 
         if len > self.left() {
             return Err("a record ends early");
         }
 
+        let bytes: &'a [u8] = self.bytes;
+
         self.at += len;
 
-        Ok(&self.bytes[self.at - len..self.at])
+        Ok(&bytes[self.at - len..self.at])
     }
 
     fn varint(&mut self) -> Result<u64, &'static str> {
@@ -427,35 +481,6 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
 
         let value = match raw.next_if(|(id, _)| *id == field.id) {
             Some((_, value)) => from_raw(value, &field.kind)?,
-            None => match &field.default {
-                Some(default) => default.clone(),
-                None if field.optional => Value::Null,
-                None => return Err("a record lacks a required field"),
-            },
-        };
-
-        object.set(field.name.clone(), value);
-    }
-
-    Ok(object)
-}
-
-/// The fields `wanted` of the object whose record fields are `raw`, read by
-/// [`read_some`], as [`to_object`] would give them.
-pub(crate) fn to_object_some(
-    mut raw: Vec<(u64, Raw)>,
-    fields: &Fields,
-    wanted: &[u64],
-) -> Result<Object, &'static str> {
-    let mut object = Object::new();
-
-    for field in fields
-        .list
-        .iter()
-        .filter(|field| wanted.contains(&field.id))
-    {
-        let value = match raw.iter().position(|(id, _)| *id == field.id) {
-            Some(at) => from_raw(raw.swap_remove(at).1, &field.kind)?,
             None => match &field.default {
                 Some(default) => default.clone(),
                 None if field.optional => Value::Null,

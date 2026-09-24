@@ -47,6 +47,12 @@ impl<'a> Range<'a> {
         Self { inner: None }
     }
 
+    /// Gives each entry the walk has left to `visit`, borrowed rather than
+    /// copied, until `visit` returns true.
+    pub(crate) fn for_each(self, visit: &mut btree::Visit<'_>) -> Result<()> {
+        self.inner.map_or(Ok(()), |inner| inner.for_each(visit))
+    }
+
     /// The number of entries the walk has left, counted without reading
     /// them out.
     pub(crate) fn count_entries(self) -> Result<u64> {
