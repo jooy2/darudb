@@ -9,6 +9,7 @@
 //! | 2^62            | Open: shared while the file is open, exclusive to recover it |
 //! | 2^62 + 1        | Writer: held by the process whose transaction is writing     |
 //! | 2^62 + 2        | Recovery: held by a process deciding whether to recover      |
+//! | 2^62 + 3        | Turn: held by the waiting writer whose turn is next          |
 //! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot  |
 //!
 //! No mutex lives in shared memory and no lock file has a layout, so a process
@@ -57,6 +58,33 @@ const WRITER_BYTE: u64 = OPEN_BYTE + 1;
 /// The recovery lock's byte: held while a process opening the file decides
 /// whether to recover it, and while it does.
 const RECOVERY_BYTE: u64 = OPEN_BYTE + 2;
+
+/// The turn lock's byte: held by a writer that has waited long enough to go
+/// next, which every other writer lets go first.
+const TURN_BYTE: u64 = OPEN_BYTE + 3;
+
+/// How long a writer waits for the writer lock before it claims the turn.
+/// Most waits are far shorter; this one is reached when a writer that commits
+/// again and again keeps taking the lock back first.
+///
+/// Each time the writer lock passes to another process, the next commit
+/// issues a barrier before its record, since it cannot know which selector a
+/// power cut would bring back. A shorter wait would pass the lock back and
+/// forth more often and pay that barrier each time: at 5 milliseconds, two
+/// processes committing in tight loops made a twentieth of the commits they
+/// made without a turn. At 50, the turn bounds the longest wait and costs
+/// little throughput.
+const TURN_AFTER: Duration = Duration::from_millis(50);
+
+/// The longest pause between two attempts at the writer lock. Shorter than
+/// [`LAST_PAUSE`], so that writers claiming the turn try as often as one
+/// another.
+const WRITER_PAUSE: Duration = Duration::from_millis(1);
+
+/// The longest pause of the writer whose turn it is. Every other writer waits
+/// for it, so the lock stays idle from its release until this writer tries
+/// again, and that has to be short.
+const TURN_PAUSE: Duration = Duration::from_micros(100);
 
 /// The lock byte of snapshot 0. Snapshot `s` is locked at this byte plus `s`,
 /// which stays below 2^63 because every transaction id is below
@@ -266,14 +294,63 @@ impl Locks {
         Ok(())
     }
 
-    /// Takes the writer lock, waiting up to `deadline` for another process's
-    /// write transaction to end. The attempt is repeated rather than blocking,
-    /// so that the wait has a limit on every platform.
+    /// Takes the writer lock, waiting up to `deadline` for other processes'
+    /// write transactions. The attempt is repeated rather than blocking, so
+    /// that the wait has a limit on every platform.
+    ///
+    /// Record locks do not queue waiters, and a writer that commits again at
+    /// once would take the lock back before a pausing one woke, again and
+    /// again. The turn lock stops that. While another process holds it, this
+    /// one leaves the writer lock alone; once this one has waited
+    /// [`TURN_AFTER`], it claims the turn itself, if it is free, and keeps it
+    /// until it has the writer lock.
     pub(crate) fn lock_writer(&self, deadline: Option<Instant>) -> Result<(), LockError> {
-        poll(deadline, || {
-            self.try_lock(WRITER_BYTE, 1, Mode::Exclusive)
-                .map_err(LockError::Io)
-        })
+        let started = Instant::now();
+        let mut turn = false;
+        let mut pause = FIRST_PAUSE;
+        let result = loop {
+            match self.try_writer(started, &mut turn) {
+                Ok(true) => break Ok(()),
+                Ok(false) => {}
+                Err(error) => break Err(error),
+            }
+
+            if let Err(error) = sleep_until(deadline, pause) {
+                break Err(error);
+            }
+
+            pause = (pause * 2).min(if turn { TURN_PAUSE } else { WRITER_PAUSE });
+        };
+
+        if turn {
+            let _ = self.unlock(TURN_BYTE, 1);
+        }
+
+        result
+    }
+
+    /// One attempt of [`lock_writer`](Self::lock_writer): `true` if it took
+    /// the writer lock. `turn` says whether this process holds the turn lock,
+    /// and the attempt claims it once the wait has lasted [`TURN_AFTER`].
+    fn try_writer(&self, started: Instant, turn: &mut bool) -> Result<bool, LockError> {
+        if !*turn && self.is_locked(TURN_BYTE, 1).map_err(LockError::Io)? {
+            return Ok(false);
+        }
+
+        if self
+            .try_lock(WRITER_BYTE, 1, Mode::Exclusive)
+            .map_err(LockError::Io)?
+        {
+            return Ok(true);
+        }
+
+        if !*turn && started.elapsed() >= TURN_AFTER {
+            *turn = self
+                .try_lock(TURN_BYTE, 1, Mode::Exclusive)
+                .map_err(LockError::Io)?;
+        }
+
+        Ok(false)
     }
 
     /// Releases the writer lock.
@@ -500,22 +577,30 @@ fn poll(
             return Ok(());
         }
 
-        let wait = match deadline {
-            None => pause,
-            Some(deadline) => {
-                let now = Instant::now();
-
-                if now >= deadline {
-                    return Err(LockError::Busy);
-                }
-
-                pause.min(deadline - now)
-            }
-        };
-
-        thread::sleep(wait);
+        sleep_until(deadline, pause)?;
         pause = (pause * 2).min(LAST_PAUSE);
     }
+}
+
+/// Sleeps for `pause`, or until `deadline` if that comes first, and fails with
+/// [`LockError::Busy`] once the deadline has passed. No deadline never fails.
+fn sleep_until(deadline: Option<Instant>, pause: Duration) -> Result<(), LockError> {
+    let wait = match deadline {
+        None => pause,
+        Some(deadline) => {
+            let now = Instant::now();
+
+            if now >= deadline {
+                return Err(LockError::Busy);
+            }
+
+            pause.min(deadline - now)
+        }
+    };
+
+    thread::sleep(wait);
+
+    Ok(())
 }
 
 /// Locks a mutex, carrying on if a thread panicked while holding it: the

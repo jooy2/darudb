@@ -40,6 +40,10 @@ fn options_for(path: &Path) -> OpenOptions {
 /// - `sum` counts the entries of tree `t` in the kept read transaction and
 ///   adds up the first byte of every value.
 /// - `hold-writer` begins a write transaction and keeps it.
+/// - `write-loop` starts a thread that commits one deferred commit after
+///   another, each holding the writer lock for a millisecond and the next
+///   taking it again at once, and `stop-loop` stops it and answers with how
+///   many it made.
 /// - `release` ends what it keeps.
 /// - `fork <marker>` forks and answers `forked`; see [`forked_child`] for
 ///   what the child does and answers.
@@ -55,6 +59,7 @@ fn helper_running_commands() {
     let mut handle = Some(options_for(path.as_ref()).open(&path).unwrap());
     let mut snapshot = None;
     let mut writer = None;
+    let mut looping = None;
     #[cfg(unix)]
     let mut child = None;
 
@@ -120,6 +125,36 @@ fn helper_running_commands() {
                 writer = None;
 
                 Ok("done".to_owned())
+            }
+            ["write-loop"] => {
+                let db = db.clone();
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let stopped = Arc::clone(&stop);
+                let thread = thread::spawn(move || {
+                    let mut commits = 0u64;
+
+                    while !stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                        let mut txn = db.begin_write().unwrap();
+
+                        txn.insert("loop", &commits.to_be_bytes(), b"").unwrap();
+                        thread::sleep(Duration::from_millis(1));
+                        txn.commit_deferred().unwrap();
+                        commits += 1;
+                    }
+
+                    commits
+                });
+
+                looping = Some((stop, thread));
+
+                Ok("done".to_owned())
+            }
+            ["stop-loop"] => {
+                let (stop, thread) = looping.take().unwrap();
+
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+
+                Ok(thread.join().unwrap().to_string())
             }
             #[cfg(unix)]
             ["fork", marker] => match super::sys::fork().unwrap() {
@@ -670,5 +705,42 @@ fn the_next_process_recovers_a_file_whose_recovery_died() {
     assert_eq!(
         db.begin_read().unwrap().get("t", b"k").unwrap(),
         Some(b"1".to_vec())
+    );
+}
+
+#[test]
+fn a_writer_that_commits_again_and_again_lets_another_process_s_writer_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut other = helper(&path);
+    let db = OpenOptions::new()
+        .busy_timeout(Duration::from_secs(2))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(other.ask("write-loop"), "done");
+
+    let mut longest = Duration::ZERO;
+
+    // Each round pauses long enough for the other process to take the
+    // writer lock back, so that every round has to win it from a writer
+    // that never lets go for long.
+    for round in 0..20u32 {
+        thread::sleep(Duration::from_millis(5));
+
+        let started = Instant::now();
+        let mut txn = db.begin_write().unwrap();
+
+        longest = longest.max(started.elapsed());
+        txn.insert("mine", &round.to_be_bytes(), b"").unwrap();
+        txn.commit_deferred().unwrap();
+    }
+
+    let commits: u64 = other.ask("stop-loop").parse().unwrap();
+
+    assert!(commits > 0, "the other process never wrote");
+    assert!(
+        longest < Duration::from_millis(500),
+        "a writer waited {longest:?}"
     );
 }

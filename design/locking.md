@@ -32,7 +32,8 @@ All locks are taken on bytes far past the end of any data:
 | 2^62                  | Open     | Shared by every process that has the file open; exclusive during recovery   |
 | 2^62 + 1              | Writer   | Exclusive by the process whose transaction is writing                       |
 | 2^62 + 2              | Recovery | Exclusive by a process that is opening the file, until it has the open lock |
-| 2^62 + 3 to 2^62 + 63 | Reserved |                                                                             |
+| 2^62 + 3              | Turn     | Exclusive by the waiting writer whose turn is next                          |
+| 2^62 + 4 to 2^62 + 63 | Reserved |                                                                             |
 | 2^62 + 64 + `s`       | Snapshot | Shared by every process with a read transaction on snapshot `s`             |
 
 **Why so far from the data.** On Windows, byte-range locks are mandatory: a range locked through one handle cannot be read or written through another. Lock bytes that overlapped data would make that data unreadable. The file never reaches 2^62 bytes, so no read or write ever touches a lock byte. Both POSIX record locks and `LockFileEx` accept ranges past the end of the file.
@@ -82,14 +83,19 @@ A read transaction that is never ended keeps every page it can reach from being 
 ## Writing
 
 1. Take the process's writer mutex, so that one thread at a time competes for the file.
-1. Take the writer lock exclusively. The attempt does not block: it is repeated with increasing pauses until it succeeds or the busy timeout passes, which fails with `BUSY`. Polling rather than blocking is what makes a timeout possible on every platform.
+1. Take the writer lock exclusively. The attempt does not block: it is repeated with increasing pauses, no longer than a millisecond, until it succeeds or the busy timeout passes, which fails with `BUSY`. Polling rather than blocking is what makes a timeout possible on every platform. Each attempt goes as follows:
+   1. If another process holds the turn lock, leave the writer lock alone.
+   1. Otherwise try the writer lock, without waiting.
+   1. If that failed and the writer has waited 50 milliseconds, try the turn lock, without waiting. A writer that gets it keeps it until it has the writer lock, and its pauses grow no longer than 100 microseconds.
 1. Hold both until the commit or the abort has returned.
 
 While it holds the writer lock, the writer starts its transaction and commits it as [Commits and recovery](commits-and-recovery.md#starting-a-write-transaction) describes. It writes records and the selector without any further lock, since readers verify everything they read.
 
-**No deadlock is possible.** The writer waits for nothing while it holds the writer lock, apart from its own barriers. Readers never wait for the writer lock. The recovery lock and the open lock are taken, in that order, only while a process opens the file, before it has any transaction, and the open lock is held exclusively only during recovery.
+**No deadlock is possible.** The writer waits for nothing while it holds the writer lock, apart from its own barriers. A writer holding the turn lock waits only for the writer lock, and the holder of that waits for nothing. Readers never wait for either. The recovery lock and the open lock are taken, in that order, only while a process opens the file, before it has any transaction, and the open lock is held exclusively only during recovery.
 
-**Fairness is not guaranteed.** Record locks do not queue waiting processes in order on every platform, so a writer can in principle lose the race repeatedly. The phase 3 tests measure whether that matters. If it does, a second lock byte can queue writers without changing the file format.
+**Why a turn lock.** Record locks do not queue waiting processes, and a writer that commits again as soon as it has finished takes the writer lock back before a pausing one wakes. The phase 3 tests saw that happen: with four processes committing in tight loops, most writers waited microseconds, but some waited seconds, past the default busy timeout. The turn lock bounds the wait. A writer that has waited 50 milliseconds claims the next turn, and every other writer, the one that just finished included, lets it go first. Among several writers claiming the turn, each tries as often as the others, so none is favoured.
+
+**Why 50 milliseconds.** Each time the writer lock passes from one process to another, the next commit issues a barrier before its record ([Commits and recovery](commits-and-recovery.md#choosing-the-slot)), so passing the lock on every commit would make contended writers pay a barrier each. Claiming the turn after 5 milliseconds did that, and two processes committing in tight loops made a twentieth of their commits. After 50, they made as many as without a turn, and the longest wait was about 60 milliseconds.
 
 ## Finding the oldest snapshot
 
@@ -121,6 +127,7 @@ The operating system releases every lock the process held, and that is all the c
 - **The writer lock** passes to the next writer, which starts from the published commit. Whatever the dead writer had written sits at free positions or in a slot that no one reads, and the next writer's choice of slot takes care of it ([Commits and recovery](commits-and-recovery.md#choosing-the-slot)).
 - **The open lock**: if it was the last process with the file open, the next process to open it runs recovery.
 - **The recovery lock**, held while it opened or recovered the file: the next process waiting for it takes it and finds the open lock as the dead one left it, free if the dead one was recovering.
+- **The turn lock**: the other writers stop waiting for it and compete for the writer lock again.
 
 ## Platform notes
 

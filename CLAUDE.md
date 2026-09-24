@@ -135,12 +135,13 @@ Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 Specified in [design/locking.md](design/locking.md).
 
 - **No mutexes in shared memory.** A process that dies holding a shared-memory mutex leaves it held, recovering from that needs robust mutexes that not every platform has, and a lock file with a memory layout in it breaks between processes of different architectures.
-- **Only operating-system byte-range locks** (`fcntl` on Unix, `LockFileEx` on Windows), on bytes from 2^62 up, where no data ever is: an open lock, a writer lock, a recovery lock that a process holds while it opens the file, and one byte per snapshot. When a process dies, the operating system releases its locks, and nothing else needs cleaning up.
+- **Only operating-system byte-range locks** (`fcntl` on Unix, `LockFileEx` on Windows), on bytes from 2^62 up, where no data ever is: an open lock, a writer lock, a recovery lock that a process holds while it opens the file, a turn lock, and one byte per snapshot. When a process dies, the operating system releases its locks, and nothing else needs cleaning up.
 - **One operating-system handle per file per process**, shared by every `Database` object for that file, because closing any descriptor drops all of a process's POSIX locks.
 - **Readers take no header lock**: they read the header, register their snapshot, and read it again.
 - **The writer reclaims pages** only from groups that no registered snapshot and no possible recovery can still reach.
 - **The page cache is keyed by page number and check**, so a stale entry never matches and nothing has to be invalidated when another process commits.
 - **Concurrency model**: one writing process at a time and any number of readers. Waiting for the writer lock past the busy timeout fails with `BUSY`.
+- **Writers take turns.** A writer that has waited 50 milliseconds claims the turn lock, and every other writer lets it go first, so a process that commits in a tight loop cannot keep the others out. The wait is long enough that the lock seldom passes back and forth, since each pass costs the next commit a barrier.
 - **iOS**: the system terminates a suspended app that holds a file lock in an App Group container, and the open lock is held while a database is open.
 - **Test this area harder than any other.** Concurrent reads and writes from several processes, with processes killed at random, are the phase 3 exit criterion.
 
