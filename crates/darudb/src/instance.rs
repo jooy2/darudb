@@ -107,7 +107,16 @@ pub(crate) struct Shared {
     writer: Mutex<bool>,
     writer_free: Condvar,
     sync_failed: AtomicBool,
+    /// Declared last, so that it is dropped last, once the handle has closed
+    /// and the locks are released; see [`Hold`].
+    hold: Arc<Hold>,
 }
+
+/// Lives for exactly as long as an instance holds its file. The registry keeps
+/// a weak reference to it, which tells an instance that is still closing from
+/// one that is gone.
+#[derive(Debug)]
+pub(crate) struct Hold;
 
 impl Shared {
     /// An instance whose header is not known yet: recovery reads it, and
@@ -147,6 +156,7 @@ impl Shared {
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             sync_failed: AtomicBool::new(false),
+            hold: Arc::new(Hold),
         }
     }
 
@@ -814,24 +824,61 @@ impl FileKey {
     }
 }
 
+/// The registry's entry for one open file.
+#[derive(Debug)]
+pub(crate) struct Entry {
+    instance: Weak<Shared>,
+    hold: Weak<Hold>,
+}
+
+impl Entry {
+    pub(crate) fn of(shared: &Arc<Shared>) -> Self {
+        Self {
+            instance: Arc::downgrade(shared),
+            hold: Arc::downgrade(&shared.hold),
+        }
+    }
+
+    /// Whether the instance still holds its file, closing or not.
+    pub(crate) fn holds(&self) -> bool {
+        self.hold.strong_count() > 0
+    }
+}
+
+/// How long an opening thread waits between two looks at an instance that is
+/// closing.
+const CLOSING_PAUSE: Duration = Duration::from_millis(1);
+
 /// The instances open in this process.
-pub(crate) static REGISTRY: LazyLock<Mutex<HashMap<FileKey, Weak<Shared>>>> =
+pub(crate) static REGISTRY: LazyLock<Mutex<HashMap<FileKey, Entry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Locks the registry. Opening holds it from the lookup to the insertion, so
 /// two threads opening one file end up with one instance.
-pub(crate) fn registry() -> MutexGuard<'static, HashMap<FileKey, Weak<Shared>>> {
+pub(crate) fn registry() -> MutexGuard<'static, HashMap<FileKey, Entry>> {
     lock(&REGISTRY)
 }
 
 /// The instance of the file `key` names, if this process has it open. One a
 /// forked process inherited does not count: it holds none of the locks.
-pub(crate) fn find(
-    instances: &HashMap<FileKey, Weak<Shared>>,
-    key: &FileKey,
-) -> Option<Arc<Shared>> {
-    instances
-        .get(key)
-        .and_then(Weak::upgrade)
-        .filter(|shared| !shared.inherited())
+///
+/// An instance whose last handle is gone may still be closing: ending its
+/// unsynced window, which can wait for another process's writer, and then
+/// releasing its locks and closing its handle. Opening the file again
+/// meanwhile would take the locks through a second handle, and on a Unix-like
+/// system the first one's unlock and close would release them all. So this
+/// waits for the closing to finish, and then there is no instance. The
+/// closing never needs the registry, so it cannot wait for the caller.
+pub(crate) fn find(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> Option<Arc<Shared>> {
+    let entry = instances.get(key)?;
+
+    if let Some(shared) = entry.instance.upgrade() {
+        return (!shared.inherited()).then_some(shared);
+    }
+
+    while entry.holds() {
+        thread::sleep(CLOSING_PAUSE);
+    }
+
+    None
 }

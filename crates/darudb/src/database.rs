@@ -12,7 +12,7 @@ use crate::format::{
     Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
     STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
-use crate::instance::{FileKey, Shared, find, registry};
+use crate::instance::{Entry, FileKey, Shared, find, registry};
 use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
 use crate::storage::{self, Created, DbFile, FileIo, Pager};
@@ -170,7 +170,7 @@ impl Database {
     pub(crate) fn open_with(path: &Path, options: &OpenOptions) -> Result<Self> {
         let mut instances = registry();
 
-        instances.retain(|_, instance| instance.strong_count() > 0);
+        instances.retain(|_, entry| entry.holds());
 
         if let Some(shared) = FileKey::of(path).and_then(|key| find(&instances, &key)) {
             shared.admit(options.secret())?;
@@ -242,7 +242,7 @@ impl Database {
         };
         let shared = open_io(file, locks, access, path, options, data_key)?;
 
-        instances.insert(key, Arc::downgrade(&shared));
+        instances.insert(key, Entry::of(&shared));
 
         Ok(Self { shared })
     }

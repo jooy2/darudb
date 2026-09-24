@@ -511,3 +511,72 @@ fn a_forked_child_uses_its_own_handle_and_keeps_its_own_locks() {
     assert!(!locks.snapshot_below(snapshot + 1).unwrap());
     assert_eq!(other.ask("get k"), "1", "the parent's handle still works");
 }
+
+/// The helper: says whether any process holds the open lock of the file,
+/// through a handle of its own, and ends.
+#[test]
+fn helper_probing_the_open_lock() {
+    let Ok(path) = env::var(HELPER_PATH) else {
+        return;
+    };
+    let held = locks_on(path.as_ref())
+        .is_locked(super::OPEN_BYTE, 1)
+        .unwrap();
+
+    println!("\nanswer {}", if held { "held" } else { "free" });
+}
+
+#[test]
+fn opening_a_file_while_its_last_handle_closes_waits_for_it_and_keeps_its_own_locks() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let db = options_for(&path).open(&path).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"k", b"deferred").unwrap();
+    txn.commit_deferred().unwrap();
+
+    // The last handle closes on another thread, where it waits for the
+    // writer lock to make the deferred commit durable.
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("hold-writer"), "done");
+
+    let (started, closing_started) = std::sync::mpsc::channel();
+    let closing = thread::spawn(move || {
+        started.send(()).unwrap();
+        drop(db);
+    });
+
+    closing_started.recv().unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    // Opening the file meanwhile waits for the closing to finish: otherwise
+    // the old handle's unlock and close would release the new one's locks.
+    let reopened = path.clone();
+    let opening = thread::spawn(move || options_for(&reopened).open(&reopened).unwrap());
+
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(
+        !opening.is_finished(),
+        "opened while the last handle closed"
+    );
+    assert_eq!(other.ask("release"), "done");
+    closing.join().unwrap();
+
+    let db = opening.join().unwrap();
+    let (exited, _) = other.finish();
+
+    assert!(exited);
+
+    // The other process is gone, so the open lock another process sees is
+    // this one's.
+    let probe = Helper::spawn("lock::tests::helper_probing_the_open_lock", &path);
+
+    assert_eq!(probe.answer(), "held");
+    assert_eq!(
+        db.begin_read().unwrap().get("t", b"k").unwrap(),
+        Some(b"deferred".to_vec())
+    );
+}
