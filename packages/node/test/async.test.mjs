@@ -13,7 +13,7 @@ import { describe, it } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { collection, Database, param, schema, t } from '../index.js';
+import { collection, Database, param, schema, t } from '../dist/index.js';
 
 /** A path in a directory of the test's own, removed when the test ends. */
 const tempPath = (context) => {
@@ -554,7 +554,7 @@ describe('writes on one file', () => {
 
   it("wait for another process's writer on the thread pool, not on the event loop", async (context) => {
     const { path, db } = await withData(context);
-    const index = fileURLToPath(new URL('../index.js', import.meta.url));
+    const index = fileURLToPath(new URL('../dist/index.js', import.meta.url));
     const holder = spawn(
       process.execPath,
       [

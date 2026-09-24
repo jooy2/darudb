@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { Serial } = require('../lib/async.js');
+const { Serial } = require('../dist/async.js');
 
 const COUNT = 3;
 const TAG_NUMBER = 2;

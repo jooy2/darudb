@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { collection, conditions, Database, param, Query, schema, t } from '../index.js';
+import { collection, conditions, Database, param, Query, schema, t } from '../dist/index.js';
 
 /** A path in a directory of the test's own, removed when the test ends. */
 const tempPath = (context) => {

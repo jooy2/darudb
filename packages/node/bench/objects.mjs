@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { collection, Database, schema, t } from '../index.js';
+import { collection, Database, schema, t } from '../dist/index.js';
 
 /** Objects in the read and query workloads. */
 const OBJECTS = 100_000;

@@ -1,0 +1,21 @@
+{
+  // The package's JavaScript, compiled from `lib` into `dist`, which is what
+  // ships. `dist` sits at the same depth as `lib`, so a path to `native.js`
+  // at the package's root is the same from either.
+  "compilerOptions": {
+    "rootDir": "lib",
+    "outDir": "dist",
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": false,
+    "removeComments": false,
+    "newLine": "lf",
+    "skipLibCheck": false
+  },
+  "include": ["lib"]
+}

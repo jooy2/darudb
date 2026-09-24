@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { Database, engineVersion, FORMAT_VERSION } from '../index.js';
+import { Database, engineVersion, FORMAT_VERSION } from '../dist/index.js';
 
 /**
  * A directory of the test's own, removed when the test ends, so tests never

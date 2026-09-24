@@ -52,7 +52,7 @@ A few notes that are easy to trip over:
 
 - **Each package keeps its own `CHANGELOG.md`**, beside its manifest, where its registry and a reader browsing that package expect to find it. The documentation site's copy is generated from them by `docs/scripts/copy-changelog.mjs` and is git-ignored, so edit the package's file and never the one under `docs/`.
 - **A change usually means a change to the docs in _both_ languages.** `docs/en` and `docs/ko` mirror each other page for page. If you cannot write the Korean, write the English and say so in the pull request, and a maintainer will follow up rather than let the two drift.
-- **`packages/node/native.js` and `native.d.ts` are generated**, together with the native addon, by `npm run build` from the `#[napi]` items in `packages/node/src/lib.rs`. They are git-ignored, and an edit to either is lost on the next build. The package's API is `index.js`, `lib/` and `index.d.ts`, written by hand over them.
+- **`packages/node/native.js` and `native.d.ts` are generated**, together with the native addon, by `npm run build` from the `#[napi]` items in `packages/node/src/lib.rs`. They are git-ignored, and an edit to either is lost on the next build. The package's API is `lib/` and `index.d.ts`, written by hand over them; `tsc` compiles `lib/` into `dist/`, which is what the package ships and what the tests load.
 - **The Rust version is pinned** in `rust-toolchain.toml`. `rustup` installs that version on the first `cargo` command in the repository, so every machine and every CI runner compiles with the same compiler.
 - **Tests never touch a fixed path.** Every test that writes a database writes it into a temporary directory of its own, so the suites can run in parallel and leave nothing behind.
 
@@ -85,14 +85,14 @@ For the Node.js binding:
 ```bash
 cd packages/node
 npm ci
-npm run build        # the native addon, `native.js` and `native.d.ts`
+npm run build        # the native addon, `native.js`, `native.d.ts`, then `dist/`
 npm run lint
 npx prettier . --check
-npm test             # node:test against the addon just built, then the types
+npm test             # `dist/` again, node:test against it, then the types
 npm run bench        # optional: the object workloads, after a release build
 ```
 
-`npm test` loads the addon that `npm run build` left in the folder, so build first after every change to Rust code, in the engine as well as in the binding.
+`npm test` compiles `lib/` into `dist/` first, but it loads the addon that `npm run build` left in the folder, so build first after every change to Rust code, in the engine as well as in the binding. `npm run build:ts` compiles `lib/` alone.
 
 For the documentation site:
 

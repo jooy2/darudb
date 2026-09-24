@@ -4,14 +4,14 @@
  * DaruDB for Node.js: an embedded database that keeps an application's data
  * in one local file.
  *
- * `index.d.ts` beside this file declares the API, with the types a schema
- * gives the objects of each collection.
+ * `index.d.ts` at the package's root declares the API, with the types a
+ * schema gives the objects of each collection.
  */
 
-const native = require('./native.js');
-const { t, collection, schema } = require('./lib/schema');
-const { Query, conditions, param } = require('./lib/query');
-const { Database } = require('./lib/database');
+const native = require('../native.js');
+const { t, collection, schema } = require('./schema');
+const { Query, conditions, param } = require('./query');
+const { Database } = require('./database');
 
 exports.Database = Database;
 exports.t = t;

@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { describe, it } from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { decodeRecords, encodeRecords } = require('../lib/codec.js');
+const { decodeRecords, encodeRecords } = require('../dist/codec.js');
 
 /** A layout as `decodeSchema` builds one, from fields in id order. */
 const layoutOf = (list) => ({
@@ -181,7 +181,7 @@ describe('records', () => {
 
   it('read records where a process forbids making code from strings', () => {
     const script = `
-      const { decodeRecords, encodeRecords } = require(${JSON.stringify(require.resolve('../lib/codec.js'))});
+      const { decodeRecords, encodeRecords } = require(${JSON.stringify(require.resolve('../dist/codec.js'))});
       const list = [{ id: 1, name: 'a', kind: { type: 'int' }, optional: true, default: undefined }];
       const layout = { name: 't', fields: { list, positions: new Map([[1, 0]]), names: new Set(['a']), hasProto: false } };
       process.stdout.write(JSON.stringify(decodeRecords(layout, encodeRecords(layout, [{ a: 7 }]))));
@@ -209,8 +209,8 @@ describe('records', () => {
 
 describe('the stored schema', () => {
   it('reads bytes that are not a schema as damage, and as nothing else', () => {
-    const { encodeSchema, decodeSchema } = require('../lib/codec.js');
-    const { collection, schema, t } = require('../lib/schema.js');
+    const { encodeSchema, decodeSchema } = require('../dist/codec.js');
+    const { collection, schema, t } = require('../dist/schema.js');
     const bytes = encodeSchema(
       schema(1, {
         teams: collection({ name: t.string().primaryKey() }),

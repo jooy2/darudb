@@ -19,6 +19,8 @@ export default pluginTypeScriptESLint.config(
     // reviewed; the loader napi-rs generates for it is not ours to lint.
     'native.js',
     'native.d.ts',
+    // Written by `tsc` from `lib`.
+    'dist',
     'npm',
     '**/*-lock.json',
     '**/*-lock.yaml'
@@ -53,7 +55,7 @@ export default pluginTypeScriptESLint.config(
   {
     // The package is CommonJS, as the loader napi-rs generates is, so the
     // files it ships load each other with `require`.
-    files: ['index.js', 'lib/**/*.js'],
+    files: ['lib/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs'
     },

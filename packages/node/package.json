@@ -2,14 +2,13 @@
   "name": "darudb",
   "version": "0.1.0",
   "description": "An embedded database that keeps an application's data in one local file. The Node.js binding of the DaruDB engine.",
-  "main": "index.js",
+  "main": "dist/index.js",
   "types": "index.d.ts",
   "files": [
-    "index.js",
+    "dist",
     "index.d.ts",
     "native.js",
-    "native.d.ts",
-    "lib"
+    "native.d.ts"
   ],
   "author": "CDGet <jooy2.contact@gmail.com>",
   "license": "MIT",
@@ -23,15 +22,16 @@
     "url": "https://github.com/jooy2/darudb/issues"
   },
   "scripts": {
-    "build": "napi build --platform --release --js native.js --dts native.d.ts",
-    "build:debug": "napi build --platform --js native.js --dts native.d.ts",
-    "test": "node --test && tsc -p types",
+    "build": "napi build --platform --release --js native.js --dts native.d.ts && tsc",
+    "build:debug": "napi build --platform --js native.js --dts native.d.ts && tsc",
+    "build:ts": "tsc",
+    "test": "tsc && node --test && tsc -p types",
     "bench": "node bench/objects.mjs",
     "lint": "eslint . --report-unused-disable-directives",
     "lint:fix": "eslint . --report-unused-disable-directives --fix",
     "format": "prettier .",
     "format:fix": "prettier . --write",
-    "prepublishOnly": "napi prepublish -t npm",
+    "prepublishOnly": "tsc && napi prepublish -t npm",
     "version": "napi version"
   },
   "engines": {
