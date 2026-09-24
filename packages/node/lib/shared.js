@@ -9,7 +9,7 @@
  */
 
 const native = require('../native.js');
-const { codeError, invalid, decodeSchema, encodeQuery } = require('./codec');
+const { codeError, invalid, decodeSchema, encodeQuery, encodeParameters } = require('./codec');
 const { Query } = require('./query');
 
 /** A view of `bytes` as the `Buffer` the native layer takes, without a copy. */
@@ -104,10 +104,13 @@ function keyOf(key) {
   return key;
 }
 
-/** A query's parameters, checked before they reach the native layer. */
+/**
+ * A query's parameters, checked and encoded as the engine reads them. The
+ * buffer is lent, as `encodeParameters` says.
+ */
 function parametersOf(parameters) {
   if (parameters === undefined) {
-    return [];
+    return encodeParameters([]);
   }
 
   if (!Array.isArray(parameters)) {
@@ -123,7 +126,7 @@ function parametersOf(parameters) {
     }
   }
 
-  return parameters;
+  return encodeParameters(parameters);
 }
 
 /**

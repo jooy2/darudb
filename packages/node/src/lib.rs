@@ -32,7 +32,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use napi::bindgen_prelude::{
-    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, Either5, Null, ToNapiValue, TypeName,
+    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, Null, ToNapiValue, TypeName,
     Uint8Array,
 };
 use napi::{Env, Task};
@@ -45,12 +45,9 @@ use napi_derive::napi;
 /// convert.
 type Result<T> = napi::Result<T, &'static str>;
 
-/// A primary key or a parameter as JavaScript passes it: a number, a
-/// `bigint`, a string, or bytes.
+/// A primary key as JavaScript passes it: a number, a `bigint`, a string,
+/// or bytes.
 type JsKey = Either4<f64, BigInt, String, Uint8Array>;
-
-/// A value of a query parameter as JavaScript passes it.
-type JsParameter = Either5<bool, f64, BigInt, String, Uint8Array>;
 
 /// A primary key as JavaScript gets it back: a number, or a `bigint` when it
 /// is beyond what a number holds exactly, a string, or bytes.
@@ -640,28 +637,24 @@ impl NativeTransaction {
         self.now(|txn| txn.count_ir(&ir))
     }
 
-    /// The records a prepared query finds with `parameters`, as `find`
-    /// returns them.
+    /// The records a prepared query finds with `parameters`, encoded as
+    /// `Query::bind_encoded` reads them, as `find` returns them.
     #[napi(ts_return_type = "Buffer")]
     pub fn find_prepared<'env>(
         &self,
         env: &'env Env,
         prepared: &NativePrepared,
-        parameters: Vec<Option<JsParameter>>,
+        parameters: Buffer,
         first: bool,
     ) -> Result<BufferSlice<'env>> {
-        let query = prepared.bound(parameters, first)?;
+        let query = prepared.bound(&parameters, first)?;
 
         js_bytes(env, self.now(|txn| txn.find(&prepared.collection, &query))?)
     }
 
     #[napi]
-    pub fn count_prepared(
-        &self,
-        prepared: &NativePrepared,
-        parameters: Vec<Option<JsParameter>>,
-    ) -> Result<f64> {
-        let query = prepared.bound(parameters, false)?;
+    pub fn count_prepared(&self, prepared: &NativePrepared, parameters: Buffer) -> Result<f64> {
+        let query = prepared.bound(&parameters, false)?;
 
         self.now(|txn| txn.count(&prepared.collection, &query))
     }
@@ -965,36 +958,24 @@ fn with<T>(held: &Mutex<Option<Txn>>, operation: impl FnOnce(&mut Txn) -> Result
     operation(lock(held)?.as_mut().ok_or_else(ended)?)
 }
 
-/// Parses a query in the query language into IR, with its parameters.
+/// Parses a query in the query language into IR, with its parameters,
+/// encoded as `Query::bind_encoded` reads them.
 #[napi]
 pub fn parse_query(
     collection: String,
     text: String,
-    parameters: Vec<Option<JsParameter>>,
+    parameters: Buffer,
     count: bool,
 ) -> Result<Buffer> {
     let request = darudb::QueryRequest {
         collection,
-        query: darudb::Query::parse(&text, &values_of(parameters)?).map_err(to_js_error)?,
+        query: darudb::Query::prepare(&text)
+            .and_then(|query| query.bind_encoded(&parameters))
+            .map_err(to_js_error)?,
         count,
     };
 
     Ok(request.encode().map_err(to_js_error)?.into())
-}
-
-/// A query's parameters as the engine takes them.
-fn values_of(parameters: Vec<Option<JsParameter>>) -> Result<Vec<darudb::Value>> {
-    parameters
-        .into_iter()
-        .map(|parameter| match parameter {
-            None => Ok(darudb::Value::Null),
-            Some(Either5::A(value)) => Ok(darudb::Value::Bool(value)),
-            Some(Either5::B(value)) => Ok(number_value(value)),
-            Some(Either5::C(value)) => bigint_value(&value),
-            Some(Either5::D(value)) => Ok(darudb::Value::String(value)),
-            Some(Either5::E(value)) => Ok(darudb::Value::Bytes(value.to_vec())),
-        })
-        .collect()
 }
 
 /// A query parsed once, whose parameters are given values each time it runs.
@@ -1030,23 +1011,20 @@ impl NativePrepared {
     /// The IR of the query with `parameters` for its parameters, for the
     /// asynchronous API, which passes queries to the thread pool as IR.
     #[napi]
-    pub fn bind(&self, parameters: Vec<Option<JsParameter>>, count: bool) -> Result<Buffer> {
+    pub fn bind(&self, parameters: Buffer, count: bool) -> Result<Buffer> {
         let request = darudb::QueryRequest {
             collection: self.collection.clone(),
-            query: self.bound(parameters, false)?,
+            query: self.bound(&parameters, false)?,
             count,
         };
 
         Ok(request.encode().map_err(to_js_error)?.into())
     }
 
-    /// The query with `parameters` for its parameters, cut to its first
-    /// object with `first`.
-    fn bound(&self, parameters: Vec<Option<JsParameter>>, first: bool) -> Result<darudb::Query> {
-        let query = self
-            .query
-            .bind(&values_of(parameters)?)
-            .map_err(to_js_error)?;
+    /// The query with `parameters`, encoded as `Query::bind_encoded` reads
+    /// them, for its parameters, cut to its first object with `first`.
+    fn bound(&self, parameters: &[u8], first: bool) -> Result<darudb::Query> {
+        let query = self.query.bind_encoded(parameters).map_err(to_js_error)?;
 
         Ok(if first { query.first() } else { query })
     }

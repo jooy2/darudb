@@ -1358,6 +1358,44 @@ function writeExpression(writer, node, depth = 1) {
   writer.close(mark);
 }
 
+/** The buffer parameters are encoded in, reused as `queryWriter` is. */
+const parameterWriter = new Writer(64);
+
+/**
+ * The values of a query's parameters as the engine reads them
+ * (`Query::bind_encoded`): a record whose field 0 is how many there are and
+ * field `n + 1` the value of parameter `n`, a null one left out, since a
+ * record holds no null. The buffer is lent: the next parameters are encoded
+ * in it, so the caller hands it to the engine at once.
+ */
+function encodeParameters(parameters) {
+  const writer = parameterWriter;
+  let present = 0;
+
+  for (const parameter of parameters) {
+    if (parameter !== null && parameter !== undefined) {
+      present++;
+    }
+  }
+
+  writer.at = 0;
+  writer.varint(present + 1);
+  writer.varint(0);
+  writer.byte(INT);
+  writer.int(parameters.length);
+
+  for (let n = 0; n < parameters.length; n++) {
+    const parameter = parameters[n];
+
+    if (parameter !== null && parameter !== undefined) {
+      writer.varint(n + 1);
+      writeQueryValue(writer, parameter);
+    }
+  }
+
+  return Buffer.from(writer.bytes.buffer, writer.bytes.byteOffset, writer.at);
+}
+
 /** The buffer queries are encoded in, reused: a query is copied out of it. */
 const queryWriter = new Writer(256);
 
@@ -1453,5 +1491,6 @@ module.exports = {
   decodeRecords,
   decodeSchema,
   encodeSchema,
-  encodeQuery
+  encodeQuery,
+  encodeParameters
 };
