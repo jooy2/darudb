@@ -76,7 +76,7 @@ mod txn;
 #[cfg(not(any(unix, windows)))]
 compile_error!("DaruDB runs on Unix-like systems and Windows only.");
 
-pub use database::Database;
+pub use database::{Database, Opening, PendingMigration};
 pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};

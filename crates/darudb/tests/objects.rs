@@ -707,3 +707,90 @@ fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
     assert_eq!(records.len(), 2);
     assert_eq!(code(QueryRequest::decode(&[0xFF])), "INVALID_QUERY");
 }
+
+#[test]
+fn a_migration_can_stop_for_its_caller_between_its_steps() {
+    use darudb::Opening;
+
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let v3 = Schema::new(3)
+        .collection(
+            users_v1()
+                .optional("nickname", Type::String)
+                .optional("label", Type::String),
+        )
+        .collection(posts_v1());
+    let mut options = OpenOptions::new();
+
+    options
+        .schema(v3)
+        .migration(Migration::to(2).run(|migrating| {
+            for key in migrating.previous_keys("users")? {
+                let mut users = migrating.collection("users")?;
+                let mut user = users.get(key.clone())?.unwrap();
+
+                user.set("nickname", format!("n{}", key.as_int().unwrap()));
+                users.put(user)?;
+            }
+
+            Ok(())
+        }));
+
+    // Dropped halfway, the migration leaves the file at version 1.
+    let Opening::Migrating(mut pending) = options.open_migrating(dir.path("app.darudb")).unwrap()
+    else {
+        panic!("the file holds version 1");
+    };
+
+    assert_eq!((pending.previous_version(), pending.version()), (1, 3));
+    assert_eq!(pending.next_step().unwrap(), Some(2));
+    drop(pending);
+    assert_eq!(objects(&open(&dir, v1(), &[]).unwrap(), "users").len(), 2);
+
+    let Opening::Migrating(mut pending) = options.open_migrating(dir.path("app.darudb")).unwrap()
+    else {
+        panic!("the file holds version 1");
+    };
+    let mut labelled = Vec::new();
+
+    // Each step runs its own function first, then returns to the caller,
+    // which runs one of its own in the same transaction.
+    while let Some(version) = pending.next_step().unwrap() {
+        let mut migrating = pending.migrating();
+
+        for key in migrating.previous_keys("users").unwrap() {
+            let mut users = migrating.collection("users").unwrap();
+            let mut user = users.get(key).unwrap().unwrap();
+            let nickname = user
+                .get("nickname")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+
+            user.set("label", format!("{nickname} at {version}"));
+            labelled.push(version);
+            users.put(user).unwrap();
+        }
+    }
+
+    let db = pending.finish().unwrap();
+
+    assert_eq!(labelled, [2, 2, 3, 3]);
+    assert_eq!(
+        objects(&db, "users")
+            .iter()
+            .map(|user| user
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_owned())
+            .collect::<Vec<_>>(),
+        ["n1 at 3", "n2 at 3"]
+    );
+    assert!(matches!(
+        options.open_migrating(dir.path("app.darudb")).unwrap(),
+        Opening::Open(_)
+    ));
+}

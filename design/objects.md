@@ -299,7 +299,7 @@ A migration from version `m` to version `n` runs in one write transaction, and t
 
 Inside the one write transaction, the engine stores the new schema before it runs the functions, so that they write objects through the same checks as any other transaction. Nothing outside the transaction can tell the order apart.
 
-A binding runs the migration functions in its own language, called back from the engine while the file is being opened.
+A binding runs the migration functions in its own language. The engine does not call back into it: opening stops once the new schema is stored and its indexes are built, and hands the migration's write transaction to the binding, which asks for the version steps one at a time, runs its function for each in the same transaction, and then asks the engine to delete what the steps delete and commit. Dropping the migration instead leaves the file as it was.
 
 ### Several processes
 

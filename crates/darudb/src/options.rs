@@ -6,7 +6,7 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 use crate::crypto::{PasswordCost, Secret};
-use crate::database::Database;
+use crate::database::{Database, Opening};
 use crate::error::{Error, Result};
 use crate::format::{self, Cipher, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 use crate::instance::Settings;
@@ -216,6 +216,18 @@ impl OpenOptions {
         self.validate()?;
 
         Database::open_with(path.as_ref(), self)
+    }
+
+    /// Opens the database at `path` like [`open`](Self::open), except that a
+    /// migration stops for the caller between its version steps: see
+    /// [`PendingMigration`]. A language binding runs its migration functions
+    /// this way.
+    ///
+    /// [`PendingMigration`]: crate::PendingMigration
+    pub fn open_migrating(&self, path: impl AsRef<Path>) -> Result<Opening> {
+        self.validate()?;
+
+        Database::opening(path.as_ref(), self)
     }
 
     pub(crate) fn creates(&self) -> bool {

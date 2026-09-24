@@ -6,11 +6,13 @@
 //! it builds and drops, the application's migration functions and the
 //! collections it deletes commit together or not at all.
 
+use std::collections::VecDeque;
+use std::fmt;
 use std::ops::Bound;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::declare::{Migration, Schema};
+use super::declare::{Migration, MigrationFn, Schema};
 use super::objects::{
     self, CollectionWriter, META, SCHEMA_KEY, Source, counter, index_entries, index_tree, internal,
     records,
@@ -48,13 +50,22 @@ pub(crate) fn check(declared: &Schema, migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
-/// Stores, checks or migrates the schema of the file behind `shared`, and
-/// returns the stored schema its handle works with.
+/// What opening a file with a declared schema leads to.
+pub(crate) enum Opened {
+    /// The file holds the declared schema, stored just now if it had none.
+    Ready(Arc<OpenSchema>),
+    /// A migration in its write transaction, waiting for its version steps
+    /// to run and for its commit. Boxed: a write transaction is large.
+    Migrating(Box<Pending>),
+}
+
+/// Stores or checks the schema of the file behind `shared`, or begins a
+/// migration from an older one.
 pub(crate) fn open(
     shared: &Arc<Shared>,
     declared: &Schema,
     migrations: &[Migration],
-) -> Result<Arc<OpenSchema>> {
+) -> Result<Opened> {
     // Most opens find the declared schema stored, which a read transaction
     // shows without waiting for the writer lock.
     {
@@ -64,7 +75,7 @@ pub(crate) fn open(
             let schema = decode(&shared.path, &read, &encoded)?;
 
             if let Resolution::Unchanged = resolve(declared, Some(&schema), migrations)? {
-                return Ok(Arc::new(OpenSchema { schema, encoded }));
+                return Ok(Opened::Ready(Arc::new(OpenSchema { schema, encoded })));
             }
         }
     }
@@ -84,7 +95,7 @@ pub(crate) fn open(
                 return Err(internal("an unchanged schema that is not stored"));
             };
 
-            return Ok(Arc::new(OpenSchema { schema, encoded }));
+            return Ok(Opened::Ready(Arc::new(OpenSchema { schema, encoded })));
         }
     };
     let schema = Arc::new(OpenSchema {
@@ -105,27 +116,109 @@ pub(crate) fn open(
         build_index(&mut txn, &schema.schema, *collection, index)?;
     }
 
-    if let Some(previous) = &plan.from {
-        if !plan.functions.is_empty() {
-            let mut migrating = Migrating {
-                txn: &mut txn,
-                previous: lenient(previous),
-            };
+    let Some(previous) = plan.from else {
+        txn.commit()?;
 
-            for function in &plan.functions {
-                function(&mut migrating)?;
-            }
+        return Ok(Opened::Ready(schema));
+    };
+    let mut functions = plan.functions.into_iter().peekable();
+    let steps = (previous.version + 1..=schema.schema.version)
+        .map(|version| {
+            let function = functions
+                .next_if(|(step, _)| *step == version)
+                .map(|(_, function)| function);
+
+            (version, function)
+        })
+        .collect();
+
+    Ok(Opened::Migrating(Box::new(Pending {
+        txn,
+        schema,
+        lenient: lenient(&previous),
+        previous,
+        steps,
+        delete: plan.delete,
+    })))
+}
+
+/// A migration in its write transaction, with the version steps still to
+/// run. The stored schema is the new one already, and the indexes are
+/// built; the functions run step by step, and the collections the steps
+/// delete go at the end, before the commit.
+pub(crate) struct Pending {
+    txn: WriteTransaction,
+    schema: Arc<OpenSchema>,
+    previous: StoredSchema,
+    /// `previous` with every field optional, for reading objects the
+    /// functions may have written already.
+    lenient: StoredSchema,
+    /// The version steps to run, each with its function if it has one.
+    steps: VecDeque<(u64, Option<MigrationFn>)>,
+    delete: Vec<u64>,
+}
+
+impl fmt::Debug for Pending {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pending")
+            .field("previous_version", &self.previous.version)
+            .field("version", &self.schema.schema.version)
+            .field(
+                "steps",
+                &self
+                    .steps
+                    .iter()
+                    .map(|(version, _)| *version)
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl Pending {
+    pub(crate) fn previous_version(&self) -> u64 {
+        self.previous.version
+    }
+
+    pub(crate) fn version(&self) -> u64 {
+        self.schema.schema.version
+    }
+
+    /// Runs the function of the next version step, if it has one, and
+    /// returns the step's version; `None` once every step has run.
+    pub(crate) fn next_step(&mut self) -> Result<Option<u64>> {
+        let Some((version, function)) = self.steps.pop_front() else {
+            return Ok(None);
+        };
+
+        if let Some(function) = function {
+            function(&mut self.migrating())?;
         }
 
-        // Last, so that the functions can still read what they delete.
-        for collection in &plan.delete {
-            delete_collection(&mut txn, previous, *collection)?;
+        Ok(Some(version))
+    }
+
+    pub(crate) fn migrating(&mut self) -> Migrating<'_> {
+        Migrating {
+            txn: &mut self.txn,
+            previous: &self.lenient,
         }
     }
 
-    txn.commit()?;
+    /// Runs the steps left, deletes the collections the steps delete, and
+    /// commits the migration.
+    pub(crate) fn finish(mut self) -> Result<Arc<OpenSchema>> {
+        while self.next_step()?.is_some() {}
 
-    Ok(schema)
+        // Last, so that the functions can still read what they delete.
+        for collection in &self.delete {
+            delete_collection(&mut self.txn, &self.previous, *collection)?;
+        }
+
+        self.txn.commit()?;
+
+        Ok(self.schema)
+    }
 }
 
 /// The stored schema whose record is `encoded`.
@@ -258,7 +351,7 @@ fn lenient(schema: &StoredSchema) -> StoredSchema {
 pub struct Migrating<'a> {
     txn: &'a mut WriteTransaction,
     /// The schema before the migration, every field of it optional.
-    previous: StoredSchema,
+    previous: &'a StoredSchema,
 }
 
 impl Migrating<'_> {
@@ -281,7 +374,7 @@ impl Migrating<'_> {
     /// The primary keys of every object of collection `collection`, named as
     /// the schema before the migration named it, in key order.
     pub fn previous_keys(&self, collection: &str) -> Result<Vec<Value>> {
-        let definition = &self.previous.collections[objects::position(&self.previous, collection)?];
+        let definition = &self.previous.collections[objects::position(self.previous, collection)?];
 
         Source::range_in(
             &*self.txn,
@@ -314,7 +407,7 @@ impl Migrating<'_> {
     /// it: afterwards, the fields the migration dropped read as a record
     /// without them does, as their defaults or null.
     pub fn previous(&self, collection: &str, key: impl Into<Value>) -> Result<Option<Object>> {
-        let definition = &self.previous.collections[objects::position(&self.previous, collection)?];
+        let definition = &self.previous.collections[objects::position(self.previous, collection)?];
 
         objects::get(&*self.txn, definition, &key.into())
     }

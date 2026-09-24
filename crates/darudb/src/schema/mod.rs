@@ -25,7 +25,7 @@ mod tests;
 pub use declare::{Collection, Embedded, Migration, Schema, Type};
 pub use objects::{CollectionReader, CollectionWriter};
 pub use open::Migrating;
-pub(crate) use open::{check, open};
+pub(crate) use open::{Opened, Pending, check, open};
 
 use crate::error::Result;
 use crate::txn::{ReadTransaction, WriteTransaction};

@@ -35,8 +35,9 @@ pub(crate) struct Plan {
     pub(crate) drop: Vec<u64>,
     /// Collections whose trees go.
     pub(crate) delete: Vec<u64>,
-    /// The migration functions to run, in version order.
-    pub(crate) functions: Vec<MigrationFn>,
+    /// The migration functions to run, with the versions they migrate to,
+    /// in version order.
+    pub(crate) functions: Vec<(u64, MigrationFn)>,
 }
 
 /// What `declared` does to `stored`, given the application's `migrations`.
@@ -193,7 +194,10 @@ fn plan(declared: &Schema, old: &StoredSchema, steps: &[&Migration]) -> Result<P
         build,
         drop,
         delete,
-        functions: steps.iter().filter_map(|step| step.run.clone()).collect(),
+        functions: steps
+            .iter()
+            .filter_map(|step| step.run.clone().map(|run| (step.version, run)))
+            .collect(),
     })
 }
 

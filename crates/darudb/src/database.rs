@@ -16,7 +16,7 @@ use crate::format::{
 use crate::instance::{Entry, FileKey, Shared, find, registry};
 use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
-use crate::schema;
+use crate::schema::{self, Migrating, Opened, Pending};
 use crate::storage::{self, Created, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 
@@ -179,20 +179,35 @@ impl Database {
     /// Opens or creates the database, once the options are known to be valid,
     /// and then stores, checks or migrates its schema.
     pub(crate) fn open_with(path: &Path, options: &OpenOptions) -> Result<Self> {
+        Self::opening(path, options)?.complete()
+    }
+
+    /// Opens or creates the database, and stores or checks its schema, or
+    /// begins its migration.
+    pub(crate) fn opening(path: &Path, options: &OpenOptions) -> Result<Opening> {
         Self::with_schema(open_shared(path, options)?, options)
     }
 
-    /// The handle to `shared`, once the file holds the declared schema.
+    /// The handle to `shared` once the file holds the declared schema, or the
+    /// migration that is to get it there.
     ///
     /// It runs after the registry of open files is unlocked: a migration can
     /// take long, and its functions may open other databases.
-    fn with_schema(shared: Arc<Shared>, options: &OpenOptions) -> Result<Self> {
-        let schema = match options.declared() {
-            Some((declared, migrations)) => Some(schema::open(&shared, declared, migrations)?),
-            None => None,
+    fn with_schema(shared: Arc<Shared>, options: &OpenOptions) -> Result<Opening> {
+        let Some((declared, migrations)) = options.declared() else {
+            return Ok(Opening::Open(Self {
+                shared,
+                schema: None,
+            }));
         };
 
-        Ok(Self { shared, schema })
+        Ok(match schema::open(&shared, declared, migrations)? {
+            Opened::Ready(schema) => Opening::Open(Self {
+                shared,
+                schema: Some(schema),
+            }),
+            Opened::Migrating(pending) => Opening::Migrating(PendingMigration { shared, pending }),
+        })
     }
 
     /// Opens a database whose file is `io`, bypassing the file system: the
@@ -208,7 +223,7 @@ impl Database {
             None,
         )?;
 
-        Self::with_schema(shared, options)
+        Self::with_schema(shared, options)?.complete()
     }
 
     /// Writes a new database onto the empty `io` and opens it.
@@ -227,13 +242,86 @@ impl Database {
 
         let shared = open_io(io, Locks::none(), Access::Alone, path, options, data_key)?;
 
-        Self::with_schema(shared, options)
+        Self::with_schema(shared, options)?.complete()
     }
 
     /// The instance behind this handle, for the engine's own tests.
     #[cfg(test)]
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
+    }
+}
+
+/// What opening a database leads to, with [`OpenOptions::open_migrating`].
+#[derive(Debug)]
+pub enum Opening {
+    /// The database is open, and holds the declared schema.
+    Open(Database),
+    /// The file holds an older version of the schema, and the migration to
+    /// the declared one is under way.
+    Migrating(PendingMigration),
+}
+
+impl Opening {
+    /// The database, once any migration has run its steps and committed.
+    pub fn complete(self) -> Result<Database> {
+        match self {
+            Opening::Open(database) => Ok(database),
+            Opening::Migrating(pending) => pending.finish(),
+        }
+    }
+}
+
+/// A migration under way: the write transaction that migrates the file, and
+/// the version steps it has still to run.
+///
+/// The stored schema is the declared one already, and new indexes are built.
+/// [`next_step`](Self::next_step) runs the steps in version order: each runs
+/// the function its [`Migration`](crate::Migration) registered, if any, and
+/// returns its version, so that the caller can run a function of its own for
+/// the step through [`migrating`](Self::migrating). A language binding runs
+/// its migration functions this way, since they cannot be Rust closures.
+/// [`finish`](Self::finish) commits the migration; dropping it instead leaves
+/// the file as it was.
+#[derive(Debug)]
+pub struct PendingMigration {
+    shared: Arc<Shared>,
+    pending: Box<Pending>,
+}
+
+impl PendingMigration {
+    /// The schema version the file holds.
+    pub fn previous_version(&self) -> u64 {
+        self.pending.previous_version()
+    }
+
+    /// The schema version the migration leads to.
+    pub fn version(&self) -> u64 {
+        self.pending.version()
+    }
+
+    /// Runs the function of the next version step, if its migration
+    /// registered one, and returns the step's version; `None` once every step
+    /// has run. An error ends the migration: drop it, and the file keeps its
+    /// old schema and data.
+    pub fn next_step(&mut self) -> Result<Option<u64>> {
+        self.pending.next_step()
+    }
+
+    /// The migration's write transaction, as a migration function gets it.
+    pub fn migrating(&mut self) -> Migrating<'_> {
+        self.pending.migrating()
+    }
+
+    /// Runs the steps left, deletes the collections the steps delete, and
+    /// commits the migration. Returns the open database.
+    pub fn finish(self) -> Result<Database> {
+        let schema = self.pending.finish()?;
+
+        Ok(Database {
+            shared: self.shared,
+            schema: Some(schema),
+        })
     }
 }
 
