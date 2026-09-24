@@ -1,6 +1,6 @@
 # Objects and queries
 
-Status: proposed.
+Status: accepted.
 
 The object layer of phase 4: collections of typed objects, a schema that says what they hold, indexes, queries, and migrations from one schema version to the next. It is built on the storage kernel's named trees of byte keys and byte values ([File format](file-format.md)), inside the kernel's transactions, and changes nothing below it: a commit of objects is a commit of trees, with the durability, recovery and locking the other documents give it.
 

@@ -1,6 +1,6 @@
 # Working in this repository
 
-What a reader has to know before changing anything here, and where to find the rest. [CONTRIBUTING.md](CONTRIBUTING.md) has the full procedure and every command; this file is the map, the requirements and the design decisions. [TODO.md](TODO.md) is the roadmap, the open questions and the work that outlived a session. [design/](design/README.md) holds the specifications of the file format, the commit and recovery protocol, and the locking protocol.
+What a reader has to know before changing anything here, and where to find the rest. [CONTRIBUTING.md](CONTRIBUTING.md) has the full procedure and every command; this file is the map, the requirements and the design decisions. [TODO.md](TODO.md) is the roadmap, the open questions and the work that outlived a session. [design/](design/README.md) holds the specifications of the file format, the commit and recovery protocol, the locking protocol, and the object layer.
 
 Decisions below carry one of two marks:
 
@@ -114,7 +114,7 @@ Specified in [design/file-format.md](design/file-format.md).
 - **No mmap; positional reads and writes (`pread` / `pwrite`) through our own page cache.** Memory-mapped files are hard to prove sound in Rust, because another process can change the mapped bytes under a live reference, and they conflict with both multi-process access and encryption. The cost is the zero-copy read path mmap would give, so the performance goal has to be proven by benchmarks against this design.
 - **Page size**: a power of two from 4096 to 65536, recorded in the header; 4096 by default until the benchmarks decide. It is independent of the operating system's page size, which is never assumed (Android now uses 16 KB pages).
 - **Every page reserves a 24-byte nonce field, encrypted or not**, so a tree has the same shape either way and one test suite covers both.
-- **Storage layout** (**[Tentative]**, phase 4): a record tree `(collection, primary key) → record bytes`, and an index tree `(collection, field, value, primary key)`.
+- **Objects on the kernel** (**[Decided]**, specified in [design/objects.md](design/objects.md)): a tree per collection from the encoded primary key to the object's record, and a tree per index, all under names beginning with `0x00`. Records hold field ids rather than names, in a format the bindings exchange with the engine.
 
 ### Crash safety and recovery **[Decided]**
 
