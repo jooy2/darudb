@@ -96,6 +96,8 @@ A write transaction dropped without `commit` is aborted, and nothing it did reac
 
 Several processes can have one file open at once. Each sees the others' commits as soon as they are made, one writes at a time, and a reader never waits for a writer. `begin_write` waits for a writer in another process as it does for one in its own, up to the busy timeout. The processes coordinate through the operating system's file locks and nothing else, so a process that dies at any moment leaves nothing the others have to clean up. Those locks, and the syncs a commit waits for, work only on a local disk: a database on a network file system such as NFS or SMB is refused with `UNSUPPORTED_FILE_SYSTEM`. Two more rules come with the locks. Nothing else in a process that has a database open may open the file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. And on iOS, an app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
 
+Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. `OpenOptions::cache_size` sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
+
 Opened with a schema, a database also holds collections of typed objects, kept in trees of the engine's own that `tree_names` does not list. [Collections and objects](./objects.md) shows how.
 
 #### Encryption

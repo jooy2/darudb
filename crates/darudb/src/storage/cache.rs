@@ -70,6 +70,12 @@ impl<V> Cache<V> {
         }
     }
 
+    /// How many pages the cache holds at most.
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// The cached copy of page `page` with check `check`, if there is one.
     pub(crate) fn get(&self, page: u64, check: &Check) -> Option<Arc<V>> {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);

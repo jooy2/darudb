@@ -25,8 +25,10 @@ use crate::format::{
 use crate::lock::{LockError, Locks};
 use crate::storage::{Cache, DbFile, Pager};
 
-/// How many decoded pages each open file keeps in memory.
-const CACHE_PAGES: usize = 4096;
+/// The fewest pages the page cache holds, whatever its size in bytes: a
+/// lookup reads a page on each level of a tree, and a cache that cannot hold
+/// a few paths from the root would read them all again every time.
+const MIN_CACHE_PAGES: usize = 16;
 
 /// How long the thread that ends a due window waits for a running writer
 /// before it looks at the window again.
@@ -41,6 +43,8 @@ const HEADER_ATTEMPTS: usize = 8;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Settings {
     pub(crate) busy_timeout: Duration,
+    /// The memory the page cache may take, in bytes.
+    pub(crate) cache_size: usize,
     pub(crate) max_unsynced_pages: u64,
     pub(crate) max_unsynced_time: Duration,
     pub(crate) password_cost: PasswordCost,
@@ -150,7 +154,10 @@ impl Shared {
             },
             records: [None; SLOT_COUNT],
         };
-        let cache = Arc::new(Cache::new(CACHE_PAGES));
+        let page_size = usize::try_from(static_header.page_size).unwrap_or(usize::MAX);
+        let cache = Arc::new(Cache::new(
+            (settings.cache_size / page_size).max(MIN_CACHE_PAGES),
+        ));
         let loader = Loader::new(Arc::clone(&pager), Arc::clone(&cache));
 
         Self {
@@ -1049,4 +1056,64 @@ pub(crate) fn find(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> Option
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::MIN_CACHE_PAGES;
+    use crate::storage::sim::SimDisk;
+    use crate::{Database, OpenOptions};
+
+    #[test]
+    fn the_cache_holds_the_pages_its_size_fits_and_never_fewer_than_the_least() {
+        for (page_size, bytes, pages) in [
+            (4096, 16 << 20, 4096),
+            (65536, 16 << 20, 256),
+            (16384, 1 << 20, 64),
+            (65536, 3 * 65536, MIN_CACHE_PAGES),
+            (4096, 0, MIN_CACHE_PAGES),
+        ] {
+            let db = Database::create_io(
+                Arc::new(SimDisk::default()),
+                page_size,
+                OpenOptions::new().cache_size(bytes),
+            )
+            .unwrap();
+
+            assert_eq!(
+                db.shared().cache.capacity(),
+                pages,
+                "{bytes} bytes of {page_size}-byte pages"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_reads_what_it_wrote_through_the_smallest_cache() {
+        let db = Database::create_io(
+            Arc::new(SimDisk::default()),
+            4096,
+            OpenOptions::new().cache_size(0),
+        )
+        .unwrap();
+        let key = |n: u32| format!("key {n:05}").into_bytes();
+        let mut txn = db.begin_write().unwrap();
+
+        for n in 0..5000 {
+            txn.insert("t", &key(n), &n.to_le_bytes()).unwrap();
+        }
+
+        txn.commit().unwrap();
+
+        let txn = db.begin_read().unwrap();
+
+        for n in (0..5000).rev() {
+            assert_eq!(
+                txn.get("t", &key(n)).unwrap().as_deref(),
+                Some(&n.to_le_bytes()[..])
+            );
+        }
+    }
 }

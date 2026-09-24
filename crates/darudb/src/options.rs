@@ -12,6 +12,9 @@ use crate::format::{self, Cipher, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZ
 use crate::instance::Settings;
 use crate::schema::{self, Migration, Schema};
 
+/// The memory the page cache of a file may take by default, in bytes.
+const DEFAULT_CACHE_SIZE: usize = 32 << 20;
+
 /// Options for opening a database, in the style of [`std::fs::OpenOptions`].
 ///
 /// ```no_run
@@ -25,6 +28,7 @@ pub struct OpenOptions {
     create: bool,
     page_size: u32,
     busy_timeout: Duration,
+    cache_size: usize,
     max_unsynced_pages: u64,
     max_unsynced_time: Duration,
     secret: Option<Secret>,
@@ -44,6 +48,7 @@ impl OpenOptions {
             create: true,
             page_size: DEFAULT_PAGE_SIZE,
             busy_timeout: Duration::from_secs(5),
+            cache_size: DEFAULT_CACHE_SIZE,
             max_unsynced_pages: 16_384,
             max_unsynced_time: Duration::from_secs(1),
             secret: None,
@@ -82,6 +87,24 @@ impl OpenOptions {
     /// options of the handle that opened the file first apply to all of them.
     pub fn busy_timeout(&mut self, timeout: Duration) -> &mut Self {
         self.busy_timeout = timeout;
+        self
+    }
+
+    /// How much memory the file's page cache may take, in bytes. 32 MiB by
+    /// default.
+    ///
+    /// The cache keeps pages read from the file, checked and decrypted, so
+    /// that reading one again costs neither a read nor a check. It holds as
+    /// many pages as fit in `bytes`, and at least 16 whatever `bytes` says, and
+    /// it fills only as pages are read, so a database smaller than the cache
+    /// never takes all of it. A larger cache speeds up reading a database
+    /// that does not fit in it; a process with little memory, such as a
+    /// mobile app extension, can give it less.
+    ///
+    /// Every handle to a file in one process shares one cache, and the
+    /// options of the handle that opened the file first apply to all of them.
+    pub fn cache_size(&mut self, bytes: usize) -> &mut Self {
+        self.cache_size = bytes;
         self
     }
 
@@ -241,6 +264,7 @@ impl OpenOptions {
     pub(crate) fn settings(&self) -> Settings {
         Settings {
             busy_timeout: self.busy_timeout,
+            cache_size: self.cache_size,
             max_unsynced_pages: self.max_unsynced_pages,
             max_unsynced_time: self.max_unsynced_time,
             password_cost: self.password_cost,

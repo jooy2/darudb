@@ -118,7 +118,7 @@ A Windows probe can make a reader's snapshot lock wait for an instant. The reade
 
 ## The page cache
 
-Each process caches the pages it reads, keyed by page number **and** check. A reader always knows the check it expects, from the pointer that led it to the page. So a cached copy of an older page at the same number never matches, and it is never used.
+Each process caches the pages it reads, keyed by page number **and** check, in one cache for each open file. The cache holds as many pages as fit in the size the file was opened with, 32 MiB by default, and never fewer than 16; it fills only as pages are read, and lets the oldest go first. A reader always knows the check it expects, from the pointer that led it to the page. So a cached copy of an older page at the same number never matches, and it is never used.
 
 A cached page is kept as its bytes, checked once when it is read, and its keys and values are read in place; a write transaction that changes a leaf copies its page and changes the copy in place, and one that changes a branch decodes its own copy of it. A decoded node would cost an allocation for every key and value, both when a page is read and when the cache lets it go.
 
