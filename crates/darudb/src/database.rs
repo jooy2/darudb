@@ -65,15 +65,14 @@ impl Database {
         WriteTransaction::begin(&self.shared)
     }
 
-    /// Makes every commit so far durable, deferred ones included.
+    /// Makes every commit so far durable, deferred ones included, whichever
+    /// process made them.
     ///
-    /// It waits for a write transaction that is running, up to the busy
-    /// timeout, and does nothing when there is no deferred commit to make
-    /// durable.
+    /// It does nothing when there is no deferred commit to make durable.
+    /// Otherwise it waits for a write transaction that is running, in this
+    /// process or another, up to the busy timeout.
     pub fn sync(&self) -> Result<()> {
-        let _writer = self.shared.acquire_writer()?;
-
-        self.shared.sync_published()
+        self.shared.sync()
     }
 
     /// Whether the database is encrypted.

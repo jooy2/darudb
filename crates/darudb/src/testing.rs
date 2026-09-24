@@ -58,6 +58,14 @@ pub(crate) struct Helper {
     lines: std::sync::mpsc::Receiver<String>,
 }
 
+/// In a helper, waits for the test that started it to [`tell`](Helper::tell)
+/// it to go on.
+pub(crate) fn wait_to_be_told() {
+    let mut line = String::new();
+
+    std::io::stdin().read_line(&mut line).unwrap();
+}
+
 /// The variable that hands a helper its database's path.
 pub(crate) const HELPER_PATH: &str = "DARUDB_HELPER_PATH";
 
@@ -71,7 +79,7 @@ impl Helper {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture", "--test-threads", "1"])
             .env(HELPER_PATH, path)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -108,6 +116,16 @@ impl Helper {
         }
 
         panic!("the helper never printed `{word}`");
+    }
+
+    /// Lets a helper waiting in [`wait_to_be_told`] go on.
+    pub(crate) fn tell(&mut self) {
+        use std::io::Write;
+
+        let stdin = self.child.stdin.as_mut().unwrap();
+
+        stdin.write_all(b"go on\n").unwrap();
+        stdin.flush().unwrap();
     }
 
     /// Kills the helper and waits until it is gone, with every lock it held.

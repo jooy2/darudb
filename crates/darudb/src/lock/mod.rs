@@ -7,6 +7,7 @@
 //! | Byte            | Lock                                                        |
 //! | --------------- | ----------------------------------------------------------- |
 //! | 2^62            | Open: held for as long as the process has the file open     |
+//! | 2^62 + 1        | Writer: held by the process whose transaction is writing    |
 //! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot |
 //!
 //! No mutex lives in shared memory and no lock file has a layout, so a process
@@ -25,9 +26,9 @@
 //! it is dropped.
 //!
 //! For now the open lock is held exclusively for as long as the file is open,
-//! so a second process cannot open the file at all. The snapshot locks are
-//! taken already, and the rest of the protocol, which lets a second process
-//! in, is not in place yet.
+//! so a second process cannot open the file at all. The writer and snapshot
+//! locks are taken already, and converting the open lock, which lets a second
+//! process in, is not in place yet.
 
 mod sys;
 
@@ -44,6 +45,9 @@ use crate::storage::DbFile;
 
 /// The open lock's byte, 2^62, the first of the lock bytes.
 const OPEN_BYTE: u64 = 1 << 62;
+
+/// The writer lock's byte.
+const WRITER_BYTE: u64 = OPEN_BYTE + 1;
 
 /// The lock byte of snapshot 0. Snapshot `s` is locked at this byte plus `s`,
 /// which stays below 2^63 because every transaction id is below
@@ -137,6 +141,24 @@ impl Locks {
         Ok(())
     }
 
+    /// Takes the writer lock, waiting up to `deadline` for another process's
+    /// write transaction to end. The attempt is repeated rather than blocking,
+    /// so that the wait has a limit on every platform.
+    pub(crate) fn lock_writer(&self, deadline: Option<Instant>) -> Result<(), LockError> {
+        poll(deadline, || {
+            self.try_lock(WRITER_BYTE, 1, Mode::Exclusive)
+                .map_err(LockError::Io)
+        })
+    }
+
+    /// Releases the writer lock.
+    pub(crate) fn unlock_writer(&self) {
+        // If this fails, the lock goes when the file closes, and until then
+        // other processes wait for it and fail with `BUSY`. There is nothing
+        // better to do with the failure.
+        let _ = self.unlock(WRITER_BYTE, 1);
+    }
+
     /// Registers a read transaction on snapshot `txn`, taking the snapshot's
     /// lock if no other read transaction in this process holds it already.
     ///
@@ -186,11 +208,59 @@ impl Locks {
         lock(&self.snapshots).keys().next().copied()
     }
 
+    /// The largest of `groups`, retained group ids in ascending order, that no
+    /// registered snapshot in any process can reach. A snapshot `s` reaches
+    /// group `F` only if `s < F`.
+    ///
+    /// This process's snapshots rule out the groups above the oldest of them
+    /// without a call to the operating system. For the rest, one question
+    /// usually settles it: whether any snapshot lies below the largest group
+    /// left. Only when one does are the groups bisected with the same
+    /// question (`design/locking.md`, "Finding the oldest snapshot").
+    ///
+    /// The caller holds the writer lock. A snapshot registered from here on is
+    /// at least the published commit, above every retained group, so the
+    /// answers do not change while it looks.
+    pub(crate) fn reclaimable(&self, groups: &[u64]) -> Result<Option<u64>, LockError> {
+        let groups = match self.oldest_local() {
+            Some(oldest) => &groups[..groups.partition_point(|group| *group <= oldest)],
+            None => groups,
+        };
+
+        last_unreached(groups, |group| self.snapshot_below(group))
+    }
+
+    /// Whether a read transaction in any process uses a snapshot below `txn`.
+    ///
+    /// One call into the operating system answers for every other process:
+    /// whether any lock lies on the snapshot bytes below `txn`'s. It cannot
+    /// say which, which is why [`reclaimable`](Self::reclaimable) bisects with
+    /// this question rather than asking for the oldest snapshot.
+    pub(crate) fn snapshot_below(&self, txn: u64) -> Result<bool, LockError> {
+        if txn == 0 {
+            return Ok(false);
+        }
+
+        if self.oldest_local().is_some_and(|oldest| oldest < txn) {
+            return Ok(true);
+        }
+
+        snapshot_byte(txn)?;
+        self.is_locked(SNAPSHOT_BASE, txn).map_err(LockError::Io)
+    }
+
     /// Takes a lock without waiting; `true` if it was granted.
     fn try_lock(&self, start: u64, len: u64, mode: Mode) -> io::Result<bool> {
         match &self.handles {
             None => Ok(true),
             Some(handles) => sys::try_lock(lock(handles)[0].as_file(), start, len, mode),
+        }
+    }
+
+    fn is_locked(&self, start: u64, len: u64) -> io::Result<bool> {
+        match &self.handles {
+            None => Ok(false),
+            Some(handles) => sys::is_locked(lock(handles)[0].as_file(), start, len),
         }
     }
 
@@ -231,6 +301,38 @@ impl Drop for Locks {
             let _ = self.unlock(OPEN_BYTE, 1);
         }
     }
+}
+
+/// The largest of `groups`, in ascending order, for which `below` says no
+/// snapshot lies below it. `below` only ever turns from `false` to `true` as
+/// the group grows, which is what lets one question about the largest group
+/// settle the common case and bisection settle the rest.
+fn last_unreached<E>(
+    groups: &[u64],
+    mut below: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<Option<u64>, E> {
+    let Some(&largest) = groups.last() else {
+        return Ok(None);
+    };
+
+    if !below(largest)? {
+        return Ok(Some(largest));
+    }
+
+    // The first group some snapshot reaches lies in `low..=high`.
+    let (mut low, mut high) = (0, groups.len() - 1);
+
+    while low < high {
+        let middle = low + (high - low) / 2;
+
+        if below(groups[middle])? {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+
+    Ok(low.checked_sub(1).map(|index| groups[index]))
 }
 
 /// The lock byte of snapshot `txn`.

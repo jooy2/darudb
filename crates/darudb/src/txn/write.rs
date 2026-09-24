@@ -66,7 +66,7 @@ pub struct WriteTransaction {
 impl WriteTransaction {
     pub(crate) fn begin(shared: &Arc<Shared>) -> Result<Self> {
         let writer = shared.acquire_writer()?;
-        let header = shared.header();
+        let header = shared.refresh_header()?;
         let base = header.published()?;
         let durable = if header.selector.unsynced {
             header
@@ -119,11 +119,9 @@ impl WriteTransaction {
         let mut space = Space::new(Arc::clone(&shared.pager), txn, base.page_count, free);
 
         // Reclaim every retained group that no snapshot and no possible
-        // recovery can still reach.
-        let threshold = shared
-            .oldest_snapshot()
-            .map_or(durable.txn, |oldest| oldest.min(durable.txn));
-        let mut reclaimed = Vec::new();
+        // recovery can still reach. Recovery can go back to the durable
+        // commit, which reaches every group above it.
+        let mut retained = Vec::new();
 
         for entry in btree::Range::new(
             loader,
@@ -136,7 +134,22 @@ impl WriteTransaction {
             let (group, _) =
                 decode_retained_key(&key).map_err(|reason| corrupted(shared, reason))?;
 
-            if group > threshold {
+            if group > durable.txn {
+                break;
+            }
+
+            retained.push((group, key, value));
+        }
+
+        let mut groups: Vec<u64> = retained.iter().map(|(group, _, _)| *group).collect();
+
+        groups.dedup();
+
+        let limit = shared.reclaimable(&groups)?;
+        let mut reclaimed = Vec::new();
+
+        for (group, key, value) in retained {
+            if limit.is_none_or(|limit| group > limit) {
                 break;
             }
 

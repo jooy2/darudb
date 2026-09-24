@@ -38,6 +38,18 @@ pub(super) fn try_lock(file: &File, start: u64, len: u64, mode: Mode) -> io::Res
     platform::try_lock(file, start, len, mode)
 }
 
+/// Whether some lock on the `len` bytes from `start` would stop an exclusive
+/// lock there: one another process holds, on Unix-like systems, and one any
+/// handle holds, this one included, on Windows.
+///
+/// Unix-like systems answer the question directly. Windows has no such query,
+/// so the answer comes from taking an exclusive lock without waiting and
+/// releasing it at once if it was granted; a reader asking for a lock in the
+/// range meanwhile waits an instant.
+pub(super) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
+    platform::is_locked(file, start, len)
+}
+
 /// Releases the lock on the `len` bytes from `start`. On Windows the range has
 /// to be exactly one that was locked, and a range locked twice, shared and
 /// exclusive, loses the exclusive lock first.
@@ -73,7 +85,13 @@ mod platform {
         pub(super) type Record = libc::flock64;
 
         #[cfg(any(target_arch = "mips", target_arch = "mips32r6"))]
+        pub(super) const GET: libc::c_int = 33;
+
+        #[cfg(any(target_arch = "mips", target_arch = "mips32r6"))]
         pub(super) const SET: libc::c_int = 34;
+
+        #[cfg(not(any(target_arch = "mips", target_arch = "mips32r6")))]
+        pub(super) const GET: libc::c_int = 12;
 
         #[cfg(not(any(target_arch = "mips", target_arch = "mips32r6")))]
         pub(super) const SET: libc::c_int = 13;
@@ -87,6 +105,8 @@ mod platform {
     )))]
     mod calls {
         pub(super) type Record = libc::flock;
+
+        pub(super) const GET: libc::c_int = libc::F_GETLK;
 
         pub(super) const SET: libc::c_int = libc::F_SETLK;
     }
@@ -169,6 +189,18 @@ mod platform {
             Err(error) if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EAGAIN)) => {
                 Ok(false)
             }
+            Err(error) if is_unsupported(&error) => Err(unsupported(error)),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
+        let mut record = record(libc::F_WRLCK, start, len)?;
+
+        // The call leaves the record alone when nothing is in the way, and
+        // describes the first lock that is otherwise.
+        match fcntl(file, calls::GET, &mut record) {
+            Ok(()) => Ok(record.l_type != narrow(libc::F_UNLCK)?),
             Err(error) if is_unsupported(&error) => Err(unsupported(error)),
             Err(error) => Err(error),
         }
@@ -257,6 +289,16 @@ mod platform {
             Some(ERROR_NOT_SUPPORTED | ERROR_INVALID_FUNCTION) => Err(unsupported(error)),
             _ => Err(error),
         }
+    }
+
+    pub(super) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
+        if !try_lock(file, start, len, Mode::Exclusive)? {
+            return Ok(true);
+        }
+
+        unlock(file, start, len)?;
+
+        Ok(false)
     }
 
     pub(super) fn unlock(file: &File, start: u64, len: u64) -> io::Result<()> {

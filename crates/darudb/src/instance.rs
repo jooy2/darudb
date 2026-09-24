@@ -61,7 +61,7 @@ struct Unsynced {
 }
 
 /// The committed state every transaction starts from.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Header {
     pub(crate) selector: Selector,
     pub(crate) records: [Option<CommitRecord>; SLOT_COUNT],
@@ -91,10 +91,13 @@ pub(crate) struct Shared {
     pub(crate) data_key: Option<DataKey>,
     /// The key that signs an encrypted file's commit records.
     pub(crate) record_auth: Option<RecordAuth>,
+    /// The header as this instance last wrote it or read it while holding the
+    /// writer lock. Only a writer changes it.
     header: Mutex<Header>,
     /// The last selector written before the last barrier, which a power cut
-    /// can bring back. `None` until this instance's first barrier: another
-    /// process may have written the selector the file shows without one.
+    /// can bring back. `None` until this instance's first barrier, and again
+    /// whenever another process has written the header since: it may have
+    /// written a selector with no barrier after it.
     last_barrier: Mutex<Option<Selector>>,
     unsynced: Mutex<Unsynced>,
     /// The free runs of the commit with the given transaction id, which the
@@ -165,8 +168,11 @@ impl Shared {
             (None, true) => Err(Error::KeyRequired { path }),
             (Some(secret), true) => {
                 let mut unlocker = Unlocker::new(secret);
+                // Another process may have changed the key since this one
+                // opened the file, so the records come from the file.
+                let bytes = self.pager.read_header(HEADER_LEN)?;
 
-                for record in self.header().records.iter().flatten() {
+                for record in self.records_in(&bytes).iter().flatten() {
                     let Ok(Some(block)) = KeyBlock::decode(&record.key_block) else {
                         continue;
                     };
@@ -201,9 +207,59 @@ impl Shared {
         }
     }
 
-    /// The committed state as the last commit left it.
+    /// The committed state as this instance's last writer left it.
     pub(crate) fn header(&self) -> Header {
         *lock(&self.header)
+    }
+
+    /// Reads the header from the file, and keeps it as the state the next
+    /// commit starts from. The caller holds the writer lock, so no other
+    /// process can change it meanwhile.
+    ///
+    /// If it is not the header this instance last knew, another process has
+    /// written it since, and the selector a power cut would bring back is no
+    /// longer known (`design/commits-and-recovery.md`, "Choosing the slot").
+    pub(crate) fn refresh_header(&self) -> Result<Header> {
+        let bytes = self.pager.read_header(HEADER_LEN)?;
+        let selector = Selector::decode(bytes[SELECTOR_OFFSET])
+            .map_err(|reason| self.pager.corrupted(reason.to_owned()))?;
+        let header = Header {
+            selector,
+            records: self.records_in(&bytes),
+        };
+
+        // Only a writer changes the header, and this process holds the writer
+        // lock: a published record that fails is damaged, not being written.
+        if header.records[selector.slot].is_none() {
+            return Err(self
+                .pager
+                .corrupted("the published commit record fails its check".to_owned()));
+        }
+
+        let mut known = lock(&self.header);
+
+        if *known != header {
+            *lock(&self.last_barrier) = None;
+            *known = header;
+        }
+
+        Ok(header)
+    }
+
+    /// The valid records of the header `bytes`, signed included. A slot whose
+    /// record fails is as good as empty: a writer that died while filling it
+    /// leaves one like that.
+    fn records_in(&self, bytes: &[u8]) -> [Option<CommitRecord>; SLOT_COUNT] {
+        let mut records = [None; SLOT_COUNT];
+
+        for (slot, record) in records.iter_mut().enumerate() {
+            *record = CommitRecord::decode(slot, &bytes[slot_offset(slot)..])
+                .ok()
+                .flatten()
+                .filter(|record| self.signed(slot, record));
+        }
+
+        records
     }
 
     pub(crate) fn set_header(&self, header: Header) {
@@ -298,9 +354,13 @@ impl Shared {
         self.locks.unregister(txn);
     }
 
-    /// The oldest snapshot in use in this process, if any.
-    pub(crate) fn oldest_snapshot(&self) -> Option<u64> {
-        self.locks.oldest_local()
+    /// The largest of `groups`, retained group ids in ascending order, that no
+    /// registered snapshot in any process can reach; see
+    /// [`Locks::reclaimable`]. The caller holds the writer lock.
+    pub(crate) fn reclaimable(&self, groups: &[u64]) -> Result<Option<u64>> {
+        self.locks
+            .reclaimable(groups)
+            .map_err(|error| self.lock_error(error))
     }
 
     /// A lock that was not taken, as the error the caller sees.
@@ -355,12 +415,15 @@ impl Shared {
         *lock(&self.free_runs) = Some((txn, runs));
     }
 
-    /// Waits for this process's writer gate, up to the busy timeout.
+    /// Waits for this process's writer gate and then for the writer lock,
+    /// together up to the busy timeout.
     pub(crate) fn acquire_writer(self: &Arc<Self>) -> Result<WriterGuard> {
         self.acquire_writer_within(self.settings.busy_timeout)
     }
 
-    /// Waits for this process's writer gate, up to `timeout`.
+    /// Waits for this process's writer gate and then for the writer lock,
+    /// together up to `timeout`. The gate lets one thread at a time compete
+    /// for the lock with other processes.
     fn acquire_writer_within(self: &Arc<Self>, timeout: Duration) -> Result<WriterGuard> {
         self.check_owner()?;
         self.check_usable()?;
@@ -394,10 +457,48 @@ impl Shared {
         }
 
         *busy = true;
+        drop(busy);
+
+        if let Err(error) = self.locks.lock_writer(deadline) {
+            self.release_gate();
+
+            return Err(self.lock_error(error));
+        }
 
         Ok(WriterGuard {
             shared: Arc::clone(self),
         })
+    }
+
+    /// Opens this process's writer gate to the next thread.
+    fn release_gate(&self) {
+        *lock(&self.writer) = false;
+        self.writer_free.notify_one();
+    }
+
+    /// Makes every commit so far durable, deferred ones included, by any
+    /// process: a barrier and the selector with the unsynced bit clear, if the
+    /// file's selector has it set.
+    ///
+    /// A selector with the bit clear was written after a barrier that made
+    /// the commit it names durable, and every commit before it. Finding one
+    /// needs no writer lock, which keeps `close` from waiting for another
+    /// process's write transaction when there is nothing to do.
+    pub(crate) fn sync(self: &Arc<Self>) -> Result<()> {
+        self.check_owner()?;
+        self.check_usable()?;
+
+        let bytes = self.pager.read_header(SELECTOR_OFFSET + 1)?;
+
+        if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| !selector.unsynced) {
+            self.close_window();
+
+            return Ok(());
+        }
+
+        let _writer = self.acquire_writer()?;
+
+        self.sync_published()
     }
 
     /// Whether a deferred commit writing `pages` pages may stay deferred, or
@@ -459,11 +560,13 @@ impl Shared {
     }
 
     /// Makes the published commit durable if it is not: a barrier, then the
-    /// selector with the unsynced bit clear. The caller holds the writer gate.
+    /// selector with the unsynced bit clear. The caller holds the writer lock,
+    /// and the header comes from the file: another process may have committed
+    /// since this one last wrote it.
     pub(crate) fn sync_published(&self) -> Result<()> {
         self.check_usable()?;
 
-        let mut header = self.header();
+        let mut header = self.refresh_header()?;
 
         if !header.selector.unsynced {
             self.close_window();
@@ -531,7 +634,18 @@ impl Drop for Shared {
             return;
         }
 
-        let _ = self.sync_published();
+        // Only this process's own deferred commits are its business here. No
+        // other handle is left, so the writer gate is free; the writer lock
+        // may take waiting for.
+        if lock(&self.unsynced).window.is_some() {
+            let deadline = Instant::now().checked_add(self.settings.busy_timeout);
+
+            if self.locks.lock_writer(deadline).is_ok() {
+                let _ = self.sync_published();
+
+                self.locks.unlock_writer();
+            }
+        }
 
         if let Some(flusher) = lock(&self.unsynced).flusher.take() {
             flusher.unpark();
@@ -594,8 +708,8 @@ pub(crate) struct WriterGuard {
 
 impl Drop for WriterGuard {
     fn drop(&mut self) {
-        *lock(&self.shared.writer) = false;
-        self.shared.writer_free.notify_one();
+        self.shared.locks.unlock_writer();
+        self.shared.release_gate();
     }
 }
 
