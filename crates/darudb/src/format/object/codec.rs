@@ -7,7 +7,7 @@
 //! types, fills defaults, and skips the fields a schema no longer has.
 
 use super::schema::{Fields, Kind};
-use super::value::{Object, Value};
+use super::value::{Name, Object, Value};
 
 const FALSE: u8 = 0x02;
 const TRUE: u8 = 0x03;
@@ -473,7 +473,7 @@ fn to_raw(value: &Value, kind: &Kind, keys: KeyKinds<'_>) -> Result<Raw, String>
 /// have is skipped. A value whose tag does not fit its field's kind, or a
 /// required field without a default missing, makes the record damaged.
 pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object, &'static str> {
-    let mut object = Object::new();
+    let mut object = Vec::with_capacity(fields.list.len());
     let mut raw = raw.into_iter().peekable();
 
     for field in &fields.list {
@@ -488,10 +488,10 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
             },
         };
 
-        object.set(field.name.clone(), value);
+        object.push((Name::from(field.name.as_str()), value));
     }
 
-    Ok(object)
+    Ok(Object::from_fields(object))
 }
 
 /// The fields a record from outside the engine holds, as an object with only
@@ -503,17 +503,22 @@ pub(crate) fn to_partial_object(
     raw: Vec<(u64, Raw)>,
     fields: &Fields,
 ) -> Result<Object, &'static str> {
-    let mut object = Object::new();
+    let mut object = Vec::with_capacity(raw.len());
 
+    // A record's field ids are in order and different, and so are the names
+    // of the fields they belong to.
     for (id, value) in raw {
         let field = fields
             .by_id(id)
             .ok_or("a record holds a field id its collection does not have")?;
 
-        object.set(field.name.clone(), from_raw(value, &field.kind)?);
+        object.push((
+            Name::from(field.name.as_str()),
+            from_raw(value, &field.kind)?,
+        ));
     }
 
-    Ok(object)
+    Ok(Object::from_fields(object))
 }
 
 fn from_raw(raw: Raw, kind: &Kind) -> Result<Value, &'static str> {
