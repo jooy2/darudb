@@ -118,7 +118,7 @@ A commit record is 512 bytes:
 
 Mixing the slot number into the record check means a record copied or written into the wrong slot fails its check.
 
-A record is **valid** when its check matches, in an encrypted file its [record MAC](#the-record-mac) matches too, and its fields are consistent: the transaction id is at least 1, the durable transaction id is smaller than the transaction id, the page count is at least 1, the next tree id is at least 16, and every root pointer is either null or names a page below the page count, written by a transaction no newer than the record's own.
+A record is **valid** when its check matches, in an encrypted file its [record MAC](#the-record-mac) matches too, and its fields are consistent: the transaction id is at least 1 and below 2^62 − 64, the limit that keeps every snapshot's lock byte within a signed 64-bit offset ([Locking](locking.md#the-lock-bytes)), the durable transaction id is smaller than the transaction id, the page count is at least 1, the next tree id is at least 16, and every root pointer is either null or names a page below the page count, written by a transaction no newer than the record's own.
 
 ## The page envelope
 

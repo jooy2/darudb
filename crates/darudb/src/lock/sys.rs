@@ -21,6 +21,8 @@ use std::io;
 /// What a lock admits alongside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Mode {
+    /// Other shared locks on the same bytes.
+    Shared,
     /// No other lock on the same bytes.
     Exclusive,
 }
@@ -156,6 +158,7 @@ mod platform {
 
     pub(super) fn try_lock(file: &File, start: u64, len: u64, mode: Mode) -> io::Result<bool> {
         let kind = match mode {
+            Mode::Shared => libc::F_RDLCK,
             Mode::Exclusive => libc::F_WRLCK,
         };
         let mut record = record(kind, start, len)?;
@@ -223,6 +226,7 @@ mod platform {
         let (low, high) = halves(len);
         let mut overlapped = at(start);
         let flags = match mode {
+            Mode::Shared => LOCKFILE_FAIL_IMMEDIATELY,
             Mode::Exclusive => LOCKFILE_FAIL_IMMEDIATELY | LOCKFILE_EXCLUSIVE_LOCK,
         };
         // SAFETY: the handle belongs to `file`, which is open for the whole

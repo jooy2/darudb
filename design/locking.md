@@ -38,7 +38,7 @@ All locks are taken on bytes far past the end of any data:
 
 **Offsets are 64-bit everywhere.** On 32-bit Unix-like targets, such as armv7 and i686, the engine uses the 64-bit variants of the lock calls.
 
-**Transaction ids stay below 2^62 − 64**, so that every snapshot byte fits in a signed 64-bit offset. At a million commits a second, that lasts more than 100,000 years.
+**Transaction ids stay below 2^62 − 64**, so that every snapshot byte fits in a signed 64-bit offset. At a million commits a second, that lasts more than 100,000 years. A record with a larger one is not valid ([File format](file-format.md#commit-slots)), and a writer whose next transaction id would reach the limit fails with `CORRUPTED`, since only a damaged or forged file can get there.
 
 ## Opening and closing
 

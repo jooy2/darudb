@@ -34,6 +34,12 @@ pub(crate) const RECORD_MAC_LEN: usize = 16;
 /// How many bytes at the start of a record the record MAC covers.
 pub(crate) const AUTHENTICATED_LEN: usize = 256;
 
+/// Every transaction id is below this, 2^62 − 64, so that the lock byte of
+/// every snapshot, at 2^62 + 64 + its transaction id, fits in a signed 64-bit
+/// file offset (`design/locking.md`). A million commits a second would take
+/// more than 100,000 years to reach it; only a damaged or forged record can.
+pub(crate) const TXN_LIMIT: u64 = (1 << 62) - 64;
+
 const CATALOG_OFFSET: usize = 32;
 const FREE_OFFSET: usize = CATALOG_OFFSET + POINTER_LEN;
 const RETAINED_OFFSET: usize = FREE_OFFSET + POINTER_LEN;
@@ -148,6 +154,10 @@ impl CommitRecord {
 
     /// The consistency rules of `design/file-format.md`, beyond the check.
     fn validate(&self) -> Result<(), &'static str> {
+        if self.txn >= TXN_LIMIT {
+            return Err("the record's transaction id is past the last one a file may use");
+        }
+
         if self.durable_txn >= self.txn {
             return Err("the record's durable transaction is not older than the record");
         }
@@ -272,12 +282,19 @@ mod tests {
         let mut stale_durable = record();
         let mut root_past_the_end = record();
         let mut root_from_the_future = record();
+        let mut past_the_last_id = record();
 
         stale_durable.durable_txn = stale_durable.txn;
         root_past_the_end.catalog.page = root_past_the_end.page_count;
         root_from_the_future.catalog.txn = root_from_the_future.txn + 1;
+        past_the_last_id.txn = TXN_LIMIT;
 
-        for bad in [stale_durable, root_past_the_end, root_from_the_future] {
+        for bad in [
+            stale_durable,
+            root_past_the_end,
+            root_from_the_future,
+            past_the_last_id,
+        ] {
             assert!(CommitRecord::decode(0, &bad.encode(0)).is_err(), "{bad:?}");
         }
     }

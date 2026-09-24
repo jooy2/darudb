@@ -4,9 +4,10 @@
 //! `design/locking.md` is the specification. The locks sit on bytes far past
 //! the end of any data:
 //!
-//! | Byte | Lock                                                    |
-//! | ---- | ------------------------------------------------------- |
-//! | 2^62 | Open: held for as long as the process has the file open |
+//! | Byte            | Lock                                                        |
+//! | --------------- | ----------------------------------------------------------- |
+//! | 2^62            | Open: held for as long as the process has the file open     |
+//! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot |
 //!
 //! No mutex lives in shared memory and no lock file has a layout, so a process
 //! that dies leaves nothing for the others to clean up: the operating system
@@ -24,11 +25,13 @@
 //! it is dropped.
 //!
 //! For now the open lock is held exclusively for as long as the file is open,
-//! so a second process cannot open the file at all. The rest of the protocol,
-//! which lets it, is not in place yet.
+//! so a second process cannot open the file at all. The snapshot locks are
+//! taken already, and the rest of the protocol, which lets a second process
+//! in, is not in place yet.
 
 mod sys;
 
+use std::collections::BTreeMap;
 use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -36,10 +39,16 @@ use std::time::{Duration, Instant};
 
 use sys::Mode;
 
+use crate::format::TXN_LIMIT;
 use crate::storage::DbFile;
 
 /// The open lock's byte, 2^62, the first of the lock bytes.
 const OPEN_BYTE: u64 = 1 << 62;
+
+/// The lock byte of snapshot 0. Snapshot `s` is locked at this byte plus `s`,
+/// which stays below 2^63 because every transaction id is below
+/// [`TXN_LIMIT`].
+const SNAPSHOT_BASE: u64 = OPEN_BYTE + 64;
 
 /// The first pause between two attempts at a lock another process holds.
 const FIRST_PAUSE: Duration = Duration::from_micros(20);
@@ -68,6 +77,10 @@ pub(crate) struct Locks {
     handles: Option<Mutex<Vec<Arc<DbFile>>>>,
     /// Whether this process holds the open lock.
     open: Mutex<bool>,
+    /// The snapshots in use in this process, with the number of read
+    /// transactions on each. The first registration of a snapshot takes a
+    /// shared lock on its byte, and the last one to end releases it.
+    snapshots: Mutex<BTreeMap<u64, usize>>,
     /// The process that opened the file. A process forked from it inherits
     /// this value, but not the locks.
     owner: u32,
@@ -79,6 +92,7 @@ impl Locks {
         Self {
             handles: Some(Mutex::new(vec![file])),
             open: Mutex::new(false),
+            snapshots: Mutex::new(BTreeMap::new()),
             owner: std::process::id(),
         }
     }
@@ -89,6 +103,7 @@ impl Locks {
         Self {
             handles: None,
             open: Mutex::new(false),
+            snapshots: Mutex::new(BTreeMap::new()),
             owner: std::process::id(),
         }
     }
@@ -120,6 +135,55 @@ impl Locks {
         *lock(&self.open) = true;
 
         Ok(())
+    }
+
+    /// Registers a read transaction on snapshot `txn`, taking the snapshot's
+    /// lock if no other read transaction in this process holds it already.
+    ///
+    /// The lock is shared and no one else takes it exclusively, apart from a
+    /// writer probing the snapshot bytes on Windows for an instant; this waits
+    /// that out, up to `deadline`.
+    pub(crate) fn register(&self, txn: u64, deadline: Option<Instant>) -> Result<(), LockError> {
+        let byte = snapshot_byte(txn)?;
+        let mut snapshots = lock(&self.snapshots);
+
+        if let Some(count) = snapshots.get_mut(&txn) {
+            *count += 1;
+
+            return Ok(());
+        }
+
+        poll(deadline, || {
+            self.try_lock(byte, 1, Mode::Shared).map_err(LockError::Io)
+        })?;
+        snapshots.insert(txn, 1);
+
+        Ok(())
+    }
+
+    /// Ends a read transaction on snapshot `txn`, releasing the snapshot's
+    /// lock if it was the last one in this process.
+    pub(crate) fn unregister(&self, txn: u64) {
+        let mut snapshots = lock(&self.snapshots);
+
+        if let Some(count) = snapshots.get_mut(&txn) {
+            *count -= 1;
+
+            if *count == 0 {
+                snapshots.remove(&txn);
+
+                // A lock left behind holds pages back from reuse, and
+                // nothing more; it goes when the file closes.
+                if let Ok(byte) = snapshot_byte(txn) {
+                    let _ = self.unlock(byte, 1);
+                }
+            }
+        }
+    }
+
+    /// The oldest snapshot a read transaction in this process uses.
+    pub(crate) fn oldest_local(&self) -> Option<u64> {
+        lock(&self.snapshots).keys().next().copied()
     }
 
     /// Takes a lock without waiting; `true` if it was granted.
@@ -155,10 +219,30 @@ impl Drop for Locks {
             return;
         }
 
+        let snapshots = std::mem::take(&mut *lock(&self.snapshots));
+
+        for txn in snapshots.keys() {
+            if let Ok(byte) = snapshot_byte(*txn) {
+                let _ = self.unlock(byte, 1);
+            }
+        }
+
         if std::mem::take(&mut *lock(&self.open)) {
             let _ = self.unlock(OPEN_BYTE, 1);
         }
     }
+}
+
+/// The lock byte of snapshot `txn`.
+fn snapshot_byte(txn: u64) -> Result<u64, LockError> {
+    if txn >= TXN_LIMIT {
+        return Err(LockError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a transaction id past the last one a file may use",
+        )));
+    }
+
+    Ok(SNAPSHOT_BASE + txn)
 }
 
 /// Runs `attempt` until it succeeds or `deadline` passes, pausing a little

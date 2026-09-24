@@ -8,8 +8,8 @@ use super::{Range, catalog_names, check_key, check_value, find_tree, root_child,
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, decode_free_key,
-    decode_free_value, decode_retained_key, decode_runs,
+    CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, TXN_LIMIT,
+    decode_free_key, decode_free_value, decode_retained_key, decode_runs,
 };
 use crate::instance::{Header, Shared, WriterGuard};
 use crate::space::Space;
@@ -90,6 +90,14 @@ impl WriteTransaction {
             .map(|record| record.txn)
             .max()
             .unwrap_or(0);
+
+        // Only a damaged or forged file gets here: it takes 2^62 commits.
+        if txn >= TXN_LIMIT {
+            return Err(shared
+                .pager
+                .corrupted("the file has used every transaction id it may".to_owned()));
+        }
+
         let (slot, barrier_first) = choose_slot(&header, &base, &durable, shared.last_barrier());
         let loader = &shared.loader;
         let free_root = root_child(base.free);

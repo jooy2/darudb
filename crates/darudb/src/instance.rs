@@ -18,8 +18,11 @@ use std::time::{Duration, Instant};
 use crate::btree::{LoadedNode, Loader};
 use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
-use crate::format::{CommitRecord, KeyBlock, SLOT_COUNT, Selector, StaticHeader};
-use crate::lock::Locks;
+use crate::format::{
+    CommitRecord, HEADER_LEN, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT, Selector, StaticHeader,
+    slot_offset,
+};
+use crate::lock::{LockError, Locks};
 use crate::storage::{Cache, DbFile, Pager};
 
 /// How many decoded pages each open file keeps in memory.
@@ -28,6 +31,10 @@ const CACHE_PAGES: usize = 4096;
 /// How long the thread that ends a due window waits for a running writer
 /// before it looks at the window again.
 const FLUSH_WAIT: Duration = Duration::from_secs(1);
+
+/// How many times a reader reads the header before it takes a published
+/// record that fails its check for damage rather than for a stale selector.
+const HEADER_ATTEMPTS: usize = 8;
 
 /// The options every handle to one file shares: those of the handle that
 /// opened it first.
@@ -96,7 +103,6 @@ pub(crate) struct Shared {
     free_runs: Mutex<Option<(u64, BTreeMap<u64, u64>)>>,
     writer: Mutex<bool>,
     writer_free: Condvar,
-    snapshots: Mutex<BTreeMap<u64, usize>>,
     sync_failed: AtomicBool,
 }
 
@@ -137,7 +143,6 @@ impl Shared {
             free_runs: Mutex::new(None),
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
-            snapshots: Mutex::new(BTreeMap::new()),
             sync_failed: AtomicBool::new(false),
         }
     }
@@ -206,36 +211,106 @@ impl Shared {
     }
 
     /// Takes a snapshot of the published commit and registers it, so that no
-    /// writer reuses a page it can reach until it is released.
+    /// writer, in this process or another, reuses a page it can reach until
+    /// it is released.
+    ///
+    /// No lock guards the header. The reader reads it from the file, registers
+    /// the snapshot, and reads it again: a writer that reclaims pages the
+    /// snapshot can reach starts after a commit newer than the snapshot is
+    /// published, and so after the second read, which saw the snapshot still
+    /// published, and after the registration, which the writer therefore sees
+    /// (`design/locking.md`, "Beginning a read").
     pub(crate) fn begin_snapshot(&self) -> Result<CommitRecord> {
         self.check_owner()?;
         self.check_usable()?;
 
-        // The header lock is held while registering, so a writer cannot
-        // publish and reclaim between the read and the registration.
-        let header = lock(&self.header);
-        let record = header.published()?;
+        let deadline = Instant::now().checked_add(self.settings.busy_timeout);
+        let mut damaged = 0;
 
-        *lock(&self.snapshots).entry(record.txn).or_insert(0) += 1;
+        loop {
+            let bytes = self.pager.read_header(HEADER_LEN)?;
+            let (slot, record) = match self.published_in(&bytes) {
+                Ok(published) => published,
+                // A stale selector names the slot a writer is filling. Only
+                // a record that keeps failing is damaged.
+                Err(reason) => {
+                    damaged += 1;
 
-        Ok(record)
+                    if damaged == HEADER_ATTEMPTS {
+                        return Err(self.pager.corrupted(reason.to_owned()));
+                    }
+
+                    thread::yield_now();
+
+                    continue;
+                }
+            };
+
+            self.locks
+                .register(record.txn, deadline)
+                .map_err(|error| self.lock_error(error))?;
+
+            let again = self.pager.read_header(slot_offset(slot) + 8)?;
+            let txn = again[slot_offset(slot)..]
+                .first_chunk::<8>()
+                .map(|bytes| u64::from_le_bytes(*bytes));
+
+            if again[SELECTOR_OFFSET] == bytes[SELECTOR_OFFSET] && txn == Some(record.txn) {
+                return Ok(record);
+            }
+
+            self.locks.unregister(record.txn);
+        }
+    }
+
+    /// The slot of the published commit in the header `bytes`, and its record
+    /// once it is known to be valid, signed included.
+    fn published_in(
+        &self,
+        bytes: &[u8],
+    ) -> std::result::Result<(usize, CommitRecord), &'static str> {
+        let selector = Selector::decode(bytes[SELECTOR_OFFSET])?;
+        let record = CommitRecord::decode(selector.slot, &bytes[slot_offset(selector.slot)..])?
+            .ok_or("the selector names an empty slot")?;
+
+        if !self.signed(selector.slot, &record) {
+            return Err("the published commit record fails its MAC");
+        }
+
+        Ok((selector.slot, record))
+    }
+
+    /// Whether `record`, read from slot `slot`, carries the MAC of this file's
+    /// data key, as every record of an encrypted file has to. A plain file's
+    /// records have none.
+    pub(crate) fn signed(&self, slot: usize, record: &CommitRecord) -> bool {
+        self.record_auth.as_ref().is_none_or(|auth| {
+            auth.verify(
+                &self.static_header.file_id,
+                slot,
+                &record.authenticated(),
+                &record.mac,
+            )
+        })
     }
 
     pub(crate) fn end_snapshot(&self, txn: u64) {
-        let mut snapshots = lock(&self.snapshots);
-
-        if let Some(count) = snapshots.get_mut(&txn) {
-            *count -= 1;
-
-            if *count == 0 {
-                snapshots.remove(&txn);
-            }
-        }
+        self.locks.unregister(txn);
     }
 
     /// The oldest snapshot in use in this process, if any.
     pub(crate) fn oldest_snapshot(&self) -> Option<u64> {
-        lock(&self.snapshots).keys().next().copied()
+        self.locks.oldest_local()
+    }
+
+    /// A lock that was not taken, as the error the caller sees.
+    pub(crate) fn lock_error(&self, error: LockError) -> Error {
+        match error {
+            LockError::Busy => Error::Busy {
+                path: self.path.clone(),
+            },
+            LockError::Io(source) => self.pager.io_error(source),
+        }
     }
 
     /// Issues a barrier, and records the selector it made durable. A failed

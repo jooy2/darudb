@@ -35,7 +35,7 @@ pub(crate) use page::{
     page_check, seal, stored_check,
 };
 pub(crate) use pointer::{POINTER_LEN, Pointer};
-pub(crate) use record::{CommitRecord, KEY_BLOCK_LEN, RECORD_LEN, RECORD_MAC_LEN};
+pub(crate) use record::{CommitRecord, KEY_BLOCK_LEN, RECORD_LEN, RECORD_MAC_LEN, TXN_LIMIT};
 pub(crate) use system::{
     CATALOG_TREE, FREE_TREE, RETAINED_TREE, TreeDescriptor, decode_free_key, decode_free_value,
     decode_retained_key, decode_runs, encode_runs, free_key, free_value, retained_key,
