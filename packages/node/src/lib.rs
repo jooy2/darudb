@@ -592,6 +592,7 @@ impl NativeTransaction {
         &self,
         kinds: Buffer,
         collections: Vec<String>,
+        #[napi(ts_arg_type = "Array<number | bigint | string | Uint8Array | undefined | null>")]
         keys: Vec<Option<JsKey>>,
         payloads: Vec<Option<Buffer>>,
     ) -> Result<AsyncTask<Work<Vec<u8>>>> {
@@ -628,7 +629,7 @@ impl NativeTransaction {
         &self,
         env: &'env Env,
         collection: String,
-        key: JsKey,
+        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
         mut scratch: BufferSlice<'_>,
     ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
         let key = key_in(key)?;
@@ -686,7 +687,7 @@ impl NativeTransaction {
         self.now(|txn| txn.count(&prepared.collection, &query))
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
     pub fn write_records(
         &self,
         collection: String,
@@ -698,7 +699,11 @@ impl NativeTransaction {
     }
 
     #[napi]
-    pub fn delete(&self, collection: String, key: JsKey) -> Result<bool> {
+    pub fn delete(
+        &self,
+        collection: String,
+        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+    ) -> Result<bool> {
         let key = key_in(key)?;
 
         self.now(|txn| txn.delete(&collection, key))
@@ -755,7 +760,7 @@ impl NativeTransaction {
         })
     }
 
-    #[napi]
+    #[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
     pub fn previous_keys(&self, collection: String) -> Result<Vec<JsKeyOut>> {
         self.now(|txn| txn.previous_keys(&collection))?.deliver()
     }
@@ -765,7 +770,7 @@ impl NativeTransaction {
         &self,
         env: &'env Env,
         collection: String,
-        key: JsKey,
+        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
     ) -> Result<Option<BufferSlice<'env>>> {
         let key = key_in(key)?;
 
