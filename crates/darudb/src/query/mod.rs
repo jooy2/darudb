@@ -20,7 +20,7 @@ mod run;
 #[cfg(test)]
 mod tests;
 
-pub use build::{Filter, Query};
+pub use build::{Filter, Query, QueryRequest};
 
 use crate::error::Result;
 use crate::format::object::Object;
@@ -46,6 +46,16 @@ impl CollectionReader<'_> {
 
         run::count(source, &plan::plan(schema, collection, &query.ir)?)
     }
+
+    /// The records of the objects `query` finds, in its order, as the file
+    /// holds them (`design/objects.md`, "Records"), for a language binding
+    /// that decodes them itself. An object the filter and the sort need not
+    /// read is not decoded at all.
+    pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
+        let (source, schema, collection) = self.parts();
+
+        run::stored(source, &plan::plan(schema, collection, &query.ir)?)
+    }
 }
 
 impl CollectionWriter<'_> {
@@ -63,5 +73,13 @@ impl CollectionWriter<'_> {
         let (source, schema, collection) = self.parts();
 
         run::count(source, &plan::plan(schema, collection, &query.ir)?)
+    }
+
+    /// The records of the objects `query` finds, with this transaction's
+    /// changes; see [`CollectionReader::query_records`].
+    pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
+        let (source, schema, collection) = self.parts();
+
+        run::stored(source, &plan::plan(schema, collection, &query.ir)?)
     }
 }

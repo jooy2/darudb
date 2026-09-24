@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::format::object::Value;
+use crate::format::object::schema::{FieldDef, Kind, StoredSchema};
 
 /// The type of a field.
 #[derive(Debug, Clone, PartialEq)]
@@ -246,6 +247,72 @@ impl Schema {
         self
     }
 
+    /// Reads a schema that another language declared, encoded the way the
+    /// file stores a schema (`design/objects.md`, "The stored schema"), with
+    /// ids of the encoder's choosing: a language binding builds its schema
+    /// this way. The ids only tie links and indexes to what they name; the
+    /// file gives the collections and fields ids of its own.
+    ///
+    /// A record that does not decode, or whose ids are inconsistent, is
+    /// [`Error::InvalidArgument`]; the schema is checked like any other when
+    /// the file is opened with it.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let stored = StoredSchema::decode(bytes).map_err(|reason| Error::InvalidArgument {
+            message: format!(
+                "a declared schema does not decode: {}",
+                reason.unwrap_or("it is in an object format this build does not read")
+            ),
+        })?;
+        let mut collections = Vec::new();
+
+        for definition in &stored.collections {
+            let key = definition
+                .key_field()
+                .ok_or_else(|| Error::InvalidArgument {
+                    message: format!("`{}` has no primary key field", definition.name),
+                })?;
+
+            if definition.auto && (key.name != AUTO_KEY || key.kind != Kind::Int) {
+                return invalid(format!(
+                    "`{}` has an auto-increment key, which is an int called `{AUTO_KEY}`",
+                    definition.name
+                ));
+            }
+
+            let fields = definition
+                .fields
+                .list
+                .iter()
+                .filter(|field| !(definition.auto && field.id == definition.key))
+                .map(|field| declared_field(field, &stored))
+                .collect::<Result<_>>()?;
+            let indexes = definition
+                .indexes
+                .iter()
+                .map(|index| {
+                    let field = definition.fields.by_id(index.field).map_or_else(
+                        || invalid(format!("`{}` indexes a field it lacks", definition.name)),
+                        |field| Ok(field.name.clone()),
+                    )?;
+
+                    Ok((field, index.unique))
+                })
+                .collect::<Result<_>>()?;
+
+            collections.push(Collection {
+                name: definition.name.clone(),
+                fields,
+                key: (!definition.auto).then(|| key.name.clone()),
+                indexes,
+            });
+        }
+
+        Ok(Self {
+            version: stored.version,
+            collections,
+        })
+    }
+
     pub(crate) fn find(&self, name: &str) -> Option<&Collection> {
         self.collections
             .iter()
@@ -366,6 +433,42 @@ impl Schema {
             _ => Ok(()),
         }
     }
+}
+
+/// A field as declared, from a field of a declared schema's record.
+fn declared_field(field: &FieldDef, stored: &StoredSchema) -> Result<Field> {
+    Ok(Field {
+        name: field.name.clone(),
+        kind: declared_type(&field.kind, stored)?,
+        optional: field.optional,
+        default: field.default.clone(),
+    })
+}
+
+fn declared_type(kind: &Kind, stored: &StoredSchema) -> Result<Type> {
+    Ok(match kind {
+        Kind::Bool => Type::Bool,
+        Kind::Int => Type::Int,
+        Kind::Float => Type::Float,
+        Kind::String => Type::String,
+        Kind::Bytes => Type::Bytes,
+        Kind::Link { collection } => Type::Link(
+            stored
+                .collection_by_id(*collection)
+                .map(|target| target.name.clone())
+                .ok_or_else(|| Error::InvalidArgument {
+                    message: "a declared link names no collection".to_owned(),
+                })?,
+        ),
+        Kind::List(element) => Type::List(Box::new(declared_type(element, stored)?)),
+        Kind::Object(fields) => Type::Object(Embedded {
+            fields: fields
+                .list
+                .iter()
+                .map(|field| declared_field(field, stored))
+                .collect::<Result<_>>()?,
+        }),
+    })
 }
 
 /// Whether a value of `kind` is one value: a scalar or a link.

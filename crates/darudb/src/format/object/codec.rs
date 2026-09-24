@@ -372,6 +372,28 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
     Ok(object)
 }
 
+/// The fields a record from outside the engine holds, as an object with only
+/// those fields: one a language binding sends to be written, which the write
+/// then checks against the schema and fills in like any other object. A field
+/// id `fields` does not have, or a value whose tag does not fit its field, is
+/// refused.
+pub(crate) fn to_partial_object(
+    raw: Vec<(u64, Raw)>,
+    fields: &Fields,
+) -> Result<Object, &'static str> {
+    let mut object = Object::new();
+
+    for (id, value) in raw {
+        let field = fields
+            .by_id(id)
+            .ok_or("a record holds a field id its collection does not have")?;
+
+        object.set(field.name.clone(), from_raw(value, &field.kind)?);
+    }
+
+    Ok(object)
+}
+
 fn from_raw(raw: Raw, kind: &Kind) -> Result<Value, &'static str> {
     match (kind, raw) {
         (Kind::Bool, Raw::Bool(value)) => Ok(Value::Bool(value)),

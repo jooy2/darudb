@@ -322,15 +322,40 @@ fn as_ref(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
     }
 }
 
-/// An object found, with its primary key and the values it sorts by.
+/// An object found: its primary key, its record, the object when it was
+/// decoded, and the values it sorts by.
 struct Found {
     sort: Vec<Value>,
     key: Vec<u8>,
-    object: Object,
+    record: Vec<u8>,
+    object: Option<Object>,
 }
 
 /// Runs `plan` and returns the objects it finds, in its order.
 pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object>> {
+    found(source, plan, true)?
+        .into_iter()
+        .map(|found| {
+            found
+                .object
+                .ok_or_else(|| objects::internal("an object found was not decoded"))
+        })
+        .collect()
+}
+
+/// Runs `plan` and returns the records of the objects it finds, in its
+/// order, as the collection's tree holds them. An object is decoded only when
+/// the filter or the sort has to read it.
+pub(crate) fn stored(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Vec<u8>>> {
+    Ok(found(source, plan, false)?
+        .into_iter()
+        .map(|found| found.record)
+        .collect())
+}
+
+/// What `plan` finds, in its order, with the objects decoded if `decode` is
+/// set.
+fn found(source: &dyn Source, plan: &Plan<'_>, decode: bool) -> Result<Vec<Found>> {
     let reader = Reader {
         source,
         links: RefCell::new(HashMap::new()),
@@ -349,7 +374,7 @@ pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object
         let mut found = Vec::new();
 
         walk(source, plan, &mut |key, record| {
-            let Some(object) = read(&reader, plan, &key, record)? else {
+            let Some(hit) = read(&reader, plan, key, record, decode)? else {
                 return Ok(false);
             };
 
@@ -359,7 +384,7 @@ pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object
                 return Ok(false);
             }
 
-            found.push(object);
+            found.push(hit);
 
             Ok(found.len() >= limit)
         })?;
@@ -372,16 +397,23 @@ pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object
     let mut found: Vec<Found> = Vec::new();
 
     walk(source, plan, &mut |key, record| {
-        let Some(object) = read(&reader, plan, &key, record)? else {
+        let Some(mut hit) = read(&reader, plan, key, record, decode)? else {
             return Ok(false);
         };
-        let sort = plan
-            .sort
-            .iter()
-            .map(|(path, _)| reader.value_at(&object, path))
-            .collect::<Result<_>>()?;
 
-        found.push(Found { sort, key, object });
+        if let Some(object) = &hit.object {
+            hit.sort = plan
+                .sort
+                .iter()
+                .map(|(path, _)| reader.value_at(object, path))
+                .collect::<Result<_>>()?;
+        }
+
+        if !decode {
+            hit.object = None;
+        }
+
+        found.push(hit);
 
         // Only the first `offset + limit` can be in the result, so the rest
         // are dropped as they fall behind.
@@ -395,12 +427,7 @@ pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object
 
     found.sort_by(compare);
 
-    Ok(found
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .map(|found| found.object)
-        .collect())
+    Ok(found.into_iter().skip(offset).take(limit).collect())
 }
 
 /// The order of the result: the sort keys, then the primary key.
@@ -418,18 +445,20 @@ fn order(plan: &Plan<'_>, a: &Found, b: &Found) -> Ordering {
 }
 
 /// The object with primary key `key`, whose record the walk may have read
-/// already, if it meets the plan's filter.
+/// already, if it meets the plan's filter. The object is decoded if `decode`
+/// is set, or if the filter or the sort needs it.
 fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
-    key: &[u8],
+    key: Vec<u8>,
     record: Option<Vec<u8>>,
-) -> Result<Option<Object>> {
+    decode: bool,
+) -> Result<Option<Found>> {
     let record = match record {
         Some(record) => record,
         None => reader
             .source
-            .get_in(&records(plan.collection.id), key)?
+            .get_in(&records(plan.collection.id), &key)?
             .ok_or_else(|| {
                 reader.source.corrupted(format!(
                     "an index of `{}` names an object that is not there",
@@ -437,12 +466,24 @@ fn read(
                 ))
             })?,
     };
-    let object = objects::decode(reader.source, plan.collection, &record)?;
+    let object = if decode || plan.filter.is_some() || !plan.sort.is_empty() {
+        Some(objects::decode(reader.source, plan.collection, &record)?)
+    } else {
+        None
+    };
 
-    match &plan.filter {
-        Some(filter) if !reader.holds(filter, &object)? => Ok(None),
-        _ => Ok(Some(object)),
+    if let (Some(filter), Some(object)) = (&plan.filter, &object) {
+        if !reader.holds(filter, object)? {
+            return Ok(None);
+        }
     }
+
+    Ok(Some(Found {
+        sort: Vec::new(),
+        key,
+        record,
+        object,
+    }))
 }
 
 /// Runs `plan` and counts the objects it finds, after its offset and within
@@ -469,7 +510,7 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
         let mut found = 0u64;
 
         walk(source, plan, &mut |key, record| {
-            if read(&reader, plan, &key, record)?.is_some() {
+            if read(&reader, plan, key, record, false)?.is_some() {
                 found += 1;
             }
 

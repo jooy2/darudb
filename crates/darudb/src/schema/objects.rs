@@ -184,6 +184,15 @@ pub(crate) fn get(
         .transpose()
 }
 
+/// The record of the object of `collection` whose primary key is `key`.
+fn get_record(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    key: &Value,
+) -> Result<Option<Vec<u8>>> {
+    source.get_in(&records(collection.id), &key_bytes(collection, key)?)
+}
+
 /// Every object of `collection`, in primary key order or its reverse.
 pub(crate) fn scan<'a>(
     source: &'a dyn Source,
@@ -276,6 +285,13 @@ impl<'a> CollectionReader<'a> {
         get(self.txn, self.definition(), &key.into())
     }
 
+    /// The record of the object whose primary key is `key`, as the file holds
+    /// it, for a language binding that decodes records itself; see
+    /// [`get_record`](CollectionWriter::get_record).
+    pub fn get_record(&self, key: impl Into<Value>) -> Result<Option<Vec<u8>>> {
+        get_record(self.txn, self.definition(), &key.into())
+    }
+
     /// Every object, in primary key order.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Object>> + '_> {
         scan(self.txn, self.definition(), false)
@@ -363,6 +379,47 @@ impl<'a> CollectionWriter<'a> {
     /// The object whose primary key is `key`, if there is one.
     pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>> {
         get(&*self.txn, self.definition(), &key.into())
+    }
+
+    /// The record of the object whose primary key is `key`, as the file holds
+    /// it (`design/objects.md`, "Records"), for a language binding that
+    /// decodes records itself.
+    ///
+    /// It is not checked here, so the binding treats it as untrusted: a
+    /// record written before a field existed lacks that field, which reads as
+    /// its default or null, and one may hold ids of fields the schema no
+    /// longer has, which are skipped.
+    pub fn get_record(&self, key: impl Into<Value>) -> Result<Option<Vec<u8>>> {
+        get_record(&*self.txn, self.definition(), &key.into())
+    }
+
+    /// Inserts the object whose record is `record`, as a language binding
+    /// sends it: the fields it has, by id, which the write checks and fills
+    /// in as [`insert`](Self::insert) does. A record that does not decode, or
+    /// holds an id or a type its collection does not have, is
+    /// [`Error::InvalidArgument`].
+    pub fn insert_record(&mut self, record: &[u8]) -> Result<Value> {
+        let object = self.record_object(record)?;
+
+        self.write(object, false)
+    }
+
+    /// Inserts or replaces the object whose record is `record`; see
+    /// [`insert_record`](Self::insert_record) and [`put`](Self::put).
+    pub fn put_record(&mut self, record: &[u8]) -> Result<Value> {
+        let object = self.record_object(record)?;
+
+        self.write(object, true)
+    }
+
+    fn record_object(&self, record: &[u8]) -> Result<Object> {
+        let collection = self.definition();
+
+        codec::read(record)
+            .and_then(|raw| codec::to_partial_object(raw, &collection.fields))
+            .map_err(|reason| Error::InvalidArgument {
+                message: format!("a record for `{}`: {reason}", collection.name),
+            })
     }
 
     /// Every object, in primary key order.

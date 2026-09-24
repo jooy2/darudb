@@ -81,7 +81,7 @@ pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};
 pub use options::OpenOptions;
-pub use query::{Filter, Query};
+pub use query::{Filter, Query, QueryRequest};
 pub use schema::{
     Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
 };

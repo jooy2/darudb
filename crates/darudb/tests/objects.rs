@@ -630,3 +630,80 @@ fn an_encrypted_database_holds_objects_too() {
         Some(&Value::from("Alice"))
     );
 }
+
+#[test]
+fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
+    use darudb::{Filter, Query, QueryRequest};
+
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let db = open(&dir, v1(), &[]).unwrap();
+
+    // The stored schema's record reads back as the schema it was declared as.
+    let declared = Schema::decode(db.schema_record().unwrap()).unwrap();
+
+    assert_eq!(declared, v1());
+    assert_eq!(
+        code(Schema::decode(&[0xFF, 1, 2])),
+        "INVALID_ARGUMENT",
+        "a record that does not decode"
+    );
+
+    // A record as the file holds it writes back as the same object.
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+    let alice = users.get(1).unwrap().unwrap();
+    let record = users.get_record(1).unwrap().unwrap();
+
+    assert!(users.delete(1).unwrap());
+    assert_eq!(users.insert_record(&record).unwrap(), Value::Int(1));
+    assert_eq!(users.get(1).unwrap(), Some(alice.clone()));
+    assert_eq!(code(users.insert_record(&record)), "DUPLICATE_KEY");
+    assert_eq!(users.put_record(&record).unwrap(), Value::Int(1));
+    assert_eq!(code(users.insert_record(&[0xFF])), "INVALID_ARGUMENT");
+    // One field, id 99, which `users` does not have.
+    assert_eq!(
+        code(users.insert_record(&[1, 99, 0x02])),
+        "INVALID_ARGUMENT"
+    );
+    // One field, the name, holding an int.
+    assert_eq!(
+        code(users.insert_record(&[1, 2, 0x04, 2])),
+        "INVALID_ARGUMENT"
+    );
+    txn.commit().unwrap();
+
+    // A query crosses as IR and returns the objects' records.
+    let query = Query::new()
+        .filter(Filter::ge("age", 0))
+        .sort_by_desc("age");
+    let request = QueryRequest {
+        collection: "users".to_owned(),
+        query: query.clone(),
+        count: false,
+    };
+    let decoded = QueryRequest::decode(&request.encode().unwrap()).unwrap();
+
+    assert_eq!(decoded, request);
+
+    let read = db.begin_read().unwrap();
+    let users = read.collection("users").unwrap();
+    let records = users.query_records(&decoded.query).unwrap();
+    let expected: Vec<Vec<u8>> = users
+        .query(&query)
+        .unwrap()
+        .iter()
+        .map(|user| {
+            users
+                .get_record(user.get("id").cloned().unwrap())
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+
+    assert_eq!(records, expected);
+    assert_eq!(records.len(), 2);
+    assert_eq!(code(QueryRequest::decode(&[0xFF])), "INVALID_QUERY");
+}

@@ -123,6 +123,43 @@ impl Not for Filter {
     }
 }
 
+/// A query as the IR carries it across the language boundary: the query, the
+/// collection it names, and whether it counts the objects rather than
+/// returning them (`design/objects.md`, "The IR").
+///
+/// A language binding builds the IR in its own language and hands the bytes
+/// to the engine, which reads them with [`decode`](Self::decode). Rust code
+/// has no need of it and uses [`Query`] directly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueryRequest {
+    /// The collection the query runs on.
+    pub collection: String,
+    /// What to find, in what order, and how many.
+    pub query: Query,
+    /// Whether to count the objects rather than return them.
+    pub count: bool,
+}
+
+impl QueryRequest {
+    /// Reads the IR in `bytes`. IR that does not decode, or that names an
+    /// unknown operator or leaves out what one uses, is
+    /// [`Error::InvalidQuery`](crate::Error::InvalidQuery).
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let (collection, ir, count) = super::ir::decode(bytes)?;
+
+        Ok(Self {
+            collection,
+            query: Query { ir },
+            count,
+        })
+    }
+
+    /// The IR of this request.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        super::ir::encode(&self.collection, &self.query.ir, self.count)
+    }
+}
+
 /// What to find in a collection, in what order, and how many, for
 /// [`CollectionReader::query`](crate::CollectionReader::query) and
 /// [`CollectionReader::count`](crate::CollectionReader::count).

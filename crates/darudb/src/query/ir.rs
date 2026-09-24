@@ -183,13 +183,6 @@ fn invalid(message: impl Into<String>) -> Error {
 
 /// The IR record of `ir` on collection `collection`, counting the objects
 /// rather than returning them if `count` is set.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the language bindings pass queries as IR; until one does, the tests are the only callers"
-    )
-)]
 pub(crate) fn encode(collection: &str, ir: &Ir, count: bool) -> Result<Vec<u8>> {
     let mut fields = vec![(1, Raw::String(collection.to_owned()))];
 
@@ -289,13 +282,6 @@ fn value_raw(value: &Value) -> Result<Raw> {
 }
 
 /// Reads an IR record: the collection, the query, and whether it counts.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the language bindings pass queries as IR; until one does, the tests are the only callers"
-    )
-)]
 pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
     let fields = codec::read(bytes).map_err(|reason| invalid(format!("the IR: {reason}")))?;
     let mut collection = None;

@@ -81,6 +81,14 @@ impl Database {
         self.shared.sync()
     }
 
+    /// The schema this handle opened the file with, as the record the file
+    /// holds it in (`design/objects.md`, "The stored schema"), or `None`
+    /// without a schema. A language binding reads the ids of collections and
+    /// fields from it, to write and read records.
+    pub fn schema_record(&self) -> Option<&[u8]> {
+        self.schema.as_ref().map(|schema| schema.encoded.as_slice())
+    }
+
     /// Whether the database is encrypted.
     pub fn is_encrypted(&self) -> bool {
         self.shared.data_key.is_some()
