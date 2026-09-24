@@ -1001,6 +1001,9 @@ pub fn parse_query(
 pub struct NativePrepared {
     collection: String,
     query: darudb::Query,
+    /// The query cut to its first object, kept apart so that each run binds
+    /// a query it shares rather than cutting a copy of it.
+    first: darudb::Query,
 }
 
 #[napi]
@@ -1010,19 +1013,16 @@ impl NativePrepared {
     pub fn from_ir(ir: BufferSlice<'_>) -> Result<Self> {
         let request = darudb::QueryRequest::decode(&ir).map_err(to_js_error)?;
 
-        Ok(Self {
-            collection: request.collection,
-            query: request.query,
-        })
+        Ok(Self::new(request.collection, request.query))
     }
 
     /// Prepares `text` in the query language, on `collection`.
     #[napi(factory)]
     pub fn from_text(collection: String, text: String) -> Result<Self> {
-        Ok(Self {
+        Ok(Self::new(
             collection,
-            query: darudb::Query::prepare(&text).map_err(to_js_error)?,
-        })
+            darudb::Query::prepare(&text).map_err(to_js_error)?,
+        ))
     }
 
     /// The IR of the query with `parameters` for its parameters, for the
@@ -1038,12 +1038,20 @@ impl NativePrepared {
         Ok(request.encode().map_err(to_js_error)?.into())
     }
 
+    fn new(collection: String, query: darudb::Query) -> Self {
+        Self {
+            collection,
+            first: query.clone().first(),
+            query,
+        }
+    }
+
     /// The query with `parameters`, encoded as `Query::bind_encoded` reads
     /// them, for its parameters, cut to its first object with `first`.
     fn bound(&self, parameters: &[u8], first: bool) -> Result<darudb::Query> {
-        let query = self.query.bind_encoded(parameters).map_err(to_js_error)?;
+        let query = if first { &self.first } else { &self.query };
 
-        Ok(if first { query.first() } else { query })
+        query.bind_encoded(parameters).map_err(to_js_error)
     }
 }
 
