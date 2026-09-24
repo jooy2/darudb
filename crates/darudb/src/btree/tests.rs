@@ -107,8 +107,10 @@ impl Harness {
             &mut self.root,
             key,
             value,
+            true,
         )
         .unwrap()
+            == Inserted::Replaced
     }
 
     fn remove(&mut self, key: &[u8]) -> bool {

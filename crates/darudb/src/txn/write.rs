@@ -66,6 +66,9 @@ pub struct WriteTransaction {
     pub(super) trees: BTreeMap<String, TreeState>,
     /// The trees looked up in the catalog without being changed.
     pub(super) descriptors: Descriptors,
+    /// Values waiting to be stored in the engine's trees before the commit,
+    /// by tree and key ([`insert_later`](Self::insert_later)).
+    pub(super) later: BTreeMap<String, BTreeMap<Vec<u8>, Vec<u8>>>,
     pub(super) next_tree_id: u64,
     pub(super) failed: bool,
     /// The schema of the handle that began the transaction, if it declared
@@ -196,6 +199,7 @@ impl WriteTransaction {
             reclaimed,
             trees: BTreeMap::new(),
             descriptors: Descriptors::default(),
+            later: BTreeMap::new(),
             next_tree_id: base.next_tree_id,
             failed: false,
             schema,
@@ -245,15 +249,100 @@ impl WriteTransaction {
     /// [`insert`](Self::insert) into any tree, the engine's own included.
     pub(crate) fn insert_in(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<()> {
         self.check_open()?;
+        self.forget_later(tree, key);
 
-        let result = self.insert_inner(tree, key, value);
+        let result = self.insert_inner(tree, key, value, true).map(drop);
 
         self.failed |= result.is_err();
 
         result
     }
 
-    fn insert_inner(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<()> {
+    /// Stores `value` under `key` in tree `tree` of the engine's, if nothing
+    /// is stored there; returns whether it stored it. When it does not, the
+    /// tree holds what it held, though the pages on the way to the key may
+    /// have been copied. It saves the search a look-up before an insert
+    /// would repeat.
+    pub(crate) fn insert_new_in(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<bool> {
+        self.check_open()?;
+        self.store_later(tree)?;
+
+        let result = self.insert_inner(tree, key, value, false);
+
+        self.failed |= result.is_err();
+
+        result
+    }
+
+    /// Stores `value` under `key` in tree `tree` of the engine's when the
+    /// transaction commits, and until then gives it to every read of the key.
+    /// For a small value written many times in one transaction, such as a
+    /// collection's auto-increment counter, which would otherwise cost a
+    /// change to its tree every time. A tree holding such values may be read
+    /// only by key, and changed; walking or counting it is refused.
+    pub(crate) fn insert_later(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        self.check_open()?;
+        check_key(key, self.shared.loader.page_size())?;
+        check_value(value)?;
+        self.later
+            .entry(tree.to_owned())
+            .or_default()
+            .insert(key.to_vec(), value.to_vec());
+
+        Ok(())
+    }
+
+    /// Stores the values waiting for tree `tree`.
+    fn store_later(&mut self, tree: &str) -> Result<()> {
+        let Some(waiting) = self.later.remove(tree) else {
+            return Ok(());
+        };
+
+        for (key, value) in waiting {
+            let result = self.insert_inner(tree, &key, &value, true);
+
+            self.failed |= result.is_err();
+            result?;
+        }
+
+        Ok(())
+    }
+
+    /// Drops a value waiting for `key` of tree `tree`, which a change of the
+    /// key replaces.
+    fn forget_later(&mut self, tree: &str, key: &[u8]) -> bool {
+        let Some(waiting) = self.later.get_mut(tree) else {
+            return false;
+        };
+        let forgot = waiting.remove(key).is_some();
+
+        if waiting.is_empty() {
+            self.later.remove(tree);
+        }
+
+        forgot
+    }
+
+    /// Refuses to walk or count a tree with values waiting to be stored.
+    fn check_not_waiting(&self, tree: &str) -> Result<()> {
+        if self.later.contains_key(tree) {
+            return Err(Error::Internal {
+                message: format!("tree {tree:?} was walked with values waiting to be stored"),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Inserts or, with `replace`, replaces; returns whether `key` was stored
+    /// anew.
+    fn insert_inner(
+        &mut self,
+        tree: &str,
+        key: &[u8],
+        value: &[u8],
+        replace: bool,
+    ) -> Result<bool> {
         let loader = &self.shared.loader;
 
         check_key(key, loader.page_size())?;
@@ -270,22 +359,23 @@ impl WriteTransaction {
         .ok_or_else(|| Error::Internal {
             message: "a tree was not created".to_owned(),
         })?;
-        let replaced = btree::insert(
+        let outcome = btree::insert(
             loader,
             &mut self.space,
             state.id,
             &mut state.root,
             key,
             value,
+            replace,
         )?;
 
-        if !replaced {
+        if outcome == btree::Inserted::New {
             state.entries += 1;
         }
 
         state.changed = true;
 
-        Ok(())
+        Ok(outcome == btree::Inserted::New)
     }
 
     /// Removes `key` and its value from tree `tree`. Returns whether it was
@@ -299,11 +389,12 @@ impl WriteTransaction {
     pub(crate) fn remove_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
         self.check_open()?;
 
+        let waited = self.forget_later(tree, key);
         let result = self.remove_inner(tree, key);
 
         self.failed |= result.is_err();
 
-        result
+        Ok(result? || waited)
     }
 
     fn remove_inner(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
@@ -343,6 +434,7 @@ impl WriteTransaction {
     /// included.
     pub(crate) fn delete_tree_in(&mut self, tree: &str) -> Result<bool> {
         self.check_open()?;
+        self.later.remove(tree);
 
         let result = self.delete_tree_inner(tree);
 
@@ -383,6 +475,10 @@ impl WriteTransaction {
     /// [`get`](Self::get) in any tree, the engine's own included.
     pub(crate) fn get_in(&self, tree: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         self.check_open()?;
+
+        if let Some(value) = self.later.get(tree).and_then(|waiting| waiting.get(key)) {
+            return Ok(Some(value.clone()));
+        }
 
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
@@ -439,6 +535,7 @@ impl WriteTransaction {
         backward: bool,
     ) -> Result<Range<'_>> {
         self.check_open()?;
+        self.check_not_waiting(tree)?;
 
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
@@ -465,6 +562,7 @@ impl WriteTransaction {
     /// [`len`](Self::len) of any tree, the engine's own included.
     pub(crate) fn len_in(&self, tree: &str) -> Result<u64> {
         self.check_open()?;
+        self.check_not_waiting(tree)?;
 
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
@@ -505,7 +603,9 @@ impl WriteTransaction {
     /// When it returns, the changes survive a crash or a power cut. If it
     /// fails with `SYNC_FAILED`, the outcome is unknown and the database has
     /// to be opened again.
-    pub fn commit(self) -> Result<()> {
+    pub fn commit(mut self) -> Result<()> {
+        self.store_all_later()?;
+
         if self.failed {
             return Err(Error::InvalidArgument {
                 message: "an operation in this write transaction failed, so it can only be aborted"
@@ -527,7 +627,9 @@ impl WriteTransaction {
     /// A crash of the process loses none of them. A power cut may undo deferred
     /// commits, newest first and never leaving a gap, and never damages the
     /// file.
-    pub fn commit_deferred(self) -> Result<()> {
+    pub fn commit_deferred(mut self) -> Result<()> {
+        self.store_all_later()?;
+
         if self.failed {
             return Err(Error::InvalidArgument {
                 message: "an operation in this write transaction failed, so it can only be aborted"
@@ -540,6 +642,17 @@ impl WriteTransaction {
 
     /// Throws away every change of this transaction. The same as dropping it.
     pub fn abort(self) {}
+
+    /// Stores every value waiting to be stored, before the commit.
+    fn store_all_later(&mut self) -> Result<()> {
+        let trees: Vec<String> = self.later.keys().cloned().collect();
+
+        for tree in trees {
+            self.store_later(&tree)?;
+        }
+
+        Ok(())
+    }
 
     /// Makes the commit write `block` as its key block, to change the key.
     pub(crate) fn replace_key_block(&mut self, block: [u8; KEY_BLOCK_LEN]) {

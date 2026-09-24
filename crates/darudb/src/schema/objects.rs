@@ -229,7 +229,15 @@ pub(crate) fn index_entries(
         .fields
         .by_id(index.field)
         .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
-    let value = object.get(&field.name).unwrap_or(&Value::Null);
+    // The value the object is stored with: a required field left out holds
+    // its default, as the record does.
+    let value = match object.get(&field.name) {
+        None | Some(Value::Null) if !field.optional => {
+            field.default.as_ref().unwrap_or(&Value::Null)
+        }
+        Some(value) => value,
+        None => &Value::Null,
+    };
     let values = match value {
         Value::List(elements) => elements.iter().collect(),
         value => vec![value],
@@ -467,19 +475,18 @@ impl<'a> CollectionWriter<'a> {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
         let record = codec::write(&raw);
-        let new = codec::to_object(raw, &collection.fields).map_err(internal)?;
-        let old = match self.txn.get_in(&records(collection.id), &key)? {
-            Some(_) if !replace => {
-                return Err(Error::DuplicateKey {
-                    message: format!(
-                        "`{}` already holds an object with the primary key {:?}",
-                        collection.name,
-                        new.get(&key_field.name).unwrap_or(&Value::Null)
-                    ),
-                });
+
+        drop(raw);
+
+        // An insert finds out whether the key is taken by storing the record,
+        // below, rather than by looking it up first.
+        let old = if replace {
+            match self.txn.get_in(&records(collection.id), &key)? {
+                Some(bytes) => Some(decode(self.txn, collection, &bytes)?),
+                None => None,
             }
-            Some(bytes) => Some(decode(self.txn, collection, &bytes)?),
-            None => None,
+        } else {
+            None
         };
         let max_key_len = self.txn.max_key_len();
         let too_long = || Error::InvalidArgument {
@@ -508,7 +515,7 @@ impl<'a> CollectionWriter<'a> {
                 Some(old) => index_entries(index, collection, old, &key)?,
                 None => Vec::new(),
             };
-            let after = index_entries(index, collection, &new, &key)?;
+            let after = index_entries(index, collection, &object, &key)?;
 
             for entry in &before {
                 if !after.contains(entry) {
@@ -547,6 +554,22 @@ impl<'a> CollectionWriter<'a> {
             }
         }
 
+        // The last refusal: a primary key already taken, which an insert
+        // learns from storing the record, and which stores nothing then.
+        if !replace
+            && !self
+                .txn
+                .insert_new_in(&records(collection.id), &key, &record)?
+        {
+            return Err(Error::DuplicateKey {
+                message: format!(
+                    "`{}` already holds an object with the primary key {:?}",
+                    collection.name,
+                    object.get(&key_field.name).unwrap_or(&Value::Null)
+                ),
+            });
+        }
+
         // Nothing below can refuse the object; only a failure of the file can
         // stop it now, and that leaves the transaction unable to commit.
         for (tree, entry) in removals {
@@ -557,14 +580,18 @@ impl<'a> CollectionWriter<'a> {
             self.txn.insert_in(&tree, &entry, &value)?;
         }
 
+        // The counter is stored once, when the transaction commits, however
+        // many objects it numbers.
         if let Some(next) = raised {
             self.txn
-                .insert_in(META, &counter(collection.id), &next.to_le_bytes())?;
+                .insert_later(META, &counter(collection.id), &next.to_le_bytes())?;
         }
 
-        self.txn.insert_in(&records(collection.id), &key, &record)?;
+        if replace {
+            self.txn.insert_in(&records(collection.id), &key, &record)?;
+        }
 
-        Ok(new.get(&key_field.name).cloned().unwrap_or(Value::Null))
+        Ok(object.get(&key_field.name).cloned().unwrap_or(Value::Null))
     }
 
     /// Gives `object` the collection's next auto-increment number if it has

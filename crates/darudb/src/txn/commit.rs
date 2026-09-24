@@ -77,6 +77,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
             &mut txn.catalog,
             name.as_bytes(),
             &descriptor.encode(),
+            true,
         )?;
     }
 
@@ -155,6 +156,7 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
                     &mut txn.free_root,
                     &free_key(*start),
                     &free_value(*len),
+                    true,
                 )?;
             }
         }
@@ -175,6 +177,7 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
                     &mut txn.retained_root,
                     &retained_key(txn.txn, sequence_number(sequence)?),
                     value,
+                    true,
                 )?;
             }
 

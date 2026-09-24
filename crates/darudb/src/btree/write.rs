@@ -27,8 +27,28 @@ type Split = Option<(Vec<u8>, Child)>;
 /// overflow run it kept, if any, for the caller to give back.
 type Replaced = Option<Option<OverflowRef>>;
 
-/// Stores `value` under `key`, replacing any value already there. Returns
-/// whether one was.
+/// What an insert stores, and whether it replaces a value already there.
+#[derive(Clone, Copy)]
+struct Put<'a> {
+    key: &'a [u8],
+    value: StoredRef<'a>,
+    replace: bool,
+}
+
+/// What an insert did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Inserted {
+    /// The key was not there, and now is.
+    New,
+    /// The key was there, and its value was replaced.
+    Replaced,
+    /// The key was there, and its value was kept, as the caller asked.
+    Kept,
+}
+
+/// Stores `value` under `key`, replacing any value already there if
+/// `replace` is set, and keeping it otherwise. A kept value leaves the tree
+/// as it was, though the nodes on the way to it may have been copied.
 pub(crate) fn insert<L: Load, S: Store>(
     load: &L,
     store: &mut S,
@@ -36,7 +56,8 @@ pub(crate) fn insert<L: Load, S: Store>(
     root: &mut Option<Child>,
     key: &[u8],
     value: &[u8],
-) -> Result<bool> {
+    replace: bool,
+) -> Result<Inserted> {
     let run = store_value(load.page_size(), store, tree, key.len(), value)?;
     let value = run.map_or(StoredRef::Inline(value), StoredRef::Overflow);
 
@@ -50,10 +71,15 @@ pub(crate) fn insert<L: Load, S: Store>(
 
         *root = Some(Child::dirty(page, Node::Leaf(leaf)));
 
-        return Ok(false);
+        return Ok(Inserted::New);
     };
 
-    let (replaced, split) = insert_into(load, store, tree, child, None, key, value)?;
+    let put = Put {
+        key,
+        value,
+        replace,
+    };
+    let (replaced, split) = insert_into(load, store, tree, child, None, put)?;
 
     if let Some((separator, right)) = split {
         let level = dirty_node(child)?.level() + 1;
@@ -71,12 +97,18 @@ pub(crate) fn insert<L: Load, S: Store>(
     }
 
     match replaced {
-        Some(run) => {
+        // The value was kept: the one written for it goes.
+        Some(_) if !replace => {
             release_run(store, run);
 
-            Ok(true)
+            Ok(Inserted::Kept)
         }
-        None => Ok(false),
+        Some(old) => {
+            release_run(store, old);
+
+            Ok(Inserted::Replaced)
+        }
+        None => Ok(Inserted::New),
     }
 }
 
@@ -86,9 +118,13 @@ fn insert_into<L: Load, S: Store>(
     tree: u64,
     child: &mut Child,
     level: Option<u8>,
-    key: &[u8],
-    value: StoredRef<'_>,
+    put: Put<'_>,
 ) -> Result<(Replaced, Split)> {
+    let Put {
+        key,
+        value,
+        replace,
+    } = put;
     let page_size = load.page_size();
     let capacity = content_len(page_size);
     let node = make_dirty(load, store, child, tree, level)?;
@@ -96,6 +132,16 @@ fn insert_into<L: Load, S: Store>(
     match node {
         Node::Leaf(leaf) => {
             let found = leaf.search(key);
+
+            if let (Ok(index), false) = (found, replace) {
+                let kept = match leaf.value(index).map_err(internal)? {
+                    StoredRef::Inline(_) => None,
+                    StoredRef::Overflow(reference) => Some(reference),
+                };
+
+                return Ok((Some(kept), None));
+            }
+
             let replaced = match found {
                 Ok(index) => Some(leaf.remove(index).map_err(internal)?),
                 Err(_) => None,
@@ -137,8 +183,7 @@ fn insert_into<L: Load, S: Store>(
                 tree,
                 &mut branch.children[index],
                 Some(branch.level - 1),
-                key,
-                value,
+                put,
             )?;
             let mut split_up = None;
 

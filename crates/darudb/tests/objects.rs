@@ -181,6 +181,43 @@ fn an_auto_increment_never_gives_a_number_twice() {
         txn.collection("users").unwrap().insert(user("h")).unwrap(),
         Value::Int(13)
     );
+
+    // The counter is stored when the transaction commits: numbers given in
+    // one transaction follow each other, and an aborted one gives none.
+    assert_eq!(
+        txn.collection("users").unwrap().insert(user("i")).unwrap(),
+        Value::Int(14)
+    );
+    txn.abort();
+
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+
+    assert_eq!(
+        users
+            .insert(user("h").with("email", "h@example.com"))
+            .unwrap(),
+        Value::Int(13)
+    );
+    assert_eq!(
+        code(users.insert(user("j").with("email", "h@example.com"))),
+        "DUPLICATE_KEY",
+        "the email is taken"
+    );
+    assert_eq!(
+        users.insert(user("k")).unwrap(),
+        Value::Int(14),
+        "a refused insert takes no number"
+    );
+    drop(users);
+    txn.commit().unwrap();
+
+    let mut txn = db.begin_write().unwrap();
+
+    assert_eq!(
+        txn.collection("users").unwrap().insert(user("l")).unwrap(),
+        Value::Int(15)
+    );
 }
 
 #[test]
