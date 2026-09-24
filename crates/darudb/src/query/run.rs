@@ -339,13 +339,9 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
                 .for_each(&mut |key, record| visit(key, Some(record)))?;
         }
         Access::Keys { keys, backward } => {
-            let mut ordered: Vec<&Vec<u8>> = keys.iter().collect();
+            for at in 0..keys.len() {
+                let key = &keys[in_order(at, keys.len(), *backward)];
 
-            if *backward {
-                ordered.reverse();
-            }
-
-            for key in ordered {
                 if let Some(record) = source.get_in(&records, key)? {
                     if visit(key, Some(&record))? {
                         break;
@@ -362,11 +358,6 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
         } => {
             let tree = index_tree(index.id);
             let mut seen = HashSet::new();
-            let mut ordered: Vec<&Range> = ranges.iter().collect();
-
-            if *backward {
-                ordered.reverse();
-            }
 
             let mut give = |key: &[u8], seen: &mut HashSet<Vec<u8>>| -> Result<bool> {
                 if *repeats && !seen.insert(key.to_vec()) {
@@ -376,7 +367,8 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
                 visit(key, None)
             };
 
-            for range in ordered {
+            for at in 0..ranges.len() {
+                let range = &ranges[in_order(at, ranges.len(), *backward)];
                 let stop = if let Some(value) = unique_value(index, *values, range) {
                     // One value of a unique index is one entry, whose key is
                     // the value and whose value is the object's key: looked
@@ -399,6 +391,11 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
     }
 
     Ok(())
+}
+
+/// The position of the `at`th of `len` things taken forwards, or backwards.
+fn in_order(at: usize, len: usize, backward: bool) -> usize {
+    if backward { len - 1 - at } else { at }
 }
 
 /// The value `range` holds, if it is a range of one value, as `values` says,
@@ -477,12 +474,19 @@ fn walk_back(
     give: &mut dyn FnMut(&[u8]) -> Result<bool>,
 ) -> Result<bool> {
     let mut high = range.1.clone();
+    // The keys of the value held back, one after another, and where each
+    // ends: one buffer for all of them rather than one for each.
+    let mut held: Vec<u8> = Vec::new();
+    let mut ends: Vec<usize> = Vec::new();
+    let mut value: Vec<u8> = Vec::new();
 
     loop {
-        let mut group: Vec<Vec<u8>> = Vec::new();
-        let mut value: Vec<u8> = Vec::new();
         let mut stopped = false;
         let mut large = false;
+
+        held.clear();
+        ends.clear();
+        value.clear();
 
         source
             .range_in(tree, as_ref(&range.0), as_ref(&high), true)?
@@ -490,20 +494,19 @@ fn walk_back(
                 let (entry, key) = entry_parts(source, index, entry, stored)?;
 
                 if entry != value.as_slice() {
-                    while let Some(key) = group.pop() {
-                        if give(&key)? {
-                            stopped = true;
+                    if give_held(&mut held, &mut ends, give)? {
+                        stopped = true;
 
-                            return Ok(true);
-                        }
+                        return Ok(true);
                     }
 
                     value.clear();
                     value.extend_from_slice(entry);
                 }
 
-                group.push(key.to_vec());
-                large = group.len() >= GROUP;
+                held.extend_from_slice(key);
+                ends.push(held.len());
+                large = ends.len() >= GROUP;
 
                 Ok(large)
             })?;
@@ -513,13 +516,7 @@ fn walk_back(
         }
 
         if !large {
-            while let Some(key) = group.pop() {
-                if give(&key)? {
-                    return Ok(true);
-                }
-            }
-
-            return Ok(false);
+            return give_held(&mut held, &mut ends, give);
         }
 
         // A large value: its objects, forwards from the first.
@@ -547,8 +544,32 @@ fn walk_back(
         }
 
         // Every entry of the value is greater than the value alone.
-        high = Bound::Excluded(value);
+        high = Bound::Excluded(value.clone());
     }
+}
+
+/// Gives the keys held back, the last first, until `give` says to stop, and
+/// returns whether it did. Nothing is held afterwards.
+fn give_held(
+    held: &mut Vec<u8>,
+    ends: &mut Vec<usize>,
+    give: &mut dyn FnMut(&[u8]) -> Result<bool>,
+) -> Result<bool> {
+    while let Some(end) = ends.pop() {
+        let start = ends.last().copied().unwrap_or(0);
+        let stop = give(&held[start..end])?;
+
+        held.truncate(start);
+
+        if stop {
+            ends.clear();
+            held.clear();
+
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn as_ref(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
