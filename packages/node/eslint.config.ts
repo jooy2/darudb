@@ -53,27 +53,11 @@ export default pluginTypeScriptESLint.config(
     }
   },
   {
-    // The package is CommonJS, as the loader napi-rs generates is, so the
-    // files it ships load each other with `require`.
-    files: ['lib/**/*.js'],
-    languageOptions: {
-      sourceType: 'commonjs'
-    },
-    rules: {
-      '@typescript-eslint/no-require-imports': 'off',
-      // A module that has moved to TypeScript is required by the name its
-      // output has in `dist`, and is found here by its source.
-      'n/no-missing-require': [
-        'error',
-        { tryExtensions: ['.js', '.json', '.node', '.mjs', '.cjs', '.ts'] }
-      ]
-    }
-  },
-  {
-    // `native.js` is loaded with `import native = require(...)`, which `tsc`
-    // compiles to a plain `require`. A namespace import would wrap the module
+    // `import x = require(...)` compiles to a plain `require`, where the other
+    // forms would add getters: a namespace import of `native.js` would wrap it
     // in an object of getters, which every call into the engine would then go
-    // through.
+    // through, and a name `index.ts` imported and exported again would be a
+    // getter on the package's exports rather than a value.
     files: ['lib/**/*.ts'],
     rules: {
       '@typescript-eslint/no-require-imports': ['error', { allowAsImport: true }]
