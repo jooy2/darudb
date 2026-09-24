@@ -99,6 +99,9 @@ pub(crate) enum Access<'s> {
         /// Whether an object can have more than one entry in the ranges, so
         /// that its key has to be remembered to be read once.
         repeats: bool,
+        /// Whether each range holds the entries of one value, as an equality
+        /// or an `IN` makes it.
+        values: bool,
     },
 }
 
@@ -751,6 +754,7 @@ fn choose<'s>(
                     ranges,
                     backward,
                     repeats: list && !single,
+                    values: true,
                 },
                 vec![best.term],
                 (sort.is_empty() && single) || (follows_sort && !list),
@@ -798,6 +802,7 @@ fn choose<'s>(
                         ranges: vec![range],
                         backward,
                         repeats: list,
+                        values: false,
                     },
                     consumed,
                     follows_sort && !list,
@@ -833,6 +838,7 @@ fn unfiltered<'s>(
                         ranges: vec![all],
                         backward: descending,
                         repeats: false,
+                        values: false,
                     },
                     Vec::new(),
                     true,

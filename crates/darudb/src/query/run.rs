@@ -358,6 +358,7 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
             ranges,
             backward,
             repeats,
+            values,
         } => {
             let tree = index_tree(index.id);
             let mut seen = HashSet::new();
@@ -376,7 +377,15 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
             };
 
             for range in ordered {
-                let stop = if *backward {
+                let stop = if let Some(value) = unique_value(index, *values, range) {
+                    // One value of a unique index is one entry, whose key is
+                    // the value and whose value is the object's key: looked
+                    // up, not walked.
+                    match source.get_in(&tree, value)? {
+                        Some(key) => give(key, &mut seen)?,
+                        None => false,
+                    }
+                } else if *backward {
                     walk_back(source, index, &tree, range, &mut |key| give(key, &mut seen))?
                 } else {
                     walk_entries(source, index, &tree, range, *backward, &mut |key| {
@@ -392,6 +401,20 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
     }
 
     Ok(())
+}
+
+/// The value `range` holds, if it is a range of one value, as `values` says,
+/// of a unique index, and the value is not null, which any number of objects
+/// may hold.
+fn unique_value<'r>(index: &IndexDef, values: bool, range: &'r Range) -> Option<&'r [u8]> {
+    match range {
+        (Bound::Included(value), _)
+            if values && index.unique && value.first() != Some(&key::NULL) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
 }
 
 /// How many objects of one value a backward walk holds back before it goes
