@@ -211,20 +211,34 @@ impl Drop for Helper {
 /// Set, a pause for the next reader that registers a snapshot afresh: it
 /// says so on the first channel after its first read of the header, and waits
 /// for the second before it takes the snapshot's lock. The one test of the
-/// second read sets it; it catches one reader and is gone.
-pub(crate) static PAUSE_BEFORE_REGISTERING: std::sync::Mutex<
-    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
-> = std::sync::Mutex::new(None);
+/// second read sets it, for the file it names; it catches one reader of that
+/// file and is gone. Readers of other files, which other tests run in the
+/// same process at the same time, pass by.
+pub(crate) static PAUSE_BEFORE_REGISTERING: std::sync::Mutex<Option<Pause>> =
+    std::sync::Mutex::new(None);
 
-/// Where a reader stops if [`PAUSE_BEFORE_REGISTERING`] is set. Only test
-/// builds call it.
-pub(crate) fn pause_before_registering() {
-    let pause = PAUSE_BEFORE_REGISTERING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
+/// The file a reader stops for, and the channels it says so and waits on.
+pub(crate) type Pause = (
+    std::path::PathBuf,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
 
-    if let Some((paused, resume)) = pause {
+/// Where a reader of the file at `path` stops if [`PAUSE_BEFORE_REGISTERING`]
+/// names that file. Only test builds call it.
+pub(crate) fn pause_before_registering(path: &std::path::Path) {
+    let pause = {
+        let mut pause = PAUSE_BEFORE_REGISTERING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        match &*pause {
+            Some((file, _, _)) if file == path => pause.take(),
+            _ => None,
+        }
+    };
+
+    if let Some((_, paused, resume)) = pause {
         let _ = paused.send(());
         let _ = resume.recv();
     }

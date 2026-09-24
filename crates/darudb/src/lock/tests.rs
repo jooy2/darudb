@@ -813,7 +813,8 @@ fn a_reader_reads_the_header_again_after_it_registers_its_snapshot() {
     let (paused, reader_paused) = std::sync::mpsc::channel();
     let (resume, resumed) = std::sync::mpsc::channel();
 
-    *crate::testing::PAUSE_BEFORE_REGISTERING.lock().unwrap() = Some((paused, resumed));
+    *crate::testing::PAUSE_BEFORE_REGISTERING.lock().unwrap() =
+        Some((db.path().to_path_buf(), paused, resumed));
 
     let reader = {
         let db = db.clone();

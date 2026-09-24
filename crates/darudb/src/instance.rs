@@ -322,7 +322,7 @@ impl Shared {
 
             // The test of the second read below stops a reader here.
             #[cfg(test)]
-            crate::testing::pause_before_registering();
+            crate::testing::pause_before_registering(&self.path);
 
             registry
                 .register(record.txn, deadline)
