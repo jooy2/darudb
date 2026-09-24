@@ -298,9 +298,12 @@ impl Locks {
     /// left. Only when one does are the groups bisected with the same
     /// question (`design/locking.md`, "Finding the oldest snapshot").
     ///
-    /// The caller holds the writer lock. A snapshot registered from here on is
-    /// at least the published commit, above every retained group, so the
-    /// answers do not change while it looks.
+    /// The caller holds the writer lock, so a reader that registers from here
+    /// on reads the published commit, above every retained group. One holding
+    /// a stale header may register an older snapshot for a moment, but it then
+    /// finds the snapshot no longer published and lets go of it without
+    /// reading a page; the registration can only make the answers keep more
+    /// pages, never fewer.
     pub(crate) fn reclaimable(&self, groups: &[u64]) -> Result<Option<u64>, LockError> {
         let groups = match self.oldest_local() {
             Some(oldest) => &groups[..groups.partition_point(|group| *group <= oldest)],
