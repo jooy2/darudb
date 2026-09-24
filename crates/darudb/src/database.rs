@@ -356,6 +356,10 @@ fn open_io(
 
     match access {
         Access::Alone => {
+            // The lock tests stop a process here and kill it.
+            #[cfg(test)]
+            crate::testing::pause_in_recovery();
+
             let (header, last_barrier) = recovery::recover(
                 &shared.pager,
                 &shared.loader,

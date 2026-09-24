@@ -135,7 +135,7 @@ Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 Specified in [design/locking.md](design/locking.md).
 
 - **No mutexes in shared memory.** A process that dies holding a shared-memory mutex leaves it held, recovering from that needs robust mutexes that not every platform has, and a lock file with a memory layout in it breaks between processes of different architectures.
-- **Only operating-system byte-range locks** (`fcntl` on Unix, `LockFileEx` on Windows), on bytes from 2^62 up, where no data ever is: an open lock, a writer lock, and one byte per snapshot. When a process dies, the operating system releases its locks, and nothing else needs cleaning up.
+- **Only operating-system byte-range locks** (`fcntl` on Unix, `LockFileEx` on Windows), on bytes from 2^62 up, where no data ever is: an open lock, a writer lock, a recovery lock that a process holds while it opens the file, and one byte per snapshot. When a process dies, the operating system releases its locks, and nothing else needs cleaning up.
 - **One operating-system handle per file per process**, shared by every `Database` object for that file, because closing any descriptor drops all of a process's POSIX locks.
 - **Readers take no header lock**: they read the header, register their snapshot, and read it again.
 - **The writer reclaims pages** only from groups that no registered snapshot and no possible recovery can still reach.

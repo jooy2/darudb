@@ -8,6 +8,7 @@
 //! | --------------- | ------------------------------------------------------------ |
 //! | 2^62            | Open: shared while the file is open, exclusive to recover it |
 //! | 2^62 + 1        | Writer: held by the process whose transaction is writing     |
+//! | 2^62 + 2        | Recovery: held by a process deciding whether to recover      |
 //! | 2^62 + 64 + `s` | Snapshot `s`: shared by every process reading that snapshot  |
 //!
 //! No mutex lives in shared memory and no lock file has a layout, so a process
@@ -27,8 +28,11 @@
 //!
 //! The open lock is how a process that opens the file learns whether any other
 //! process has it open, which decides whether a crash may have left something
-//! to recover. The first to open it holds it exclusively while it recovers,
-//! and every process shares it after that.
+//! to recover. Only a process that has finished opening holds it, shared, or a
+//! process that is recovering the file, exclusively. A process on its way in
+//! waits for the recovery lock instead, so that if the one recovering dies,
+//! its open lock goes with it, and the next one in finds the file unopened and
+//! recovers it.
 
 mod sys;
 
@@ -49,6 +53,10 @@ const OPEN_BYTE: u64 = 1 << 62;
 
 /// The writer lock's byte.
 const WRITER_BYTE: u64 = OPEN_BYTE + 1;
+
+/// The recovery lock's byte: held while a process opening the file decides
+/// whether to recover it, and while it does.
+const RECOVERY_BYTE: u64 = OPEN_BYTE + 2;
 
 /// The lock byte of snapshot 0. Snapshot `s` is locked at this byte plus `s`,
 /// which stays below 2^63 because every transaction id is below
@@ -102,6 +110,8 @@ pub(crate) struct Locks {
     handles: Option<Mutex<Vec<Arc<DbFile>>>>,
     /// Whether this process holds the open lock.
     open: Mutex<bool>,
+    /// Whether this process holds the recovery lock.
+    recovery: Mutex<bool>,
     /// The snapshots in use in this process, with the number of read
     /// transactions on each. The first registration of a snapshot takes a
     /// shared lock on its byte, and the last one to end releases it.
@@ -117,6 +127,7 @@ impl Locks {
         Self {
             handles: Some(Mutex::new(vec![file])),
             open: Mutex::new(false),
+            recovery: Mutex::new(false),
             snapshots: Mutex::new(BTreeMap::new()),
             owner: std::process::id(),
         }
@@ -128,6 +139,7 @@ impl Locks {
         Self {
             handles: None,
             open: Mutex::new(false),
+            recovery: Mutex::new(false),
             snapshots: Mutex::new(BTreeMap::new()),
             owner: std::process::id(),
         }
@@ -148,10 +160,18 @@ impl Locks {
         }
     }
 
-    /// Takes the open lock: exclusively if no other process has the file open,
-    /// and otherwise shared, once any recovery in progress has finished. The
-    /// wait for the shared lock lasts up to `timeout`.
+    /// Takes the open lock, after the recovery lock, which it waits for up to
+    /// `timeout`: exclusively if no other process has the file open, and
+    /// otherwise shared.
+    ///
+    /// [`Access::Alone`] leaves the recovery lock held, so that no other
+    /// process opens the file while this one recovers it; [`share`](Self::share)
+    /// releases it. [`Access::Shared`] has released it already.
     pub(crate) fn open(&self, timeout: Duration) -> Result<Access, LockError> {
+        let deadline = Instant::now().checked_add(timeout);
+
+        self.lock_recovery(deadline)?;
+
         if self
             .try_lock(OPEN_BYTE, 1, Mode::Exclusive)
             .map_err(LockError::Io)?
@@ -161,30 +181,50 @@ impl Locks {
             return Ok(Access::Alone);
         }
 
-        let deadline = Instant::now().checked_add(timeout);
-
+        // The others hold it shared: a process holds it exclusively only while
+        // it holds the recovery lock too. One running a build from before the
+        // recovery lock may not, and is waited for.
         poll(deadline, || {
             self.try_lock(OPEN_BYTE, 1, Mode::Shared)
                 .map_err(LockError::Io)
         })?;
         *lock(&self.open) = true;
+        self.unlock_recovery();
 
         Ok(Access::Shared)
     }
 
-    /// Converts the open lock, held exclusively, to shared, letting other
-    /// processes open the file.
+    /// Takes the recovery lock, waiting up to `deadline` for another process
+    /// that is opening the file or recovering it.
+    fn lock_recovery(&self, deadline: Option<Instant>) -> Result<(), LockError> {
+        poll(deadline, || {
+            self.try_lock(RECOVERY_BYTE, 1, Mode::Exclusive)
+                .map_err(LockError::Io)
+        })?;
+        *lock(&self.recovery) = true;
+
+        Ok(())
+    }
+
+    /// Releases the recovery lock, if this process holds it.
+    fn unlock_recovery(&self) {
+        if std::mem::take(&mut *lock(&self.recovery)) {
+            // If this fails, the lock goes when the file closes, and until
+            // then other processes wait to open it and fail with `BUSY`.
+            let _ = self.unlock(RECOVERY_BYTE, 1);
+        }
+    }
+
+    /// Converts the open lock, held exclusively, to shared, and releases the
+    /// recovery lock, letting other processes open the file.
     ///
-    /// No other process can slip in between: a Unix-like system converts a
-    /// record lock in place, and on Windows the shared lock is taken while the
-    /// exclusive one is still held, after which one unlock releases the
-    /// exclusive one.
-    ///
-    /// Should Windows refuse the shared lock alongside the exclusive one, the
-    /// exclusive lock is released first and the shared one waited for, up to
-    /// `timeout`. The gap that leaves is harmless here, because this process
-    /// has finished recovery and begun nothing yet: another process that
-    /// recovers the file meanwhile finds nothing to change.
+    /// A Unix-like system converts a record lock in place, and on Windows the
+    /// shared lock is taken while the exclusive one is still held, after which
+    /// one unlock releases the exclusive one. Should Windows refuse the shared
+    /// lock alongside the exclusive one, the exclusive lock is released first
+    /// and the shared one waited for, up to `timeout`. No other process can
+    /// open the file in that gap, since this one still holds the recovery
+    /// lock.
     pub(crate) fn share(&self, timeout: Duration) -> Result<(), LockError> {
         let shared = self
             .try_lock(OPEN_BYTE, 1, Mode::Shared)
@@ -203,15 +243,20 @@ impl Locks {
             })?;
         }
 
+        self.unlock_recovery();
+
         Ok(())
     }
 
-    /// Takes the open lock exclusively, waiting up to `timeout` for every other
-    /// process to close the file. Creating a database where the file system
-    /// has no links needs it, to write the first page before anyone reads it.
+    /// Takes the recovery lock and then the open lock exclusively, waiting up
+    /// to `timeout` for every other process to finish opening the file or give
+    /// up on it, and holds them as [`Access::Alone`] does. Creating a database
+    /// where the file system has no links needs it, to write the first page
+    /// before anyone reads it.
     pub(crate) fn open_alone(&self, timeout: Duration) -> Result<(), LockError> {
         let deadline = Instant::now().checked_add(timeout);
 
+        self.lock_recovery(deadline)?;
         poll(deadline, || {
             self.try_lock(OPEN_BYTE, 1, Mode::Exclusive)
                 .map_err(LockError::Io)
@@ -392,6 +437,9 @@ impl Drop for Locks {
         if std::mem::take(&mut *lock(&self.open)) {
             let _ = self.unlock(OPEN_BYTE, 1);
         }
+
+        // Still held only if opening failed while this process recovered.
+        self.unlock_recovery();
     }
 }
 

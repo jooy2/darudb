@@ -27,12 +27,13 @@ On Windows, a lock belongs to the handle. With one handle per process, the behav
 
 All locks are taken on bytes far past the end of any data:
 
-| Byte                  | Name     | Held                                                                      |
-| --------------------- | -------- | ------------------------------------------------------------------------- |
-| 2^62                  | Open     | Shared by every process that has the file open; exclusive during recovery |
-| 2^62 + 1              | Writer   | Exclusive by the process whose transaction is writing                     |
-| 2^62 + 2 to 2^62 + 63 | Reserved |                                                                           |
-| 2^62 + 64 + `s`       | Snapshot | Shared by every process with a read transaction on snapshot `s`           |
+| Byte                  | Name     | Held                                                                        |
+| --------------------- | -------- | --------------------------------------------------------------------------- |
+| 2^62                  | Open     | Shared by every process that has the file open; exclusive during recovery   |
+| 2^62 + 1              | Writer   | Exclusive by the process whose transaction is writing                       |
+| 2^62 + 2              | Recovery | Exclusive by a process that is opening the file, until it has the open lock |
+| 2^62 + 3 to 2^62 + 63 | Reserved |                                                                             |
+| 2^62 + 64 + `s`       | Snapshot | Shared by every process with a read transaction on snapshot `s`             |
 
 **Why so far from the data.** On Windows, byte-range locks are mandatory: a range locked through one handle cannot be read or written through another. Lock bytes that overlapped data would make that data unreadable. The file never reaches 2^62 bytes, so no read or write ever touches a lock byte. Both POSIX record locks and `LockFileEx` accept ranges past the end of the file.
 
@@ -45,11 +46,15 @@ All locks are taken on bytes far past the end of any data:
 To open the file, a process:
 
 1. Opens the file for reading and writing, or finds its existing instance for it and stops here.
+1. Takes the recovery lock exclusively. The attempt is repeated with increasing pauses, and waiting past the busy timeout fails with `BUSY`.
 1. Tries to take the open lock exclusively, without waiting.
-1. If it gets it, no other process has the file open. It runs [recovery](commits-and-recovery.md#recovery), then converts the lock to shared.
-1. If it does not, another process has the file open or is recovering it. It waits for the open lock in shared mode, which is granted once any recovery in progress has finished. Waiting past the busy timeout fails with `BUSY`.
+1. If it gets it, no other process has the file open. It runs [recovery](commits-and-recovery.md#recovery), then converts the open lock to shared.
+1. If it does not, other processes have the file open, and the first of them recovered it. It takes the open lock in shared mode.
+1. Releases the recovery lock.
 
-Converting the lock never leaves a gap in which a third process could slip in: POSIX record locks convert in place, and on Windows the process takes the shared lock while still holding the exclusive one, then releases the exclusive one.
+A process holds the open lock only once it has recovered the file or found others holding it, never while it waits to open. That is what the recovery lock is for. If a process dies while it recovers the file, after a power cut, its open lock and its recovery lock go together, and the next process to take the recovery lock finds the open lock free and recovers the file itself. Were processes waiting for the open lock in shared mode instead, they would be granted it by the death and use the file unrecovered.
+
+Converting the open lock happens under the recovery lock, so no other process can open the file in between: POSIX record locks convert in place, and on Windows the process takes the shared lock while still holding the exclusive one, then releases the exclusive one.
 
 When the last `Database` object for the file in a process closes, the instance ends the process's unsynced window if it made deferred commits, releases its locks, and closes the handle.
 
@@ -82,7 +87,7 @@ A read transaction that is never ended keeps every page it can reach from being 
 
 While it holds the writer lock, the writer starts its transaction and commits it as [Commits and recovery](commits-and-recovery.md#starting-a-write-transaction) describes. It writes records and the selector without any further lock, since readers verify everything they read.
 
-**No deadlock is possible.** The writer waits for nothing while it holds the writer lock, apart from its own barriers. Readers never wait for the writer lock. The open lock is held exclusively only during recovery, which happens before the process has any transaction.
+**No deadlock is possible.** The writer waits for nothing while it holds the writer lock, apart from its own barriers. Readers never wait for the writer lock. The recovery lock and the open lock are taken, in that order, only while a process opens the file, before it has any transaction, and the open lock is held exclusively only during recovery.
 
 **Fairness is not guaranteed.** Record locks do not queue waiting processes in order on every platform, so a writer can in principle lose the race repeatedly. The phase 3 tests measure whether that matters. If it does, a second lock byte can queue writers without changing the file format.
 
@@ -115,12 +120,13 @@ The operating system releases every lock the process held, and that is all the c
 - **Its snapshots** stop holding pages back. The next writer reclaims them.
 - **The writer lock** passes to the next writer, which starts from the published commit. Whatever the dead writer had written sits at free positions or in a slot that no one reads, and the next writer's choice of slot takes care of it ([Commits and recovery](commits-and-recovery.md#choosing-the-slot)).
 - **The open lock**: if it was the last process with the file open, the next process to open it runs recovery.
+- **The recovery lock**, held while it opened or recovered the file: the next process waiting for it takes it and finds the open lock as the dead one left it, free if the dead one was recovering.
 
 ## Platform notes
 
 - **Linux and Android.** `fcntl` record locks, through the 64-bit calls on 32-bit targets. An app's private storage supports them. Shared storage served through FUSE may not; when the lock call reports that locks are unsupported, the open fails with `UNSUPPORTED_FILE_SYSTEM`.
 - **macOS and iOS.** `fcntl` record locks, and `F_FULLFSYNC` as the barrier, which Rust's standard library already uses for `sync_all`. On iOS, the system terminates a suspended app that holds a file lock inside an App Group container. The open lock is held for as long as the database is open, so an app whose database lives in an App Group container has to close it before the app is suspended. A database in the app's own container is not affected.
-- **Windows.** `LockFileEx` and `UnlockFileEx`. Locks are mandatory, which is why the lock bytes sit far from the data. An unlock has to name exactly the range that was locked. A handle may hold a shared and an exclusive lock on the same range, and the first unlock releases the exclusive one, which is what converting the open lock relies on. The barrier is `FlushFileBuffers`; there is no way to sync a directory, and none is needed on NTFS, which journals the change itself.
+- **Windows.** `LockFileEx` and `UnlockFileEx`. Locks are mandatory, which is why the lock bytes sit far from the data. An unlock has to name exactly the range that was locked. A handle may hold a shared and an exclusive lock on the same range, and the first unlock releases the exclusive one, which is what converting the open lock relies on. Should Windows refuse the shared lock alongside the exclusive one, the process releases the exclusive lock first and then takes the shared one; the recovery lock it still holds keeps every other process out of the gap. The barrier is `FlushFileBuffers`; there is no way to sync a directory, and none is needed on NTFS, which journals the change itself.
 - **Network file systems** are detected and refused with `UNSUPPORTED_FILE_SYSTEM`: by `statfs` on Linux (NFS, SMB and the like), by the file system name on macOS (`nfs`, `smbfs`, `afpfs`, `webdav`), and by `GetDriveTypeW` and UNC paths on Windows. Detection is best effort; a network file system that is not detected is still not supported.
 - **Containers.** Processes in containers that share a local volume share the kernel, and so its locks, and work as usual. Hosts that share a volume over a network do not.
 
@@ -128,10 +134,10 @@ The operating system releases every lock the process held, and that is all the c
 
 This document adds two error codes to the engine:
 
-| Code                      | When                                                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `BUSY`                    | The writer lock, or the open lock during another process's recovery, was not granted within the busy timeout. |
-| `UNSUPPORTED_FILE_SYSTEM` | The file is on a network file system, or on a file system whose locks do not work.                            |
+| Code                      | When                                                                                                                             |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `BUSY`                    | The writer lock, or the recovery lock while another process opens or recovers the file, was not granted within the busy timeout. |
+| `UNSUPPORTED_FILE_SYSTEM` | The file is on a network file system, or on a file system whose locks do not work.                                               |
 
 ## What the phase 3 tests must show
 

@@ -205,7 +205,7 @@ Starting from each of `c`'s three root pointers whose transaction id is above `L
 
 So the file at the path is either absent or a complete database, and two processes creating it at once cannot collide. A file of zero length is never a database and is refused with `NOT_A_DATABASE`.
 
-On a file system that supports neither links nor a no-replace rename, the engine falls back to creating the file directly and writing page 0 while holding the open lock exclusively. A crash in between leaves an empty file, which is refused as above, and the file has to be deleted by hand.
+On a file system that supports neither links nor a no-replace rename, the engine falls back to creating the file directly and writing page 0 while holding the recovery lock and the open lock exclusively ([Locking](locking.md#opening-and-closing)). A crash in between leaves an empty file, which is refused as above, and the file has to be deleted by hand.
 
 A temporary file left behind by a crash is never read by the engine and is safe to delete.
 

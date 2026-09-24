@@ -232,3 +232,22 @@ pub(crate) fn widen_race() {
         }
     }
 }
+
+/// Whether [`pause_in_recovery`] pauses. A helper sets it before it opens a
+/// database.
+pub(crate) static PAUSE_IN_RECOVERY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Stops a process for good in the middle of opening a file it recovers, if
+/// [`PAUSE_IN_RECOVERY`] is set, after saying so: the test kills it there, to
+/// show that the next process to open the file recovers it. Only test builds
+/// call it.
+pub(crate) fn pause_in_recovery() {
+    if PAUSE_IN_RECOVERY.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("\nanswer recovering");
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+}

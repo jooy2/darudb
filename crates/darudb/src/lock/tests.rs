@@ -34,6 +34,7 @@ fn options_for(path: &Path) -> OpenOptions {
 /// one a line, answering each on a line that starts with `answer`.
 ///
 /// - `put <key> <value>` commits `value` under `key` in tree `t`.
+/// - `defer <key> <value>` does the same with a deferred commit.
 /// - `snapshot` begins a read transaction and keeps it.
 /// - `get <key>` reads through the kept read transaction, or a new one.
 /// - `sum` counts the entries of tree `t` in the kept read transaction and
@@ -67,6 +68,12 @@ fn helper_running_commands() {
             ["put", key, value] => db.begin_write().and_then(|mut txn| {
                 txn.insert("t", key.as_bytes(), value.as_bytes())?;
                 txn.commit()?;
+
+                Ok("done".to_owned())
+            }),
+            ["defer", key, value] => db.begin_write().and_then(|mut txn| {
+                txn.insert("t", key.as_bytes(), value.as_bytes())?;
+                txn.commit_deferred()?;
 
                 Ok("done".to_owned())
             }),
@@ -613,5 +620,55 @@ fn opening_a_file_while_its_last_handle_closes_waits_for_it_and_keeps_its_own_lo
     assert_eq!(
         db.begin_read().unwrap().get("t", b"k").unwrap(),
         Some(b"deferred".to_vec())
+    );
+}
+
+/// The helper: opens the database and stops in the middle of recovering it,
+/// where the test kills it.
+#[test]
+fn helper_dying_while_it_recovers() {
+    let Ok(path) = env::var(HELPER_PATH) else {
+        return;
+    };
+
+    crate::testing::PAUSE_IN_RECOVERY.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let _ = options_for(path.as_ref()).open(&path);
+}
+
+#[test]
+fn the_next_process_recovers_a_file_whose_recovery_died() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+
+    // A process makes a deferred commit and dies with it: whoever opens the
+    // file next has to check the commit and publish it as durable.
+    let mut first = helper(&path);
+
+    assert_eq!(first.ask("defer k 1"), "done");
+    first.kill();
+
+    let recovering = Helper::spawn("lock::tests::helper_dying_while_it_recovers", &path);
+
+    assert_eq!(recovering.answer(), "recovering");
+
+    let reopened = path.clone();
+    let opening = thread::spawn(move || options_for(&reopened).open(&reopened).unwrap());
+
+    thread::sleep(Duration::from_millis(100));
+
+    assert!(
+        !opening.is_finished(),
+        "opened while another process recovered the file"
+    );
+
+    recovering.kill();
+
+    let db = opening.join().unwrap();
+
+    assert!(!selector(&db).unsynced, "the file was not recovered");
+    assert_eq!(
+        db.begin_read().unwrap().get("t", b"k").unwrap(),
+        Some(b"1".to_vec())
     );
 }

@@ -34,9 +34,8 @@ Phase 3 is done: the open, writer and snapshot locks of [design/locking.md](desi
 
 Confirmed by reading the code against the specification; no test reproduces them yet.
 
-- **A process that dies while it recovers the file can leave it unrecovered.** In `design/locking.md`, a process that finds the open lock taken waits for it in shared mode, which is "granted once any recovery in progress has finished". If the recovering process is killed instead, after a power cut, the waiting processes get the shared lock without recovering, and may read or commit on top of a commit the power cut damaged. Closing the gap takes a change to the lock protocol, such as a second lock byte held only by processes that recovered the file or found it recovered, so that an opening process can tell whether one of them is alive.
 - **The unsynced window is counted per process.** The page and time limits bound each process's own deferred commits. When a process with deferred commits dies, nothing ends its window until another process syncs or makes a sync commit, and the windows of several processes add up.
-- **No no-replace rename.** On a file system without links, `storage/create.rs` goes straight to creating the file in place under the open lock, where `design/commits-and-recovery.md` would first try `renameat2`, `renamex_np` or `MoveFileExW`.
+- **No no-replace rename.** On a file system without links, `storage/create.rs` goes straight to creating the file in place under the recovery and open locks, where `design/commits-and-recovery.md` would first try `renameat2`, `renamex_np` or `MoveFileExW`.
 - **Windows identifies a file by its canonical path**, not by its volume serial number and file index as `design/locking.md` asks. Two hard links to one database are two instances there, and their locks keep them apart as two processes' locks would.
 
 ## Open questions
