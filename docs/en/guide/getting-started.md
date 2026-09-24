@@ -111,7 +111,7 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-`OpenOptions::key` takes a 32-byte key instead of a password, such as one kept in the operating system's keystore. A password is hashed with Argon2id, which takes tens of milliseconds by default; `OpenOptions::password_hashing` raises or lowers that cost. Changing the key or the password re-encrypts nothing, and once it returns, the old one no longer opens the file. A plain database stays plain, and an encrypted one cannot be opened without its key: keep it where it cannot be lost.
+Pages are encrypted with XAES-256-GCM on processors with AES instructions and with XChaCha20-Poly1305 elsewhere, whichever is faster on the machine that creates the database. `OpenOptions::key` takes a 32-byte key instead of a password, such as one kept in the operating system's keystore. A password is hashed with Argon2id, which takes tens of milliseconds by default; `OpenOptions::password_hashing` raises or lowers that cost. Changing the key or the password re-encrypts nothing, and once it returns, the old one no longer opens the file. A plain database stays plain, and an encrypted one cannot be opened without its key: keep it where it cannot be lost.
 
 ### Node.js
 

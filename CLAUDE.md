@@ -146,7 +146,7 @@ Specified in [design/locking.md](design/locking.md).
 
 Specified in [design/file-format.md](design/file-format.md#encryption).
 
-- **Page-level AEAD with XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer.
+- **Page-level AEAD with XAES-256-GCM or XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer. A new file gets XAES-256-GCM on a processor with AES instructions and XChaCha20-Poly1305 elsewhere (`crypto/page.rs`, `preferred_cipher`), because each is several times faster than the other on the processors it suits. The key block is always wrapped with XChaCha20-Poly1305.
 - **A data key wrapped by a key-encryption key**, stored in every commit record. Every commit copies the key block of the commit before it. Changing a password is a sync commit that rewraps the key, followed by empty sync commits until no slot holds the old key block.
 - **A password becomes a key through Argon2id**, with its parameters stored in the key block: 19 MiB, 2 iterations and 1 lane by default, which fits a mobile app extension's memory. Unauthenticated modes such as CBC are not used at all.
 - **Commit records are authenticated too.** Page 0 is plain, so each record of an encrypted file carries a keyed BLAKE2b MAC under a key derived from the data key, and recovery refuses a record whose MAC fails. Without it, anyone who can write the file could assemble a record from existing pages. Any code that reads a record from disk, such as a process that finds another process's commit in phase 3, has to check the MAC.

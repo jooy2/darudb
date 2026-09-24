@@ -72,15 +72,15 @@ Page 0 is never encrypted: its fields say how to read everything else, including
 
 Written once, when the file is created, and never again.
 
-| Offset | Size | Field                                                                            |
-| ------ | ---- | -------------------------------------------------------------------------------- |
-| 0      | 8    | Magic: `89 44 61 72 75 44 42 0A` (`\x89DaruDB\n`)                                |
-| 8      | 4    | Format version: 2                                                                |
-| 12     | 4    | Page size `P`                                                                    |
-| 16     | 16   | File id: 16 random bytes, generated when the file is created                     |
-| 32     | 1    | Cipher: 0 for a plain file, 1 for XChaCha20-Poly1305 ([Encryption](#encryption)) |
-| 33     | 15   | Reserved                                                                         |
-| 48     | 16   | Static check: XXH3-128 of bytes 0 to 47                                          |
+| Offset | Size | Field                                                                                                |
+| ------ | ---- | ---------------------------------------------------------------------------------------------------- |
+| 0      | 8    | Magic: `89 44 61 72 75 44 42 0A` (`\x89DaruDB\n`)                                                    |
+| 8      | 4    | Format version: 2                                                                                    |
+| 12     | 4    | Page size `P`                                                                                        |
+| 16     | 16   | File id: 16 random bytes, generated when the file is created                                         |
+| 32     | 1    | Cipher: 0 for a plain file, 1 for XChaCha20-Poly1305, 2 for XAES-256-GCM ([Encryption](#encryption)) |
+| 33     | 15   | Reserved                                                                                             |
+| 48     | 16   | Static check: XXH3-128 of bytes 0 to 47                                                              |
 
 The magic's leading `0x89` is outside ASCII, so the file is never mistaken for text and a transfer that strips the eighth bit is detected. Its trailing newline catches a transfer that rewrites line endings. The first 16 bytes are laid out as in format version 1, so every version can at least tell a DaruDB file and its version apart.
 
@@ -251,13 +251,15 @@ The cipher is chosen when the file is created and recorded in the static fields;
 
 ### Pages
 
-Each page is encrypted with **XChaCha20-Poly1305** under the file's data key (DEK), which is 32 random bytes generated when the file is created.
+Each page is encrypted under the file's data key (DEK), which is 32 random bytes generated when the file is created, with the file's page cipher: **XChaCha20-Poly1305** or **XAES-256-GCM**, as defined by the C2SP specification. Both take a 24-byte nonce and give a 16-byte tag, so a page has the same layout under either.
 
 - The nonce is 24 random bytes, drawn fresh every time the page is written, and stored in the page's prefix.
 - The associated data is the page number, as 8 bytes, which binds the ciphertext to its place in the file.
 - The tag is the page's check, stored at the end of the page and in the pointer that leads to it.
 
-A random 192-bit nonce is safe for any number of writes under one key. AES-256-GCM has only 96 bits of nonce, which makes random nonces unsafe after about 2^32 page writes under one key, and a counter-based nonce is hard to keep unique across several writer processes and crashes. That is why it is not proposed. If it is wanted for hardware acceleration, it needs a nonce scheme of its own and a new cipher value.
+A random 192-bit nonce is safe for any number of writes under one key. Plain AES-256-GCM has only 96 bits of nonce, which makes random nonces unsafe after about 2^32 page writes under one key, and a counter-based nonce is hard to keep unique across several writer processes and crashes. XAES-256-GCM solves that by deriving a fresh AES-256-GCM key from the first half of a 24-byte nonce, at the cost of two AES block encryptions and a key schedule per page.
+
+A new encrypted file gets XAES-256-GCM when the machine creating it has AES and carry-less multiplication instructions, and XChaCha20-Poly1305 otherwise. Measured on one Apple silicon machine, 4 KiB pages encrypt at about 3.0 GB/s with XAES-256-GCM and 0.7 GB/s with XChaCha20-Poly1305; forced onto software implementations, the order reverses, at 0.13 and 0.32 GB/s. Old 32-bit ARM phones and some small ARM boards lack the instructions, and there the choice keeps the file fast. A file keeps its cipher for life and reads the same on any machine, only more slowly where the processor does not suit it.
 
 Because the tag is stored in the parent, an attacker cannot replace a page with an older, validly encrypted version of the same page: its tag would not match the parent's. The run check of an overflow run is an XXH3-128 hash over tags that an attacker cannot forge, so it carries the same protection.
 
@@ -328,6 +330,6 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | ------- | ----------------------------------------------------------------------------------------------------------- |
 | 1       | The skeleton: magic, format version and page size, with page sizes from 512 bytes. Nothing could be stored. |
 | 2       | Commits, trees and encryption.                                                                              |
-| 3       | This document: version 2 with the [record MAC](#the-record-mac) in encrypted files.                         |
+| 3       | This document: version 2 with the [record MAC](#the-record-mac) in encrypted files, and XAES-256-GCM pages. |
 
 A build that writes version 3 refuses a version 1 or version 2 file with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and version 2 never left development.

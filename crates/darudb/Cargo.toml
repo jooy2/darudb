@@ -19,9 +19,12 @@ twox-hash.workspace = true
 # Random file ids and temporary file names, from the operating system.
 # MIT OR Apache-2.0.
 getrandom.workspace = true
-# XChaCha20-Poly1305, the cipher of an encrypted file's pages and of its key
+# XChaCha20-Poly1305, one of the two page ciphers and the cipher of the key
 # block. Apache-2.0 OR MIT.
 chacha20poly1305.workspace = true
+# XAES-256-GCM, the page cipher on processors with AES instructions.
+# Apache-2.0 OR MIT.
+xaes-256-gcm.workspace = true
 # Argon2id, which turns a password into the key that unwraps the data key.
 # MIT OR Apache-2.0.
 argon2.workspace = true

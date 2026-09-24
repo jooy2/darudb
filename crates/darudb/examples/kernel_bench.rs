@@ -37,7 +37,13 @@ fn main() -> Outcome {
     encrypted.key([0x42; 32]);
 
     let outcome = run(&directory.join("plain"), "plain file", &OpenOptions::new())
-        .and_then(|()| run(&directory.join("encrypted"), "encrypted file", &encrypted))
+        .and_then(|()| {
+            run(
+                &directory.join("encrypted"),
+                "encrypted file, this machine's cipher",
+                &encrypted,
+            )
+        })
         .and_then(|()| password(&directory.join("password")));
 
     fs::remove_dir_all(&directory)?;

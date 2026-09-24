@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 use crate::crypto::{PasswordCost, Secret};
 use crate::database::Database;
 use crate::error::{Error, Result};
-use crate::format::{self, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
+use crate::format::{self, Cipher, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 use crate::instance::Settings;
 
 /// Options for opening a database, in the style of [`std::fs::OpenOptions`].
@@ -28,6 +28,9 @@ pub struct OpenOptions {
     max_unsynced_time: Duration,
     secret: Option<Secret>,
     password_cost: PasswordCost,
+    /// The page cipher of a new encrypted file, when the engine's own tests
+    /// pin it; otherwise the one the machine prefers.
+    page_cipher: Option<Cipher>,
 }
 
 impl OpenOptions {
@@ -42,6 +45,7 @@ impl OpenOptions {
             max_unsynced_time: Duration::from_secs(1),
             secret: None,
             password_cost: PasswordCost::DEFAULT,
+            page_cipher: None,
         }
     }
 
@@ -101,8 +105,10 @@ impl OpenOptions {
 
     /// Encrypts a new database with `key`, or opens an encrypted one with it.
     ///
-    /// Every page of an encrypted database is encrypted and authenticated with
-    /// XChaCha20-Poly1305 under a random data key, which `key` wraps. Opening
+    /// Every page of an encrypted database is encrypted and authenticated under
+    /// a random data key, which `key` wraps: with XAES-256-GCM when the machine
+    /// creating the database has AES instructions, and XChaCha20-Poly1305
+    /// otherwise. Opening
     /// it without a key or password fails with [`Error::KeyRequired`], and with
     /// another one with [`Error::WrongKey`]. A plain database cannot be opened
     /// with a key, and does not become encrypted: that takes a new file.
@@ -175,6 +181,18 @@ impl OpenOptions {
 
     pub(crate) fn secret(&self) -> Option<&Secret> {
         self.secret.as_ref()
+    }
+
+    pub(crate) fn page_cipher(&self) -> Option<Cipher> {
+        self.page_cipher
+    }
+
+    /// Pins the page cipher of a new encrypted file, so the tests cover both
+    /// ciphers on any machine.
+    #[cfg(test)]
+    pub(crate) fn pin_page_cipher(&mut self, cipher: Cipher) -> &mut Self {
+        self.page_cipher = Some(cipher);
+        self
     }
 
     fn validate(&self) -> Result<()> {

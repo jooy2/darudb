@@ -269,7 +269,8 @@ enum Action {
 ///
 /// Some seeds commit only with sync commits, the others mostly with deferred
 /// ones, some of them under a window limit small enough to be reached often.
-/// Odd seeds encrypt the file, with a key or, now and then, with a password.
+/// Odd seeds encrypt the file, with a key under each of the two page ciphers
+/// or, now and then, with a password under the cipher this machine prefers.
 /// The window's time limit is left out: it depends on the clock, and the run
 /// has to replay the same way from its seed.
 fn run(seed: u64, page_size: u32, steps: usize) {
@@ -282,9 +283,16 @@ fn run(seed: u64, page_size: u32, steps: usize) {
         options.max_unsynced_pages(24);
     }
 
+    let key = [u8::try_from(seed % 251).unwrap(); 32];
+
     match seed % 10 {
         3 => options.password("crash suite").password_hashing(8, 1, 1),
-        1 | 5 | 7 | 9 => options.key([u8::try_from(seed % 251).unwrap(); 32]),
+        1 | 5 => options
+            .key(key)
+            .pin_page_cipher(crate::format::Cipher::XChaCha20Poly1305),
+        7 | 9 => options
+            .key(key)
+            .pin_page_cipher(crate::format::Cipher::Xaes256Gcm),
         _ => &mut options,
     };
 
@@ -704,11 +712,16 @@ fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
 
 #[test]
 fn a_damaged_page_is_reported_and_never_panics() {
-    let mut encrypted = OpenOptions::new();
+    let mut chacha = OpenOptions::new();
+    let mut xaes = OpenOptions::new();
 
-    encrypted.key([9; 32]);
+    chacha
+        .key([9; 32])
+        .pin_page_cipher(crate::format::Cipher::XChaCha20Poly1305);
+    xaes.key([9; 32])
+        .pin_page_cipher(crate::format::Cipher::Xaes256Gcm);
 
-    for options in [OpenOptions::new(), encrypted] {
+    for options in [OpenOptions::new(), chacha, xaes] {
         damage_pages(&options);
     }
 }

@@ -21,6 +21,7 @@ tempfile = "3.27.0"
 twox-hash = { version = "2.1.4", default-features = false, features = ["std", "xxhash3_128"] }
 getrandom = "0.4.3"
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+xaes-256-gcm = { version = "0.1.0", default-features = false, features = ["zeroize"] }
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = "1.9.0"
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }

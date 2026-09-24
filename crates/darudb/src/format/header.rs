@@ -46,6 +46,8 @@ pub(crate) enum Cipher {
     Plain,
     /// Each page encrypted with XChaCha20-Poly1305: its check is its tag.
     XChaCha20Poly1305,
+    /// Each page encrypted with XAES-256-GCM: its check is its tag.
+    Xaes256Gcm,
 }
 
 /// The fields written once, when the file is created.
@@ -81,6 +83,7 @@ impl StaticHeader {
         bytes[32] = match self.cipher {
             Cipher::Plain => 0,
             Cipher::XChaCha20Poly1305 => 1,
+            Cipher::Xaes256Gcm => 2,
         };
 
         let check = Check::of(&[&bytes[..STATIC_CHECK_OFFSET]]);
@@ -123,6 +126,7 @@ impl StaticHeader {
         let cipher = match bytes[32] {
             0 => Cipher::Plain,
             1 => Cipher::XChaCha20Poly1305,
+            2 => Cipher::Xaes256Gcm,
             _ => return Err(HeaderError::Damaged("the cipher is not a known one")),
         };
         let mut file_id = [0u8; 16];
@@ -204,7 +208,7 @@ mod tests {
         assert_eq!(bytes[32], 1);
         assert_eq!(StaticHeader::decode(&bytes), Ok(encrypted));
 
-        bytes[32] = 2;
+        bytes[32] = 3;
 
         let check = Check::of(&[&bytes[..48]]);
 

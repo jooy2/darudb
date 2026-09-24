@@ -268,14 +268,16 @@ fn open_io(
             });
         }
         (Cipher::Plain, _) => None,
-        (Cipher::XChaCha20Poly1305, Some(data_key)) => Some(data_key),
-        (Cipher::XChaCha20Poly1305, None) => Some(unlock(path, &static_header, &bytes, options)?),
+        (_, Some(data_key)) => Some(data_key),
+        (_, None) => Some(unlock(path, &static_header, &bytes, options)?),
     };
     let pager = Arc::new(Pager::new(
         io,
         static_header.page_size as usize,
         path.to_path_buf(),
-        data_key.as_ref().map(PageCipher::new),
+        data_key
+            .as_ref()
+            .and_then(|key| PageCipher::new(static_header.cipher, key)),
     ));
     let shared = Shared::new(
         pager,
@@ -404,7 +406,12 @@ fn new_file(
             .encode();
             first.mac = RecordAuth::new(&data_key).mac(&file_id, 0, &first.authenticated());
 
-            (Cipher::XChaCha20Poly1305, Some(data_key))
+            (
+                options
+                    .page_cipher()
+                    .unwrap_or_else(crypto::preferred_cipher),
+                Some(data_key),
+            )
         }
     };
     let header = StaticHeader {

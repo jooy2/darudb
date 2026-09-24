@@ -26,7 +26,7 @@ Phase 0 is done: [design/](design/README.md) holds the accepted file format, com
 
 Phase 1 is done: the file format for plain files, the copy-on-write B+tree, sync and deferred commits, recovery, and the crash suites, which pass at thousands of simulated cuts and hundreds of real process kills. `examples/kernel_bench.rs` measures the kernel.
 
-Phase 2 is done: page encryption, the key block, passwords, key changes, and the crash suites running with encryption on and off. `examples/kernel_bench.rs` measures both kinds of file; the slowdown is in the open question on cipher speed below.
+Phase 2 is done: page encryption, the key block, passwords, key changes, and the crash suites running with encryption on and off. `examples/kernel_bench.rs` measures both kinds of file. On one Apple silicon machine, with XAES-256-GCM, a read that misses the page cache went from 4 to 6 microseconds and reading a 256 KiB value from 41 to 141.
 
 ## Open questions
 
@@ -34,7 +34,7 @@ Phase 2 is done: page encryption, the key block, passwords, key changes, and the
 - **JavaScript runtimes beyond Node.js**: Electron (whose main and renderer are themselves several processes), React Native, Bun, Deno.
 - **Minimum Dart and Flutter versions.** Build hooks need Dart 3.10 or Flutter 3.38 at least.
 - **Encryption API in the bindings**: how Node.js and Dart take a key or a password, and whether they offer the operating system's keystore. The Rust API exists.
-- **Cipher speed.** Measured with `examples/kernel_bench.rs` on one Apple silicon machine, XChaCha20-Poly1305 runs at about 0.6 GB/s: a read that misses the page cache went from 4 to 11 microseconds, and reading a 256 KiB value from 41 to 459. A cipher with hardware support and a 192-bit nonce, such as XAES-256-GCM, would be several times faster, but it is a new cipher value and a decision for the maintainer.
+- **Choosing the page cipher.** A new encrypted file gets the page cipher that suits the processor creating it, and the caller cannot pick one. Whether to offer that, for a file that moves between very different machines, is open.
 - **Query API form**: string queries, a builder, or both.
 - **Schema migrations**: how they are declared and when they run.
 - **File format versioning**: the forward and backward compatibility policy, and whether an older file is upgraded on open or by an explicit call. The design settles only the pre-release rule: no migrations until the first release.
