@@ -27,13 +27,65 @@ pub(crate) const META: &str = "\0meta";
 pub(crate) const SCHEMA_KEY: &[u8] = b"schema";
 
 /// The tree of collection `id`'s objects.
-pub(crate) fn records(id: u64) -> String {
-    format!("\0rec/{id}")
+pub(crate) fn records(id: u64) -> TreeName {
+    TreeName::new("\0rec/", id)
 }
 
 /// The tree of index `id`.
-pub(crate) fn index_tree(id: u64) -> String {
-    format!("\0idx/{id}")
+pub(crate) fn index_tree(id: u64) -> TreeName {
+    TreeName::new("\0idx/", id)
+}
+
+/// The name of a tree of the object layer, a prefix and an id, kept inline:
+/// every read and write of an object names a tree or two, and a name
+/// formatted on the heap each time cost more than the lookup it served.
+#[derive(Clone, Copy)]
+pub(crate) struct TreeName {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl TreeName {
+    fn new(prefix: &str, id: u64) -> Self {
+        let mut digits = [0u8; 20];
+        let mut start = digits.len();
+        let mut rest = id;
+
+        loop {
+            start -= 1;
+            // A remainder of a division by ten is a digit.
+            digits[start] = b'0' + (rest % 10) as u8;
+            rest /= 10;
+
+            if rest == 0 {
+                break;
+            }
+        }
+
+        let digits = &digits[start..];
+        let len = prefix.len() + digits.len();
+        let mut bytes = [0u8; 32];
+
+        bytes[..prefix.len()].copy_from_slice(prefix.as_bytes());
+        bytes[prefix.len()..len].copy_from_slice(digits);
+
+        Self { bytes, len }
+    }
+}
+
+impl std::ops::Deref for TreeName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        // A prefix and digits, both ASCII, so this never fails.
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
+}
+
+impl std::fmt::Debug for TreeName {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, formatter)
+    }
 }
 
 /// The key of collection `id`'s next auto-increment number in [`META`].
@@ -519,7 +571,7 @@ impl<'a> CollectionWriter<'a> {
 
             for entry in &before {
                 if !after.contains(entry) {
-                    removals.push((tree.clone(), entry.0.clone()));
+                    removals.push((tree, entry.0.clone()));
                 }
             }
 
@@ -550,7 +602,7 @@ impl<'a> CollectionWriter<'a> {
                     }
                 }
 
-                additions.push((tree.clone(), entry));
+                additions.push((tree, entry));
             }
         }
 
@@ -690,4 +742,17 @@ pub(crate) fn check_indexes(source: &dyn Source, schema: &StoredSchema) -> Resul
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{index_tree, records};
+
+    #[test]
+    fn a_tree_name_is_its_prefix_and_its_id_in_decimal() {
+        for id in [0, 7, 10, 99, 4096, u64::MAX] {
+            assert_eq!(&*records(id), format!("\0rec/{id}"));
+            assert_eq!(&*index_tree(id), format!("\0idx/{id}"));
+        }
+    }
 }
