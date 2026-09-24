@@ -344,7 +344,16 @@ impl Locks {
         }
     }
 
+    /// Releases a lock. In a forked process it does nothing: the lock was the
+    /// parent's, and on a Unix-like system unlocking the same bytes would
+    /// release a lock the child took on them itself, through its own handle,
+    /// as when it drops an inherited read transaction on the snapshot it also
+    /// reads.
     fn unlock(&self, start: u64, len: u64) -> io::Result<()> {
+        if self.inherited() {
+            return Ok(());
+        }
+
         match &self.handles {
             None => Ok(()),
             Some(handles) => sys::unlock(lock(handles)[0].as_file(), start, len),

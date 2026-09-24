@@ -40,7 +40,9 @@ fn options_for(path: &Path) -> OpenOptions {
 ///   adds up the first byte of every value.
 /// - `hold-writer` begins a write transaction and keeps it.
 /// - `release` ends what it keeps.
-/// - `fork <marker>` forks; see [`forked_child`].
+/// - `fork <marker>` forks and answers `forked`; see [`forked_child`] for
+///   what the child does and answers.
+/// - `reap` waits for the forked child and answers with its exit code.
 #[test]
 fn helper_running_commands() {
     let Ok(path) = env::var(HELPER_PATH) else {
@@ -52,6 +54,8 @@ fn helper_running_commands() {
     let mut handle = Some(options_for(path.as_ref()).open(&path).unwrap());
     let mut snapshot = None;
     let mut writer = None;
+    #[cfg(unix)]
+    let mut child = None;
 
     println!("\nanswer open");
 
@@ -112,9 +116,18 @@ fn helper_running_commands() {
             }
             #[cfg(unix)]
             ["fork", marker] => match super::sys::fork().unwrap() {
-                None => forked_child(path.as_ref(), &mut handle, Path::new(marker)),
-                Some(child) => Ok(format!("child {}", super::sys::wait_for(child).unwrap())),
+                None => forked_child(path.as_ref(), &mut handle, &mut snapshot, Path::new(marker)),
+                Some(forked) => {
+                    child = Some(forked);
+
+                    Ok("forked".to_owned())
+                }
             },
+            #[cfg(unix)]
+            ["reap"] => Ok(format!(
+                "child {}",
+                super::sys::wait_for(child.take().unwrap()).unwrap()
+            )),
             _ => panic!("an unknown command: {line}"),
         };
 
@@ -125,14 +138,21 @@ fn helper_running_commands() {
     }
 }
 
-/// A child forked from the helper, which holds the file open, no read or
-/// write transaction on it. Every handle the child inherited has to behave as
-/// closed; the child opens the file itself, reads through its own handle,
-/// and drops the inherited ones, which must not release its own locks. It
-/// says which snapshot it reads, waits for the test to create `marker`, and
-/// ends. Its exit code says which check failed.
+/// A child forked from the helper, which holds the file open and may hold a
+/// read transaction on it. Every handle the child inherited has to behave as
+/// closed. The child opens the file itself and reads through its own handle,
+/// the same snapshot as the inherited read transaction when nothing was
+/// committed in between. Then it drops everything it inherited, which must
+/// not release a lock of its own. It says which snapshot it reads, waits for
+/// the test to create `marker`, and ends. Its exit code says which check
+/// failed.
 #[cfg(unix)]
-fn forked_child(path: &Path, inherited: &mut Option<Database>, marker: &Path) -> ! {
+fn forked_child(
+    path: &Path,
+    inherited: &mut Option<Database>,
+    inherited_read: &mut Option<crate::ReadTransaction>,
+    marker: &Path,
+) -> ! {
     let exit = super::sys::exit_now;
     let Some(db) = inherited.as_ref() else {
         exit(10);
@@ -153,8 +173,9 @@ fn forked_child(path: &Path, inherited: &mut Option<Database>, marker: &Path) ->
         exit(14);
     };
 
-    // Closing an inherited descriptor would release every lock the child
-    // holds on the file, its own snapshot's included.
+    // Releasing an inherited lock, or closing an inherited descriptor, would
+    // release the child's own lock on the same bytes, or all of them.
+    *inherited_read = None;
     *inherited = None;
 
     println!("answer child-reading {}", read.commit_id());
@@ -492,22 +513,36 @@ fn a_forked_child_uses_its_own_handle_and_keeps_its_own_locks() {
     let mut other = helper(&path);
 
     assert_eq!(other.ask("put k 1"), "done");
+    assert_eq!(other.ask("snapshot"), "done");
 
-    let answer = other.ask(&format!("fork {}", marker.display()));
-    let snapshot: u64 = answer
+    // The parent and the child answer in either order.
+    let mut answers = [
+        other.ask(&format!("fork {}", marker.display())),
+        other.answer(),
+    ];
+
+    answers.sort();
+
+    let [reading, forked] = answers;
+    let snapshot: u64 = reading
         .strip_prefix("child-reading ")
-        .unwrap_or_else(|| panic!("the child answered `{answer}`"))
+        .unwrap_or_else(|| panic!("the child answered `{reading}`"))
         .parse()
         .unwrap();
 
-    // Nobody but the child reads, so the lock on its snapshot is its own.
+    assert_eq!(forked, "forked");
+
+    // Once the parent lets go of the same snapshot, nobody but the child
+    // reads, so the lock on it is the child's own.
+    assert_eq!(other.ask("release"), "done");
+
     let locks = locks_on(&path);
 
     assert!(locks.snapshot_below(snapshot + 1).unwrap());
 
     std::fs::write(&marker, b"").unwrap();
 
-    assert_eq!(other.answer(), "child 0");
+    assert_eq!(other.ask("reap"), "child 0");
     assert!(!locks.snapshot_below(snapshot + 1).unwrap());
     assert_eq!(other.ask("get k"), "1", "the parent's handle still works");
 }
