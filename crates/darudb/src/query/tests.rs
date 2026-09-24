@@ -302,7 +302,10 @@ fn agree(
 
 #[test]
 fn every_query_gives_the_scans_answer() {
-    for seed in 0..6 {
+    // The last seeds hold enough players that one value of an index has more
+    // objects than a backward walk holds back (`run::GROUP`).
+    for seed in 0..8 {
+        let players = if seed < 6 { 30 } else { 400 };
         let dir = tempfile::tempdir().unwrap();
         let mut options = OpenOptions::new();
 
@@ -326,7 +329,7 @@ fn every_query_gives_the_scans_answer() {
             txn.collection("teams").unwrap().insert(team).unwrap();
         }
 
-        for _ in 0..30 {
+        for _ in 0..players {
             let mut players = txn.collection("players").unwrap();
             let mut object = player(&mut rng);
 

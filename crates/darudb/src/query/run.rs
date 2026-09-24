@@ -10,7 +10,7 @@ use std::ops::Bound;
 use super::ir::Op;
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
 use crate::error::Result;
-use crate::format::object::schema::CollectionDef;
+use crate::format::object::schema::{CollectionDef, IndexDef};
 use crate::format::object::{Object, Value, key};
 use crate::schema::objects::{self, Source, index_tree, records};
 
@@ -241,68 +241,22 @@ fn walk(
                 ordered.reverse();
             }
 
+            let mut give = |key: Vec<u8>, seen: &mut HashSet<Vec<u8>>| -> Result<bool> {
+                if *repeats && !seen.insert(key.clone()) {
+                    return Ok(false);
+                }
+
+                visit(key, None)
+            };
+
             for range in ordered {
-                // Walking backwards, the objects of one value come in
-                // descending key order; they are held back and given in
-                // ascending key order, which is the order for ties.
-                let mut group: Vec<Vec<u8>> = Vec::new();
-                let mut group_value: Vec<u8> = Vec::new();
-                let mut stop = false;
-                let mut give = |key: Vec<u8>, seen: &mut HashSet<Vec<u8>>| -> Result<bool> {
-                    if *repeats && !seen.insert(key.clone()) {
-                        return Ok(false);
-                    }
-
-                    visit(key, None)
+                let stop = if *backward {
+                    walk_back(source, index, &tree, range, &mut |key| give(key, &mut seen))?
+                } else {
+                    walk_entries(source, index, &tree, range, *backward, &mut |key| {
+                        give(key, &mut seen)
+                    })?
                 };
-
-                for entry in
-                    source.range_in(&tree, as_ref(&range.0), as_ref(&range.1), *backward)?
-                {
-                    let (entry, value) = entry?;
-                    let (_, used) = key::decode(&entry).map_err(|reason| {
-                        source.corrupted(format!("an entry of index {}: {reason}", index.id))
-                    })?;
-                    let key = if index.unique {
-                        value
-                    } else {
-                        entry[used..].to_vec()
-                    };
-
-                    if !*backward {
-                        if give(key, &mut seen)? {
-                            stop = true;
-                            break;
-                        }
-
-                        continue;
-                    }
-
-                    if entry[..used] != group_value[..] {
-                        while let Some(key) = group.pop() {
-                            if give(key, &mut seen)? {
-                                stop = true;
-                                break;
-                            }
-                        }
-
-                        if stop {
-                            break;
-                        }
-
-                        group_value = entry[..used].to_vec();
-                    }
-
-                    group.push(key);
-                }
-
-                while !stop {
-                    let Some(key) = group.pop() else {
-                        break;
-                    };
-
-                    stop = give(key, &mut seen)?;
-                }
 
                 if stop {
                     break;
@@ -312,6 +266,132 @@ fn walk(
     }
 
     Ok(())
+}
+
+/// How many objects of one value a backward walk holds back before it goes
+/// to the value's first entry and walks its objects forwards instead.
+const GROUP: usize = 64;
+
+/// The primary key an index entry names, and how many bytes of the entry
+/// its value takes.
+fn entry_key(
+    source: &dyn Source,
+    index: &IndexDef,
+    entry: Vec<u8>,
+    value: Vec<u8>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let (_, used) = key::decode(&entry)
+        .map_err(|reason| source.corrupted(format!("an entry of index {}: {reason}", index.id)))?;
+    let mut entry = entry;
+    let key = entry.split_off(used);
+
+    // A unique index keeps the key in the entry's value, and after the
+    // value only where values repeat: null.
+    Ok((entry, if index.unique { value } else { key }))
+}
+
+/// Gives the primary keys of the entries of `range`, in the walk's order,
+/// until `give` says to stop, and returns whether it did.
+fn walk_entries(
+    source: &dyn Source,
+    index: &IndexDef,
+    tree: &str,
+    range: &Range,
+    backward: bool,
+    give: &mut dyn FnMut(Vec<u8>) -> Result<bool>,
+) -> Result<bool> {
+    for entry in source.range_in(tree, as_ref(&range.0), as_ref(&range.1), backward)? {
+        let (entry, value) = entry?;
+        let (_, key) = entry_key(source, index, entry, value)?;
+
+        if give(key)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Walks a range of an index backwards, giving each value's objects in
+/// ascending key order, which is the order for ties.
+///
+/// Walking backwards, one value's objects come in descending key order, so
+/// they are held back and given reversed once the value changes. A value
+/// with more than [`GROUP`] objects is walked forwards from its first entry
+/// instead, so that a query that stops after a few objects does not read a
+/// value's thousands: the entries are `value || key`, and the bounds of a
+/// range never cut a value's entries apart.
+fn walk_back(
+    source: &dyn Source,
+    index: &IndexDef,
+    tree: &str,
+    range: &Range,
+    give: &mut dyn FnMut(Vec<u8>) -> Result<bool>,
+) -> Result<bool> {
+    let mut high = range.1.clone();
+
+    'values: loop {
+        let mut group: Vec<Vec<u8>> = Vec::new();
+        let mut value: Vec<u8> = Vec::new();
+
+        for entry in source.range_in(tree, as_ref(&range.0), as_ref(&high), true)? {
+            let (entry, key) = {
+                let (entry, stored) = entry?;
+
+                entry_key(source, index, entry, stored)?
+            };
+
+            if entry != value {
+                while let Some(key) = group.pop() {
+                    if give(key)? {
+                        return Ok(true);
+                    }
+                }
+
+                value = entry;
+            }
+
+            group.push(key);
+
+            if group.len() < GROUP {
+                continue;
+            }
+
+            // A large value: its objects, forwards from the first.
+            let start = match &range.0 {
+                Bound::Included(start) | Bound::Excluded(start) if *start > value => {
+                    range.0.clone()
+                }
+                _ => Bound::Included(value.clone()),
+            };
+
+            for entry in source.range_in(tree, as_ref(&start), as_ref(&range.1), false)? {
+                let (entry, stored) = entry?;
+                let (entry, key) = entry_key(source, index, entry, stored)?;
+
+                if entry != value {
+                    break;
+                }
+
+                if give(key)? {
+                    return Ok(true);
+                }
+            }
+
+            // Every entry of the value is greater than the value alone.
+            high = Bound::Excluded(value);
+
+            continue 'values;
+        }
+
+        while let Some(key) = group.pop() {
+            if give(key)? {
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
+    }
 }
 
 fn as_ref(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
