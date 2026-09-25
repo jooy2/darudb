@@ -708,11 +708,11 @@ impl<'a> CollectionWriter<'a> {
     fn record_object(&self, record: &[u8]) -> Result<Object> {
         let collection = self.definition();
 
-        codec::read(record)
-            .and_then(|raw| codec::to_partial_object(raw, &collection.fields))
-            .map_err(|reason| Error::InvalidArgument {
+        codec::partial_object_of(record, &collection.fields).map_err(|reason| {
+            Error::InvalidArgument {
                 message: format!("a record for `{}`: {reason}", collection.name),
-            })
+            }
+        })
     }
 
     /// Every object, in primary key order.

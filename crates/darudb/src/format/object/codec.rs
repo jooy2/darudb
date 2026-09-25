@@ -843,28 +843,45 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
     Ok(Object::from_fields(object))
 }
 
-/// The fields a record from outside the engine holds, as an object with only
-/// those fields: one a language binding sends to be written, which the write
-/// then checks against the schema and fills in like any other object. A field
-/// id `fields` does not have, or a value whose tag does not fit its field, is
-/// refused.
-pub(crate) fn to_partial_object(
-    raw: Vec<(u64, Raw)>,
-    fields: &Fields,
-) -> Result<Object, &'static str> {
-    let mut object = Vec::with_capacity(raw.len());
+/// The fields the record `bytes` from outside the engine holds, as an
+/// object with only those fields: one a language binding sends to be
+/// written, which the write then checks against the schema and fills in like
+/// any other object. A field id `fields` does not have, or a value whose tag
+/// does not fit its field, is refused, as are bytes that are not one record.
+///
+/// The values are read straight from the record, as [`object_of`] reads
+/// them, rather than into [`Raw`] values first. A record with more than one
+/// thing wrong is refused for the first found, which may not be the one
+/// reading it whole first would name.
+pub(crate) fn partial_object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2)?;
+    let mut object = Vec::with_capacity(count.min(RESERVE));
+    let mut last = None;
 
-    // A record's field ids are in order and different, and so are the names
-    // of the fields they belong to.
-    for (id, value) in raw {
+    for _ in 0..count {
+        let id = reader.varint()?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err("a record's field ids are out of order");
+        }
+
+        last = Some(id);
+
+        // A record's field ids are in order and different, and so are the
+        // names of the fields they belong to.
         let field = fields
             .by_id(id)
             .ok_or("a record holds a field id its collection does not have")?;
 
         object.push((
             Name::from(field.name.as_str()),
-            from_raw(value, &field.kind)?,
+            reader.value_as(&field.kind, 0)?,
         ));
+    }
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
     }
 
     Ok(Object::from_fields(object))
@@ -1218,6 +1235,60 @@ mod tests {
                 std::str::from_utf8(&bytes).is_ok(),
                 "{bytes:?}"
             );
+        }
+    }
+
+    /// A record a binding sends reads as the object that reading it into
+    /// values and then converting them field by field gives, and random
+    /// bytes are refused by the one exactly when they are by the other.
+    #[test]
+    fn a_record_to_write_reads_as_its_values_converted_one_by_one() {
+        let fields = fields();
+        let converted = |bytes: &[u8]| -> Result<Object, &'static str> {
+            let mut object = Vec::new();
+
+            for (id, raw) in read(bytes)? {
+                let field = fields.by_id(id).ok_or("unknown")?;
+
+                object.push((Name::from(field.name.as_str()), from_raw(raw, &field.kind)?));
+            }
+
+            Ok(Object::from_fields(object))
+        };
+        let mut rng = Rng::new(13);
+        let valid = record_of(&full(), &fields, &keys).unwrap();
+
+        assert_eq!(partial_object_of(&valid, &fields), converted(&valid));
+        let mut written = full();
+
+        // An optional field left null is not written, so the record lacks it.
+        written.remove("email");
+        assert_eq!(partial_object_of(&valid, &fields).unwrap(), written);
+
+        for _ in 0..20_000 {
+            let mut bytes = if rng.below(2) == 0 {
+                valid.clone()
+            } else {
+                let len = rng.index(40);
+
+                rng.bytes(len)
+            };
+
+            if !bytes.is_empty() {
+                for _ in 0..1 + rng.index(3) {
+                    let at = rng.index(bytes.len());
+
+                    bytes[at] = rng.next_u64().to_le_bytes()[0];
+                }
+            }
+
+            match (partial_object_of(&bytes, &fields), converted(&bytes)) {
+                (Ok(direct), Ok(staged)) => assert_eq!(direct, staged, "{bytes:?}"),
+                (Err(_), Err(_)) => {}
+                (direct, staged) => {
+                    panic!("{bytes:?}: {direct:?} read at once, {staged:?} in two steps")
+                }
+            }
         }
     }
 
