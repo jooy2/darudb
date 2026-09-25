@@ -155,6 +155,41 @@ impl Leaf {
         true
     }
 
+    /// Replaces the value of entry `index`, whose key is `key`, with `value`
+    /// in the entry's own cell, when the new cell is no longer than the old
+    /// one. Returns `None`, having changed nothing, when it is longer, and
+    /// otherwise the overflow run of the old value, if it had one, for the
+    /// caller to give back.
+    ///
+    /// A leaf filled in key order has no room left, so replacing a value by
+    /// a removal and an insert compacted the whole page every time; a value
+    /// that keeps its length, as most replacements do, changes in place. The
+    /// old cell's bytes past the new one's end count as removed, and go when
+    /// the page is compacted.
+    pub(crate) fn overwrite(
+        &mut self,
+        index: usize,
+        key: &[u8],
+        value: StoredRef<'_>,
+    ) -> Result<Option<Option<OverflowRef>>, &'static str> {
+        let (at, len) = leaf_cell(&self.page, index);
+        let new_len = cell_len(key.len(), value);
+
+        if new_len > len {
+            return Ok(None);
+        }
+
+        let run = match self.value(index)? {
+            StoredRef::Inline(_) => None,
+            StoredRef::Overflow(reference) => Some(reference),
+        };
+
+        write_cell(&mut self.page, at, key, value);
+        self.garbage += len - new_len;
+
+        Ok(Some(run))
+    }
+
     /// The bytes entry `index` takes, its slot included.
     pub(crate) fn entry_size(&self, index: usize) -> usize {
         leaf_cell(&self.page, index).1 + 2
@@ -321,18 +356,39 @@ mod tests {
                     }
                 } else {
                     let value = value_of(&mut rng);
-                    let at = match found {
-                        Ok(index) => {
-                            leaf.remove(index).unwrap();
-                            model.remove(index);
-                            index
-                        }
-                        Err(index) => index,
+                    // Half the replacements try the entry's own cell first.
+                    let overwritten = match found {
+                        Ok(index) if rng.below(2) == 0 => leaf
+                            .overwrite(index, &key, value.as_stored())
+                            .unwrap()
+                            .map(|run| (index, run)),
+                        _ => None,
                     };
-                    let entry = LeafEntry { key, value };
 
-                    if leaf.insert(at, &entry.key, entry.value.as_stored()) {
-                        model.insert(at, entry);
+                    if let Some((index, run)) = overwritten {
+                        let old = std::mem::replace(&mut model[index].value, value);
+
+                        assert_eq!(
+                            run,
+                            match old {
+                                StoredValue::Overflow(reference) => Some(reference),
+                                StoredValue::Inline(_) => None,
+                            }
+                        );
+                    } else {
+                        let at = match found {
+                            Ok(index) => {
+                                leaf.remove(index).unwrap();
+                                model.remove(index);
+                                index
+                            }
+                            Err(index) => index,
+                        };
+                        let entry = LeafEntry { key, value };
+
+                        if leaf.insert(at, &entry.key, entry.value.as_stored()) {
+                            model.insert(at, entry);
+                        }
                     }
                 }
 

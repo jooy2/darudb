@@ -142,6 +142,12 @@ fn insert_into<L: Load, S: Store>(
                 return Ok((Some(kept), None));
             }
 
+            if let Ok(index) = found {
+                if let Some(replaced) = leaf.overwrite(index, key, value).map_err(internal)? {
+                    return Ok((Some(replaced), None));
+                }
+            }
+
             let replaced = match found {
                 Ok(index) => Some(leaf.remove(index).map_err(internal)?),
                 Err(_) => None,
