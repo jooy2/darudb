@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::leaf::Leaf;
 use crate::format::{
     PageHeader, PageKind, Pointer, StoredRef, branch_child, branch_key, branch_len, branch_size,
-    check_branch, check_leaf, decode_branch, leaf_entry, leaf_inline, leaf_key, leaf_size,
+    check_branch, check_leaf, decode_branch, leaf_entry, leaf_extent, leaf_inline, leaf_key,
     leaf_value,
 };
 use crate::storage::Weigh;
@@ -103,8 +103,13 @@ pub(crate) struct LoadedNode {
     level: u8,
     leaf: bool,
     /// The bytes of the page's content the node takes, as [`Node::len`]
-    /// counts them.
-    size: u32,
+    /// counts them. The content of a page of 65536 bytes is shorter than
+    /// that, so two bytes hold it, and the node keeps to the 64 bytes that
+    /// one cache line holds.
+    size: u16,
+    /// Where a leaf's lowest cell starts, which a write transaction's copy
+    /// of the leaf takes rather than finding it again; 0 for a branch.
+    low: u16,
     /// The length of the prefix every key begins with, which the heads
     /// follow: the prefix the first and last keys share.
     prefix: u16,
@@ -177,10 +182,10 @@ impl LoadedNode {
         let heads = (0..count)
             .map(|index| key_head(key_at(index), prefix))
             .collect();
-        let size = if leaf {
-            leaf_size(&page, count)
+        let (size, low) = if leaf {
+            leaf_extent(&page, count)
         } else {
-            branch_size(&page, count)
+            (branch_size(&page, count), 0)
         };
 
         Self {
@@ -188,8 +193,9 @@ impl LoadedNode {
             txn: header.txn,
             level: header.level,
             leaf,
-            // A page and a key are at most 65536 bytes long.
-            size: u32::try_from(size).unwrap_or(u32::MAX),
+            // A page's content and a key are shorter than 65536 bytes.
+            size: u16::try_from(size).unwrap_or(u16::MAX),
+            low: u16::try_from(low).unwrap_or(u16::MAX),
             prefix: u16::try_from(prefix).unwrap_or(u16::MAX),
             kept_prefix,
             heads,
@@ -205,7 +211,12 @@ impl LoadedNode {
     /// The node, decoded for a write transaction to change.
     pub(crate) fn to_node(&self) -> crate::error::Result<Node> {
         let node = if self.leaf {
-            Ok(Node::Leaf(Leaf::from_page(&self.page, self.count())))
+            Ok(Node::Leaf(Leaf::from_loaded(
+                &self.page,
+                self.count(),
+                usize::from(self.size),
+                usize::from(self.low),
+            )))
         } else {
             decode_branch(&self.page, self.count()).map(|(keys, children)| {
                 Node::Branch(Branch {
@@ -276,7 +287,7 @@ impl NodeRef<'_> {
     pub(crate) fn size(&self) -> usize {
         match self {
             NodeRef::Borrowed(node) => node.len(),
-            NodeRef::Loaded(loaded) => loaded.size as usize,
+            NodeRef::Loaded(loaded) => usize::from(loaded.size),
         }
     }
 
@@ -636,6 +647,13 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A cached node's fields, beside its page and its heads, fit in the 64
+    /// bytes of one cache line, which every lookup reads on every level.
+    #[test]
+    fn a_cached_node_keeps_to_one_cache_line() {
+        assert!(size_of::<LoadedNode>() <= 64, "{}", size_of::<LoadedNode>());
     }
 
     #[test]

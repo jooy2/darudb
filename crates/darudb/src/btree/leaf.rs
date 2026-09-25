@@ -44,13 +44,20 @@ impl Leaf {
 
     /// A copy of the leaf with `count` entries on `page`, which
     /// `check_leaf` has passed.
+    #[cfg(test)]
     pub(crate) fn from_page(page: &[u8], count: usize) -> Self {
-        let end = check_offset(page.len());
-        let (low, cells) = (0..count).fold((end, 0), |(low, cells), index| {
-            let (at, len) = leaf_cell(page, index);
+        let (size, low) = crate::format::leaf_extent(page, count);
 
-            (low.min(at), cells + len)
-        });
+        Self::from_loaded(page, count, size, low)
+    }
+
+    /// [`from_page`](Self::from_page) for a page whose entries take `size`
+    /// bytes, slots included, and whose lowest cell starts at `low`, as the
+    /// cached node knows them: copying a leaf for a write transaction to
+    /// change then reads no cell of it.
+    pub(crate) fn from_loaded(page: &[u8], count: usize, size: usize, low: usize) -> Self {
+        let end = check_offset(page.len());
+        let cells = size.saturating_sub(2 * count);
 
         Self {
             page: page.to_vec(),
@@ -58,7 +65,7 @@ impl Leaf {
             low,
             // Cells that overlap, which only a damaged page has, count as
             // none: the leaf then splits sooner than it has to, no more.
-            garbage: (end - low).saturating_sub(cells),
+            garbage: end.saturating_sub(low).saturating_sub(cells),
         }
     }
 

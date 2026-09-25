@@ -359,20 +359,21 @@ pub(crate) fn leaf_entry(
 }
 
 /// The bytes the `count` entries of a leaf that [`check_leaf`] passed take,
-/// slots included, as [`LeafEntry::len`] counts them.
-pub(crate) fn leaf_size(page: &[u8], count: usize) -> usize {
-    (0..count)
-        .map(|index| {
-            let at = read_u16(page, CONTENT_OFFSET + 2 * index);
-            let key_len = read_u16(page, at);
+/// slots included, as [`LeafEntry::len`] counts them, and where its lowest
+/// cell starts: the end of its free space, `check_offset` of the page when
+/// it has no entry.
+pub(crate) fn leaf_extent(page: &[u8], count: usize) -> (usize, usize) {
+    (0..count).fold((0, check_offset(page.len())), |(size, low), index| {
+        let at = read_u16(page, CONTENT_OFFSET + 2 * index);
+        let key_len = read_u16(page, at);
+        let len = if page[at + 2] == 0 {
+            inline_entry_len(key_len, read_u16(page, at + 3))
+        } else {
+            LEAF_OVERHEAD + key_len
+        };
 
-            if page[at + 2] == 0 {
-                inline_entry_len(key_len, read_u16(page, at + 3))
-            } else {
-                LEAF_OVERHEAD + key_len
-            }
-        })
-        .sum()
+        (size + len, low.min(at))
+    })
 }
 
 /// Reads the `count` entries of a leaf.

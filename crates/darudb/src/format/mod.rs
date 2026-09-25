@@ -36,8 +36,8 @@ pub(crate) use node::decode_leaf;
 pub(crate) use node::{
     LeafEntry, OverflowRef, StoredRef, StoredValue, branch_child, branch_key, branch_key_len,
     branch_len, branch_size, cell_len, check_branch, check_leaf, decode_branch, encode_branch,
-    encode_leaf, inline_entry_len, inline_limit, leaf_cell, leaf_entry, leaf_inline, leaf_key,
-    leaf_size, leaf_value, max_key_len, overflow_pages, set_slot, write_cell,
+    encode_leaf, inline_entry_len, inline_limit, leaf_cell, leaf_entry, leaf_extent, leaf_inline,
+    leaf_key, leaf_value, max_key_len, overflow_pages, set_slot, write_cell,
 };
 pub(crate) use page::{
     CONTENT_OFFSET, PAGE_HEADER_OFFSET, PageHeader, PageKind, check_offset, content_len,
