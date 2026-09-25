@@ -201,6 +201,60 @@ fn an_object_read_by_key_has_its_fields_by_name_in_every_collection() {
     }
 }
 
+/// An object stored before its collection had an indexed field is in the
+/// index under the field's default, and changing or deleting the object
+/// takes that entry out again.
+#[test]
+fn an_indexed_field_added_later_leaves_its_default_in_the_index_until_changed() {
+    let dir = TestDir::new();
+    let v1 = Schema::new(1).collection(Collection::new("things").field("name", Type::String));
+    let db = open(&dir, v1, &[]).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    for name in ["a", "b", "c"] {
+        txn.collection("things")
+            .unwrap()
+            .insert(Object::new().with("name", name))
+            .unwrap();
+    }
+
+    txn.commit().unwrap();
+    drop(db);
+
+    let v2 = Schema::new(2).collection(
+        Collection::new("things")
+            .field("name", Type::String)
+            .with_default("rank", Type::Int, 5)
+            .index("rank"),
+    );
+    let db = open(&dir, v2, &[]).unwrap();
+    let ranked = |db: &Database, rank: i64| -> Vec<i64> {
+        let read = db.begin_read().unwrap();
+
+        read.collection("things")
+            .unwrap()
+            .query(&darudb::Query::new().filter(darudb::Filter::eq("rank", rank)))
+            .unwrap()
+            .iter()
+            .map(|thing| thing.get("id").and_then(Value::as_int).unwrap())
+            .collect()
+    };
+
+    assert_eq!(ranked(&db, 5), [1, 2, 3]);
+
+    let mut txn = db.begin_write().unwrap();
+    let mut things = txn.collection("things").unwrap();
+    let mut first = things.get(1).unwrap().unwrap();
+
+    first.set("rank", 7);
+    things.put(first).unwrap();
+    assert!(things.delete(2).unwrap());
+    txn.commit().unwrap();
+
+    assert_eq!(ranked(&db, 5), [3]);
+    assert_eq!(ranked(&db, 7), [1]);
+}
+
 #[test]
 fn an_auto_increment_never_gives_a_number_twice() {
     let dir = TestDir::new();

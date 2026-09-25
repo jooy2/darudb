@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::{Error, Result};
 use crate::format::object::codec;
 use crate::format::object::key;
-use crate::format::object::schema::{CollectionDef, IndexDef, Kind, OpenSchema, StoredSchema};
+use crate::format::object::schema::{
+    CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
+};
 use crate::format::object::{Object, Value};
 use crate::txn::{Range, ReadTransaction, WriteTransaction};
 
@@ -380,10 +382,7 @@ pub(crate) fn index_entries(
     object: &Object,
     key: &[u8],
 ) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    let field = collection
-        .fields
-        .by_id(index.field)
-        .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+    let field = indexed_field(index, collection)?;
     // The value the object is stored with: a required field left out holds
     // its default, as the record does.
     let value = match object.get(&field.name) {
@@ -393,6 +392,56 @@ pub(crate) fn index_entries(
         Some(value) => value,
         None => &Value::Null,
     };
+
+    entries_of(index, value, key)
+}
+
+/// The entries of `index` for the stored object whose record is `record`
+/// and whose primary key encodes as `key`: what [`index_entries`] gives for
+/// the object the record decodes to, read from the one field the index is
+/// on. Replacing or deleting an object needs only its entries, which
+/// decoding the whole object for cost more than the rest of a change that
+/// rewrites one index.
+fn stored_index_entries(
+    source: &dyn Source,
+    index: &IndexDef,
+    collection: &CollectionDef,
+    record: &[u8],
+    key: &[u8],
+) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let field = indexed_field(index, collection)?;
+    let value = match codec::find_field(record, field.id)
+        .map_err(|reason| damaged(source, collection, reason))?
+    {
+        Some(found) => codec::field_value(found, &field.kind)
+            .map_err(|reason| damaged(source, collection, reason))?,
+        None => match &field.default {
+            Some(default) => default.clone(),
+            None if field.optional => Value::Null,
+            None => {
+                return Err(damaged(
+                    source,
+                    collection,
+                    "a record lacks a required field",
+                ));
+            }
+        },
+    };
+
+    entries_of(index, &value, key)
+}
+
+/// The field of `collection` that `index` is on.
+fn indexed_field<'c>(index: &IndexDef, collection: &'c CollectionDef) -> Result<&'c FieldDef> {
+    collection
+        .fields
+        .by_id(index.field)
+        .ok_or_else(|| internal("an index is on a field its collection does not have"))
+}
+
+/// The entries of `index` for an object whose value of the indexed field is
+/// `value` and whose primary key encodes as `key`.
+fn entries_of(index: &IndexDef, value: &Value, key: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
     // A list gives an entry for each of its values, once each and in order;
     // any other value gives one.
     let Value::List(elements) = value else {
@@ -581,15 +630,24 @@ impl<'a> CollectionWriter<'a> {
         let schema = Arc::clone(&self.schema);
         let collection = &schema.schema.collections[self.position];
         let key = key_bytes(collection, &key.into())?;
-        let Some(bytes) = self.txn.get_in(&records(collection.id), &key)? else {
-            return Ok(false);
-        };
-        let old = decode(self.txn, collection, &bytes)?;
-
-        for index in &collection.indexes {
-            for (entry, _) in index_entries(index, collection, &old, &key)? {
-                self.txn.remove_in(&index_tree(index.id), &entry)?;
+        let mut entries = Vec::new();
+        let source: &dyn Source = &*self.txn;
+        let found = source.get_in_with(&records(collection.id), &key, &mut |stored| {
+            for index in &collection.indexes {
+                for (entry, _) in stored_index_entries(source, index, collection, stored, &key)? {
+                    entries.push((index_tree(index.id), entry));
+                }
             }
+
+            Ok(())
+        })?;
+
+        if !found {
+            return Ok(false);
+        }
+
+        for (tree, entry) in entries {
+            self.txn.remove_in(&tree, &entry)?;
         }
 
         self.txn.remove_in(&records(collection.id), &key)
@@ -700,15 +758,24 @@ impl<'a> CollectionWriter<'a> {
         })?;
 
         // An insert finds out whether the key is taken by storing the record,
-        // below, rather than by looking it up first.
-        let old = if replace {
-            match self.txn.get_in(&records(collection.id), &key)? {
-                Some(bytes) => Some(decode(self.txn, collection, &bytes)?),
-                None => None,
-            }
-        } else {
-            None
-        };
+        // below, rather than by looking it up first. A replacement reads the
+        // entries the object it replaces has in each index.
+        let mut old: Vec<Vec<(Vec<u8>, Vec<u8>)>> = Vec::new();
+
+        if replace {
+            let source: &dyn Source = &*self.txn;
+
+            source.get_in_with(&records(collection.id), &key, &mut |stored| {
+                for index in &collection.indexes {
+                    old.push(stored_index_entries(
+                        source, index, collection, stored, &key,
+                    )?);
+                }
+
+                Ok(())
+            })?;
+        }
+
         let max_key_len = self.txn.max_key_len();
         let too_long = || Error::InvalidArgument {
             message: format!(
@@ -730,15 +797,12 @@ impl<'a> CollectionWriter<'a> {
         let mut removals = Vec::new();
         let mut additions = Vec::with_capacity(collection.indexes.len());
 
-        for index in &collection.indexes {
+        for (position, index) in collection.indexes.iter().enumerate() {
             let tree = index_tree(index.id);
-            let before = match &old {
-                Some(old) => index_entries(index, collection, old, &key)?,
-                None => Vec::new(),
-            };
+            let before = old.get(position).map_or(&[][..], Vec::as_slice);
             let after = index_entries(index, collection, &object, &key)?;
 
-            for entry in &before {
+            for entry in before {
                 if !after.contains(entry) {
                     removals.push((tree, entry.0.clone()));
                 }

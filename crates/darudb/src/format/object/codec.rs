@@ -314,6 +314,23 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
     Ok(None)
 }
 
+/// The value of a field of kind `kind` that [`find_field`] found, as
+/// [`object_of`] would read it: a record whose value does not fit the kind
+/// is damaged.
+pub(crate) fn field_value(found: FieldRef<'_>, kind: &Kind) -> Result<Value, &'static str> {
+    match (found, kind) {
+        (FieldRef::Bool(value), Kind::Bool) => Ok(Value::Bool(value)),
+        (FieldRef::Int(value), Kind::Int) => Ok(Value::Int(value)),
+        (FieldRef::Float(value), Kind::Float) => Ok(Value::Float(value)),
+        (FieldRef::String(text), Kind::String) => String::from_utf8(text.to_vec())
+            .map(Value::String)
+            .map_err(|_| "a record holds a string that is not UTF-8"),
+        (FieldRef::Bytes(bytes), Kind::Bytes) => Ok(Value::Bytes(bytes.to_vec())),
+        (FieldRef::Encoded(bytes), kind) => value_of(bytes, kind),
+        _ => Err("a record holds a value of another type than its field"),
+    }
+}
+
 /// The value whose encoding `bytes` [`find_field`] gave, as a field of kind
 /// `kind`.
 pub(crate) fn value_of(bytes: &[u8], kind: &Kind) -> Result<Value, &'static str> {
