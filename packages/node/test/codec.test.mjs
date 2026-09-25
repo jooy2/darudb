@@ -72,6 +72,34 @@ describe('records', () => {
     assert.deepEqual(back, sample);
   });
 
+  it('read the strings of records from a Buffer, as the engine gives them', () => {
+    // Strings short and long, ASCII and not, in embedded objects too, in
+    // records short enough for their strings to be cut from one text of the
+    // record and in one too long for that; records one after another, so
+    // that each one's strings come from its own bytes.
+    const texts = layoutOf([
+      field(1, 'a', { type: 'string' }),
+      field(2, 'b', { type: 'string' }),
+      field(3, 'c', { type: 'bytes' }),
+      field(4, 'd', {
+        type: 'object',
+        fields: layoutOf([field(1, 'inner', { type: 'string' })]).fields
+      })
+    ]);
+    const objects = [
+      { a: 'person 1', b: '1@example.com', c: new Uint8Array([200, 0, 128]), d: { inner: 'x' } },
+      { a: 'p', b: '', c: new Uint8Array(0), d: { inner: 'one, then another' } },
+      { a: 'héllo', b: 'city 2', c: new Uint8Array([255]), d: { inner: 'wörld' } },
+      { a: 'a'.repeat(64), b: 'b'.repeat(65), c: new Uint8Array(3), d: { inner: 'inner' } },
+      { a: 'short', b: 'x'.repeat(600), c: new Uint8Array(700).fill(233), d: { inner: 'last' } },
+      { a: 'after the long one', b: 'y', c: new Uint8Array([1]), d: { inner: 'z' } }
+    ];
+    const bytes = encodeRecords(texts, objects);
+
+    assert.deepEqual(decodeRecords(texts, Buffer.from(bytes)), objects);
+    assert.deepEqual(decodeRecords(texts, bytes), objects);
+  });
+
   it('keep ints exact across the whole 64-bit range', () => {
     const ints = layoutOf([field(1, 'n', { type: 'int', anyInt: true })]);
     const values = [

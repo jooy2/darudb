@@ -352,6 +352,13 @@ class Writer {
   }
 }
 
+/**
+ * The longest record whose strings are cut from one text of the record
+ * (`Reader.string`), which a string cut from it may keep alive: a record
+ * with a large value beside its strings makes each of them on its own.
+ */
+const SHARED_TEXT = 512;
+
 /** Reads what the engine gives back, checking every length and tag. */
 /** The bytes of a float being read, and the view that reads them. */
 const floatBytes = new Uint8Array(8);
@@ -362,12 +369,26 @@ class Reader {
   declare at: number;
   declare end: number;
   declare floats: DataView | null;
+  /** Where the bytes being read begin, which `text` starts at. */
+  declare start: number;
+  /** The bytes from `start` to `end` as Latin-1 text, once a string needs it. */
+  declare text: string | null;
 
   constructor(bytes: Uint8Array, start = 0, end = bytes.length) {
     this.bytes = bytes;
     this.at = start;
     this.end = end;
     this.floats = null;
+    this.start = start;
+    this.text = null;
+  }
+
+  /** Moves the reader to the bytes from `start` to `end`: the next record. */
+  restart(start: number, end: number): void {
+    this.at = start;
+    this.start = start;
+    this.end = end;
+    this.text = null;
   }
 
   /** A view for reading floats, made the first time one is read. */
@@ -483,14 +504,29 @@ class Reader {
 
       // A `Buffer` makes a string of it in one call, at a cost that does
       // not grow with its length as building one from its codes does.
+      if (ascii && Buffer.isBuffer(this.bytes)) {
+        if (this.end - this.start > SHARED_TEXT) {
+          return this.bytes.toString('latin1', start, this.at);
+        }
+
+        // The strings of a short record are cut from one text of the whole
+        // record, made at its first string: the call that makes a string
+        // costs several times what cutting one out of another does. A cut
+        // may keep that text alive for as long as it lives itself, which
+        // `SHARED_TEXT` bounds.
+        if (this.text === null) {
+          this.text = this.bytes.toString('latin1', this.start, this.end);
+        }
+
+        return this.text.substring(start - this.start, this.at - this.start);
+      }
+
       if (ascii) {
         // `apply` takes any array-like, a `Uint8Array` as well as an array.
-        return Buffer.isBuffer(this.bytes)
-          ? this.bytes.toString('latin1', start, this.at)
-          : String.fromCharCode.apply(
-              null,
-              this.bytes.subarray(start, this.at) as unknown as number[]
-            );
+        return String.fromCharCode.apply(
+          null,
+          this.bytes.subarray(start, this.at) as unknown as number[]
+        );
       }
     }
 
@@ -1005,8 +1041,7 @@ function decodeRecords(collection: CollectionLayout, bytes: Uint8Array): Record<
   while (reader.at < reader.end) {
     const length = reader.count();
 
-    record.at = reader.at;
-    record.end = reader.at + length;
+    record.restart(reader.at, reader.at + length);
 
     const object = readFields(record, collection.fields, false, 0);
 
