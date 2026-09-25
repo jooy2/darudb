@@ -51,7 +51,7 @@ impl CollectionReader<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan(schema, collection, query)?)
+        run::objects(source, &plan(schema, collection, query)?, self.order())
     }
 
     /// How many objects `query` finds, after its offset and within its
@@ -95,7 +95,7 @@ impl CollectionWriter<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan(schema, collection, query)?)
+        run::objects(source, &plan(schema, collection, query)?, self.order())
     }
 
     /// How many objects `query` finds, with this transaction's changes; see

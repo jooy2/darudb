@@ -136,9 +136,9 @@ fn objects_are_there_after_the_file_is_opened_again() {
     );
 }
 
-/// An object read by key has its fields in their order by name, in each
-/// collection, when two collections have as many fields in different orders,
-/// in a read transaction and in a write one.
+/// An object read by key, by a query or by a walk has its fields in their
+/// order by name, in each collection, when two collections have as many
+/// fields in different orders, in a read transaction and in a write one.
 #[test]
 fn an_object_read_by_key_has_its_fields_by_name_in_every_collection() {
     let dir = TestDir::new();
@@ -180,12 +180,24 @@ fn an_object_read_by_key_has_its_fields_by_name_in_every_collection() {
     let read = db.begin_read().unwrap();
 
     for (name, expected) in [("first", &first), ("second", &second)] {
-        let object = read.collection(name).unwrap().get(1).unwrap().unwrap();
-        let names: Vec<&str> = object.fields().map(|(name, _)| name).collect();
+        let collection = read.collection(name).unwrap();
+        let queried = collection.query(&darudb::Query::new()).unwrap();
+        let walked: Vec<Object> = collection.iter().unwrap().map(Result::unwrap).collect();
 
-        assert_eq!(&object, expected, "{name}");
-        assert!(names.is_sorted(), "{name}: {names:?}");
-        assert_eq!(object.get("id"), Some(&Value::Int(1)), "{name}");
+        for object in [collection.get(1).unwrap().unwrap()]
+            .iter()
+            .chain(&queried)
+            .chain(&walked)
+        {
+            let names: Vec<&str> = object.fields().map(|(name, _)| name).collect();
+
+            assert_eq!(object, expected, "{name}");
+            assert!(names.is_sorted(), "{name}: {names:?}");
+            assert_eq!(object.get("id"), Some(&Value::Int(1)), "{name}");
+        }
+
+        assert_eq!(queried.len(), 1);
+        assert_eq!(walked.len(), 1);
     }
 }
 

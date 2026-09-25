@@ -265,35 +265,38 @@ fn damaged(source: &dyn Source, collection: &CollectionDef, reason: &str) -> Err
     source.corrupted(format!("an object of `{}`: {reason}", collection.name))
 }
 
-/// Decodes objects of one collection read one after another: the first as
-/// [`decode`] does, and from the second on with the order of the fields by
-/// name worked out once for the rest, which working out for one object alone
-/// would cost more than it saves.
+/// Decodes objects of one collection read one after another, with the
+/// fields of each put in their places by the order of the fields by name:
+/// the order the caller knows, the one its schema worked out when it was
+/// opened, or else one worked out at the second object for the rest, the
+/// first being decoded as [`decode`] does, since working the order out for
+/// one object alone would cost more than it saves.
 pub(crate) struct Decoder<'a> {
     collection: &'a CollectionDef,
-    order: Option<codec::NameOrder>,
+    known: Option<&'a codec::NameOrder>,
+    worked: Option<codec::NameOrder>,
     first: bool,
 }
 
 impl<'a> Decoder<'a> {
-    pub(crate) fn new(collection: &'a CollectionDef) -> Self {
+    pub(crate) fn new(collection: &'a CollectionDef, known: Option<&'a codec::NameOrder>) -> Self {
         Self {
             collection,
-            order: None,
+            known,
+            worked: None,
             first: true,
         }
     }
 
     pub(crate) fn decode(&mut self, source: &dyn Source, bytes: &[u8]) -> Result<Object> {
         let collection = self.collection;
-
-        if std::mem::take(&mut self.first) {
-            return decode(source, collection, bytes);
-        }
-
-        let order = self
-            .order
-            .get_or_insert_with(|| codec::NameOrder::of(&collection.fields));
+        let order = match self.known {
+            Some(order) => order,
+            None if std::mem::take(&mut self.first) => return decode(source, collection, bytes),
+            None => self
+                .worked
+                .get_or_insert_with(|| codec::NameOrder::of(&collection.fields)),
+        };
 
         codec::object_in_order(bytes, &collection.fields, order)
             .map_err(|reason| damaged(source, collection, reason))
@@ -348,10 +351,13 @@ fn get_record_with(
     source.get_in_with(&records(collection.id), &key_bytes(collection, key)?, visit)
 }
 
-/// Every object of `collection`, in primary key order or its reverse.
+/// Every object of `collection`, in primary key order or its reverse, with
+/// its fields put in their places by `order`, the collection's, if the
+/// caller knows it.
 pub(crate) fn scan<'a>(
     source: &'a dyn Source,
     collection: &'a CollectionDef,
+    order: Option<&'a codec::NameOrder>,
     backward: bool,
 ) -> Result<impl Iterator<Item = Result<Object>> + 'a> {
     let range = source.range_in(
@@ -361,7 +367,7 @@ pub(crate) fn scan<'a>(
         backward,
     )?;
 
-    let mut decoder = Decoder::new(collection);
+    let mut decoder = Decoder::new(collection, order);
 
     Ok(range.map(move |entry| entry.and_then(|(_, bytes)| decoder.decode(source, &bytes))))
 }
@@ -460,6 +466,11 @@ impl<'a> CollectionReader<'a> {
         (self.txn, &self.schema.schema, self.definition())
     }
 
+    /// The order of the collection's fields by name.
+    pub(crate) fn order(&self) -> Option<&codec::NameOrder> {
+        self.schema.order(self.position)
+    }
+
     /// The object whose primary key is `key`, if there is one.
     pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>> {
         get(
@@ -492,7 +503,12 @@ impl<'a> CollectionReader<'a> {
 
     /// Every object, in primary key order.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Object>> + '_> {
-        scan(self.txn, self.definition(), false)
+        scan(
+            self.txn,
+            self.definition(),
+            self.schema.order(self.position),
+            false,
+        )
     }
 
     /// The number of objects.
@@ -534,6 +550,11 @@ impl<'a> CollectionWriter<'a> {
     /// The transaction, the schema and the collection, for running a query.
     pub(crate) fn parts(&self) -> (&dyn Source, &StoredSchema, &CollectionDef) {
         (&*self.txn, &self.schema.schema, self.definition())
+    }
+
+    /// The order of the collection's fields by name.
+    pub(crate) fn order(&self) -> Option<&codec::NameOrder> {
+        self.schema.order(self.position)
     }
 
     /// Inserts `object` and returns its primary key.
@@ -638,7 +659,12 @@ impl<'a> CollectionWriter<'a> {
 
     /// Every object, in primary key order.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Object>> + '_> {
-        scan(&*self.txn, self.definition(), false)
+        scan(
+            &*self.txn,
+            self.definition(),
+            self.schema.order(self.position),
+            false,
+        )
     }
 
     /// The number of objects.

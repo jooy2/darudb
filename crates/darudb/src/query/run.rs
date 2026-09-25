@@ -11,7 +11,7 @@ use std::ops::Bound;
 use super::ir::Op;
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
 use crate::error::Result;
-use crate::format::object::codec::{self, FieldRef};
+use crate::format::object::codec::{self, FieldRef, NameOrder};
 use crate::format::object::schema::{CollectionDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
 use crate::schema::objects::{self, Source, index_tree, records};
@@ -602,11 +602,16 @@ struct Found {
     record: Vec<u8>,
 }
 
-/// Runs `plan` and returns the objects it finds, in its order. Only the
-/// objects in the result are decoded whole.
-pub(crate) fn objects(source: &dyn Source, plan: &Plan<'_>) -> Result<Vec<Object>> {
+/// Runs `plan` and returns the objects it finds, in its order, with their
+/// fields put in their places by `order`, the collection's, if the caller
+/// knows it. Only the objects in the result are decoded whole.
+pub(crate) fn objects(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    order: Option<&NameOrder>,
+) -> Result<Vec<Object>> {
     let mut objects = Vec::new();
-    let mut decoder = objects::Decoder::new(plan.collection);
+    let mut decoder = objects::Decoder::new(plan.collection, order);
 
     found(source, plan, &mut |record| {
         objects.push(decoder.decode(source, &record)?);

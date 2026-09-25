@@ -5,6 +5,7 @@
 use super::build::{Filter, Query};
 use super::ir::{self, Ir};
 use super::{plan, run};
+use crate::format::object::codec::NameOrder;
 use crate::format::object::{Object, Value};
 use crate::schema::objects::Source;
 use crate::schema::{Collection, Embedded, Schema, Type};
@@ -284,8 +285,12 @@ fn agree(
             b.err()
         ),
     };
-    let found = ids(&run::objects(source, &planned).unwrap());
-    let expected = ids(&run::whole(|| run::objects(source, &scanned)).unwrap());
+    // The planned query's objects are put in order by the collection's order
+    // of fields by name, as a handle's schema gives it, and the scan's
+    // without one.
+    let order = NameOrder::of(&collection.fields);
+    let found = ids(&run::objects(source, &planned, Some(&order)).unwrap());
+    let expected = ids(&run::whole(|| run::objects(source, &scanned, None)).unwrap());
     let mut lent = Vec::new();
 
     run::each_stored(source, &planned, &mut |record| {
