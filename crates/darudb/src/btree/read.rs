@@ -77,6 +77,16 @@ fn find<'a, L: Load>(
     }
 }
 
+/// Whether `key` is stored, found without copying its value.
+pub(crate) fn contains<L: Load>(
+    load: &L,
+    tree: u64,
+    root: Option<&Child>,
+    key: &[u8],
+) -> Result<bool> {
+    Ok(find(load, tree, root, key)?.is_some())
+}
+
 /// The value stored under `key`, as the leaf stores it.
 pub(crate) fn get_stored<L: Load>(
     load: &L,

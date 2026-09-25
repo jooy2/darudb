@@ -118,6 +118,10 @@ impl Harness {
         remove(&self.loader, &mut self.store, TREE, &mut self.root, key).unwrap()
     }
 
+    fn remove_present(&mut self, key: &[u8]) -> bool {
+        super::remove_present(&self.loader, &mut self.store, TREE, &mut self.root, key).unwrap()
+    }
+
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         get(&self.loader, TREE, self.root.as_ref(), key).unwrap()
     }
@@ -318,11 +322,15 @@ fn random_changes_match_a_model() {
                 let key = key_of(&mut rng, page_size);
 
                 if rng.below(3) == 0 {
-                    assert_eq!(
-                        harness.remove(&key),
-                        model.remove(&key).is_some(),
-                        "seed {seed}"
-                    );
+                    // Half the removals go straight to the key, which takes
+                    // nothing away when it is not there.
+                    let removed = if rng.below(2) == 0 {
+                        harness.remove(&key)
+                    } else {
+                        harness.remove_present(&key)
+                    };
+
+                    assert_eq!(removed, model.remove(&key).is_some(), "seed {seed}");
                 } else {
                     let value = value_of(&mut rng, page_size);
 

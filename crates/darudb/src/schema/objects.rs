@@ -646,11 +646,12 @@ impl<'a> CollectionWriter<'a> {
             return Ok(false);
         }
 
+        // The object and its entries, which it has just been read for.
         for (tree, entry) in entries {
-            self.txn.remove_in(&tree, &entry)?;
+            self.txn.remove_present_in(&tree, &entry)?;
         }
 
-        self.txn.remove_in(&records(collection.id), &key)
+        self.txn.remove_present_in(&records(collection.id), &key)
     }
 
     /// The object whose primary key is `key`, if there is one.
@@ -863,8 +864,10 @@ impl<'a> CollectionWriter<'a> {
 
         // Nothing below can refuse the object; only a failure of the file can
         // stop it now, and that leaves the transaction unable to commit.
+        // The entries of the object replaced, which it has just been read
+        // for.
         for (tree, entry) in removals {
-            self.txn.remove_in(&tree, &entry)?;
+            self.txn.remove_present_in(&tree, &entry)?;
         }
 
         for (tree, (entry, value)) in additions {

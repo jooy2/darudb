@@ -11,7 +11,7 @@ use std::mem;
 
 use super::leaf::Leaf;
 use super::node::{Branch, Child, Node, child_index};
-use super::read::{get_stored, internal};
+use super::read::{contains, internal};
 use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
@@ -232,21 +232,35 @@ pub(crate) fn remove<L: Load, S: Store>(
     root: &mut Option<Child>,
     key: &[u8],
 ) -> Result<bool> {
-    if get_stored(load, tree, root.as_ref(), key)?.is_none() {
+    if !contains(load, tree, root.as_ref(), key)? {
         return Ok(false);
     }
 
+    remove_present(load, store, tree, root, key)
+}
+
+/// [`remove`] for a key the caller knows to be there, as one it has just
+/// read: the removal goes down to it once, rather than looking it up first.
+/// The nodes on the way to it are copied whether it is there or not.
+pub(crate) fn remove_present<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    key: &[u8],
+) -> Result<bool> {
     let Some(child) = root.as_mut() else {
         return Ok(false);
     };
+    let removed = remove_from(load, store, tree, child, None, key)?;
 
-    if let Some(run) = remove_from(load, store, tree, child, None, key)? {
+    if let Some(run) = removed {
         release_run(store, run);
     }
 
     collapse_root(store, root)?;
 
-    Ok(true)
+    Ok(removed.is_some())
 }
 
 fn remove_from<L: Load, S: Store>(

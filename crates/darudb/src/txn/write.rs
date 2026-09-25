@@ -401,17 +401,29 @@ impl WriteTransaction {
 
     /// [`remove`](Self::remove) from any tree, the engine's own included.
     pub(crate) fn remove_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
+        self.remove_either(tree, key, false)
+    }
+
+    /// [`remove_in`](Self::remove_in) for a key the caller knows is there,
+    /// having just read it in this transaction: the removal goes down to it
+    /// once rather than looking it up first, and copies the pages on the way
+    /// even when it is not there after all.
+    pub(crate) fn remove_present_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
+        self.remove_either(tree, key, true)
+    }
+
+    fn remove_either(&mut self, tree: &str, key: &[u8], present: bool) -> Result<bool> {
         self.check_open()?;
 
         let waited = self.forget_later(tree, key);
-        let result = self.remove_inner(tree, key);
+        let result = self.remove_inner(tree, key, present);
 
         self.failed |= result.is_err();
 
         Ok(result? || waited)
     }
 
-    fn remove_inner(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
+    fn remove_inner(&mut self, tree: &str, key: &[u8], present: bool) -> Result<bool> {
         let loader = &self.shared.loader;
 
         check_key(key, loader.page_size())?;
@@ -428,7 +440,13 @@ impl WriteTransaction {
             return Ok(false);
         };
 
-        if !btree::remove(loader, &mut self.space, state.id, &mut state.root, key)? {
+        let removed = if present {
+            btree::remove_present(loader, &mut self.space, state.id, &mut state.root, key)?
+        } else {
+            btree::remove(loader, &mut self.space, state.id, &mut state.root, key)?
+        };
+
+        if !removed {
             return Ok(false);
         }
 
