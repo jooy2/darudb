@@ -232,9 +232,20 @@ pub(crate) enum FieldRef<'a> {
     Bool(bool),
     Int(i64),
     Float(f64),
-    String(&'a str),
+    /// A string's bytes, checked to be UTF-8 as [`utf8`] checks them.
+    String(&'a [u8]),
     Bytes(&'a [u8]),
     Encoded(&'a [u8]),
+}
+
+/// Whether `bytes` are UTF-8. Bytes that are all below `0x80` are, and
+/// telling so is a short loop the compiler puts in place; any others go
+/// through the full check. A filter reads a string field of every record it
+/// tests, and the call the full check costs took a fifth of the time of a
+/// filter on a short string.
+#[inline]
+pub(crate) fn utf8(bytes: &[u8]) -> bool {
+    bytes.is_ascii() || std::str::from_utf8(bytes).is_ok()
 }
 
 /// The value of field `id` in the record `bytes`, if the record holds it,
@@ -278,11 +289,13 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
             }
             STRING => {
                 let len = reader.varint()?;
+                let text = reader.take(len)?;
 
-                FieldRef::String(
-                    std::str::from_utf8(reader.take(len)?)
-                        .map_err(|_| "a record holds a string that is not UTF-8")?,
-                )
+                if !utf8(text) {
+                    return Err("a record holds a string that is not UTF-8");
+                }
+
+                FieldRef::String(text)
             }
             BYTES => {
                 let len = reader.varint()?;
@@ -1139,6 +1152,55 @@ mod tests {
         assert!(read.get("name").is_none());
         assert_eq!(read.get("id"), Some(&Value::Int(7)));
         assert_eq!(read.get("admin"), Some(&Value::Bool(true)));
+    }
+
+    /// A string field found for a filter is checked to be UTF-8, whether
+    /// its bytes are all ASCII or not.
+    #[test]
+    fn a_string_found_for_a_filter_is_checked_to_be_utf8() {
+        let record = write(&[
+            (1, Raw::String("plain".into())),
+            (2, Raw::String("\u{d55c}\u{ae00} \u{e9}".into())),
+        ]);
+
+        assert_eq!(find_field(&record, 1), Ok(Some(FieldRef::String(b"plain"))));
+        assert_eq!(
+            find_field(&record, 2),
+            Ok(Some(FieldRef::String("\u{d55c}\u{ae00} \u{e9}".as_bytes())))
+        );
+
+        // A continuation byte alone, a byte UTF-8 never uses, and a sequence
+        // cut short, each after ASCII.
+        for bad in [&[b'a', 0x80][..], &[b'a', 0xFF], &[b'a', 0xE2, 0x82]] {
+            let mut record = vec![1, 1, STRING, u8::try_from(bad.len()).unwrap()];
+
+            record.extend_from_slice(bad);
+
+            assert!(find_field(&record, 1).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn utf8_is_what_the_full_check_says() {
+        let mut rng = Rng::new(12);
+
+        for _ in 0..20_000 {
+            // Mostly ASCII, with a byte above it now and then, so that both
+            // ways through the check are taken.
+            let bytes: Vec<u8> = (0..rng.index(24))
+                .map(|_| {
+                    let byte = rng.next_u64().to_le_bytes()[0];
+
+                    if rng.below(4) == 0 { byte } else { byte & 0x7F }
+                })
+                .collect();
+
+            assert_eq!(
+                utf8(&bytes),
+                std::str::from_utf8(&bytes).is_ok(),
+                "{bytes:?}"
+            );
+        }
     }
 
     #[test]

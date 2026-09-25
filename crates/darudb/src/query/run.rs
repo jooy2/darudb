@@ -172,7 +172,9 @@ enum ValueRef<'a> {
     Bool(bool),
     Int(i64),
     Float(f64),
-    String(&'a str),
+    /// A string's bytes, checked to be UTF-8 already, which a comparison
+    /// reads as they are.
+    String(&'a [u8]),
     Bytes(&'a [u8]),
 }
 
@@ -181,9 +183,18 @@ impl ValueRef<'_> {
         matches!(self, ValueRef::Null | ValueRef::Value(Value::Null))
     }
 
-    fn as_str(&self) -> Option<&str> {
+    /// The bytes of a string value.
+    fn string_bytes(&self) -> Option<&[u8]> {
         match self {
             ValueRef::String(text) => Some(text),
+            ValueRef::Value(Value::String(text)) => Some(text.as_bytes()),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            ValueRef::String(text) => std::str::from_utf8(text).ok(),
             ValueRef::Value(value) => value.as_str(),
             _ => None,
         }
@@ -196,7 +207,7 @@ impl ValueRef<'_> {
             ValueRef::Bool(value) => Value::Bool(value),
             ValueRef::Int(value) => Value::Int(value),
             ValueRef::Float(value) => Value::Float(value),
-            ValueRef::String(value) => Value::String(value.to_owned()),
+            ValueRef::String(value) => Value::String(String::from_utf8_lossy(value).into_owned()),
             ValueRef::Bytes(value) => Value::Bytes(value.to_vec()),
         }
     }
@@ -205,9 +216,7 @@ impl ValueRef<'_> {
     fn compare(self, other: &Value) -> Ordering {
         match (self, other) {
             (ValueRef::Value(value), _) => key::compare(value, other),
-            (ValueRef::String(value), Value::String(other)) => {
-                value.as_bytes().cmp(other.as_bytes())
-            }
+            (ValueRef::String(value), Value::String(other)) => value.cmp(other.as_bytes()),
             (ValueRef::Bytes(value), Value::Bytes(other)) => value.cmp(other.as_slice()),
             // Values of two types are ordered by their types alone, as an
             // empty value of the same type is, which costs no allocation.
@@ -311,8 +320,12 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
             .is_ok(),
         Test::Element(other) => value.compare(other).is_eq(),
         Test::Substring(text) => value.as_str().is_some_and(|value| value.contains(*text)),
-        Test::StartsWith(text) => value.as_str().is_some_and(|value| value.starts_with(*text)),
-        Test::EndsWith(text) => value.as_str().is_some_and(|value| value.ends_with(*text)),
+        Test::StartsWith(text) => value
+            .string_bytes()
+            .is_some_and(|value| value.starts_with(text.as_bytes())),
+        Test::EndsWith(text) => value
+            .string_bytes()
+            .is_some_and(|value| value.ends_with(text.as_bytes())),
         Test::IsNull => value.is_null(),
     }
 }
