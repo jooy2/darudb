@@ -421,6 +421,26 @@ impl Txn {
         .map_err(to_js_error)
     }
 
+    /// Gives `visit` the record of the object whose key is `key`, where the
+    /// engine lends it, and returns whether there was one.
+    fn get_record_with(
+        &mut self,
+        collection: &str,
+        key: darudb::Value,
+        visit: &mut dyn FnMut(&[u8]) -> darudb::Result<()>,
+    ) -> Result<bool> {
+        match self {
+            Txn::Read(txn) => txn
+                .collection(collection)
+                .and_then(|collection| collection.get_record_with(key, visit)),
+            _ => self
+                .writing()?
+                .collection(collection)
+                .and_then(|collection| collection.get_record_with(key, visit)),
+        }
+        .map_err(to_js_error)
+    }
+
     /// The records `query` finds, each after its length, copied once each
     /// from where the engine lends them.
     fn find(&mut self, collection: &str, query: &darudb::Query) -> Result<Vec<u8>> {
@@ -633,10 +653,17 @@ impl NativeTransaction {
         mut scratch: BufferSlice<'_>,
     ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
         let key = key_in(key)?;
+        let mut copied = None;
 
-        self.now(|txn| txn.get_record(&collection, key))?
-            .map(|record| delivered(env, record, &mut scratch))
-            .transpose()
+        self.now(|txn| {
+            txn.get_record_with(&collection, key, &mut |record| {
+                copied = Some(copy_lent(record, &mut scratch));
+
+                Ok(())
+            })
+        })?;
+
+        copied.map(|copied| handed(env, copied)).transpose()
     }
 
     /// The records a query finds, one after another, each after its length;
@@ -1216,6 +1243,28 @@ fn delivered<'env>(
             Ok(Either::A(len))
         }
         _ => js_bytes(env, bytes).map(Either::B),
+    }
+}
+
+/// Bytes the engine lends, copied once for [`handed`] to deliver as
+/// [`delivered`] does: into `scratch` when they fit, their length then, and
+/// into a vector of their own when they do not.
+fn copy_lent(bytes: &[u8], scratch: &mut [u8]) -> Either<u32, Vec<u8>> {
+    match (scratch.get_mut(..bytes.len()), u32::try_from(bytes.len())) {
+        (Some(room), Ok(len)) => {
+            room.copy_from_slice(bytes);
+
+            Either::A(len)
+        }
+        _ => Either::B(bytes.to_vec()),
+    }
+}
+
+/// What [`copy_lent`] copied, as a synchronous read hands it JavaScript.
+fn handed(env: &Env, copied: Either<u32, Vec<u8>>) -> Result<Either<u32, BufferSlice<'_>>> {
+    match copied {
+        Either::A(len) => Ok(Either::A(len)),
+        Either::B(bytes) => js_bytes(env, bytes).map(Either::B),
     }
 }
 
