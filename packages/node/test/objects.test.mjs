@@ -279,6 +279,42 @@ describe('objects', () => {
     });
   });
 
+  it('write the same whether their records fit the reused buffer or not', (context) => {
+    const { db } = withData(context);
+    const long = 'y'.repeat(100_000);
+
+    db.write((txn) => {
+      const teams = txn.collection('teams');
+
+      // A getter that writes while its own object is being encoded, one
+      // record after a record larger than the buffer small writes reuse,
+      // and a batch of more records than it takes.
+      teams.put({
+        name: 'east',
+        get city() {
+          teams.put({ name: 'inside', city: 'written by a getter' });
+
+          return 'Busan';
+        }
+      });
+      teams.put({ name: 'long', city: long });
+      teams.put({ name: 'after', city: 'short' });
+      teams.insertMany(
+        Array.from({ length: 40 }, (_, n) => ({ name: `batch ${n}`, city: `${n}` }))
+      );
+    });
+
+    db.read((txn) => {
+      const teams = txn.collection('teams');
+
+      assert.deepEqual(teams.get('east'), { name: 'east', city: 'Busan' });
+      assert.deepEqual(teams.get('inside'), { name: 'inside', city: 'written by a getter' });
+      assert.deepEqual(teams.get('long'), { name: 'long', city: long });
+      assert.deepEqual(teams.get('after'), { name: 'after', city: 'short' });
+      assert.deepEqual(teams.get('batch 39'), { name: 'batch 39', city: '39' });
+    });
+  });
+
   it('keep each text prepared on its own collection', (context) => {
     const { db } = withData(context);
 

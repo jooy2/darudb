@@ -18,7 +18,7 @@ import native = require('../native.js');
 import {
   codeError,
   invalid,
-  encodeRecords,
+  lendRecords,
   decodeRecord,
   decodeRecords,
   encodeSchema
@@ -187,9 +187,9 @@ class WriteCollection extends ReadCollection {
       return [];
     }
 
-    const records = encodeRecords(this[LAYOUT], objects);
+    const records = lendRecords(this[LAYOUT], objects);
 
-    return this[TXN].writeRecords(this[LAYOUT].name, toBuffer(records), replace);
+    return this[TXN].writeRecords(this[LAYOUT].name, records, replace);
   }
 }
 

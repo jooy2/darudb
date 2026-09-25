@@ -707,6 +707,61 @@ function own(object: object, name: string): unknown {
 function encodeRecords(collection: CollectionLayout, objects: readonly unknown[]): Uint8Array {
   const writer = new Writer(64 * objects.length + 64);
 
+  writeRecords(writer, collection, objects);
+
+  return writer.finish();
+}
+
+/** The buffer a synchronous write's records are encoded in, reused. */
+const recordWriter = new Writer(1024);
+
+/** Whether records are being encoded in `recordWriter`. */
+let recordsLent = false;
+
+/** The most records `lendRecords` encodes in the buffer it reuses. */
+const LENT_RECORDS = 16;
+
+/** How large the reused buffer may stay after a large record grew it. */
+const LENT_BYTES = 64 * 1024;
+
+/**
+ * `encodeRecords` for a synchronous write, which hands the records to the
+ * engine at once: a view of a buffer kept for the purpose, which lasts until
+ * the next records are lent, rather than a buffer of their own. A few
+ * records, as a `put` or an `insert` writes, cost the allocation and the
+ * copy of a buffer of their own several times what encoding them does. A
+ * large batch gets a buffer of its own all the same, and so do the records
+ * a getter writes while an object of the batch is being encoded.
+ */
+function lendRecords(collection: CollectionLayout, objects: readonly unknown[]): Buffer {
+  if (recordsLent || objects.length > LENT_RECORDS) {
+    const bytes = encodeRecords(collection, objects);
+
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
+  }
+
+  recordsLent = true;
+
+  try {
+    if (recordWriter.bytes.length > LENT_BYTES) {
+      recordWriter.bytes = new Uint8Array(1024);
+    }
+
+    recordWriter.at = 0;
+    writeRecords(recordWriter, collection, objects);
+
+    return Buffer.from(recordWriter.bytes.buffer, recordWriter.bytes.byteOffset, recordWriter.at);
+  } finally {
+    recordsLent = false;
+  }
+}
+
+/** Writes the records of `objects` into `writer`, each after its length. */
+function writeRecords(
+  writer: Writer,
+  collection: CollectionLayout,
+  objects: readonly unknown[]
+): void {
   for (const object of objects) {
     if (typeof object !== 'object' || object === null || Array.isArray(object)) {
       throw invalid(`an object of \`${collection.name}\` is ${describe(object)}`);
@@ -730,8 +785,6 @@ function encodeRecords(collection: CollectionLayout, objects: readonly unknown[]
 
     writer.bytes[slot + 4] = length;
   }
-
-  return writer.finish();
 }
 
 /** Skips a value of any type, as a record read with an older schema holds. */
@@ -1764,6 +1817,7 @@ export {
   codeError,
   invalid,
   encodeRecords,
+  lendRecords,
   decodeRecord,
   decodeRecords,
   decodeSchema,
