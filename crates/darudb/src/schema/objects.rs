@@ -594,15 +594,12 @@ impl<'a> CollectionWriter<'a> {
             collection,
             object.get(&key_field.name).unwrap_or(&Value::Null),
         )?;
-        let raw = codec::from_object(&object, &collection.fields, &|id| {
+        let record = codec::record_of(&object, &collection.fields, &|id| {
             schema.schema.key_kind(id)
         })
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-        let record = codec::write(&raw);
-
-        drop(raw);
 
         // An insert finds out whether the key is taken by storing the record,
         // below, rather than by looking it up first.

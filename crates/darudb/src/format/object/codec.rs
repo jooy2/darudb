@@ -593,6 +593,22 @@ fn write_varint(mut value: u64, out: &mut Vec<u8>) {
     out.push(value.to_le_bytes()[0]);
 }
 
+/// The varint of `value`, in the first of the bytes, and how many it takes.
+fn varint_bytes(mut value: u64) -> ([u8; 10], usize) {
+    let mut bytes = [0; 10];
+    let mut len = 0;
+
+    while value >= 0x80 {
+        bytes[len] = value.to_le_bytes()[0] | 0x80;
+        value >>= 7;
+        len += 1;
+    }
+
+    bytes[len] = value.to_le_bytes()[0];
+
+    (bytes, len + 1)
+}
+
 fn zigzag(value: i64) -> u64 {
     u64::from_le_bytes(((value << 1) ^ (value >> 63)).to_le_bytes())
 }
@@ -604,30 +620,94 @@ fn unzigzag(value: u64) -> i64 {
 /// The primary key kinds of the collections links point to, by collection id.
 pub(crate) type KeyKinds<'a> = &'a dyn Fn(u64) -> Option<Kind>;
 
-/// The fields of `object` for a record, checked against `fields`: every name
-/// is a field, every value has its field's type, and every required field
-/// without a default has a value. A required field left out is written with
-/// its default, so that a later change of the default changes no object
-/// already written; an optional one left out or null is not written.
+/// The record of `object`, checked against `fields`: every name is a field,
+/// every value has its field's type, and every required field without a
+/// default has a value. A required field left out is written with its
+/// default, so that a later change of the default changes no object already
+/// written; an optional one left out or null is not written.
+///
+/// The object is written straight into the record's bytes. Going through
+/// [`Raw`] values first copied every string and byte value of the object, and
+/// grew one vector for the values and another for the bytes.
 ///
 /// The error says what is wrong, for the caller to report as an invalid
-/// argument.
-pub(crate) fn from_object(
+/// argument. A name that is not a field is reported before anything else
+/// wrong with the object.
+pub(crate) fn record_of(
     object: &Object,
     fields: &Fields,
     keys: KeyKinds<'_>,
-) -> Result<Vec<(u64, Raw)>, String> {
-    if let Some((name, _)) = object
-        .fields()
-        .find(|(name, _)| fields.by_name(name).is_none())
-    {
-        return Err(format!("`{name}` is not a field"));
+) -> Result<Vec<u8>, String> {
+    // Room for the fields of a small object, which most are, so that the
+    // record is written without growing its buffer.
+    let mut out = Vec::with_capacity(16 * (fields.list.len() + 1));
+
+    encode_object(object, fields, keys, &mut out)?;
+
+    Ok(out)
+}
+
+fn encode_object(
+    object: &Object,
+    fields: &Fields,
+    keys: KeyKinds<'_>,
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
+    let start = out.len();
+    let most = fields.list.len() as u64;
+
+    // The count of fields comes first, and is known once they are written:
+    // room is left for the most it can be, and taken back if it is shorter.
+    write_varint(most, out);
+
+    let reserved = out.len() - start;
+    let mut known = 0;
+    let written = encode_fields(object, fields, keys, out, &mut known);
+
+    if written.is_err() || known != object.len() {
+        if let Some((name, _)) = object
+            .fields()
+            .find(|(name, _)| fields.by_name(name).is_none())
+        {
+            return Err(format!("`{name}` is not a field"));
+        }
     }
 
-    let mut raw = Vec::new();
+    let count = written?;
+
+    if count != most {
+        let (prefix, len) = varint_bytes(count);
+
+        if len == reserved {
+            out[start..start + len].copy_from_slice(&prefix[..len]);
+        } else {
+            out.splice(start..start + reserved, prefix[..len].iter().copied());
+        }
+    }
+
+    Ok(())
+}
+
+/// Writes the fields of `object` that `fields` has, by id, and returns how
+/// many it wrote. `known` counts the object's fields that `fields` has, for
+/// the caller to tell whether the object has others.
+fn encode_fields(
+    object: &Object,
+    fields: &Fields,
+    keys: KeyKinds<'_>,
+    out: &mut Vec<u8>,
+    known: &mut usize,
+) -> Result<u64, String> {
+    let mut count = 0;
 
     for field in &fields.list {
-        let value = match object.get(&field.name) {
+        let value = object.get(&field.name);
+
+        if value.is_some() {
+            *known += 1;
+        }
+
+        let value = match value {
             None | Some(Value::Null) if field.optional => continue,
             None | Some(Value::Null) => match &field.default {
                 Some(default) => default,
@@ -636,41 +716,74 @@ pub(crate) fn from_object(
             Some(value) => value,
         };
 
-        let converted = to_raw(value, &field.kind, keys)
+        write_varint(field.id, out);
+        encode_value(value, &field.kind, keys, out)
             .map_err(|expected| format!("`{}` holds {expected}", field.name))?;
-
-        raw.push((field.id, converted));
+        count += 1;
     }
 
-    Ok(raw)
+    Ok(count)
 }
 
-/// `value` as a record holds it, if it has kind `kind`. The error names the
-/// kind expected.
-fn to_raw(value: &Value, kind: &Kind, keys: KeyKinds<'_>) -> Result<Raw, String> {
+/// Writes `value` as a record holds it, if it has kind `kind`. The error
+/// names the kind expected.
+fn encode_value(
+    value: &Value,
+    kind: &Kind,
+    keys: KeyKinds<'_>,
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
     let mismatch = || format!("a value that is not {}", kind.describe());
 
     match (kind, value) {
-        (Kind::Bool, Value::Bool(value)) => Ok(Raw::Bool(*value)),
-        (Kind::Int, Value::Int(value)) => Ok(Raw::Int(*value)),
-        (Kind::Float, Value::Float(value)) => Ok(Raw::Float(*value)),
-        (Kind::String, Value::String(value)) => Ok(Raw::String(value.clone())),
-        (Kind::Bytes, Value::Bytes(value)) => Ok(Raw::Bytes(value.clone())),
+        (Kind::Bool, Value::Bool(false)) => out.push(FALSE),
+        (Kind::Bool, Value::Bool(true)) => out.push(TRUE),
+        (Kind::Int, Value::Int(value)) => {
+            out.push(INT);
+            write_varint(zigzag(*value), out);
+        }
+        (Kind::Float, Value::Float(value)) => {
+            out.push(FLOAT);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        (Kind::String, Value::String(value)) => {
+            out.push(STRING);
+            write_varint(value.len() as u64, out);
+            out.extend_from_slice(value.as_bytes());
+        }
+        (Kind::Bytes, Value::Bytes(value)) => {
+            out.push(BYTES);
+            write_varint(value.len() as u64, out);
+            out.extend_from_slice(value);
+        }
         (Kind::Link { collection }, value) => {
             let key = keys(*collection).ok_or_else(mismatch)?;
 
-            Ok(Raw::Link(Box::new(to_raw(value, &key, keys)?)))
+            out.push(LINK);
+            encode_value(value, &key, keys, out)?;
         }
-        (Kind::List(element), Value::List(values)) => values
-            .iter()
-            .map(|value| to_raw(value, element, keys))
-            .collect::<Result<_, _>>()
-            .map(Raw::List),
+        (Kind::List(element), Value::List(values)) => {
+            out.push(LIST);
+            write_varint(values.len() as u64, out);
+
+            for value in values {
+                encode_value(value, element, keys, out)?;
+            }
+        }
         (Kind::Object(fields), Value::Object(object)) => {
-            from_object(object, fields, keys).map(Raw::Object)
+            // An embedded record is preceded by its length, known once it is
+            // written, so it is written apart first.
+            let mut inner = Vec::new();
+
+            encode_object(object, fields, keys, &mut inner)?;
+            out.push(OBJECT);
+            write_varint(inner.len() as u64, out);
+            out.extend_from_slice(&inner);
         }
-        _ => Err(mismatch()),
+        _ => return Err(mismatch()),
     }
+
+    Ok(())
 }
 
 /// The object whose record fields are `raw`, under `fields`: a field absent
@@ -864,7 +977,7 @@ mod tests {
     #[test]
     fn an_object_reads_back_as_it_was_written() {
         let fields = fields();
-        let bytes = write(&from_object(&full(), &fields, &keys).unwrap());
+        let bytes = record_of(&full(), &fields, &keys).unwrap();
         let read = to_object(read(&bytes).unwrap(), &fields).unwrap();
 
         assert_eq!(read, full());
@@ -875,7 +988,7 @@ mod tests {
     fn left_out_fields_read_as_their_default_or_null() {
         let fields = fields();
         let written = Object::new().with("id", 1).with("name", "B");
-        let bytes = write(&from_object(&written, &fields, &keys).unwrap());
+        let bytes = record_of(&written, &fields, &keys).unwrap();
         let read = to_object(super::read(&bytes).unwrap(), &fields).unwrap();
 
         assert_eq!(object_of(&bytes, &fields).unwrap(), read);
@@ -883,6 +996,107 @@ mod tests {
         assert_eq!(read.get("age"), Some(&Value::Int(0)));
         assert_eq!(read.get("email"), Some(&Value::Null));
         assert_eq!(read.len(), fields.list.len());
+    }
+
+    /// The record written from an object is the one its values give, field
+    /// by field in id order, with an optional field left out or null not
+    /// written.
+    #[test]
+    fn an_object_is_written_as_its_values_give() {
+        let expected = write(&[
+            (1, Raw::Int(7)),
+            (2, Raw::String("Ada".into())),
+            (4, Raw::Int(36)),
+            (5, Raw::Float(-0.5)),
+            (
+                6,
+                Raw::List(vec![Raw::String("a".into()), Raw::String("b".into())]),
+            ),
+            (7, Raw::Object(vec![(1, Raw::String("Seoul".into()))])),
+            (8, Raw::Link(Box::new(Raw::Int(3)))),
+            (9, Raw::Bytes(vec![0, 1, 255])),
+            (10, Raw::Bool(true)),
+        ]);
+
+        assert_eq!(record_of(&full(), &fields(), &keys).unwrap(), expected);
+    }
+
+    /// The count of fields leads the record, and is written in as many bytes
+    /// as it takes, when the schema has so many fields that the most it could
+    /// be takes more.
+    #[test]
+    fn the_count_of_fields_takes_the_bytes_it_needs() {
+        let fields = Fields {
+            list: (1..=200)
+                .map(|id| field(id, &format!("f{id}"), Kind::Int, true))
+                .collect(),
+            next_id: 201,
+        };
+
+        for set in [0, 1, 127, 128, 200] {
+            let object = Object::from_fields(
+                (1..=set)
+                    .map(|id| (Name::from(format!("f{id}").as_str()), Value::Int(id)))
+                    .collect(),
+            );
+            let bytes = record_of(&object, &fields, &keys).unwrap();
+            let expected = write(
+                &(1..=set)
+                    .map(|id| (id.cast_unsigned(), Raw::Int(id)))
+                    .collect::<Vec<_>>(),
+            );
+
+            assert_eq!(bytes, expected, "{set} fields set");
+            assert_eq!(object_of(&bytes, &fields).unwrap().len(), 200);
+        }
+    }
+
+    /// The error names what is wrong, and a name that is not a field comes
+    /// before anything else wrong with the object, in an embedded object
+    /// too.
+    #[test]
+    fn a_refused_object_is_told_what_is_wrong() {
+        let fields = fields();
+        let mut missing = full();
+
+        missing.remove("name");
+
+        let cases = [
+            (
+                full().with("age", "old"),
+                "`age` holds a value that is not an int",
+            ),
+            (missing.clone(), "`name` is required"),
+            (missing.with("nickname", "x"), "`nickname` is not a field"),
+            (
+                full().with("age", "old").with("zzz", 1),
+                "`zzz` is not a field",
+            ),
+            (
+                full().with("friend", "x"),
+                "`friend` holds a value that is not an int",
+            ),
+            (
+                full().with("tags", vec![Value::Int(1)]),
+                "`tags` holds a value that is not a string",
+            ),
+            (
+                full().with("address", Object::new().with("zip", "x").with("zzz", 1)),
+                "`address` holds `zzz` is not a field",
+            ),
+            (
+                full().with("address", Object::new()),
+                "`address` holds `city` is required",
+            ),
+        ];
+
+        for (object, message) in cases {
+            assert_eq!(
+                record_of(&object, &fields, &keys),
+                Err(message.to_owned()),
+                "{object:?}"
+            );
+        }
     }
 
     #[test]
@@ -903,14 +1117,14 @@ mod tests {
         ];
 
         for object in cases {
-            assert!(from_object(&object, &fields, &keys).is_err(), "{object:?}");
+            assert!(record_of(&object, &fields, &keys).is_err(), "{object:?}");
         }
     }
 
     #[test]
     fn a_field_the_schema_no_longer_has_is_skipped() {
         let fields = fields();
-        let mut raw = from_object(&full(), &fields, &keys).unwrap();
+        let mut raw = read(&record_of(&full(), &fields, &keys).unwrap()).unwrap();
 
         // A field removed from the schema, and one past every field it has.
         raw.push((99, Raw::Bytes(vec![9; 4])));
@@ -946,7 +1160,7 @@ mod tests {
     fn random_bytes_read_as_a_record_or_as_damage_and_never_panic() {
         let mut rng = Rng::new(6);
         let fields = fields();
-        let valid = write(&from_object(&full(), &fields, &keys).unwrap());
+        let valid = record_of(&full(), &fields, &keys).unwrap();
 
         for _ in 0..20_000 {
             let mut bytes = if rng.below(2) == 0 {
