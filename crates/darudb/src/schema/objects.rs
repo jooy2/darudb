@@ -366,32 +366,47 @@ pub(crate) fn index_entries(
         Some(value) => value,
         None => &Value::Null,
     };
-    let values = match value {
-        Value::List(elements) => elements.iter().collect(),
-        value => vec![value],
+    // A list gives an entry for each of its values, once each and in order;
+    // any other value gives one.
+    let Value::List(elements) = value else {
+        return Ok(vec![index_entry(index, value, key)?]);
     };
     let mut entries = BTreeSet::new();
 
-    for value in values {
-        let mut entry = key::encoded(value).map_err(internal)?;
-
-        // A unique index keys by the value alone, except for null, which any
-        // number of objects may hold. Its entries name the object in their
-        // value either way.
-        if !index.unique || value.is_null() {
-            entry.extend_from_slice(key);
-        }
-
-        let named = if index.unique {
-            key.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        entries.insert((entry, named));
+    for value in elements {
+        entries.insert(index_entry(index, value, key)?);
     }
 
     Ok(entries.into_iter().collect())
+}
+
+/// The entry `value` gives index `index` for the object whose key is `key`.
+fn index_entry(index: &IndexDef, value: &Value, key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    // A unique index keys by the value alone, except for null, which any
+    // number of objects may hold. Its entries name the object in their value
+    // either way.
+    let keyed = !index.unique || value.is_null();
+    let room = match value {
+        Value::String(text) => text.len(),
+        Value::Bytes(bytes) => bytes.len(),
+        _ => 0,
+    } + 9
+        + if keyed { key.len() } else { 0 };
+    let mut entry = Vec::with_capacity(room);
+
+    key::encode(value, &mut entry).map_err(internal)?;
+
+    if keyed {
+        entry.extend_from_slice(key);
+    }
+
+    let named = if index.unique {
+        key.to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok((entry, named))
 }
 
 /// A collection of a read transaction: its objects as of the transaction's
@@ -632,7 +647,7 @@ impl<'a> CollectionWriter<'a> {
         }
 
         let mut removals = Vec::new();
-        let mut additions = Vec::new();
+        let mut additions = Vec::with_capacity(collection.indexes.len());
 
         for index in &collection.indexes {
             let tree = index_tree(index.id);
@@ -658,20 +673,26 @@ impl<'a> CollectionWriter<'a> {
                 }
 
                 if index.unique {
-                    if let Some(holder) = self.txn.get_in(&tree, &entry.0)? {
-                        if holder != key {
-                            let field = collection
-                                .fields
-                                .by_id(index.field)
-                                .map_or("", |field| field.name.as_str());
+                    let mut taken = false;
 
-                            return Err(Error::DuplicateKey {
-                                message: format!(
-                                    "another object of `{}` holds this value of its unique field `{field}`",
-                                    collection.name
-                                ),
-                            });
-                        }
+                    self.txn.get_in_with(&tree, &entry.0, &mut |holder| {
+                        taken = holder != key;
+
+                        Ok(())
+                    })?;
+
+                    if taken {
+                        let field = collection
+                            .fields
+                            .by_id(index.field)
+                            .map_or("", |field| field.name.as_str());
+
+                        return Err(Error::DuplicateKey {
+                            message: format!(
+                                "another object of `{}` holds this value of its unique field `{field}`",
+                                collection.name
+                            ),
+                        });
                     }
                 }
 
