@@ -13,6 +13,7 @@
 //! commit; here a search reads one buffer, the size is a sum kept as it
 //! changes, and the page is written as it is.
 
+use super::node::compare;
 use crate::format::{
     CONTENT_OFFSET, LeafEntry, OverflowRef, StoredRef, StoredValue, cell_len, check_offset,
     encode_leaf, leaf_cell, leaf_entry, leaf_inline, leaf_key, leaf_value, set_slot, write_cell,
@@ -118,7 +119,7 @@ impl Leaf {
         while low < high {
             let middle = low + (high - low) / 2;
 
-            match self.key(middle).cmp(key) {
+            match compare(self.key(middle), key) {
                 std::cmp::Ordering::Less => low = middle + 1,
                 std::cmp::Ordering::Greater => high = middle,
                 std::cmp::Ordering::Equal => return Ok(middle),

@@ -76,7 +76,7 @@ impl Node {
 
 /// The child that holds `key`: the number of separators at or below it.
 pub(crate) fn child_index(keys: &[Vec<u8>], key: &[u8]) -> usize {
-    keys.partition_point(|separator| separator.as_slice() <= key)
+    keys.partition_point(|separator| compare(separator, key) != Ordering::Greater)
 }
 
 /// A committed node as the page cache keeps it: its page, checked once and
@@ -450,16 +450,44 @@ fn search<'k>(
     low
 }
 
-/// Compares two keys as unsigned bytes, the first eight as one number, which
-/// settles most comparisons of a search without a call to compare memory.
+/// Compares two keys as unsigned bytes, eight at a time as one number, and
+/// the last few padded with zeros, which settles a comparison of the short
+/// keys trees hold without a call to compare memory. Keys of an index share
+/// their first eight bytes more often than not, a tag and the high bytes of a
+/// number, so stopping after the first eight left most of their comparisons
+/// to that call.
 #[inline(always)]
-fn compare(a: &[u8], b: &[u8]) -> Ordering {
-    match (a.split_first_chunk::<8>(), b.split_first_chunk::<8>()) {
-        (Some((a_head, a_rest)), Some((b_head, b_rest))) => u64::from_be_bytes(*a_head)
-            .cmp(&u64::from_be_bytes(*b_head))
-            .then_with(|| a_rest.cmp(b_rest)),
-        _ => a.cmp(b),
+pub(crate) fn compare(mut a: &[u8], mut b: &[u8]) -> Ordering {
+    while let (Some((a_head, a_rest)), Some((b_head, b_rest))) =
+        (a.split_first_chunk::<8>(), b.split_first_chunk::<8>())
+    {
+        let (a_head, b_head) = (u64::from_be_bytes(*a_head), u64::from_be_bytes(*b_head));
+
+        if a_head != b_head {
+            return a_head.cmp(&b_head);
+        }
+
+        (a, b) = (a_rest, b_rest);
     }
+
+    // Fewer than eight bytes are left in one of them: the bytes both have,
+    // then the lengths.
+    let shared = a.len().min(b.len());
+
+    padded(&a[..shared])
+        .cmp(&padded(&b[..shared]))
+        .then(a.len().cmp(&b.len()))
+}
+
+/// Up to eight bytes as a big-endian number, padded with zeros.
+#[inline(always)]
+fn padded(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .zip((0..8).rev())
+        .fold(0, |number, (&byte, place)| {
+            number | u64::from(byte) << (8 * place)
+        })
 }
 
 impl Clone for NodeRef<'_> {
@@ -613,10 +641,11 @@ mod tests {
     #[test]
     fn keys_compare_as_unsigned_bytes() {
         let mut rng = Rng::new(3);
-        // Short alphabets and lengths around eight, so that keys often share
-        // their first eight bytes or end inside them.
+        // Short alphabets and lengths up to past four times eight, so that
+        // keys often share their first eight bytes or more, or end inside
+        // them.
         let key = |rng: &mut Rng| -> Vec<u8> {
-            let len = rng.index(20);
+            let len = rng.index(36);
 
             (0..len)
                 .map(|_| [0x00, 0x01, 0x7F, 0x80, 0xFF][rng.index(5)])
@@ -624,7 +653,16 @@ mod tests {
         };
 
         for _ in 0..20_000 {
-            let (a, b) = (key(&mut rng), key(&mut rng));
+            let a = key(&mut rng);
+            // Half the time, a key that begins with a part of the other.
+            let b = if rng.below(2) == 0 {
+                key(&mut rng)
+            } else {
+                let mut b = a[..rng.index(a.len() + 1)].to_vec();
+
+                b.extend(key(&mut rng));
+                b
+            };
 
             assert_eq!(compare(&a, &b), a.cmp(&b), "{a:?} and {b:?}");
             assert_eq!(compare(&a, &a), Ordering::Equal);
