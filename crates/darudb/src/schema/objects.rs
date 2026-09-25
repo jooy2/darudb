@@ -27,25 +27,27 @@ pub(crate) const META: &str = "\0meta";
 pub(crate) const SCHEMA_KEY: &[u8] = b"schema";
 
 /// The tree of collection `id`'s objects.
-pub(crate) fn records(id: u64) -> TreeName {
-    TreeName::new("\0rec/", id)
+pub(crate) fn records(id: u64) -> IdName {
+    IdName::new("\0rec/", id)
 }
 
 /// The tree of index `id`.
-pub(crate) fn index_tree(id: u64) -> TreeName {
-    TreeName::new("\0idx/", id)
+pub(crate) fn index_tree(id: u64) -> IdName {
+    IdName::new("\0idx/", id)
 }
 
-/// The name of a tree of the object layer, a prefix and an id, kept inline:
-/// every read and write of an object names a tree or two, and a name
-/// formatted on the heap each time cost more than the lookup it served.
+/// A name made of a prefix and an id, kept inline: the name of a tree of the
+/// object layer, or the key of a counter in [`META`]. Every read and write of
+/// an object names a tree or two, and an insert reads and stores its
+/// collection's counter; a name formatted on the heap each time cost more
+/// than the lookup it served.
 #[derive(Clone, Copy)]
-pub(crate) struct TreeName {
+pub(crate) struct IdName {
     bytes: [u8; 32],
     len: usize,
 }
 
-impl TreeName {
+impl IdName {
     fn new(prefix: &str, id: u64) -> Self {
         let mut digits = [0u8; 20];
         let mut start = digits.len();
@@ -73,7 +75,7 @@ impl TreeName {
     }
 }
 
-impl std::ops::Deref for TreeName {
+impl std::ops::Deref for IdName {
     type Target = str;
 
     fn deref(&self) -> &str {
@@ -82,15 +84,15 @@ impl std::ops::Deref for TreeName {
     }
 }
 
-impl std::fmt::Debug for TreeName {
+impl std::fmt::Debug for IdName {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&**self, formatter)
     }
 }
 
 /// The key of collection `id`'s next auto-increment number in [`META`].
-pub(crate) fn counter(id: u64) -> Vec<u8> {
-    format!("next/{id}").into_bytes()
+pub(crate) fn counter(id: u64) -> IdName {
+    IdName::new("next/", id)
 }
 
 /// What reading objects needs of a transaction, read or write.
@@ -707,7 +709,7 @@ impl<'a> CollectionWriter<'a> {
         // many objects it numbers.
         if let Some(next) = raised {
             self.txn
-                .insert_later(META, &counter(collection.id), &next.to_le_bytes())?;
+                .insert_later(META, counter(collection.id).as_bytes(), &next.to_le_bytes())?;
         }
 
         if replace {
@@ -726,15 +728,19 @@ impl<'a> CollectionWriter<'a> {
         object: &mut Object,
         name: &str,
     ) -> Result<Option<u64>> {
-        let next = match self.txn.get_in(META, &counter(collection.id))? {
-            Some(bytes) => u64::from_le_bytes(bytes.as_slice().try_into().map_err(|_| {
-                self.txn.corrupted(format!(
-                    "the auto-increment counter of `{}` is not 8 bytes long",
-                    collection.name
-                ))
-            })?),
-            None => 1,
-        };
+        let mut next = 1;
+
+        self.txn
+            .get_in_with(META, counter(collection.id).as_bytes(), &mut |bytes| {
+                next = u64::from_le_bytes(bytes.try_into().map_err(|_| {
+                    self.txn.corrupted(format!(
+                        "the auto-increment counter of `{}` is not 8 bytes long",
+                        collection.name
+                    ))
+                })?);
+
+                Ok(())
+            })?;
 
         match object.get(name) {
             None | Some(Value::Null) => {
@@ -742,7 +748,7 @@ impl<'a> CollectionWriter<'a> {
                     message: format!("`{}` has used every auto-increment number", collection.name),
                 })?;
 
-                object.set(name, assigned);
+                object.set_named(name, Value::Int(assigned));
 
                 Ok(Some(next + 1))
             }

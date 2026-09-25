@@ -284,6 +284,20 @@ impl WriteTransaction {
         self.check_open()?;
         check_key(key, self.shared.loader.page_size())?;
         check_value(value)?;
+
+        // A value written again, as a counter is by every insert, replaces
+        // the one waiting in its place, with no key or value copied anew.
+        if let Some(waiting) = self
+            .later
+            .get_mut(tree)
+            .and_then(|waiting| waiting.get_mut(key))
+        {
+            waiting.clear();
+            waiting.extend_from_slice(value);
+
+            return Ok(());
+        }
+
         self.later
             .entry(tree.to_owned())
             .or_default()

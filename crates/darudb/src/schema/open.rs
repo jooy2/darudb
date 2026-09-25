@@ -325,7 +325,7 @@ fn delete_collection(txn: &mut WriteTransaction, previous: &StoredSchema, id: u6
         txn.delete_tree_in(&index_tree(index.id))?;
     }
 
-    txn.remove_in(META, &counter(id))?;
+    txn.remove_in(META, counter(id).as_bytes())?;
 
     Ok(())
 }
