@@ -694,6 +694,33 @@ fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
     let alice = users.get(1).unwrap().unwrap();
     let record = users.get_record(1).unwrap().unwrap();
 
+    // The same record lent, with the transaction's changes, and nothing for
+    // a key no object has; an error the callback returns is returned.
+    let mut lent = Vec::new();
+
+    assert!(
+        users
+            .get_record_with(1, |record| {
+                lent.extend_from_slice(record);
+                Ok(())
+            })
+            .unwrap()
+    );
+    assert_eq!(lent, record);
+    assert!(
+        !users
+            .get_record_with(99, |_| panic!("no object has the key 99"))
+            .unwrap()
+    );
+    assert_eq!(
+        code(
+            users.get_record_with(1, |_| Err(darudb::Error::InvalidArgument {
+                message: "stop".to_owned(),
+            }))
+        ),
+        "INVALID_ARGUMENT"
+    );
+
     assert!(users.delete(1).unwrap());
     assert_eq!(users.insert_record(&record).unwrap(), Value::Int(1));
     assert_eq!(users.get(1).unwrap(), Some(alice.clone()));
@@ -742,6 +769,18 @@ fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
 
     assert_eq!(records, expected);
     assert_eq!(records.len(), 2);
+
+    let mut lent = None;
+
+    assert!(
+        users
+            .get_record_with(1, |record| {
+                lent = Some(record.to_vec());
+                Ok(())
+            })
+            .unwrap()
+    );
+    assert_eq!(lent, users.get_record(1).unwrap());
 
     // The same records, lent one at a time, and the first error stops them.
     let mut lent = Vec::new();

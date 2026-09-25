@@ -327,6 +327,17 @@ fn get_record(
     source.get_in(&records(collection.id), &key_bytes(collection, key)?)
 }
 
+/// Gives `visit` the record of the object of `collection` whose primary key
+/// is `key`, borrowed where it lies, and returns whether there was one.
+fn get_record_with(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    key: &Value,
+    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
+    source.get_in_with(&records(collection.id), &key_bytes(collection, key)?, visit)
+}
+
 /// Every object of `collection`, in primary key order or its reverse.
 pub(crate) fn scan<'a>(
     source: &'a dyn Source,
@@ -451,6 +462,19 @@ impl<'a> CollectionReader<'a> {
         get_record(self.txn, self.definition(), &key.into())
     }
 
+    /// Gives `visit` the record of the object whose primary key is `key`,
+    /// as [`get_record`](Self::get_record) returns it, but borrowed rather
+    /// than copied into a vector of its own, and returns whether there was
+    /// one: a binding that copies the record into a buffer of its own copies
+    /// it once. An error `visit` returns is returned.
+    pub fn get_record_with(
+        &self,
+        key: impl Into<Value>,
+        mut visit: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        get_record_with(self.txn, self.definition(), &key.into(), &mut visit)
+    }
+
     /// Every object, in primary key order.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Object>> + '_> {
         scan(self.txn, self.definition(), false)
@@ -550,6 +574,17 @@ impl<'a> CollectionWriter<'a> {
     /// longer has, which are skipped.
     pub fn get_record(&self, key: impl Into<Value>) -> Result<Option<Vec<u8>>> {
         get_record(&*self.txn, self.definition(), &key.into())
+    }
+
+    /// Gives `visit` the record of the object whose primary key is `key`,
+    /// with this transaction's changes; see
+    /// [`CollectionReader::get_record_with`].
+    pub fn get_record_with(
+        &self,
+        key: impl Into<Value>,
+        mut visit: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        get_record_with(&*self.txn, self.definition(), &key.into(), &mut visit)
     }
 
     /// Inserts the object whose record is `record`, as a language binding
