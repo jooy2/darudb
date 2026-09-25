@@ -257,7 +257,12 @@ pub(crate) fn decode(
     bytes: &[u8],
 ) -> Result<Object> {
     codec::object_of(bytes, &collection.fields)
-        .map_err(|reason| source.corrupted(format!("an object of `{}`: {reason}", collection.name)))
+        .map_err(|reason| damaged(source, collection, reason))
+}
+
+/// The error for an object of `collection` whose record is damaged.
+fn damaged(source: &dyn Source, collection: &CollectionDef, reason: &str) -> Error {
+    source.corrupted(format!("an object of `{}`: {reason}", collection.name))
 }
 
 /// Decodes objects of one collection read one after another: the first as
@@ -290,17 +295,18 @@ impl<'a> Decoder<'a> {
             .order
             .get_or_insert_with(|| codec::NameOrder::of(&collection.fields));
 
-        codec::object_in_order(bytes, &collection.fields, order).map_err(|reason| {
-            source.corrupted(format!("an object of `{}`: {reason}", collection.name))
-        })
+        codec::object_in_order(bytes, &collection.fields, order)
+            .map_err(|reason| damaged(source, collection, reason))
     }
 }
 
 /// The object of `collection` whose primary key is `key`, if there is one,
-/// decoded from its record where the record lies.
+/// decoded from its record where the record lies, with its fields put in
+/// their places by `order` when the caller knows the collection's.
 pub(crate) fn get(
     source: &dyn Source,
     collection: &CollectionDef,
+    order: Option<&codec::NameOrder>,
     key: &Value,
 ) -> Result<Option<Object>> {
     let mut object = None;
@@ -309,7 +315,11 @@ pub(crate) fn get(
         &records(collection.id),
         &key_bytes(collection, key)?,
         &mut |bytes| {
-            object = Some(decode(source, collection, bytes)?);
+            object = Some(match order {
+                Some(order) => codec::object_in_order(bytes, &collection.fields, order)
+                    .map_err(|reason| damaged(source, collection, reason))?,
+                None => decode(source, collection, bytes)?,
+            });
 
             Ok(())
         },
@@ -452,7 +462,12 @@ impl<'a> CollectionReader<'a> {
 
     /// The object whose primary key is `key`, if there is one.
     pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>> {
-        get(self.txn, self.definition(), &key.into())
+        get(
+            self.txn,
+            self.definition(),
+            self.schema.order(self.position),
+            &key.into(),
+        )
     }
 
     /// The record of the object whose primary key is `key`, as the file holds
@@ -561,7 +576,12 @@ impl<'a> CollectionWriter<'a> {
 
     /// The object whose primary key is `key`, if there is one.
     pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>> {
-        get(&*self.txn, self.definition(), &key.into())
+        get(
+            &*self.txn,
+            self.definition(),
+            self.schema.order(self.position),
+            &key.into(),
+        )
     }
 
     /// The record of the object whose primary key is `key`, as the file holds

@@ -107,7 +107,7 @@ impl Reader<'_> {
             return Ok(object.clone());
         }
 
-        let object = objects::get(self.source, target, key)?;
+        let object = objects::get(self.source, target, None, key)?;
         let mut links = self.links.borrow_mut();
 
         if links.len() >= LINK_CACHE {

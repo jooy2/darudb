@@ -2,7 +2,7 @@
 //! gives them, and its encoding as a record (`design/objects.md`, "The stored
 //! schema").
 
-use super::codec::{self, Raw};
+use super::codec::{self, NameOrder, Raw};
 use super::value::Value;
 
 /// The object layer's format, field 1 of the stored schema.
@@ -131,6 +131,33 @@ impl CollectionDef {
 pub(crate) struct OpenSchema {
     pub(crate) schema: StoredSchema,
     pub(crate) encoded: Vec<u8>,
+    /// The order of each collection's fields by name, at the collection's
+    /// position, so that an object read alone has its fields put in their
+    /// places rather than sorted. Worked out once, here: the schema a handle
+    /// opened a file with does not change while the handle lives, where the
+    /// fields of a schema being migrated are renamed in place.
+    orders: Vec<NameOrder>,
+}
+
+impl OpenSchema {
+    pub(crate) fn new(schema: StoredSchema, encoded: Vec<u8>) -> Self {
+        let orders = schema
+            .collections
+            .iter()
+            .map(|collection| NameOrder::of(&collection.fields))
+            .collect();
+
+        Self {
+            schema,
+            encoded,
+            orders,
+        }
+    }
+
+    /// The order of the fields by name of the collection at `position`.
+    pub(crate) fn order(&self, position: usize) -> Option<&NameOrder> {
+        self.orders.get(position)
+    }
 }
 
 /// The schema a file holds.

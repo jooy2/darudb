@@ -75,7 +75,7 @@ pub(crate) fn open(
             let schema = decode(&shared.path, &read, &encoded)?;
 
             if let Resolution::Unchanged = resolve(declared, Some(&schema), migrations)? {
-                return Ok(Opened::Ready(Arc::new(OpenSchema { schema, encoded })));
+                return Ok(Opened::Ready(Arc::new(OpenSchema::new(schema, encoded))));
             }
         }
     }
@@ -95,13 +95,11 @@ pub(crate) fn open(
                 return Err(internal("an unchanged schema that is not stored"));
             };
 
-            return Ok(Opened::Ready(Arc::new(OpenSchema { schema, encoded })));
+            return Ok(Opened::Ready(Arc::new(OpenSchema::new(schema, encoded))));
         }
     };
-    let schema = Arc::new(OpenSchema {
-        encoded: plan.to.encode(),
-        schema: plan.to,
-    });
+    let encoded = plan.to.encode();
+    let schema = Arc::new(OpenSchema::new(plan.to, encoded));
 
     // Stored first, so that the migration functions read and write objects
     // under the new schema like any other transaction does.
@@ -421,7 +419,7 @@ impl Migrating<'_> {
     pub fn previous(&self, collection: &str, key: impl Into<Value>) -> Result<Option<Object>> {
         let definition = &self.previous.collections[objects::position(self.previous, collection)?];
 
-        objects::get(&*self.txn, definition, &key.into())
+        objects::get(&*self.txn, definition, None, &key.into())
     }
 
     /// The record of the object [`previous`](Self::previous) reads, as the

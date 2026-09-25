@@ -136,6 +136,59 @@ fn objects_are_there_after_the_file_is_opened_again() {
     );
 }
 
+/// An object read by key has its fields in their order by name, in each
+/// collection, when two collections have as many fields in different orders,
+/// in a read transaction and in a write one.
+#[test]
+fn an_object_read_by_key_has_its_fields_by_name_in_every_collection() {
+    let dir = TestDir::new();
+    let schema = Schema::new(1)
+        .collection(
+            Collection::new("first")
+                .field("b", Type::String)
+                .field("a", Type::Int),
+        )
+        .collection(
+            Collection::new("second")
+                .field("x", Type::Int)
+                .field("zeta", Type::String),
+        );
+    let db = open(&dir, schema, &[]).unwrap();
+    let first = Object::new().with("a", 1).with("b", "one").with("id", 1);
+    let second = Object::new().with("id", 1).with("x", 2).with("zeta", "two");
+    let mut txn = db.begin_write().unwrap();
+
+    txn.collection("first")
+        .unwrap()
+        .insert(first.clone())
+        .unwrap();
+    txn.collection("second")
+        .unwrap()
+        .insert(second.clone())
+        .unwrap();
+
+    assert_eq!(
+        txn.collection("first").unwrap().get(1).unwrap(),
+        Some(first.clone())
+    );
+    assert_eq!(
+        txn.collection("second").unwrap().get(1).unwrap(),
+        Some(second.clone())
+    );
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+
+    for (name, expected) in [("first", &first), ("second", &second)] {
+        let object = read.collection(name).unwrap().get(1).unwrap().unwrap();
+        let names: Vec<&str> = object.fields().map(|(name, _)| name).collect();
+
+        assert_eq!(&object, expected, "{name}");
+        assert!(names.is_sorted(), "{name}: {names:?}");
+        assert_eq!(object.get("id"), Some(&Value::Int(1)), "{name}");
+    }
+}
+
 #[test]
 fn an_auto_increment_never_gives_a_number_twice() {
     let dir = TestDir::new();

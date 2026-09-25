@@ -143,6 +143,7 @@ pub(crate) fn object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'stati
 /// with [`object_in_order`] has its fields put in their places rather than
 /// compared. The order is worked out from the same fields the objects are
 /// read with, and kept no longer than the caller keeps them.
+#[derive(Debug)]
 pub(crate) struct NameOrder {
     ranked: Vec<usize>,
 }
