@@ -694,7 +694,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
             let mut stop = false;
 
             with_record(source, plan, key, walked, &mut |record| {
-                if meets(&reader, plan, Some(record), false)?.is_none() {
+                if !meets(&reader, plan, Some(record), None)? {
                     return Ok(());
                 }
 
@@ -720,6 +720,8 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
     let keep = offset.saturating_add(limit);
     let compare = |a: &Found, b: &Found| order(plan, a, b);
     let mut found: Vec<Found> = Vec::new();
+    // The values an object sorts by, filled again for each object tested.
+    let mut values = Vec::new();
     // Once the kept objects have been cut down to `keep`, the last of them:
     // an object that sorts after it cannot be in the result, and is not
     // copied.
@@ -750,7 +752,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
                     order_of(plan, (values, key), (&bound.sort, &bound.key)).is_lt()
                 })
             };
-            let Some(hit) = read(&reader, plan, key, record, &admit)? else {
+            let Some(hit) = read(&reader, plan, key, record, &admit, &mut values)? else {
                 return Ok(false);
             };
 
@@ -812,26 +814,25 @@ type Admit<'a> = dyn Fn(&[Value], &[u8]) -> bool + 'a;
 /// already, if it meets the plan's filter, with the values it sorts by, and
 /// only if `admit` says an object with those values and that key may be in
 /// the result. The filter and the sort read the fields they need from the
-/// record; the key and the record are copied only for an object that is
-/// kept.
+/// record, and the sort's values go into `values`; the values, the key and
+/// the record are taken or copied only for an object that is kept.
 fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
     walked: Option<&[u8]>,
     admit: &Admit<'_>,
+    values: &mut Vec<Value>,
 ) -> Result<Option<Found>> {
     let mut hit = None;
 
     with_record(reader.source, plan, key, walked, &mut |record| {
-        if let Some(values) = meets(reader, plan, Some(record), true)? {
-            if admit(&values, key) {
-                hit = Some(Found {
-                    sort: values,
-                    key: key.to_vec(),
-                    record: record.to_vec(),
-                });
-            }
+        if meets(reader, plan, Some(record), Some(values))? && admit(values, key) {
+            hit = Some(Found {
+                sort: std::mem::take(values),
+                key: key.to_vec(),
+                record: record.to_vec(),
+            });
         }
 
         Ok(())
@@ -865,19 +866,27 @@ fn with_record(
     }
 }
 
-/// Whether the object whose record is `record` meets the plan's filter, with
-/// the values it sorts by when `sort` is set: `None` when it does not.
+/// Whether the object whose record is `record` meets the plan's filter.
+/// When it does, and `sort` is given, the values it sorts by replace what
+/// `sort` held: one vector serves every object a query tests, where one made
+/// for each and dropped with the objects not kept cost most of a sort's
+/// allocations.
 fn meets(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     record: Option<&[u8]>,
-    sort: bool,
-) -> Result<Option<Vec<Value>>> {
+    mut sort: Option<&mut Vec<Value>>,
+) -> Result<bool> {
     let record = record.unwrap_or_default();
-    let sorting = sort && !plan.sort.is_empty();
+
+    if let Some(values) = sort.as_deref_mut() {
+        values.clear();
+    }
+
+    let sorting = sort.is_some() && !plan.sort.is_empty();
 
     if plan.filter.is_none() && !sorting {
-        return Ok(Some(Vec::new()));
+        return Ok(true);
     }
 
     let view = View {
@@ -900,21 +909,17 @@ fn meets(
 
     if let Some(filter) = &plan.filter {
         if !reader.holds(filter, fields)? {
-            return Ok(None);
+            return Ok(false);
         }
     }
 
-    if !sorting {
-        return Ok(Some(Vec::new()));
+    if let Some(values) = sort {
+        for (path, _) in &plan.sort {
+            values.push(reader.value_at(fields, path)?);
+        }
     }
 
-    let values: Vec<Value> = plan
-        .sort
-        .iter()
-        .map(|(path, _)| reader.value_at(fields, path))
-        .collect::<Result<_>>()?;
-
-    Ok(Some(values))
+    Ok(true)
 }
 
 /// Runs `plan` and counts the objects it finds, after its offset and within
@@ -974,7 +979,7 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
 
         walk(source, plan, &mut |key, walked| {
             with_record(source, plan, key, walked, &mut |record| {
-                found += u64::from(meets(&reader, plan, Some(record), false)?.is_some());
+                found += u64::from(meets(&reader, plan, Some(record), None)?);
 
                 Ok(())
             })?;
