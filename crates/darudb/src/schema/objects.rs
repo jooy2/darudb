@@ -571,6 +571,18 @@ impl<'a> CollectionReader<'a> {
     }
 }
 
+/// An object about to be stored: what the checks and the trees need of it.
+struct Written {
+    key: Vec<u8>,
+    /// The primary key, which the write returns.
+    key_value: Value,
+    record: Vec<u8>,
+    /// The object's entries in each index of its collection, in their order.
+    entries: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    /// The auto-increment counter to store, if the write moves it.
+    raised: Option<u64>,
+}
+
 /// A collection of a write transaction: its objects, with the transaction's
 /// changes, and the calls that change them.
 #[derive(Debug)]
@@ -693,17 +705,99 @@ impl<'a> CollectionWriter<'a> {
     /// holds an id or a type its collection does not have, is
     /// [`Error::InvalidArgument`].
     pub fn insert_record(&mut self, record: &[u8]) -> Result<Value> {
-        let object = self.record_object(record)?;
-
-        self.write(object, false)
+        self.write_record(record, false)
     }
 
     /// Inserts or replaces the object whose record is `record`; see
     /// [`insert_record`](Self::insert_record) and [`put`](Self::put).
     pub fn put_record(&mut self, record: &[u8]) -> Result<Value> {
-        let object = self.record_object(record)?;
+        self.write_record(record, true)
+    }
 
-        self.write(object, true)
+    /// Writes the object whose record a binding sent. In a collection whose
+    /// fields all hold scalars, the record is checked where it lies and
+    /// completed into the record the file holds: reading it into an object
+    /// and writing that again cost a value and a name for every field, and a
+    /// search by name for each. Any other collection's record goes through an
+    /// object, whose embedded objects get their defaults on the way.
+    fn write_record(&mut self, record: &[u8], replace: bool) -> Result<Value> {
+        let schema = Arc::clone(&self.schema);
+        let collection = &schema.schema.collections[self.position];
+
+        if !codec::is_flat(&collection.fields) {
+            let object = self.record_object(record)?;
+
+            return self.write(object, replace);
+        }
+
+        let refused = |reason: &str| Error::InvalidArgument {
+            message: format!("a record for `{}`: {reason}", collection.name),
+        };
+        let present = codec::flat_fields(record, &collection.fields).map_err(refused)?;
+        let (key_position, key_field) = collection
+            .fields
+            .list
+            .iter()
+            .enumerate()
+            .find(|(_, field)| field.id == collection.key)
+            .ok_or_else(|| internal("a collection has no key field"))?;
+        let given = present
+            .iter()
+            .find(|(position, _)| *position == key_position)
+            .map(|(_, found)| codec::field_value(*found, &key_field.kind))
+            .transpose()
+            .map_err(refused)?;
+        let (assigned, raised) = if collection.auto {
+            self.number(collection, given.as_ref())?
+        } else {
+            (None, None)
+        };
+        let key_value = match assigned {
+            Some(number) => Value::Int(number),
+            None => given.unwrap_or(Value::Null),
+        };
+        let key = key_bytes(collection, &key_value)?;
+        let stored = codec::flat_record(
+            &present,
+            &collection.fields,
+            assigned.map(|number| (key_position, number)),
+        )
+        .map_err(|message| Error::InvalidArgument {
+            message: format!("an object of `{}`: {message}", collection.name),
+        })?;
+        let mut entries = Vec::with_capacity(collection.indexes.len());
+
+        for index in &collection.indexes {
+            let (position, field) = collection
+                .fields
+                .list
+                .iter()
+                .enumerate()
+                .find(|(_, field)| field.id == index.field)
+                .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+            // The value the object is stored with, as `index_entries` finds
+            // it in the object.
+            let value = match present.iter().find(|(at, _)| *at == position) {
+                Some((_, found)) => codec::field_value(*found, &field.kind).map_err(refused)?,
+                None if position == key_position => key_value.clone(),
+                None if !field.optional => field.default.clone().unwrap_or(Value::Null),
+                None => Value::Null,
+            };
+
+            entries.push(entries_of(index, &value, &key)?);
+        }
+
+        self.store(
+            collection,
+            Written {
+                key,
+                key_value,
+                record: stored,
+                entries,
+                raised,
+            },
+            replace,
+        )
     }
 
     fn record_object(&self, record: &[u8]) -> Result<Object> {
@@ -743,20 +837,60 @@ impl<'a> CollectionWriter<'a> {
             .key_field()
             .ok_or_else(|| internal("a collection has no key field"))?;
         let raised = if collection.auto {
-            self.number(collection, &mut object, &key_field.name)?
+            let (assigned, raised) = self.number(collection, object.get(&key_field.name))?;
+
+            if let Some(number) = assigned {
+                object.set_named(&key_field.name, Value::Int(number));
+            }
+
+            raised
         } else {
             None
         };
-        let key = key_bytes(
-            collection,
-            object.get(&key_field.name).unwrap_or(&Value::Null),
-        )?;
+        let key_value = object.get(&key_field.name).cloned().unwrap_or(Value::Null);
+        let key = key_bytes(collection, &key_value)?;
         let record = codec::record_of(&object, &collection.fields, &|id| {
             schema.schema.key_kind(id)
         })
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
+        let entries = collection
+            .indexes
+            .iter()
+            .map(|index| index_entries(index, collection, &object, &key))
+            .collect::<Result<_>>()?;
+
+        self.store(
+            collection,
+            Written {
+                key,
+                key_value,
+                record,
+                entries,
+                raised,
+            },
+            replace,
+        )
+    }
+
+    /// Stores an object of `collection` with its index entries, after the
+    /// checks that need the trees: a unique value or, for an insert, a
+    /// primary key already taken. A replacement takes out the entries of the
+    /// object it replaces that the new one does not have. Returns the key.
+    fn store(
+        &mut self,
+        collection: &CollectionDef,
+        written: Written,
+        replace: bool,
+    ) -> Result<Value> {
+        let Written {
+            key,
+            key_value,
+            record,
+            entries,
+            raised,
+        } = written;
 
         // An insert finds out whether the key is taken by storing the record,
         // below, rather than by looking it up first. A replacement reads the
@@ -798,10 +932,9 @@ impl<'a> CollectionWriter<'a> {
         let mut removals = Vec::new();
         let mut additions = Vec::with_capacity(collection.indexes.len());
 
-        for (position, index) in collection.indexes.iter().enumerate() {
+        for ((position, index), after) in collection.indexes.iter().enumerate().zip(entries) {
             let tree = index_tree(index.id);
             let before = old.get(position).map_or(&[][..], Vec::as_slice);
-            let after = index_entries(index, collection, &object, &key)?;
 
             for entry in before {
                 if !after.contains(entry) {
@@ -855,9 +988,8 @@ impl<'a> CollectionWriter<'a> {
         {
             return Err(Error::DuplicateKey {
                 message: format!(
-                    "`{}` already holds an object with the primary key {:?}",
-                    collection.name,
-                    object.get(&key_field.name).unwrap_or(&Value::Null)
+                    "`{}` already holds an object with the primary key {key_value:?}",
+                    collection.name
                 ),
             });
         }
@@ -885,18 +1017,17 @@ impl<'a> CollectionWriter<'a> {
             self.txn.insert_in(&records(collection.id), &key, &record)?;
         }
 
-        Ok(object.get(&key_field.name).cloned().unwrap_or(Value::Null))
+        Ok(key_value)
     }
 
-    /// Gives `object` the collection's next auto-increment number if it has
-    /// no key, and returns the next number to store if it changes: past the
-    /// one given, or past a key the object brings that is not below it.
+    /// The collection's next auto-increment number, if the object gives no
+    /// key, `given`, and the next number to store if it changes: past the
+    /// one assigned, or past a key the object brings that is not below it.
     fn number(
         &self,
         collection: &CollectionDef,
-        object: &mut Object,
-        name: &str,
-    ) -> Result<Option<u64>> {
+        given: Option<&Value>,
+    ) -> Result<(Option<i64>, Option<u64>)> {
         let mut next = 1;
 
         self.txn
@@ -911,22 +1042,23 @@ impl<'a> CollectionWriter<'a> {
                 Ok(())
             })?;
 
-        match object.get(name) {
+        match given {
             None | Some(Value::Null) => {
                 let assigned = i64::try_from(next).map_err(|_| Error::InvalidArgument {
                     message: format!("`{}` has used every auto-increment number", collection.name),
                 })?;
 
-                object.set_named(name, Value::Int(assigned));
-
-                Ok(Some(next + 1))
+                Ok((Some(assigned), Some(next + 1)))
             }
-            Some(Value::Int(chosen)) => Ok(u64::try_from(*chosen)
-                .ok()
-                .filter(|chosen| *chosen >= next)
-                .map(|chosen| chosen.saturating_add(1))),
+            Some(Value::Int(chosen)) => Ok((
+                None,
+                u64::try_from(*chosen)
+                    .ok()
+                    .filter(|chosen| *chosen >= next)
+                    .map(|chosen| chosen.saturating_add(1)),
+            )),
             // Not an int: the key check refuses the object.
-            Some(_) => Ok(None),
+            Some(_) => Ok((None, None)),
         }
     }
 }

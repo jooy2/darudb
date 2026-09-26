@@ -483,6 +483,43 @@ impl<'a> Reader<'a> {
         Ok(object)
     }
 
+    /// A value of the scalar kind `kind`, borrowed from the record: what
+    /// [`value_as`](Self::value_as) reads, and refuses, without copying a
+    /// string or bytes.
+    fn scalar_as(&mut self, kind: &Kind) -> Result<FieldRef<'a>, &'static str> {
+        let start = self.at;
+
+        match (kind, self.byte()?) {
+            (Kind::Bool, FALSE) => Ok(FieldRef::Bool(false)),
+            (Kind::Bool, TRUE) => Ok(FieldRef::Bool(true)),
+            (Kind::Int, INT) => Ok(FieldRef::Int(unzigzag(self.varint()?))),
+            (Kind::Float, FLOAT) => self.float().map(FieldRef::Float),
+            (Kind::String, STRING) => {
+                let len = self.varint()?;
+                let text = self.take(len)?;
+
+                if !utf8(text) {
+                    return Err("a record holds a string that is not UTF-8");
+                }
+
+                Ok(FieldRef::String(text))
+            }
+            (Kind::Bytes, BYTES) => {
+                let len = self.varint()?;
+
+                self.take(len).map(FieldRef::Bytes)
+            }
+            // A value of another type: refused as `value_as` refuses it,
+            // after reading it whole, which may find it damaged first.
+            _ => {
+                self.at = start;
+                from_raw(self.value(0)?, kind)?;
+
+                Err("a record holds a value of another type than its field")
+            }
+        }
+    }
+
     /// A value of kind `kind`, read straight into one where the kind is a
     /// scalar or an embedded object, as [`from_raw`] would make it.
     fn value_as(&mut self, kind: &Kind, depth: usize) -> Result<Value, &'static str> {
@@ -885,6 +922,146 @@ pub(crate) fn partial_object_of(bytes: &[u8], fields: &Fields) -> Result<Object,
     }
 
     Ok(Object::from_fields(object))
+}
+
+/// Whether every field of `fields` holds a scalar: a bool, an int, a float,
+/// a string or bytes. The records a binding sends for such a collection are
+/// checked and completed as they are, by [`flat_fields`] and
+/// [`flat_record`], rather than read into an object and written again.
+pub(crate) fn is_flat(fields: &Fields) -> bool {
+    fields.list.iter().all(|field| {
+        matches!(
+            field.kind,
+            Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+        )
+    })
+}
+
+/// The fields the record `bytes` from outside the engine holds, under
+/// `fields`, which [`is_flat`] accepts: each as the position of its field in
+/// the list and its value, borrowed from the record. The record is checked as
+/// [`partial_object_of`] checks it, and refused for the same reasons, in the
+/// same order.
+pub(crate) fn flat_fields<'a>(
+    bytes: &'a [u8],
+    fields: &Fields,
+) -> Result<Vec<(usize, FieldRef<'a>)>, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2)?;
+    // Ids in order and all of them the schema's: no more than it has.
+    let mut present = Vec::with_capacity(count.min(fields.list.len()));
+    let mut last = None;
+
+    for _ in 0..count {
+        let id = reader.varint()?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err("a record's field ids are out of order");
+        }
+
+        last = Some(id);
+
+        let position = fields
+            .list
+            .iter()
+            .position(|field| field.id == id)
+            .ok_or("a record holds a field id its collection does not have")?;
+
+        present.push((position, reader.scalar_as(&fields.list[position].kind)?));
+    }
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
+    }
+
+    Ok(present)
+}
+
+/// The record the file holds for the fields `present` that [`flat_fields`]
+/// read, under the same `fields`: the bytes [`record_of`] writes for the
+/// object they make. A required field left out is written with its default,
+/// and an optional one is not written. `assigned` is the position in the
+/// list of the auto-increment key the record left out, and the number it
+/// gets.
+///
+/// The error says what is wrong, as [`record_of`] says it.
+pub(crate) fn flat_record(
+    present: &[(usize, FieldRef<'_>)],
+    fields: &Fields,
+    assigned: Option<(usize, i64)>,
+) -> Result<Vec<u8>, String> {
+    let given = |position: usize| {
+        present
+            .iter()
+            .find(|(at, _)| *at == position)
+            .map(|(_, value)| *value)
+            .or_else(|| {
+                assigned
+                    .filter(|(at, _)| *at == position)
+                    .map(|(_, number)| FieldRef::Int(number))
+            })
+    };
+    let mut count = 0u64;
+
+    // The count comes first: work it out, and refuse a required field left
+    // out, before writing anything.
+    for (position, field) in fields.list.iter().enumerate() {
+        if given(position).is_some() || (!field.optional && field.default.is_some()) {
+            count += 1;
+        } else if !field.optional {
+            return Err(format!("`{}` is required", field.name));
+        }
+    }
+
+    let mut out = Vec::with_capacity(16 * (fields.list.len() + 1));
+
+    write_varint(count, &mut out);
+
+    for (position, field) in fields.list.iter().enumerate() {
+        match (given(position), &field.default) {
+            (Some(value), _) => {
+                write_varint(field.id, &mut out);
+                write_ref(value, &mut out);
+            }
+            (None, Some(default)) if !field.optional => {
+                write_varint(field.id, &mut out);
+                encode_value(default, &field.kind, &|_| None, &mut out)
+                    .map_err(|expected| format!("`{}` holds {expected}", field.name))?;
+            }
+            (None, _) => {}
+        }
+    }
+
+    Ok(out)
+}
+
+/// Writes a value [`find_field`] or [`flat_fields`] read, as a record holds
+/// it.
+fn write_ref(value: FieldRef<'_>, out: &mut Vec<u8>) {
+    match value {
+        FieldRef::Bool(false) => out.push(FALSE),
+        FieldRef::Bool(true) => out.push(TRUE),
+        FieldRef::Int(value) => {
+            out.push(INT);
+            write_varint(zigzag(value), out);
+        }
+        FieldRef::Float(value) => {
+            out.push(FLOAT);
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        FieldRef::String(text) => {
+            out.push(STRING);
+            write_varint(text.len() as u64, out);
+            out.extend_from_slice(text);
+        }
+        FieldRef::Bytes(bytes) => {
+            out.push(BYTES);
+            write_varint(bytes.len() as u64, out);
+            out.extend_from_slice(bytes);
+        }
+        // Tag included.
+        FieldRef::Encoded(bytes) => out.extend_from_slice(bytes),
+    }
 }
 
 fn from_raw(raw: Raw, kind: &Kind) -> Result<Value, &'static str> {

@@ -1,8 +1,11 @@
 //! Tests of the object layer that look below the public API: the index trees
 //! against the objects they index.
 
-use super::objects::{Source, check_indexes};
+use std::ops::Bound;
+
+use super::objects::{Source, check_indexes, index_tree, records};
 use super::{Collection, Schema, Type};
+use crate::format::object::schema::Kind;
 use crate::format::object::{Object, Value};
 use crate::testing::Rng;
 use crate::{Database, OpenOptions};
@@ -319,4 +322,202 @@ fn a_process_whose_file_another_process_migrated_fails_with_schema_mismatch() {
             .get("nickname"),
         Some(&Value::Null)
     );
+}
+
+/// Two collections whose fields all hold scalars, one keyed by an
+/// auto-increment and one by a string, so that a binding's records for them
+/// take the path that checks and completes the record as it is.
+fn flat_schema() -> Schema {
+    Schema::new(1)
+        .collection(
+            Collection::new("people")
+                .field("name", Type::String)
+                .optional("email", Type::String)
+                .with_default("age", Type::Int, 18)
+                .optional("score", Type::Float)
+                .with_default("admin", Type::Bool, false)
+                .optional("photo", Type::Bytes)
+                .unique("email")
+                .index("age")
+                .index("admin"),
+        )
+        .collection(
+            Collection::new("tags")
+                .primary_key("label", Type::String)
+                .with_default("uses", Type::Int, 0)
+                .index("uses"),
+        )
+}
+
+/// A record as a binding might send one for a collection whose fields are
+/// `fields`, by id and kind: most fields at random, now and then a value of
+/// the wrong type, an id the collection does not have, the key, or bytes
+/// cut or changed.
+fn random_record(rng: &mut Rng, fields: &[(u64, &str)]) -> Vec<u8> {
+    use crate::format::object::codec::{self, Raw};
+
+    let mut raw = Vec::new();
+
+    for (id, kind) in fields {
+        if rng.below(3) == 0 {
+            continue;
+        }
+
+        let kind = if rng.below(30) == 0 {
+            ["string", "int", "float", "bool", "bytes"][rng.index(5)]
+        } else {
+            kind
+        };
+        let value = match kind {
+            "string" => {
+                Raw::String(["ace", "bee", "cat", "", "a\0b", "é"][rng.index(6)].to_owned())
+            }
+            "int" => Raw::Int(i64::try_from(rng.below(8)).unwrap() - 2),
+            "float" => Raw::Float([0.5, -1.0, f64::NAN, 1e300][rng.index(4)]),
+            "bool" => Raw::Bool(rng.below(2) == 0),
+            _ => {
+                let len = rng.index(4);
+
+                Raw::Bytes(rng.bytes(len))
+            }
+        };
+
+        raw.push((*id, value));
+    }
+
+    if rng.below(30) == 0 {
+        raw.push((90 + rng.below(3), Raw::Int(1)));
+    }
+
+    let mut record = codec::write(&raw);
+
+    match rng.below(40) {
+        0 => record.truncate(rng.index(record.len())),
+        1 => {
+            let at = rng.index(record.len());
+
+            record[at] = u8::try_from(rng.below(256)).unwrap();
+        }
+        _ => {}
+    }
+
+    record
+}
+
+#[test]
+fn a_binding_s_records_are_written_as_the_objects_they_hold_would_be() {
+    use crate::format::object::codec;
+
+    for seed in 0..6 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(flat_schema());
+
+        // Records through the path that completes them as they are, and the
+        // same records read into objects and written as objects.
+        let through_records = options.open(dir.path().join("records.darudb")).unwrap();
+        let through_objects = options.open(dir.path().join("objects.darudb")).unwrap();
+        let mut rng = Rng::new(seed);
+        let mut written = 0;
+
+        for _ in 0..20 {
+            let mut left = through_records.begin_write().unwrap();
+            let mut right = through_objects.begin_write().unwrap();
+            let open = left.schema().cloned().unwrap();
+
+            for _ in 0..30 {
+                let position = rng.index(2);
+                let definition = &open.schema.collections[position];
+                let name = definition.name.clone();
+                let kinds: Vec<(u64, &str)> = definition
+                    .fields
+                    .list
+                    .iter()
+                    .map(|field| {
+                        let kind = match field.kind {
+                            Kind::String => "string",
+                            Kind::Int => "int",
+                            Kind::Float => "float",
+                            Kind::Bool => "bool",
+                            _ => "bytes",
+                        };
+
+                        (field.id, kind)
+                    })
+                    .collect();
+                let record = random_record(&mut rng, &kinds);
+                let replace = rng.below(2) == 0;
+                let fast = {
+                    let mut collection = left.collection(&name).unwrap();
+
+                    if replace {
+                        collection.put_record(&record)
+                    } else {
+                        collection.insert_record(&record)
+                    }
+                };
+                let slow = match codec::partial_object_of(&record, &definition.fields) {
+                    Ok(object) => {
+                        let mut collection = right.collection(&name).unwrap();
+
+                        if replace {
+                            collection.put(object)
+                        } else {
+                            collection.insert(object)
+                        }
+                    }
+                    Err(reason) => Err(crate::Error::InvalidArgument {
+                        message: format!("a record for `{name}`: {reason}"),
+                    }),
+                };
+
+                match (&fast, &slow) {
+                    (Ok(fast), Ok(slow)) => {
+                        assert_eq!(fast, slow, "seed {seed}");
+                        written += 1;
+                    }
+                    (Err(fast), Err(slow)) => {
+                        assert_eq!(fast.to_string(), slow.to_string(), "seed {seed}");
+                    }
+                    _ => panic!(
+                        "seed {seed}: {record:?} gave {fast:?} one way and {slow:?} the other"
+                    ),
+                }
+            }
+
+            // The same records, byte for byte, and the same index entries.
+            for collection in &open.schema.collections {
+                let trees = std::iter::once(records(collection.id))
+                    .chain(collection.indexes.iter().map(|index| index_tree(index.id)));
+
+                for tree in trees {
+                    let entries = |txn: &crate::WriteTransaction| {
+                        txn.range_in::<Vec<u8>>(
+                            &tree,
+                            &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+                            false,
+                        )
+                        .unwrap()
+                        .collect::<crate::Result<Vec<_>>>()
+                        .unwrap()
+                    };
+
+                    assert_eq!(
+                        entries(&left),
+                        entries(&right),
+                        "seed {seed}: tree {:?}",
+                        &*tree
+                    );
+                }
+            }
+
+            check_indexes(&left as &dyn Source, &open.schema)
+                .unwrap_or_else(|reason| panic!("seed {seed}: {reason}"));
+            left.commit().unwrap();
+            right.commit().unwrap();
+        }
+
+        assert!(written > 100, "seed {seed}: only {written} records written");
+    }
 }
