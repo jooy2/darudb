@@ -4,6 +4,7 @@
 //! leaves up. The pages are not written here: the commit writes all of them
 //! together, in page order, before its barrier.
 
+use super::leaf::LeafParts;
 use super::node::{Branch, Child, LoadedNode, Node};
 use super::read::internal;
 use crate::error::Result;
@@ -35,12 +36,19 @@ pub(crate) fn finish(
         Child::Clean(pointer) => return Ok(pointer),
         Child::Dirty { page, node } => (page, *node),
     };
-    let (header, mut bytes) = match node {
+    let (header, mut bytes, heads, size, low) = match node {
         // A leaf is laid out as its page already.
-        Node::Leaf(leaf) => (
-            header(PageKind::Leaf, 0, leaf.len(), txn, tree)?,
-            leaf.into_page(),
-        ),
+        Node::Leaf(leaf) => {
+            let header = header(PageKind::Leaf, 0, leaf.len(), txn, tree)?;
+            let LeafParts {
+                page,
+                heads,
+                size,
+                low,
+            } = leaf.into_parts();
+
+            (header, page, heads, size, low)
+        }
         Node::Branch(Branch {
             level,
             keys,
@@ -56,16 +64,16 @@ pub(crate) fn finish(
 
             encode_branch(keys.iter(), &pointers, &mut bytes);
 
-            (
-                header(PageKind::Branch, level, keys.len(), txn, tree)?,
-                bytes,
-            )
+            let header = header(PageKind::Branch, level, keys.len(), txn, tree)?;
+            let size = keys.branch_len();
+
+            (header, bytes, keys.into_heads(), size, 0)
         }
     };
 
     header.write(&mut bytes);
 
-    let loaded = LoadedNode::encoded(bytes.clone(), &header);
+    let loaded = LoadedNode::encoded(bytes.clone(), &header, heads, size, low);
     let check = pager.seal(page, &mut bytes)?;
     let pointer = Pointer { page, txn, check };
 

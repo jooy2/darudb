@@ -11,16 +11,29 @@
 //! A leaf kept as a vector of entries would cost an allocation for every key
 //! and value, a walk over every entry to learn its size, and an encoding at
 //! commit; here a search reads one buffer, the size is a sum kept as it
-//! changes, and the page is written as it is.
+//! changes, and the page is written as it is. The heads of the keys are kept
+//! beside the page, as a cached node keeps them, for searches and for the
+//! node the commit caches.
 
-use super::node::compare;
+use super::node::Heads;
 use crate::format::{
     CONTENT_OFFSET, LeafEntry, OverflowRef, StoredRef, StoredValue, cell_len, check_offset,
     encode_leaf, leaf_cell, leaf_entry, leaf_inline, leaf_key, leaf_value, set_slot, write_cell,
 };
 
+/// A leaf's page as the commit writes it, and what the node it caches takes
+/// from the leaf: the heads, the bytes the entries take, slots included, and
+/// where the lowest cell starts.
+#[derive(Debug)]
+pub(crate) struct LeafParts {
+    pub(crate) page: Vec<u8>,
+    pub(crate) heads: Heads,
+    pub(crate) size: usize,
+    pub(crate) low: usize,
+}
+
 /// A leaf of a write transaction.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Leaf {
     /// The whole page: its frame is filled in when it is written.
     page: Vec<u8>,
@@ -29,7 +42,19 @@ pub(crate) struct Leaf {
     low: usize,
     /// Bytes of cells no slot points to any more, among the others.
     garbage: usize,
+    heads: Heads,
 }
+
+/// Leaves are equal when their pages are, whatever prefix their heads
+/// follow.
+impl PartialEq for Leaf {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.page, self.count, self.low, self.garbage)
+            == (&other.page, other.count, other.low, other.garbage)
+    }
+}
+
+impl Eq for Leaf {}
 
 impl Leaf {
     /// An empty leaf for a page of `page_size` bytes.
@@ -39,6 +64,7 @@ impl Leaf {
             count: 0,
             low: check_offset(page_size),
             garbage: 0,
+            heads: Heads::default(),
         }
     }
 
@@ -47,15 +73,22 @@ impl Leaf {
     #[cfg(test)]
     pub(crate) fn from_page(page: &[u8], count: usize) -> Self {
         let (size, low) = crate::format::leaf_extent(page, count);
+        let heads = Heads::of(count, |index| leaf_key(page, index));
 
-        Self::from_loaded(page, count, size, low)
+        Self::from_loaded(page, count, size, low, heads)
     }
 
     /// [`from_page`](Self::from_page) for a page whose entries take `size`
-    /// bytes, slots included, and whose lowest cell starts at `low`, as the
-    /// cached node knows them: copying a leaf for a write transaction to
-    /// change then reads no cell of it.
-    pub(crate) fn from_loaded(page: &[u8], count: usize, size: usize, low: usize) -> Self {
+    /// bytes, slots included, whose lowest cell starts at `low`, and whose
+    /// keys have `heads`, as the cached node knows them: copying a leaf for a
+    /// write transaction to change then reads no cell of it.
+    pub(crate) fn from_loaded(
+        page: &[u8],
+        count: usize,
+        size: usize,
+        low: usize,
+        heads: Heads,
+    ) -> Self {
         let end = check_offset(page.len());
         let cells = size.saturating_sub(2 * count);
 
@@ -66,6 +99,7 @@ impl Leaf {
             // Cells that overlap, which only a damaged page has, count as
             // none: the leaf then splits sooner than it has to, no more.
             garbage: end.saturating_sub(low).saturating_sub(cells),
+            heads,
         }
     }
 
@@ -76,12 +110,14 @@ impl Leaf {
         encode_leaf(entries, &mut page);
 
         let used: usize = entries.iter().map(|entry| entry.len() - 2).sum();
+        let heads = Heads::of(entries.len(), |index| &entries[index].key);
 
         Self {
             page,
             count: entries.len(),
             low: check_offset(page_size) - used,
             garbage: 0,
+            heads,
         }
     }
 
@@ -121,19 +157,27 @@ impl Leaf {
 
     /// Where `key` is, or where it would go.
     pub(crate) fn search(&self, key: &[u8]) -> Result<usize, usize> {
-        let (mut low, mut high) = (0, self.count);
+        let at = self.rank(key, false);
 
-        while low < high {
-            let middle = low + (high - low) / 2;
-
-            match compare(self.key(middle), key) {
-                std::cmp::Ordering::Less => low = middle + 1,
-                std::cmp::Ordering::Greater => high = middle,
-                std::cmp::Ordering::Equal => return Ok(middle),
-            }
+        if at < self.count && self.key(at) == key {
+            Ok(at)
+        } else {
+            Err(at)
         }
+    }
 
-        Err(low)
+    /// How many keys are below `key`, or at or below it with `or_equal`.
+    #[inline(always)]
+    pub(crate) fn rank(&self, key: &[u8], or_equal: bool) -> usize {
+        let page = &self.page;
+        let first = if self.count > 0 {
+            leaf_key(page, 0)
+        } else {
+            &[]
+        };
+
+        self.heads
+            .rank(first, key, or_equal, |index| leaf_key(page, index))
     }
 
     /// Inserts `key` and `value` as entry `index`, if they fit in the page;
@@ -153,6 +197,7 @@ impl Leaf {
         let slots = CONTENT_OFFSET + 2 * index;
         let slots_end = CONTENT_OFFSET + 2 * self.count;
 
+        self.heads.insert(index, key, |at| leaf_key(&self.page, at));
         self.page.copy_within(slots..slots_end, slots + 2);
         self.low -= len;
         write_cell(&mut self.page, self.low, key, value);
@@ -203,6 +248,8 @@ impl Leaf {
     }
 
     /// Moves the entries from `at` on into a new leaf, which it returns.
+    /// Each part's heads are worked out again, after the longer prefix its
+    /// keys may share.
     pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
         let mut right = Leaf::new(self.page.len());
 
@@ -216,8 +263,10 @@ impl Leaf {
         }
 
         right.count = self.count - at;
+        right.heads = Heads::of(right.count, |index| leaf_key(&right.page, index));
         self.page[CONTENT_OFFSET + 2 * at..CONTENT_OFFSET + 2 * self.count].fill(0);
         self.count = at;
+        self.heads = Heads::of(at, |index| leaf_key(&self.page, index));
 
         right
     }
@@ -239,6 +288,7 @@ impl Leaf {
         self.page[slots_end - 2..slots_end].fill(0);
         self.count -= 1;
         self.garbage += len;
+        self.heads.remove(index);
 
         Ok(run)
     }
@@ -262,16 +312,30 @@ impl Leaf {
 
     /// The page, compacted if any cell was removed, with its frame zeroed
     /// for the header and the check to be written.
-    pub(crate) fn into_page(mut self) -> Vec<u8> {
+    #[cfg(test)]
+    pub(crate) fn into_page(self) -> Vec<u8> {
+        self.into_parts().page
+    }
+
+    /// [`into_page`](Self::into_page), with what the node the commit caches
+    /// takes from the leaf.
+    pub(crate) fn into_parts(mut self) -> LeafParts {
         if self.garbage > 0 {
             self.compact();
         }
 
         let end = check_offset(self.page.len());
+        let size = self.size();
 
         self.page[..CONTENT_OFFSET].fill(0);
         self.page[end..].fill(0);
-        self.page
+
+        LeafParts {
+            page: self.page,
+            heads: self.heads,
+            size,
+            low: self.low,
+        }
     }
 
     /// The contiguous bytes between the slots and the lowest cell.
@@ -401,6 +465,8 @@ mod tests {
 
                 let size: usize = model.iter().map(LeafEntry::len).sum();
 
+                leaf.heads
+                    .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
                 assert_eq!(leaf.size(), size);
                 assert!(size <= PAGE - CONTENT_OFFSET - 16);
                 assert_eq!(leaf.to_entries().unwrap(), model);
@@ -463,6 +529,12 @@ mod tests {
             let at = rng.index(model.len() + 1);
             let right = leaf.split_off(at);
             let (left_model, right_model) = model.split_at(at);
+
+            leaf.heads
+                .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
+            right
+                .heads
+                .assert_follow(right.len(), |index| leaf_key(&right.page, index));
 
             assert_eq!(leaf.to_entries().unwrap(), left_model);
             assert_eq!(right.to_entries().unwrap(), right_model);

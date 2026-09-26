@@ -74,19 +74,158 @@ impl Node {
     }
 }
 
+/// The heads of the keys of a node a write transaction changes, and the
+/// length of the prefix they follow: what [`LoadedNode`] keeps for a
+/// committed node, kept up to date as keys come and go.
+///
+/// A search of a changed node compared whole keys on every step, each read
+/// through its slot, and took a third of a transaction that deletes objects
+/// one after another. With the heads it reads a key only where two heads are
+/// equal, as a search of a cached node does, and the commit hands the heads
+/// to the node it caches rather than working them out again.
+///
+/// Every key begins with the same `prefix` bytes, and head `i` is the head
+/// of key `i` after them. A key inserted without that prefix shortens it,
+/// and every head is worked out again; with keys in order, only a key before
+/// the first or after the last can bring that. The prefix may be shorter
+/// than the one the keys share, once the first or the last key has gone.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Heads {
+    prefix: usize,
+    heads: Vec<u32>,
+}
+
+impl Heads {
+    /// The heads of `count` keys, which `key_at` gives by position, after
+    /// the longest prefix they all share.
+    pub(crate) fn of<'k>(count: usize, key_at: impl Fn(usize) -> &'k [u8]) -> Self {
+        let prefix = match count {
+            0 => 0,
+            _ => {
+                let first = key_at(0);
+
+                (1..count).fold(first.len(), |prefix, index| {
+                    shared_prefix(&first[..prefix], key_at(index))
+                })
+            }
+        };
+
+        Self {
+            prefix,
+            heads: (0..count)
+                .map(|index| key_head(key_at(index), prefix))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.heads.len()
+    }
+
+    /// Makes room for `key` as key `index`, before the keys that `key_at`
+    /// gives change: `key_at(0)` is the first of them.
+    pub(crate) fn insert<'k>(
+        &mut self,
+        index: usize,
+        key: &[u8],
+        key_at: impl Fn(usize) -> &'k [u8],
+    ) {
+        if self.heads.is_empty() {
+            self.prefix = key.len();
+        } else {
+            let first = key_at(0);
+
+            if key.get(..self.prefix) != Some(&first[..self.prefix]) {
+                self.prefix = shared_prefix(&first[..self.prefix], key);
+
+                for (at, head) in self.heads.iter_mut().enumerate() {
+                    *head = key_head(key_at(at), self.prefix);
+                }
+            }
+        }
+
+        self.heads.insert(index, key_head(key, self.prefix));
+    }
+
+    pub(crate) fn remove(&mut self, index: usize) {
+        self.heads.remove(index);
+        self.forget_prefix_if_empty();
+    }
+
+    pub(crate) fn pop(&mut self) {
+        self.heads.pop();
+        self.forget_prefix_if_empty();
+    }
+
+    /// Checks that these are the heads of the `count` keys `key_at` gives,
+    /// after a prefix they all share.
+    #[cfg(test)]
+    pub(crate) fn assert_follow<'k>(&self, count: usize, key_at: impl Fn(usize) -> &'k [u8]) {
+        assert_eq!(self.heads.len(), count);
+
+        if count == 0 {
+            assert_eq!(self.prefix, 0);
+
+            return;
+        }
+
+        let prefix = &key_at(0)[..self.prefix];
+
+        for index in 0..count {
+            assert!(
+                key_at(index).starts_with(prefix),
+                "key {index} lacks the prefix"
+            );
+            assert_eq!(self.heads[index], key_head(key_at(index), self.prefix));
+        }
+    }
+
+    /// With no key left, no bytes to take a prefix from.
+    fn forget_prefix_if_empty(&mut self) {
+        if self.heads.is_empty() {
+            self.prefix = 0;
+        }
+    }
+
+    /// How many of the ascending keys are below `key`, or at or below it
+    /// with `or_equal`. `first` begins with the prefix: key 0, or anything
+    /// when there is no key.
+    #[inline(always)]
+    pub(crate) fn rank<'k>(
+        &self,
+        first: &[u8],
+        key: &[u8],
+        or_equal: bool,
+        key_at: impl Fn(usize) -> &'k [u8],
+    ) -> usize {
+        search_heads(&self.heads, &first[..self.prefix], key, or_equal, key_at)
+    }
+}
+
 /// The separator keys of a branch a write transaction changes, one after
-/// another in one buffer, with where each of them ends.
+/// another in one buffer, with where each of them ends, and their heads.
 ///
 /// A key in a vector of its own cost an allocation for every key of a
 /// branch, both when a transaction first changed the branch and when it let
 /// it go, and a small transaction changes a branch on every level of every
 /// tree it writes: that took a tenth of a deferred commit of one object.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Keys {
     bytes: Vec<u8>,
     /// Where each key ends in `bytes`.
     ends: Vec<usize>,
+    heads: Heads,
 }
+
+/// Keys are equal when they hold the same keys, whatever prefix their heads
+/// follow.
+impl PartialEq for Keys {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes == other.bytes && self.ends == other.ends
+    }
+}
+
+impl Eq for Keys {}
 
 impl Keys {
     /// The keys `keys` gives, in its order.
@@ -94,10 +233,36 @@ impl Keys {
         let mut all = Self::default();
 
         for key in keys {
-            all.push(key);
+            all.bytes.extend_from_slice(key);
+            all.ends.push(all.bytes.len());
         }
 
+        all.heads = Heads::of(all.len(), |index| all.get(index));
         all
+    }
+
+    /// The `count` keys `key_at` gives, taking `total` bytes, whose heads
+    /// are `heads`: a committed branch's, as its cached node has them.
+    fn with_heads<'k>(
+        count: usize,
+        total: usize,
+        key_at: impl Fn(usize) -> &'k [u8],
+        heads: Heads,
+    ) -> Self {
+        let mut bytes = Vec::with_capacity(total);
+        let mut ends = Vec::with_capacity(count);
+
+        for index in 0..count {
+            bytes.extend_from_slice(key_at(index));
+            ends.push(bytes.len());
+        }
+
+        Self { bytes, ends, heads }
+    }
+
+    /// The heads, for the node the commit caches.
+    pub(crate) fn into_heads(self) -> Heads {
+        self.heads
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -110,12 +275,12 @@ impl Keys {
 
     /// Where key `index` starts in `bytes`.
     fn start(&self, index: usize) -> usize {
-        index.checked_sub(1).map_or(0, |before| self.ends[before])
+        key_start(&self.ends, index)
     }
 
     /// Key `index`.
     pub(crate) fn get(&self, index: usize) -> &[u8] {
-        &self.bytes[self.start(index)..self.ends[index]]
+        key_in(&self.bytes, &self.ends, index)
     }
 
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
@@ -123,14 +288,15 @@ impl Keys {
     }
 
     pub(crate) fn push(&mut self, key: &[u8]) {
-        self.bytes.extend_from_slice(key);
-        self.ends.push(self.bytes.len());
+        self.insert(self.len(), key);
     }
 
     /// Puts `key` in place `index`, before the key there.
     pub(crate) fn insert(&mut self, index: usize, key: &[u8]) {
         let at = self.start(index);
 
+        self.heads
+            .insert(index, key, |at| key_in(&self.bytes, &self.ends, at));
         self.bytes.splice(at..at, key.iter().copied());
 
         for end in &mut self.ends[index..] {
@@ -146,6 +312,7 @@ impl Keys {
 
         self.bytes.drain(start..end);
         self.ends.remove(index);
+        self.heads.remove(index);
 
         for later in &mut self.ends[index..] {
             *later -= end - start;
@@ -158,26 +325,32 @@ impl Keys {
         self.insert(index, key);
     }
 
-    /// Adds `other`'s keys after these.
+    /// Adds `other`'s keys after these. Merging branches is rare, so the
+    /// heads are worked out again.
     pub(crate) fn append(&mut self, other: &Keys) {
         let base = self.bytes.len();
 
         self.bytes.extend_from_slice(&other.bytes);
         self.ends.extend(other.ends.iter().map(|end| end + base));
+        self.heads = Heads::of(self.len(), |index| key_in(&self.bytes, &self.ends, index));
     }
 
-    /// Takes the keys from `at` on out, and returns them.
+    /// Takes the keys from `at` on out, and returns them. Each part's heads
+    /// are worked out again, after the longer prefix its keys may share.
     pub(crate) fn split_off(&mut self, at: usize) -> Keys {
         let start = self.start(at);
         let bytes = self.bytes.split_off(start);
-        let ends = self
+        let ends: Vec<usize> = self
             .ends
             .split_off(at)
             .into_iter()
             .map(|end| end - start)
             .collect();
+        let heads = Heads::of(ends.len(), |index| key_in(&bytes, &ends, index));
 
-        Keys { bytes, ends }
+        self.heads = Heads::of(self.len(), |index| key_in(&self.bytes, &self.ends, index));
+
+        Keys { bytes, ends, heads }
     }
 
     /// Takes the last key out, and returns it.
@@ -187,31 +360,39 @@ impl Keys {
 
         self.bytes.truncate(self.start(last));
         self.ends.pop();
+        self.heads.pop();
 
         Some(key)
     }
 
     /// The child that holds `key`: the number of separators at or below it.
     pub(crate) fn child_index(&self, key: &[u8]) -> usize {
-        let (mut low, mut high) = (0, self.len());
+        self.rank(key, true)
+    }
 
-        while low < high {
-            let middle = low + (high - low) / 2;
-
-            if compare(self.get(middle), key) == Ordering::Greater {
-                high = middle;
-            } else {
-                low = middle + 1;
-            }
-        }
-
-        low
+    /// How many keys are below `key`, or at or below it with `or_equal`.
+    #[inline(always)]
+    pub(crate) fn rank(&self, key: &[u8], or_equal: bool) -> usize {
+        self.heads.rank(&self.bytes, key, or_equal, |index| {
+            key_in(&self.bytes, &self.ends, index)
+        })
     }
 
     /// The bytes of a page's content a branch with these keys takes.
     pub(crate) fn branch_len(&self) -> usize {
         POINTER_LEN + self.len() * branch_key_len(0) + self.bytes.len()
     }
+}
+
+/// Where key `index` of [`Keys`] starts in its bytes.
+fn key_start(ends: &[usize], index: usize) -> usize {
+    index.checked_sub(1).map_or(0, |before| ends[before])
+}
+
+/// Key `index` of [`Keys`], from its parts, which lets the heads be changed
+/// while the keys are read.
+fn key_in<'a>(bytes: &'a [u8], ends: &[usize], index: usize) -> &'a [u8] {
+    &bytes[key_start(ends, index)..ends[index]]
 }
 
 /// A committed node as the page cache keeps it: its page, checked once and
@@ -279,49 +460,95 @@ impl LoadedNode {
     }
 
     /// The node on a page this process encoded, before sealing it, which
-    /// needs no check.
-    pub(crate) fn encoded(page: Vec<u8>, header: &PageHeader) -> Self {
+    /// needs no check: a changed node whose keys had `heads`, and whose
+    /// content takes `size` bytes from `low` on, as the leaf or branch it was
+    /// counted them. The heads are taken as they are when they follow the
+    /// prefix the first and last keys share, which a read of the page would
+    /// find, and worked out again otherwise.
+    pub(crate) fn encoded(
+        page: Vec<u8>,
+        header: &PageHeader,
+        heads: Heads,
+        size: usize,
+        low: usize,
+    ) -> Self {
+        let count = usize::from(header.count);
+        let leaf = header.kind == PageKind::Leaf;
+
         debug_assert!(
             match header.kind {
-                PageKind::Leaf => check_leaf(&page, usize::from(header.count)),
-                _ => check_branch(&page, usize::from(header.count)),
+                PageKind::Leaf => check_leaf(&page, count),
+                _ => check_branch(&page, count),
             }
             .is_ok()
         );
+        debug_assert_eq!(
+            (size, low),
+            if leaf {
+                leaf_extent(&page, count)
+            } else {
+                (branch_size(&page, count), 0)
+            }
+        );
 
-        Self::checked(page, header)
+        let prefix = Self::shared_by(&page, leaf, count);
+        let heads = if heads.prefix == prefix && heads.len() == count {
+            debug_assert_eq!(heads.heads, Self::heads_of(&page, leaf, count, prefix));
+            heads.heads
+        } else {
+            Self::heads_of(&page, leaf, count, prefix)
+        };
+
+        Self::from_parts(page, header, prefix, heads, size, low)
     }
 
     fn checked(page: Vec<u8>, header: &PageHeader) -> Self {
         let count = usize::from(header.count);
         let leaf = header.kind == PageKind::Leaf;
-        let key_at = |index| {
-            if leaf {
-                leaf_key(&page, index)
-            } else {
-                branch_key(&page, count, index)
-            }
-        };
-        let (prefix, mut kept_prefix) = (
-            match count {
-                0 => 0,
-                _ => shared_prefix(key_at(0), key_at(count - 1)),
-            },
-            [0; KEPT_PREFIX],
-        );
-
-        if count > 0 && prefix <= KEPT_PREFIX {
-            kept_prefix[..prefix].copy_from_slice(&key_at(0)[..prefix]);
-        }
-
-        let heads = (0..count)
-            .map(|index| key_head(key_at(index), prefix))
-            .collect();
+        let prefix = Self::shared_by(&page, leaf, count);
+        let heads = Self::heads_of(&page, leaf, count, prefix);
         let (size, low) = if leaf {
             leaf_extent(&page, count)
         } else {
             (branch_size(&page, count), 0)
         };
+
+        Self::from_parts(page, header, prefix, heads, size, low)
+    }
+
+    /// The prefix every key of the page shares: the first and last keys'.
+    fn shared_by(page: &[u8], leaf: bool, count: usize) -> usize {
+        match count {
+            0 => 0,
+            _ => shared_prefix(
+                page_key(page, leaf, count, 0),
+                page_key(page, leaf, count, count - 1),
+            ),
+        }
+    }
+
+    /// The head of every key of the page, after `prefix`.
+    fn heads_of(page: &[u8], leaf: bool, count: usize, prefix: usize) -> Vec<u32> {
+        (0..count)
+            .map(|index| key_head(page_key(page, leaf, count, index), prefix))
+            .collect()
+    }
+
+    fn from_parts(
+        page: Vec<u8>,
+        header: &PageHeader,
+        prefix: usize,
+        heads: Vec<u32>,
+        size: usize,
+        low: usize,
+    ) -> Self {
+        let count = heads.len();
+        let leaf = header.kind == PageKind::Leaf;
+        let mut kept_prefix = [0; KEPT_PREFIX];
+
+        if count > 0 && prefix <= KEPT_PREFIX {
+            kept_prefix[..prefix].copy_from_slice(&page_key(&page, leaf, count, 0)[..prefix]);
+        }
 
         Self {
             tree: header.tree,
@@ -333,7 +560,7 @@ impl LoadedNode {
             low: u16::try_from(low).unwrap_or(u16::MAX),
             prefix: u16::try_from(prefix).unwrap_or(u16::MAX),
             kept_prefix,
-            heads,
+            heads: heads.into_boxed_slice(),
             page: page.into_boxed_slice(),
         }
     }
@@ -343,22 +570,34 @@ impl LoadedNode {
         self.level
     }
 
-    /// The node, decoded for a write transaction to change.
+    /// The node, decoded for a write transaction to change, with its heads.
     pub(crate) fn to_node(&self) -> crate::error::Result<Node> {
+        let heads = Heads {
+            prefix: usize::from(self.prefix),
+            heads: self.heads.to_vec(),
+        };
         let node = if self.leaf {
             Ok(Node::Leaf(Leaf::from_loaded(
                 &self.page,
                 self.count(),
                 usize::from(self.size),
                 usize::from(self.low),
+                heads,
             )))
         } else {
             let (page, count) = (&self.page, self.count());
+            let key_bytes =
+                usize::from(self.size).saturating_sub(POINTER_LEN + count * branch_key_len(0));
 
             check_branch(page, count).map(|()| {
                 Node::Branch(Branch {
                     level: self.level,
-                    keys: Keys::of((0..count).map(|index| branch_key(page, count, index))),
+                    keys: Keys::with_heads(
+                        count,
+                        key_bytes,
+                        |index| branch_key(page, count, index),
+                        heads,
+                    ),
                     children: (0..=count)
                         .map(|index| Child::Clean(branch_child(page, index)))
                         .collect(),
@@ -492,7 +731,8 @@ impl NodeRef<'_> {
                     branch_key(page, count, at)
                 })
             }
-            NodeRef::Borrowed(_) => search(self.count(), key, or_equal, |at| self.key(at)),
+            NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.rank(key, or_equal),
+            NodeRef::Borrowed(Node::Branch(branch)) => branch.keys.rank(key, or_equal),
         }
     }
 
@@ -520,6 +760,15 @@ fn key_head(key: &[u8], prefix: usize) -> u32 {
     head[..len].copy_from_slice(&rest[..len]);
 
     u32::from_be_bytes(head)
+}
+
+/// Key `index` of a leaf page, or of a branch page with `count` keys.
+fn page_key(page: &[u8], leaf: bool, count: usize, index: usize) -> &[u8] {
+    if leaf {
+        leaf_key(page, index)
+    } else {
+        branch_key(page, count, index)
+    }
 }
 
 /// The length of the prefix `a` and `b` share.
@@ -559,35 +808,6 @@ fn search_heads<'k>(
                 Ordering::Equal => or_equal,
                 Ordering::Greater => false,
             },
-        };
-
-        if below {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-
-    low
-}
-
-/// How many of `count` ascending keys, which `key_at` gives by position,
-/// are below `key`, or at or below it with `or_equal`: a binary search.
-#[inline(always)]
-fn search<'k>(
-    count: usize,
-    key: &[u8],
-    or_equal: bool,
-    key_at: impl Fn(usize) -> &'k [u8],
-) -> usize {
-    let (mut low, mut high) = (0, count);
-
-    while low < high {
-        let middle = low + (high - low) / 2;
-        let below = match compare(key_at(middle), key) {
-            Ordering::Less => true,
-            Ordering::Equal => or_equal,
-            Ordering::Greater => false,
         };
 
         if below {
@@ -889,7 +1109,75 @@ mod tests {
                 assert_eq!(keys.len(), model.len());
                 assert_eq!(keys.iter().collect::<Vec<_>>(), model);
                 assert_eq!(keys.branch_len(), branch_len(&model));
+                keys.heads
+                    .assert_follow(keys.len(), |index| keys.get(index));
             }
+        }
+    }
+
+    /// A search of keys a transaction changes, inserted and removed in order
+    /// and around a shared prefix, finds what a search of a sorted vector of
+    /// the same keys finds, and their heads follow them.
+    #[test]
+    fn a_search_of_changed_keys_finds_what_the_keys_say() {
+        let mut rng = Rng::new(9);
+
+        for round in 0..300 {
+            let shared: Vec<u8> = match round % 4 {
+                0 => Vec::new(),
+                1 => b"\x04\x80\0\0\0\0\0\x01".to_vec(),
+                2 => b"\x04\x80\0\0\0\0\0\x01\0".to_vec(),
+                _ => rng.bytes(12),
+            };
+            let mut keys = Keys::default();
+            let mut model: Vec<Vec<u8>> = Vec::new();
+
+            for _ in 0..80 {
+                // Now and then a key without the prefix, which shortens it.
+                let key = if rng.below(10) == 0 {
+                    let cut = rng.index(shared.len() + 1);
+
+                    key_after(&mut rng, &shared[..cut])
+                } else {
+                    key_after(&mut rng, &shared)
+                };
+
+                match model.binary_search(&key) {
+                    Ok(at) if rng.below(2) == 0 => {
+                        keys.remove(at);
+                        model.remove(at);
+                    }
+                    Ok(_) => {}
+                    Err(at) => {
+                        keys.insert(at, &key);
+                        model.insert(at, key);
+                    }
+                }
+
+                keys.heads
+                    .assert_follow(keys.len(), |index| keys.get(index));
+
+                for probe in probes(&mut rng, &model, &shared) {
+                    assert_eq!(
+                        keys.rank(&probe, false),
+                        model.partition_point(|key| key < &probe),
+                        "{probe:?} in {model:?}"
+                    );
+                    assert_eq!(
+                        keys.child_index(&probe),
+                        model.partition_point(|key| key <= &probe),
+                        "{probe:?} in {model:?}"
+                    );
+                }
+            }
+
+            let at = rng.index(model.len() + 1);
+            let tail = keys.split_off(at);
+
+            keys.heads
+                .assert_follow(keys.len(), |index| keys.get(index));
+            tail.heads
+                .assert_follow(tail.len(), |index| tail.get(index));
         }
     }
 }
