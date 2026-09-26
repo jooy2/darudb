@@ -51,11 +51,6 @@ function toBuffer(bytes: Uint8Array): Buffer {
  */
 const scratch = Buffer.allocUnsafe(1 << 16);
 
-/** The bytes a synchronous read delivered, as `scratch` says. */
-function delivered(out: number | Buffer): Buffer {
-  return typeof out === 'number' ? scratch.subarray(0, out) : out;
-}
-
 /** Refuses a promise where a transaction's function returns. */
 function synchronous(result: unknown): void {
   if (
@@ -418,7 +413,6 @@ function collectionOf(layout: SchemaLayout | null, name: string): CollectionLayo
 export {
   toBuffer,
   scratch,
-  delivered,
   synchronous,
   nativeMigration,
   keyOf,

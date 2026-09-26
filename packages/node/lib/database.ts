@@ -21,6 +21,7 @@ import {
   lendRecords,
   decodeRecord,
   decodeRecords,
+  decodeFirst,
   encodeSchema
 } from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
@@ -28,7 +29,6 @@ import type { DeclaredSchema } from './schema.js';
 import {
   toBuffer,
   scratch,
-  delivered,
   synchronous,
   nativeMigration,
   keyOf,
@@ -102,21 +102,39 @@ class ReadCollection {
     return this.#layout.name;
   }
 
-  /** The object whose primary key is `key`, or `null`. */
+  /**
+   * The object whose primary key is `key`, or `null`. What the native layer
+   * delivers is read where it lies, `scratch` up to the length it gives, with
+   * no view made of it for every read.
+   */
   get(key: unknown): Record<string, unknown> | null {
     const record = native.getRecord(this.#txn, nameOf(this.#layout), keyOf(key), scratch);
 
-    return record === null ? null : decodeRecord(this.#layout, delivered(record));
+    if (record === null) {
+      return null;
+    }
+
+    return typeof record === 'number'
+      ? decodeRecord(this.#layout, scratch, false, record)
+      : decodeRecord(this.#layout, record);
   }
 
   /** The objects a query finds, in its order; every object without one. */
   find(query: QueryInput, parameters?: unknown): Record<string, unknown>[] {
-    return decodeRecords(this.#layout, this.#find(query, parameters, false));
+    const records = this.#find(query, parameters, false);
+
+    return typeof records === 'number'
+      ? decodeRecords(this.#layout, scratch, records)
+      : decodeRecords(this.#layout, records);
   }
 
   /** The first object a query finds, or `null`. The engine stops reading there. */
   findOne(query: QueryInput, parameters?: unknown): Record<string, unknown> | null {
-    return decodeRecords(this.#layout, this.#find(query, parameters, true))[0] ?? null;
+    const records = this.#find(query, parameters, true);
+
+    return typeof records === 'number'
+      ? decodeFirst(this.#layout, scratch, records)
+      : decodeFirst(this.#layout, records);
   }
 
   /** How many objects a query finds, after its offset and within its limit. */
@@ -131,20 +149,30 @@ class ReadCollection {
     return native.count(this.#txn, irOf(name, query, parameters, true, false, true));
   }
 
-  /** The records a query finds; only the first with `first`. */
-  #find(query: QueryInput, parameters: unknown, first: boolean): Buffer {
+  /**
+   * The records a query finds, only the first with `first`: their length in
+   * `scratch`, or a `Buffer` of their own.
+   */
+  #find(query: QueryInput, parameters: unknown, first: boolean): number | Buffer {
     const name = this.#layout.name;
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
-      return delivered(
-        native.findPrepared(this.#txn, prepared.handle, parametersOf(parameters), first, scratch)
+      return native.findPrepared(
+        this.#txn,
+        prepared.handle,
+        parametersOf(parameters),
+        first,
+        scratch
       );
     }
 
     // The IR is lent: the engine reads it before the call returns.
-    return delivered(
-      native.find(this.#txn, irOf(name, query, parameters, false, first, true), first, scratch)
+    return native.find(
+      this.#txn,
+      irOf(name, query, parameters, false, first, true),
+      first,
+      scratch
     );
   }
 

@@ -1087,9 +1087,10 @@ function builderOf(fields: Layout): Builder | null {
 function decodeRecord(
   collection: CollectionLayout,
   bytes: Uint8Array,
-  lenient = false
+  lenient = false,
+  end = bytes.length
 ): Record<string, unknown> {
-  const reader = new Reader(bytes);
+  const reader = new Reader(bytes, 0, end);
   const object = readFields(reader, collection.fields, lenient, 0);
 
   if (reader.at !== reader.end) {
@@ -1099,29 +1100,58 @@ function decodeRecord(
   return object;
 }
 
-/** The objects of records one after another, each after its length. */
-function decodeRecords(collection: CollectionLayout, bytes: Uint8Array): Record<string, unknown>[] {
-  const reader = new Reader(bytes);
+/** The objects of records one after another, each after its length, up to `end`. */
+function decodeRecords(
+  collection: CollectionLayout,
+  bytes: Uint8Array,
+  end = bytes.length
+): Record<string, unknown>[] {
+  const reader = new Reader(bytes, 0, end);
   // One reader for every record, moved from each to the next.
   const record = new Reader(bytes, 0, 0);
   const objects: Record<string, unknown>[] = [];
 
   while (reader.at < reader.end) {
-    const length = reader.count();
-
-    record.restart(reader.at, reader.at + length);
-
-    const object = readFields(record, collection.fields, false, 0);
-
-    if (record.at !== record.end) {
-      throw corrupted('it has bytes after its last field');
-    }
-
-    objects.push(object);
-    reader.at += length;
+    objects.push(nextRecord(collection, reader, record));
   }
 
   return objects;
+}
+
+/**
+ * The object of the first of records written as `decodeRecords` reads them,
+ * or `null` when there is none: what `findOne` returns, without an array
+ * made for it.
+ */
+function decodeFirst(
+  collection: CollectionLayout,
+  bytes: Uint8Array,
+  end = bytes.length
+): Record<string, unknown> | null {
+  const reader = new Reader(bytes, 0, end);
+
+  return reader.at < reader.end ? nextRecord(collection, reader, new Reader(bytes, 0, 0)) : null;
+}
+
+/** The object of the record at `reader`, read with `record`, moving `reader` past it. */
+function nextRecord(
+  collection: CollectionLayout,
+  reader: Reader,
+  record: Reader
+): Record<string, unknown> {
+  const length = reader.count();
+
+  record.restart(reader.at, reader.at + length);
+
+  const object = readFields(record, collection.fields, false, 0);
+
+  if (record.at !== record.end) {
+    throw corrupted('it has bytes after its last field');
+  }
+
+  reader.at += length;
+
+  return object;
 }
 
 /**
@@ -1835,6 +1865,7 @@ export {
   lendRecords,
   decodeRecord,
   decodeRecords,
+  decodeFirst,
   decodeSchema,
   encodeSchema,
   encodeQuery,
