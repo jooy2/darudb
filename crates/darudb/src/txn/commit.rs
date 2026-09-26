@@ -18,6 +18,7 @@ use crate::format::{
     slot_offset,
 };
 use crate::instance::Header;
+use crate::space::YoungPart;
 
 /// How many rounds the allocator trees may take to settle. They settle in two
 /// or three; running out means a bug.
@@ -161,12 +162,20 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
             }
         }
 
-        let group: Vec<Vec<u8>> = txn
+        // The young part goes last, in entries of its own, so that a later
+        // transaction can reclaim it apart from the rest by their keys.
+        let young = txn.space.young_runs();
+        let mut group: Vec<Vec<u8>> = txn
             .space
             .retired_runs()
             .chunks(runs_per_value(page_size))
             .map(encode_runs)
             .collect();
+        let young_first = group.len();
+
+        group.extend(young.chunks(runs_per_value(page_size)).map(encode_runs));
+
+        let young_entries = group.len() - young_first;
 
         if group != written_group {
             for (sequence, value) in group.iter().enumerate() {
@@ -195,6 +204,14 @@ fn settle_allocator_trees(txn: &mut WriteTransaction) -> Result<()> {
         }
 
         if txn.space.changes() == before && !txn.space.retire_set_aside() {
+            if !young.is_empty() {
+                txn.young_part = Some(YoungPart {
+                    first: sequence_number(young_first)?,
+                    entries: sequence_number(young_entries)?,
+                    runs: young,
+                });
+            }
+
             return Ok(());
         }
     }
@@ -311,6 +328,24 @@ fn write_and_publish(
     records[txn.slot] = Some(*record);
     shared.set_header(Header { selector, records });
     shared.leave_free_runs(record.txn, txn.space.take_free());
+
+    let mut young = txn.young.take().unwrap_or_default();
+
+    if deferred {
+        for group in &txn.young_reclaimed {
+            young.remove(group);
+        }
+
+        if let Some(part) = txn.young_part.take() {
+            young.insert(record.txn, part);
+        }
+    } else {
+        // Every group is the new durable commit's or older, and is reclaimed
+        // whole once no snapshot needs it.
+        young.clear();
+    }
+
+    shared.leave_young(record.txn, young);
 
     for page in pages {
         shared

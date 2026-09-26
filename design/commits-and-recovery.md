@@ -45,6 +45,14 @@ and reclaims every group `F ≤ R`: in the commit it is making, those pages move
 
 The durable commit is in the minimum because recovery may still need it. Until a newer commit is durable, a power cut can return the file to `D`, so nothing `D` can reach may be overwritten.
 
+### Pages written in the unsynced window
+
+A page written after `D` is one that `D` does not reach. If commit `F` stopped using it, the only commits that reach it are those from the one that wrote it up to the one before `F`, all newer than `D`. Recovery adopts none of them without checking it, and checking fails on a page that has been overwritten since, so recovery falls back to an older commit, at worst to `D`. A power cut undoes deferred commits from the newest backwards in any case. Such a page can therefore be reclaimed while the window is still open, as soon as no registered snapshot `s` has `D < s < F`. Without this, every page a deferred commit writes stays in use until the window ends, and a window of small commits grows the file by all of them.
+
+The writer keeps these pages apart. The pages of a commit's group that were written after its durable commit are the group's young part, which the commit writes after the rest of the group, in entries of its own, and the writer remembers which entries those are. Pages set aside while the allocator trees settle belong to the young part too, since no commit reaches them. When a write transaction starts, it also reclaims the young part of every group `F` above `D` for which no snapshot lies strictly between `D` and `F`, and removes those entries. The rest of such a group waits for `R`, as before.
+
+Only the writer that made a commit knows its young parts. A writer in another process, or one that finds another process's commit published, reclaims those groups whole once the window has ended, as it reclaims every other group. So does every writer once `D` has reached `F`.
+
 ## Allocating pages
 
 The writer takes pages from the free tree, lowest page numbers first, which keeps the file dense at the front and lets its tail be cut off later. An overflow run needs consecutive pages, so it takes the first free run that is long enough. When nothing free fits, the file grows: new pages start at the page count of the commit the transaction started from, and the new record's page count covers them.
@@ -138,7 +146,7 @@ There is no second barrier after the selector. If a power cut loses the selector
 1. Write the selector: the chosen slot, with the unsynced bit set. The commit is published but not yet durable.
 1. Return.
 
-The record's durable transaction id keeps pointing at `D`, which keeps `D`'s slot out of reach and `D`'s pages from being reclaimed until the window ends.
+The record's durable transaction id keeps pointing at `D`, which keeps `D`'s slot out of reach and `D`'s pages from being reclaimed until the window ends. Pages written in the window can be reclaimed sooner, as [Pages written in the unsynced window](#pages-written-in-the-unsynced-window) describes.
 
 ## Ending the unsynced window
 

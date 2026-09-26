@@ -472,6 +472,15 @@ fn another_process_sees_the_writer_lock_and_the_snapshots() {
     assert!(locks.snapshot_below(1 << 40).unwrap());
     assert_eq!(locks.reclaimable(&[4, 9, 10, 11, 30]).unwrap(), Some(10));
 
+    // Young pages are written after the durable commit: a snapshot reaches
+    // those of a group only if it lies strictly between the two.
+    assert_eq!(
+        locks.young_reclaimable(4, &[8, 10, 11, 30]).unwrap(),
+        Some(10)
+    );
+    assert_eq!(locks.young_reclaimable(9, &[11, 30]).unwrap(), None);
+    assert_eq!(locks.young_reclaimable(10, &[11, 30]).unwrap(), Some(30));
+
     // The lock goes with the last registration, not the first.
     helper.tell();
     helper.wait_for("one-left");
@@ -483,6 +492,10 @@ fn another_process_sees_the_writer_lock_and_the_snapshots() {
 
     assert!(!locks.snapshot_below(11).unwrap());
     assert_eq!(locks.reclaimable(&[4, 9, 10, 11, 30]).unwrap(), Some(30));
+    assert_eq!(
+        locks.young_reclaimable(4, &[8, 10, 11, 30]).unwrap(),
+        Some(30)
+    );
 
     // The writer lock dies with the process.
     helper.kill();
@@ -502,6 +515,9 @@ fn this_process_s_own_snapshots_hold_back_what_they_reach() {
     locks.registry().register(7, None).unwrap();
 
     assert_eq!(locks.reclaimable(&[3, 7, 8, 12]).unwrap(), Some(7));
+    assert_eq!(locks.young_reclaimable(3, &[5, 7, 8, 12]).unwrap(), Some(7));
+    assert_eq!(locks.young_reclaimable(6, &[8, 12]).unwrap(), None);
+    assert_eq!(locks.young_reclaimable(7, &[8, 12]).unwrap(), Some(12));
 
     // Kept for a moment after its last reader, the lock still holds pages
     // back, until it is released.

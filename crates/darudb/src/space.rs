@@ -5,8 +5,10 @@
 //! groups it may reclaim, and hands pages out from there, lowest first. A page
 //! it releases goes back to the free pages if the transaction allocated it
 //! itself, and into this commit's retained group if it was committed: a reader
-//! or a recovery may still need it. `design/commits-and-recovery.md` is the
-//! specification.
+//! or a recovery may still need it. A committed page written after the durable
+//! commit goes into the group's young part, which the durable commit does not
+//! reach and a later transaction may reclaim before the unsynced window ends.
+//! `design/commits-and-recovery.md` is the specification.
 //!
 //! Every change to the free runs is noted with what the free tree held for
 //! that run before, so the commit rewrites only the runs that changed, and an
@@ -23,6 +25,22 @@ use crate::storage::Pager;
 
 /// The file never reaches this many bytes: the lock bytes start there.
 const LOCK_BASE: u64 = 1 << 62;
+
+/// The young part of one retained group: the pages its commit released that
+/// were written after the durable commit, which the writer may reclaim before
+/// the unsynced window ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct YoungPart {
+    /// The sequence number of its first entry in the retained tree. Its
+    /// entries are the group's last.
+    pub(crate) first: u32,
+    /// How many entries it takes.
+    pub(crate) entries: u32,
+    pub(crate) runs: Vec<(u64, u32)>,
+}
+
+/// The young parts of the retained groups of one commit, by group.
+pub(crate) type YoungParts = BTreeMap<u64, YoungPart>;
 
 /// The free space of one write transaction.
 #[derive(Debug)]
@@ -41,8 +59,16 @@ pub(crate) struct Space {
     max_page_count: u64,
     /// Pages this transaction allocated.
     fresh: HashSet<u64>,
-    /// Committed pages this transaction stopped using: its retained group.
+    /// Pages written after this id are young: the durable commit does not
+    /// reach them.
+    young_after: u64,
+    /// Committed pages this transaction stopped using that the durable
+    /// commit may reach: its retained group, but for the young part.
     retired: Vec<u64>,
+    /// Committed pages this transaction stopped using that were written after
+    /// the durable commit, and pages it set aside while settling, which no
+    /// commit reaches: the young part of its retained group.
+    retired_young: Vec<u64>,
     /// Pages this transaction allocated and released while settling, to be
     /// handed out again first; see [`Space::settle`].
     set_aside: Vec<u64>,
@@ -55,10 +81,11 @@ pub(crate) struct Space {
 
 impl Space {
     /// The space of a transaction `txn` whose base commit has `page_count`
-    /// pages and the given free runs.
+    /// pages and the given free runs, and whose durable commit is `durable`.
     pub(crate) fn new(
         pager: Arc<Pager>,
         txn: u64,
+        durable: u64,
         page_count: u64,
         free: BTreeMap<u64, u64>,
     ) -> Self {
@@ -73,7 +100,9 @@ impl Space {
             page_count,
             max_page_count,
             fresh: HashSet::new(),
+            young_after: durable,
             retired: Vec::new(),
+            retired_young: Vec::new(),
             set_aside: Vec::new(),
             changes: 0,
             settling: false,
@@ -94,9 +123,10 @@ impl Space {
         self.settling = true;
     }
 
-    /// Moves the set-aside pages into the retained group, once a round has
-    /// changed nothing else, and says whether there were any. Nothing reaches
-    /// them, and a later commit reclaims them like any other retained page.
+    /// Moves the set-aside pages into the young part of the retained group,
+    /// once a round has changed nothing else, and says whether there were
+    /// any. Nothing reaches them, and a later commit reclaims them like any
+    /// other young page.
     pub(crate) fn retire_set_aside(&mut self) -> bool {
         if self.set_aside.is_empty() {
             return false;
@@ -104,7 +134,7 @@ impl Space {
 
         for page in self.set_aside.drain(..) {
             self.fresh.remove(&page);
-            self.retired.push(page);
+            self.retired_young.push(page);
         }
 
         self.changes += 1;
@@ -241,23 +271,16 @@ impl Space {
         self.changes
     }
 
-    /// This commit's retained group, as runs of consecutive pages.
+    /// This commit's retained group but for its young part, as runs of
+    /// consecutive pages.
     pub(crate) fn retired_runs(&self) -> Vec<(u64, u32)> {
-        let mut pages = self.retired.clone();
-        let mut runs: Vec<(u64, u32)> = Vec::new();
+        runs_of(&self.retired)
+    }
 
-        pages.sort_unstable();
-
-        for page in pages {
-            match runs.last_mut() {
-                Some((start, len)) if *start + u64::from(*len) == page && *len < u32::MAX => {
-                    *len += 1;
-                }
-                _ => runs.push((page, 1)),
-            }
-        }
-
-        runs
+    /// The young part of this commit's retained group, as runs of
+    /// consecutive pages.
+    pub(crate) fn young_runs(&self) -> Vec<(u64, u32)> {
+        runs_of(&self.retired_young)
     }
 
     fn extend(&mut self, pages: u64) -> Result<u64> {
@@ -330,12 +353,20 @@ impl Store for Space {
         Ok(first)
     }
 
-    fn release(&mut self, page: u64) {
+    fn release(&mut self, page: u64, written: u64) {
         if !self.fresh.contains(&page) {
-            debug_assert!(!self.retired.contains(&page), "page {page} released twice");
+            debug_assert!(
+                !self.retired.contains(&page) && !self.retired_young.contains(&page),
+                "page {page} released twice"
+            );
 
             // A committed page: a reader or a recovery may still need it.
-            self.retired.push(page);
+            if written > self.young_after {
+                self.retired_young.push(page);
+            } else {
+                self.retired.push(page);
+            }
+
             self.changes += 1;
         } else if self.settling {
             debug_assert!(
@@ -359,6 +390,25 @@ impl Store for Space {
     }
 }
 
+/// `pages`, in any order, as runs of consecutive pages.
+fn runs_of(pages: &[u64]) -> Vec<(u64, u32)> {
+    let mut pages = pages.to_vec();
+    let mut runs: Vec<(u64, u32)> = Vec::new();
+
+    pages.sort_unstable();
+
+    for page in pages {
+        match runs.last_mut() {
+            Some((start, len)) if *start + u64::from(*len) == page && *len < u32::MAX => {
+                *len += 1;
+            }
+            _ => runs.push((page, 1)),
+        }
+    }
+
+    runs
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -374,7 +424,8 @@ mod tests {
             None,
         ));
 
-        Space::new(pager, 2, page_count, free.iter().copied().collect())
+        // Transaction 4, whose durable commit is 2.
+        Space::new(pager, 4, 2, page_count, free.iter().copied().collect())
     }
 
     #[test]
@@ -406,11 +457,25 @@ mod tests {
         let mut space = space(10, &[]);
         let fresh = space.allocate().unwrap();
 
-        space.release(fresh);
-        space.release(4);
+        space.release(fresh, 4);
+        space.release(4, 1);
 
         assert_eq!(space.free(), &[(fresh, 1)].into_iter().collect());
         assert_eq!(space.retired_runs(), [(4, 1)]);
+        assert_eq!(space.young_runs(), []);
+    }
+
+    #[test]
+    fn a_committed_page_written_after_the_durable_commit_is_young() {
+        let mut space = space(10, &[]);
+
+        space.release(4, 1);
+        space.release(5, 2);
+        space.release(6, 3);
+        space.release(7, 3);
+
+        assert_eq!(space.retired_runs(), [(4, 2)]);
+        assert_eq!(space.young_runs(), [(6, 2)]);
     }
 
     #[test]
@@ -437,18 +502,20 @@ mod tests {
         let before = space.changes();
 
         // A tree emptied and refilled in one round gets its own page back.
-        space.release(page);
+        space.release(page, 4);
 
         assert_eq!(space.allocate().unwrap(), page);
         assert_eq!(space.changes(), before);
         assert_eq!(space.free(), &[(6, 2)].into_iter().collect());
 
-        // What is left over when the round ends joins the retained group.
-        space.release(page);
+        // What is left over when the round ends joins the retained group, as
+        // a young page: no commit reaches it.
+        space.release(page, 4);
 
         assert!(space.retire_set_aside());
         assert!(!space.retire_set_aside());
-        assert_eq!(space.retired_runs(), [(page, 1)]);
+        assert_eq!(space.retired_runs(), []);
+        assert_eq!(space.young_runs(), [(page, 1)]);
         assert_eq!(space.free(), &[(6, 2)].into_iter().collect());
     }
 
@@ -494,7 +561,7 @@ mod tests {
         let mut space = space(20, &[]);
 
         for page in [9, 3, 4, 5, 12, 10] {
-            space.release(page);
+            space.release(page, 1);
         }
 
         assert_eq!(space.retired_runs(), [(3, 3), (9, 2), (12, 1)]);

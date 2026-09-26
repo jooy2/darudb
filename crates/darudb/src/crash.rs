@@ -716,6 +716,126 @@ fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
 }
 
 #[test]
+fn deferred_commits_reuse_the_pages_they_write_before_the_window_ends() {
+    let disk = Arc::new(SimDisk::default());
+    let mut options = OpenOptions::new();
+
+    // A window that only `sync` ends.
+    options
+        .max_unsynced_pages(u64::MAX)
+        .max_unsynced_time(Duration::MAX);
+
+    let db = Database::create_io(disk.clone(), 4096, &options).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    for index in 0..2000u32 {
+        txn.insert("t", &index.to_be_bytes(), &[0; 100]).unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let write = |round: u32| {
+        let mut txn = db.begin_write().unwrap();
+
+        // Ten keys, in ten different leaves.
+        txn.insert("t", &(round % 10 * 200).to_be_bytes(), &[1; 100])
+            .unwrap();
+        txn.commit_deferred().unwrap();
+    };
+
+    for round in 0..20 {
+        write(round);
+    }
+
+    // Every leaf they change has been copied once in the window by now: the
+    // durable commit's copy stays until the window ends.
+    let settled = disk.current().len();
+
+    // Each of these writes a leaf, its branches and the catalog again.
+    // Without reusing the pages of the commits before it inside the window,
+    // the file grows by all of them.
+    for round in 20..500 {
+        write(round);
+    }
+
+    assert!(
+        disk.current().len() <= settled + 16 * 4096,
+        "the file grew from {settled} to {} bytes",
+        disk.current().len()
+    );
+    check_integrity(&db).unwrap();
+    db.sync().unwrap();
+    check_integrity(&db).unwrap();
+}
+
+#[test]
+fn a_reader_in_the_window_keeps_its_snapshot_while_deferred_commits_reuse_pages() {
+    let disk = Arc::new(SimDisk::default());
+    let mut options = OpenOptions::new();
+
+    // The smallest cache, so that the reader reads its pages from the file
+    // rather than from copies the cache kept.
+    options
+        .max_unsynced_pages(u64::MAX)
+        .max_unsynced_time(Duration::MAX)
+        .cache_size(0);
+
+    let db = Database::create_io(disk.clone(), 4096, &options).unwrap();
+    let write = |value: u8, deferred: bool| {
+        let mut txn = db.begin_write().unwrap();
+
+        for index in 0..2000u32 {
+            txn.insert("t", &index.to_be_bytes(), &[value; 100])
+                .unwrap();
+        }
+
+        if deferred {
+            txn.commit_deferred().unwrap();
+        } else {
+            txn.commit().unwrap();
+        }
+    };
+
+    write(0, false);
+    write(1, true);
+    write(2, true);
+
+    // A snapshot newer than the durable commit, whose pages were all written
+    // in the window.
+    let snapshot = db.begin_read().unwrap();
+
+    for value in 3..30 {
+        write(value, true);
+        check_integrity(&db).unwrap();
+    }
+
+    let values: Vec<_> = snapshot
+        .iter("t")
+        .unwrap()
+        .map(|entry| entry.unwrap().1)
+        .collect();
+
+    assert_eq!(values.len(), 2000);
+    assert!(values.iter().all(|value| value == &vec![2; 100]));
+
+    // Once the reader is gone, the pages it held go back into use.
+    drop(snapshot);
+
+    let grown = disk.current().len();
+
+    for value in 30..60 {
+        write(value, true);
+    }
+
+    assert!(
+        disk.current().len() <= grown + 4 * 4096,
+        "the file grew from {grown} to {} bytes",
+        disk.current().len()
+    );
+    check_integrity(&db).unwrap();
+}
+
+#[test]
 fn a_damaged_page_is_reported_and_never_panics() {
     let mut chacha = OpenOptions::new();
     let mut xaes = OpenOptions::new();

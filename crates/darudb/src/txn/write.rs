@@ -15,9 +15,10 @@ use crate::format::object::schema::OpenSchema;
 use crate::format::{
     CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, TXN_LIMIT,
     decode_free_key, decode_free_value, decode_retained_key, decode_runs, max_key_len,
+    retained_key,
 };
 use crate::instance::{Header, Shared, WriterGuard};
-use crate::space::Space;
+use crate::space::{Space, YoungPart, YoungParts};
 
 /// A tree this transaction has opened.
 #[derive(Debug)]
@@ -61,8 +62,17 @@ pub struct WriteTransaction {
     /// The key block the commit record gets: the base commit's, unless the
     /// key is being changed.
     pub(super) key_block: [u8; KEY_BLOCK_LEN],
-    /// The retained groups this transaction reclaims, by key.
+    /// The retained group entries this transaction reclaims, by key.
     pub(super) reclaimed: Vec<Vec<u8>>,
+    /// The young parts of the base commit's retained groups, until the
+    /// commit replaces them with its own. A transaction that does not commit
+    /// leaves them for the next one.
+    pub(super) young: Option<YoungParts>,
+    /// The groups whose young parts this transaction reclaims.
+    pub(super) young_reclaimed: Vec<u64>,
+    /// The young part of this commit's retained group, once the commit has
+    /// written the group.
+    pub(super) young_part: Option<YoungPart>,
     pub(super) trees: BTreeMap<String, TreeState>,
     /// The trees looked up in the catalog without being changed.
     pub(super) descriptors: Descriptors,
@@ -136,7 +146,13 @@ impl WriteTransaction {
             }
             None => load_free(loader, free_root.as_ref(), base.page_count)?,
         };
-        let mut space = Space::new(Arc::clone(&shared.pager), txn, base.page_count, free);
+        let mut space = Space::new(
+            Arc::clone(&shared.pager),
+            txn,
+            durable.txn,
+            base.page_count,
+            free,
+        );
 
         // Reclaim every retained group that no snapshot and no possible
         // recovery can still reach. Recovery can go back to the durable
@@ -182,6 +198,38 @@ impl WriteTransaction {
             reclaimed.push(key);
         }
 
+        // Reclaim the young parts of the groups above the durable commit that
+        // no snapshot can reach: pages written after the durable commit,
+        // which only commits of the unsynced window reach, and recovery only
+        // through a commit it checks. Groups the durable commit has caught up
+        // with were reclaimed whole above, or wait to be.
+        let mut young = shared.take_young(base.txn).unwrap_or_default();
+
+        young.retain(|group, _| *group > durable.txn);
+
+        // The crash suite runs through here thousands of times.
+        #[cfg(test)]
+        check_young(loader, retained_root.as_ref(), &young)?;
+
+        let groups: Vec<u64> = young.keys().copied().collect();
+        let mut young_reclaimed = Vec::new();
+
+        if let Some(limit) = shared.young_reclaimable(durable.txn, &groups)? {
+            for (group, part) in young.range(..=limit) {
+                for (start, len) in &part.runs {
+                    space
+                        .add_free_checked(*start, u64::from(*len))
+                        .map_err(|reason| corrupted(shared, reason))?;
+                }
+
+                for sequence in part.first..part.first + part.entries {
+                    reclaimed.push(retained_key(*group, sequence).to_vec());
+                }
+
+                young_reclaimed.push(*group);
+            }
+        }
+
         Ok(Self {
             shared: Arc::clone(shared),
             _writer: writer,
@@ -197,6 +245,9 @@ impl WriteTransaction {
             base_txn: base.txn,
             key_block: base.key_block,
             reclaimed,
+            young: Some(young),
+            young_reclaimed,
+            young_part: None,
             trees: BTreeMap::new(),
             descriptors: Descriptors::default(),
             later: BTreeMap::new(),
@@ -732,11 +783,15 @@ impl WriteTransaction {
 }
 
 impl Drop for WriteTransaction {
-    /// Leaves the free runs the transaction started from to the next one,
-    /// unless it committed, which leaves its own.
+    /// Leaves the free runs and the young parts the transaction started from
+    /// to the next one, unless it committed, which leaves its own.
     fn drop(&mut self) {
         if let Some(free) = self.space.take_initial_free() {
             self.shared.leave_free_runs(self.base_txn, free);
+        }
+
+        if let Some(young) = self.young.take() {
+            self.shared.leave_young(self.base_txn, young);
         }
     }
 }
@@ -867,6 +922,47 @@ fn load_free(
     }
 
     Ok(free)
+}
+
+/// Checks that the young parts left in memory are what the retained tree
+/// rooted at `root` holds: each part's entries, and no entry after them.
+#[cfg(test)]
+fn check_young(
+    loader: &crate::btree::Loader,
+    root: Option<&Child>,
+    young: &YoungParts,
+) -> Result<()> {
+    for (group, part) in young {
+        let mut runs = Vec::new();
+        let mut sequences = Vec::new();
+        let first = retained_key(*group, part.first);
+        let next_group = retained_key(*group + 1, 0);
+
+        for entry in btree::Range::new(
+            loader,
+            RETAINED_TREE,
+            root,
+            Bound::Included(&first[..]),
+            Bound::Excluded(&next_group[..]),
+        )? {
+            let (key, value) = entry?;
+
+            sequences.push(decode_retained_key(&key).unwrap().1);
+            runs.extend(decode_runs(&value).unwrap());
+        }
+
+        assert_eq!(
+            sequences,
+            (part.first..part.first + part.entries).collect::<Vec<_>>(),
+            "the young part of group {group} left in memory names other entries"
+        );
+        assert_eq!(
+            runs, part.runs,
+            "the young part of group {group} left in memory differs from the retained tree"
+        );
+    }
+
+    Ok(())
 }
 
 fn corrupted(shared: &Shared, reason: &str) -> Error {

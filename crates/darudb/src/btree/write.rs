@@ -307,7 +307,7 @@ fn collapse_root<S: Store>(store: &mut S, root: &mut Option<Child>) -> Result<()
 
         match node.as_mut() {
             Node::Leaf(leaf) if leaf.is_empty() => {
-                store.release(page);
+                store.release(page, store.txn());
                 *root = None;
 
                 return Ok(());
@@ -318,7 +318,7 @@ fn collapse_root<S: Store>(store: &mut S, root: &mut Option<Child>) -> Result<()
                     .pop()
                     .ok_or_else(|| internal("a branch without children"))?;
 
-                store.release(page);
+                store.release(page, store.txn());
                 *root = Some(only);
             }
             _ => return Ok(()),
@@ -445,7 +445,7 @@ fn make_dirty<'c, L: Load, S: Store>(
         let loaded = load.load(&pointer, tree, level)?;
         let page = store.allocate()?;
 
-        store.release(pointer.page);
+        store.release(pointer.page, pointer.txn);
         *child = Child::dirty(page, loaded.to_node()?);
     }
 
@@ -467,12 +467,12 @@ fn take_node<L: Load, S: Store>(
         Child::Clean(pointer) => {
             let loaded = load.load(&pointer, tree, level)?;
 
-            store.release(pointer.page);
+            store.release(pointer.page, pointer.txn);
 
             loaded.to_node()
         }
         Child::Dirty { page, node } => {
-            store.release(page);
+            store.release(page, store.txn());
 
             Ok(*node)
         }
@@ -489,8 +489,8 @@ fn dirty_node(child: &Child) -> Result<&Node> {
 
 fn release_child<S: Store>(store: &mut S, child: &Child) {
     match child {
-        Child::Clean(pointer) => store.release(pointer.page),
-        Child::Dirty { page, .. } => store.release(*page),
+        Child::Clean(pointer) => store.release(pointer.page, pointer.txn),
+        Child::Dirty { page, .. } => store.release(*page, store.txn()),
     }
 }
 
@@ -645,7 +645,7 @@ fn store_value<S: Store>(
 fn release_run<S: Store>(store: &mut S, run: Option<OverflowRef>) {
     if let Some(reference) = run {
         for index in 0..u64::from(reference.pages) {
-            store.release(reference.first + index);
+            store.release(reference.first + index, reference.txn);
         }
     }
 }
@@ -667,11 +667,11 @@ pub(crate) fn delete_tree<L: Load, S: Store>(
             Child::Clean(pointer) => {
                 let loaded = load.load(&pointer, tree, level)?;
 
-                store.release(pointer.page);
+                store.release(pointer.page, pointer.txn);
                 loaded.to_node()?
             }
             Child::Dirty { page, node } => {
-                store.release(page);
+                store.release(page, store.txn());
                 *node
             }
         };

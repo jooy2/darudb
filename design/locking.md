@@ -114,6 +114,8 @@ Each question is answered in two parts:
 - **Other processes**, on Unix-like systems: `fcntl(F_GETLK)`, asking for an exclusive lock over the range of snapshot bytes below `F`. It reports whether a conflicting lock exists. It does not report the lowest one, which is why the search bisects instead of asking for it.
 - **Other processes**, on Windows, which has no such query: try to take an exclusive lock over the same range without waiting, and release it at once if granted. Granted means no other lock lies in the range. The probe also collides with this process's own snapshot locks, which is harmless: those snapshots count anyway.
 
+The young parts of the groups above `D` ([Commits and recovery](commits-and-recovery.md#pages-written-in-the-unsynced-window)) take a second search of the same kind, over those groups, with a question that has a lower end: whether any snapshot lies strictly between `D` and the group. For other processes, that is one query over the snapshot bytes from `D + 1` up to the group's.
+
 A Windows probe can make a reader's snapshot lock wait for an instant. The reader waits for it, and the writer never waits while it holds a probe, so the two cannot deadlock.
 
 ## The page cache

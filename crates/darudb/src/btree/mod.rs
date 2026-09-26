@@ -55,10 +55,12 @@ pub(crate) trait Store {
     /// `pages` consecutive free pages for this transaction; returns the first.
     fn allocate_run(&mut self, pages: u64) -> Result<u64>;
 
-    /// Gives back a page this transaction no longer uses. A page it allocated
-    /// itself becomes free again; a committed page is retained until no
-    /// reader and no recovery can need it.
-    fn release(&mut self, page: u64);
+    /// Gives back a page this transaction no longer uses, which transaction
+    /// `written` wrote: the id in the pointer that led to it, or this
+    /// transaction's for a page it allocated. A page it allocated itself
+    /// becomes free again; a committed page is retained until no reader and
+    /// no recovery can need it.
+    fn release(&mut self, page: u64, written: u64);
 
     /// Seals and writes consecutive pages from `first` on right away, in one
     /// call, and returns their checks. Used for overflow runs, whose content

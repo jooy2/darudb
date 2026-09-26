@@ -226,7 +226,7 @@ The pages no one can reach any more, which the writer may use. Each entry is a r
 
 ### The retained tree
 
-Pages that the published commit no longer reaches, but that an older commit may still need, grouped by the commit that stopped using them. The key is 12 bytes: the transaction id of that commit, big-endian, followed by a big-endian 32-bit sequence number that starts at 0. The value is a list of runs, each 12 bytes: the first page number (8 bytes) and the run length (4 bytes). A group with more runs than fit in one inline value continues under the next sequence number.
+Pages that the published commit no longer reaches, but that an older commit may still need, grouped by the commit that stopped using them. The key is 12 bytes: the transaction id of that commit, big-endian, followed by a big-endian 32-bit sequence number that starts at 0. The value is a list of runs, each 12 bytes: the first page number (8 bytes) and the run length (4 bytes). A group with more runs than fit in one inline value continues under the next sequence number. The pages a commit stopped using that were written after its durable commit start an entry of their own, after the rest of the group, so that the writer can remove them apart from the rest ([Commits and recovery](commits-and-recovery.md#pages-written-in-the-unsynced-window)). Nothing else needs to tell the two apart: a group is all of its entries.
 
 [Commits and recovery](commits-and-recovery.md#reclaiming-pages) says when a group moves from here to the free tree.
 

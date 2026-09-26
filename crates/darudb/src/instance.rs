@@ -23,6 +23,7 @@ use crate::format::{
     StaticHeader, slot_offset,
 };
 use crate::lock::{LockError, Locks};
+use crate::space::YoungParts;
 use crate::storage::{Cache, DbFile, Pager};
 
 /// The fewest pages the page cache holds, whatever its size in bytes: a
@@ -108,6 +109,10 @@ pub(crate) struct Shared {
     /// last write transaction left for the next, so that it need not read the
     /// free tree again.
     free_runs: Mutex<Option<(u64, BTreeMap<u64, u64>)>>,
+    /// The young parts of the retained groups of the commit with the given
+    /// transaction id, which only the writer that made them knows: another
+    /// process's writer reclaims their groups whole, once the window ends.
+    young: Mutex<Option<(u64, YoungParts)>>,
     writer: Mutex<bool>,
     writer_free: Condvar,
     sync_failed: AtomicBool,
@@ -171,6 +176,7 @@ impl Shared {
             last_barrier: Mutex::new(None),
             unsynced: Mutex::new(Unsynced::default()),
             free_runs: Mutex::new(None),
+            young: Mutex::new(None),
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             sync_failed: AtomicBool::new(false),
@@ -518,6 +524,31 @@ impl Shared {
     /// Leaves the free runs of commit `txn` for the next write transaction.
     pub(crate) fn leave_free_runs(&self, txn: u64, runs: BTreeMap<u64, u64>) {
         *lock(&self.free_runs) = Some((txn, runs));
+    }
+
+    /// The young parts of commit `txn`'s retained groups, if the last write
+    /// transaction left them. Parts left for any other commit are thrown
+    /// away: another process has committed since.
+    pub(crate) fn take_young(&self, txn: u64) -> Option<YoungParts> {
+        lock(&self.young)
+            .take()
+            .and_then(|(of, parts)| (of == txn).then_some(parts))
+    }
+
+    /// Leaves the young parts of commit `txn`'s retained groups for the next
+    /// write transaction.
+    pub(crate) fn leave_young(&self, txn: u64, parts: YoungParts) {
+        *lock(&self.young) = Some((txn, parts));
+    }
+
+    /// The largest of `groups`, commits after the durable commit `durable` in
+    /// ascending order, whose young parts no registered snapshot in any
+    /// process can reach; see [`Locks::young_reclaimable`]. The caller holds
+    /// the writer lock.
+    pub(crate) fn young_reclaimable(&self, durable: u64, groups: &[u64]) -> Result<Option<u64>> {
+        self.locks
+            .young_reclaimable(durable, groups)
+            .map_err(|error| self.lock_error(error))
     }
 
     /// Waits for this process's writer gate and then for the writer lock,

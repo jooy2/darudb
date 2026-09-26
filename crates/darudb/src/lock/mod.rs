@@ -545,6 +545,39 @@ impl Locks {
         last_unreached(groups, |group| self.snapshot_below(group))
     }
 
+    /// The largest of `groups`, ids of commits after the durable commit
+    /// `durable` in ascending order, whose young pages no registered snapshot
+    /// in any process can reach. Young pages were written after `durable`, so
+    /// a snapshot `s` reaches those of group `F` only if `durable < s < F`
+    /// (`design/commits-and-recovery.md`, "Reclaiming pages"). Like
+    /// [`reclaimable`](Self::reclaimable), it asks about the largest group
+    /// first and bisects only when a snapshot lies below it.
+    pub(crate) fn young_reclaimable(
+        &self,
+        durable: u64,
+        groups: &[u64],
+    ) -> Result<Option<u64>, LockError> {
+        last_unreached(groups, |group| self.snapshot_between(durable, group))
+    }
+
+    /// Whether a read transaction in any process uses a snapshot `s` with
+    /// `low < s < high`.
+    fn snapshot_between(&self, low: u64, high: u64) -> Result<bool, LockError> {
+        let first = low.saturating_add(1);
+
+        if high <= first {
+            return Ok(false);
+        }
+
+        if lock(&self.snapshots).range(first..high).next().is_some() {
+            return Ok(true);
+        }
+
+        snapshot_byte(high)?;
+        self.is_locked(snapshot_byte(first)?, high - first)
+            .map_err(LockError::Io)
+    }
+
     /// Whether a read transaction in any process uses a snapshot below `txn`.
     ///
     /// One call into the operating system answers for every other process:

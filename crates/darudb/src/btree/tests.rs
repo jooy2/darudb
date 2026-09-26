@@ -57,7 +57,7 @@ impl Store for TestStore {
         Ok(first)
     }
 
-    fn release(&mut self, page: u64) {
+    fn release(&mut self, page: u64, _written: u64) {
         if self.fresh.remove(&page) {
             self.free.push(page);
         } else {
