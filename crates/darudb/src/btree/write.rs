@@ -11,7 +11,7 @@ use std::mem;
 
 use super::leaf::Leaf;
 use super::node::{Branch, Child, Keys, Node};
-use super::read::{contains, internal};
+use super::read::{contains, contains_below, internal};
 use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
@@ -33,6 +33,19 @@ struct Put<'a> {
     key: &'a [u8],
     value: StoredRef<'a>,
     replace: bool,
+}
+
+/// What is given the value a removal takes out, before it goes.
+pub(crate) type Removed<'v> = dyn FnMut(&[u8]) -> Result<()> + 'v;
+
+/// What a removal looks for, and how it goes down to it.
+struct Take<'k, 'v> {
+    key: &'k [u8],
+    /// Whether the first committed node on the way is searched for the key
+    /// before it is copied.
+    probe: bool,
+    /// What is given the value before it goes.
+    visit: Option<&'v mut Removed<'v>>,
 }
 
 /// What an insert did.
@@ -249,10 +262,49 @@ pub(crate) fn remove_present<L: Load, S: Store>(
     root: &mut Option<Child>,
     key: &[u8],
 ) -> Result<bool> {
+    let take = Take {
+        key,
+        probe: false,
+        visit: None,
+    };
+
+    remove_one(load, store, tree, root, take)
+}
+
+/// [`remove`], giving `visit` the value before it goes, for a caller that
+/// needs the value of what it removes. The part of the path to the key that
+/// the transaction has copied already is gone down once rather than twice:
+/// the first committed node on the way is searched before it is copied, and
+/// nothing is copied when the key is not there. An error `visit` returns
+/// removes nothing, though the nodes on the way to the key have been copied.
+pub(crate) fn remove_with<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    key: &[u8],
+    visit: &mut Removed<'_>,
+) -> Result<bool> {
+    let take = Take {
+        key,
+        probe: true,
+        visit: Some(visit),
+    };
+
+    remove_one(load, store, tree, root, take)
+}
+
+fn remove_one<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    take: Take<'_, '_>,
+) -> Result<bool> {
     let Some(child) = root.as_mut() else {
         return Ok(false);
     };
-    let removed = remove_from(load, store, tree, child, None, key)?;
+    let removed = remove_from(load, store, tree, child, None, take)?;
 
     if let Some(run) = removed {
         release_run(store, run);
@@ -269,13 +321,40 @@ fn remove_from<L: Load, S: Store>(
     tree: u64,
     child: &mut Child,
     level: Option<u8>,
-    key: &[u8],
+    take: Take<'_, '_>,
 ) -> Result<Replaced> {
+    let Take {
+        key,
+        mut probe,
+        visit,
+    } = take;
+
+    // Every node below a committed one is committed too, so once the key is
+    // known to be under it, nothing further down needs searching first.
+    if probe && matches!(child, Child::Clean(_)) {
+        if !contains_below(load, tree, child, level, key)? {
+            return Ok(None);
+        }
+
+        probe = false;
+    }
+
     let node = make_dirty(load, store, child, tree, level)?;
 
     match node {
         Node::Leaf(leaf) => match leaf.search(key) {
-            Ok(index) => Ok(Some(leaf.remove(index).map_err(internal)?)),
+            Ok(index) => {
+                if let Some(visit) = visit {
+                    match leaf.value(index).map_err(internal)? {
+                        StoredRef::Inline(value) => visit(value)?,
+                        StoredRef::Overflow(reference) => {
+                            visit(&load.read_overflow(&reference, tree)?)?;
+                        }
+                    }
+                }
+
+                Ok(Some(leaf.remove(index).map_err(internal)?))
+            }
             Err(_) => Ok(None),
         },
         Node::Branch(branch) => {
@@ -286,10 +365,13 @@ fn remove_from<L: Load, S: Store>(
                 tree,
                 &mut branch.children[index],
                 Some(branch.level - 1),
-                key,
+                Take { key, probe, visit },
             )?;
 
-            rebalance(load, store, tree, branch, index)?;
+            // A child nothing was removed from is the size it was.
+            if removed.is_some() {
+                rebalance(load, store, tree, branch, index)?;
+            }
 
             Ok(removed)
         }

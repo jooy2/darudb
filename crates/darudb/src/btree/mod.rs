@@ -28,7 +28,7 @@ pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
 pub(crate) use node::{Child, LoadedNode, Node};
 pub(crate) use read::{Range, Seeker, Visit, get, get_with, resolve};
-pub(crate) use write::{Inserted, delete_tree, insert, remove, remove_present};
+pub(crate) use write::{Inserted, delete_tree, insert, remove, remove_present, remove_with};
 
 /// Where committed nodes and overflow values come from.
 pub(crate) trait Load {

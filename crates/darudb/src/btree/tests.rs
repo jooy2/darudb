@@ -122,6 +122,51 @@ impl Harness {
         super::remove_present(&self.loader, &mut self.store, TREE, &mut self.root, key).unwrap()
     }
 
+    /// Removes `key` through [`remove_with`], and returns the value it gave
+    /// the visitor.
+    fn remove_with(&mut self, key: &[u8]) -> Option<Vec<u8>> {
+        let mut visited = None;
+        let removed = super::remove_with(
+            &self.loader,
+            &mut self.store,
+            TREE,
+            &mut self.root,
+            key,
+            &mut |value| {
+                visited = Some(value.to_vec());
+
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(removed, visited.is_some());
+        visited
+    }
+
+    /// Tries to remove `key` through [`remove_with`] with a visitor that
+    /// refuses it, and returns whether there was a value to refuse.
+    fn refuse_removal(&mut self, key: &[u8]) -> bool {
+        let mut seen = false;
+        let result = super::remove_with(
+            &self.loader,
+            &mut self.store,
+            TREE,
+            &mut self.root,
+            key,
+            &mut |_| {
+                seen = true;
+
+                Err(crate::error::Error::InvalidArgument {
+                    message: "refused".to_owned(),
+                })
+            },
+        );
+
+        assert_eq!(result.is_err(), seen);
+        seen
+    }
+
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         get(&self.loader, TREE, self.root.as_ref(), key).unwrap()
     }
@@ -324,12 +369,25 @@ fn random_changes_match_a_model() {
                 let key = key_of(&mut rng, page_size);
 
                 if rng.below(3) == 0 {
-                    // Half the removals go straight to the key, which takes
-                    // nothing away when it is not there.
-                    let removed = if rng.below(2) == 0 {
-                        harness.remove(&key)
-                    } else {
-                        harness.remove_present(&key)
+                    // Some removals go straight to the key, which takes
+                    // nothing away when it is not there; some read its value
+                    // on the way, and some of those are refused.
+                    let removed = match rng.below(4) {
+                        0 => harness.remove(&key),
+                        1 => harness.remove_present(&key),
+                        2 => {
+                            let visited = harness.remove_with(&key);
+
+                            assert_eq!(visited.as_ref(), model.get(&key), "seed {seed}");
+                            visited.is_some()
+                        }
+                        _ => {
+                            let refused = harness.refuse_removal(&key);
+
+                            assert_eq!(refused, model.contains_key(&key), "seed {seed}");
+
+                            continue;
+                        }
                     };
 
                     assert_eq!(removed, model.remove(&key).is_some(), "seed {seed}");
@@ -456,6 +514,37 @@ fn a_seeker_finds_what_a_lookup_from_the_root_finds() {
         deepest >= 2,
         "the trees reached {deepest} levels of branches"
     );
+}
+
+/// A removal that reads the value it takes out searches a committed node
+/// before copying it, so a key that is not there copies nothing, whether
+/// no node on the way was copied yet or only the upper ones were.
+#[test]
+fn a_removal_that_reads_its_value_copies_nothing_for_a_missing_key() {
+    let mut harness = Harness::new(4096);
+
+    for n in 0..2000u32 {
+        harness.insert(&(n * 2).to_be_bytes(), &[7; 40]);
+    }
+
+    harness.commit();
+
+    assert_eq!(harness.remove_with(&5u32.to_be_bytes()), None);
+    assert!(matches!(harness.root, Some(Child::Clean(_))));
+    assert!(harness.store.fresh.is_empty(), "a page was copied");
+
+    assert_eq!(harness.remove_with(&6u32.to_be_bytes()), Some(vec![7; 40]));
+    assert!(matches!(harness.root, Some(Child::Dirty { .. })));
+
+    let copied = harness.store.fresh.len();
+
+    assert_eq!(harness.remove_with(&3001u32.to_be_bytes()), None);
+    assert_eq!(harness.store.fresh.len(), copied, "a page was copied");
+    assert_eq!(
+        harness.remove_with(&3000u32.to_be_bytes()),
+        Some(vec![7; 40])
+    );
+    assert!(harness.store.fresh.len() > copied);
 }
 
 #[test]

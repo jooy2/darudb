@@ -59,7 +59,31 @@ fn find<'a, L: Load>(
     let Some(root) = root else {
         return Ok(None);
     };
-    let mut node = resolve(load, root, tree, None)?;
+
+    find_below(load, tree, root, None, key)
+}
+
+/// Whether the subtree under `child`, a node on `level` if known, holds
+/// `key`.
+pub(super) fn contains_below<L: Load>(
+    load: &L,
+    tree: u64,
+    child: &Child,
+    level: Option<u8>,
+    key: &[u8],
+) -> Result<bool> {
+    Ok(find_below(load, tree, child, level, key)?.is_some())
+}
+
+/// [`find`] in the subtree under `child`, a node on `level` if known.
+fn find_below<'a, L: Load>(
+    load: &L,
+    tree: u64,
+    child: &'a Child,
+    level: Option<u8>,
+    key: &[u8],
+) -> Result<Option<(NodeRef<'a>, usize)>> {
+    let mut node = resolve(load, child, tree, level)?;
 
     loop {
         if node.is_leaf() {

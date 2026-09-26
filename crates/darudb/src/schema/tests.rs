@@ -521,3 +521,42 @@ fn a_binding_s_records_are_written_as_the_objects_they_hold_would_be() {
         assert!(written > 100, "seed {seed}: only {written} records written");
     }
 }
+
+/// Deleting an object whose record is damaged fails with `CORRUPTED`, takes
+/// nothing out, and leaves the transaction able to commit: the record is
+/// read on its way out of the tree, and the removal stops there.
+#[test]
+fn deleting_a_damaged_object_takes_nothing_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = OpenOptions::new();
+
+    options.schema(schema());
+
+    let db = options.open(dir.path().join("objects.darudb")).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let players = open
+        .schema
+        .collections
+        .iter()
+        .find(|collection| collection.name == "players")
+        .unwrap();
+    let key = crate::format::object::key::encoded(&Value::Int(2)).unwrap();
+
+    txn.collection("players")
+        .unwrap()
+        .insert(Object::new().with("id", 1).with("score", 3))
+        .unwrap();
+    // A record that ends inside its count of fields.
+    txn.insert_in(&records(players.id), &key, &[0x80]).unwrap();
+
+    let error = txn.collection("players").unwrap().delete(2).unwrap_err();
+
+    assert_eq!(error.code(), "CORRUPTED");
+    assert!(
+        txn.get_in(&records(players.id), &key).unwrap().is_some(),
+        "the damaged record was taken out"
+    );
+    assert!(txn.collection("players").unwrap().delete(1).unwrap());
+    txn.commit().unwrap();
+}

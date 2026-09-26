@@ -452,7 +452,7 @@ impl WriteTransaction {
 
     /// [`remove`](Self::remove) from any tree, the engine's own included.
     pub(crate) fn remove_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
-        self.remove_either(tree, key, false)
+        self.remove_either(tree, key, Removal::Checked)
     }
 
     /// [`remove_in`](Self::remove_in) for a key the caller knows is there,
@@ -460,21 +460,55 @@ impl WriteTransaction {
     /// once rather than looking it up first, and copies the pages on the way
     /// even when it is not there after all.
     pub(crate) fn remove_present_in(&mut self, tree: &str, key: &[u8]) -> Result<bool> {
-        self.remove_either(tree, key, true)
+        self.remove_either(tree, key, Removal::Present)
     }
 
-    fn remove_either(&mut self, tree: &str, key: &[u8], present: bool) -> Result<bool> {
+    /// [`remove_in`](Self::remove_in), giving `visit` the value before it
+    /// goes, for a caller that needs the value of what it removes: the part
+    /// of the way to the key that this transaction has changed already is
+    /// gone down once, rather than once to read the value and once to remove
+    /// it, and nothing is copied when the key is not there. An error `visit`
+    /// returns removes nothing and leaves the transaction able to commit.
+    pub(crate) fn remove_in_with(
+        &mut self,
+        tree: &str,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        self.check_open()?;
+
+        // A value waiting to be stored is the key's, and any in the tree an
+        // older one.
+        if let Some(value) = self.later.get(tree).and_then(|waiting| waiting.get(key)) {
+            visit(value)?;
+
+            return self.remove_either(tree, key, Removal::Checked);
+        }
+
+        let mut refused = false;
+        let result = self.remove_inner(
+            tree,
+            key,
+            Removal::Visited(&mut |value| visit(value).inspect_err(|_| refused = true)),
+        );
+
+        self.failed |= result.is_err() && !refused;
+
+        result
+    }
+
+    fn remove_either(&mut self, tree: &str, key: &[u8], removal: Removal<'_>) -> Result<bool> {
         self.check_open()?;
 
         let waited = self.forget_later(tree, key);
-        let result = self.remove_inner(tree, key, present);
+        let result = self.remove_inner(tree, key, removal);
 
         self.failed |= result.is_err();
 
         Ok(result? || waited)
     }
 
-    fn remove_inner(&mut self, tree: &str, key: &[u8], present: bool) -> Result<bool> {
+    fn remove_inner(&mut self, tree: &str, key: &[u8], removal: Removal<'_>) -> Result<bool> {
         let loader = &self.shared.loader;
 
         check_key(key, loader.page_size())?;
@@ -491,14 +525,33 @@ impl WriteTransaction {
             return Ok(false);
         };
 
-        let removed = if present {
-            // The nodes on the way are copied, and the committed ones given
-            // back, whether the key is there or not: the copies are the tree
-            // now, and the commit has to write them.
-            state.changed = true;
-            btree::remove_present(loader, &mut self.space, state.id, &mut state.root, key)?
-        } else {
-            btree::remove(loader, &mut self.space, state.id, &mut state.root, key)?
+        let removed = match removal {
+            Removal::Checked => {
+                btree::remove(loader, &mut self.space, state.id, &mut state.root, key)?
+            }
+            Removal::Present => {
+                // The nodes on the way are copied, and the committed ones
+                // given back, whether the key is there or not: the copies are
+                // the tree now, and the commit has to write them.
+                state.changed = true;
+                btree::remove_present(loader, &mut self.space, state.id, &mut state.root, key)?
+            }
+            Removal::Visited(visit) => {
+                let removed = btree::remove_with(
+                    loader,
+                    &mut self.space,
+                    state.id,
+                    &mut state.root,
+                    key,
+                    visit,
+                );
+
+                // The nodes on the way are copied only for a key that is
+                // there, and stay copied when the visitor refuses it. A
+                // copied root was copied by an earlier change or by this one.
+                state.changed |= matches!(state.root, Some(Child::Dirty { .. }));
+                removed?
+            }
         };
 
         if !removed {
@@ -819,6 +872,18 @@ impl Drop for WriteTransaction {
             self.shared.leave_young(self.base_txn, young);
         }
     }
+}
+
+/// How a removal finds its key.
+enum Removal<'v> {
+    /// Looked up first, and nothing copied when it is not there.
+    Checked,
+    /// Gone down to once, copying the nodes on the way whether it is there
+    /// or not, for a key the caller knows is there.
+    Present,
+    /// Gone down to once, with its value given to the visitor before it
+    /// goes, and nothing copied when it is not there.
+    Visited(&'v mut dyn FnMut(&[u8]) -> Result<()>),
 }
 
 /// The state of tree `name` in this transaction, loaded from the catalog on

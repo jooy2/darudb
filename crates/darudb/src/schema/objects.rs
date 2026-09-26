@@ -527,9 +527,24 @@ fn stored_entries(
     record: &[u8],
     key: &[u8],
 ) -> Result<()> {
+    read_entries(entries, position, index, collection, record, key)
+        .map_err(|unread| unread.error(source, collection))
+}
+
+/// [`stored_entries`] for a caller that makes the error for a damaged record
+/// itself, as one that reads the record while its transaction changes the
+/// tree does.
+#[inline(always)]
+fn read_entries(
+    entries: &mut IndexKeys,
+    position: usize,
+    index: &IndexDef,
+    collection: &CollectionDef,
+    record: &[u8],
+    key: &[u8],
+) -> Result<(), Unread> {
     let field = indexed_field(index, collection)?;
-    let found = codec::find_field(record, field.id)
-        .map_err(|reason| damaged(source, collection, reason))?;
+    let found = codec::find_field(record, field.id).map_err(Unread::Damaged)?;
 
     if let Some(found) = found {
         if scalar_entry(entries, position, index, found, &field.kind, key)? {
@@ -538,22 +553,38 @@ fn stored_entries(
     }
 
     let value = match found {
-        Some(found) => codec::field_value(found, &field.kind)
-            .map_err(|reason| damaged(source, collection, reason))?,
+        Some(found) => codec::field_value(found, &field.kind).map_err(Unread::Damaged)?,
         None => match &field.default {
             Some(default) => default.clone(),
             None if field.optional => Value::Null,
-            None => {
-                return Err(damaged(
-                    source,
-                    collection,
-                    "a record lacks a required field",
-                ));
-            }
+            None => return Err(Unread::Damaged("a record lacks a required field")),
         },
     };
 
-    value_entries(entries, position, index, &value, key)
+    Ok(value_entries(entries, position, index, &value, key)?)
+}
+
+/// Why the entries of a stored object were not read: what is wrong with its
+/// record, for the caller to make the error for, or another failure.
+enum Unread {
+    Damaged(&'static str),
+    Failed(Error),
+}
+
+impl From<Error> for Unread {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl Unread {
+    /// The error, for an object of `collection` read from `source`.
+    fn error(self, source: &dyn Source, collection: &CollectionDef) -> Error {
+        match self {
+            Self::Damaged(reason) => damaged(source, collection, reason),
+            Self::Failed(error) => error,
+        }
+    }
 }
 
 /// The field of `collection` that `index` is on.
@@ -853,37 +884,42 @@ impl<'a> CollectionWriter<'a> {
         let collection = &schema.schema.collections[self.position];
         let key = key_bytes(collection, &key.into())?;
         let mut entries = IndexKeys::default();
-        let source: &dyn Source = &*self.txn;
-        let found = source.get_in_with(&records(collection.id), &key, &mut |stored| {
-            entries.ends.reserve(collection.indexes.len());
+        let mut damage = None;
+        // The object goes first, read on its way out for its entries: the
+        // transaction cannot make the error for a damaged record while it
+        // removes it, so the reason waits.
+        let found =
+            self.txn
+                .remove_in_with(&records(collection.id), &key, &mut |stored| {
+                    entries.ends.reserve(collection.indexes.len());
 
-            for (position, index) in collection.indexes.iter().enumerate() {
-                stored_entries(
-                    source,
-                    &mut entries,
-                    position,
-                    index,
-                    collection,
-                    stored,
-                    &key,
-                )?;
-            }
+                    for (position, index) in collection.indexes.iter().enumerate() {
+                        read_entries(&mut entries, position, index, collection, stored, &key)
+                            .map_err(|unread| match unread {
+                                Unread::Damaged(reason) => {
+                                    damage = Some(reason);
 
-            Ok(())
-        })?;
+                                    internal(reason)
+                                }
+                                Unread::Failed(error) => error,
+                            })?;
+                    }
 
-        if !found {
-            return Ok(false);
-        }
+                    Ok(())
+                });
+        let found = match (found, damage) {
+            (Err(_), Some(reason)) => return Err(damaged(&*self.txn, collection, reason)),
+            (found, _) => found?,
+        };
 
-        // The object and its entries, which it has just been read for.
+        // Its entries, which it has just been read for.
         for (position, entry) in entries.iter() {
             let tree = index_tree(collection.indexes[position].id);
 
             self.txn.remove_present_in(&tree, entry)?;
         }
 
-        self.txn.remove_present_in(&records(collection.id), &key)
+        Ok(found)
     }
 
     /// The object whose primary key is `key`, if there is one.
