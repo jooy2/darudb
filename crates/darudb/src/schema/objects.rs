@@ -398,6 +398,72 @@ pub(crate) fn scan<'a>(
 /// The entries of one object in one index: a key and a value each.
 type Entries = Vec<(Vec<u8>, Vec<u8>)>;
 
+/// The entries an object has in the indexes of its collection: the key of
+/// each, one after another in one buffer, with the position of its index in
+/// the collection. An entry's value is the object's primary key in a unique
+/// index and empty in any other, so only the keys are kept. A vector for
+/// each key and each value, and one for the entries of each index, made
+/// replacing an object with two indexes cost about eighteen allocations,
+/// which took a tenth of the time the replacement did.
+#[derive(Debug, Default)]
+struct IndexKeys {
+    bytes: Vec<u8>,
+    /// The position of each entry's index, and where the entry's key ends in
+    /// `bytes`.
+    ends: Vec<(usize, usize)>,
+}
+
+impl IndexKeys {
+    /// Room for the entries of a collection with `indexes` indexes, one each.
+    fn with_capacity(indexes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            ends: Vec::with_capacity(indexes),
+        }
+    }
+
+    /// Every entry: the position of its index, and its key.
+    fn iter(&self) -> impl Iterator<Item = (usize, &[u8])> {
+        let mut start = 0;
+
+        self.ends.iter().map(move |&(position, end)| {
+            let entry = &self.bytes[start..end];
+
+            start = end;
+
+            (position, entry)
+        })
+    }
+
+    /// Whether index `position` has the entry `key` here.
+    fn contains(&self, position: usize, key: &[u8]) -> bool {
+        self.iter().any(|entry| entry == (position, key))
+    }
+
+    /// Adds an entry of index `position` whose key `encode` writes, with
+    /// room for about `len` bytes.
+    fn push(
+        &mut self,
+        position: usize,
+        len: usize,
+        encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+    ) -> Result<()> {
+        let start = self.bytes.len();
+
+        self.bytes.reserve(len);
+
+        if let Err(error) = encode(&mut self.bytes) {
+            self.bytes.truncate(start);
+
+            return Err(error);
+        }
+
+        self.ends.push((position, self.bytes.len()));
+
+        Ok(())
+    }
+}
+
 /// The entries that `object`, whose primary key encodes as `key`, has in
 /// `index`: a key and a value each, without repeats.
 pub(crate) fn index_entries(
@@ -406,6 +472,32 @@ pub(crate) fn index_entries(
     object: &Object,
     key: &[u8],
 ) -> Result<Entries> {
+    let mut entries = IndexKeys::default();
+
+    object_entries(&mut entries, 0, index, collection, object, key)?;
+
+    let value = if index.unique {
+        key.to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(entries
+        .iter()
+        .map(|(_, entry)| (entry.to_vec(), value.clone()))
+        .collect())
+}
+
+/// Adds the entries that `object`, whose primary key encodes as `key`, has
+/// in `index`, the index at `position` in `collection`, without repeats.
+fn object_entries(
+    entries: &mut IndexKeys,
+    position: usize,
+    index: &IndexDef,
+    collection: &CollectionDef,
+    object: &Object,
+    key: &[u8],
+) -> Result<()> {
     let field = indexed_field(index, collection)?;
     // The value the object is stored with: a required field left out holds
     // its default, as the record does.
@@ -417,28 +509,32 @@ pub(crate) fn index_entries(
         None => &Value::Null,
     };
 
-    entries_of(index, value, key)
+    value_entries(entries, position, index, value, key)
 }
 
-/// The entries of `index` for the stored object whose record is `record`
-/// and whose primary key encodes as `key`: what [`index_entries`] gives for
-/// the object the record decodes to, read from the one field the index is
-/// on. Replacing or deleting an object needs only its entries, which
-/// decoding the whole object for cost more than the rest of a change that
-/// rewrites one index.
-fn stored_index_entries(
+/// Adds the entries of `index`, at `position`, for the stored object whose
+/// record is `record` and whose primary key encodes as `key`: what
+/// [`object_entries`] adds for the object the record decodes to, read from
+/// the one field the index is on. Replacing or deleting an object needs only
+/// its entries, which decoding the whole object for cost more than the rest
+/// of a change that rewrites one index.
+fn stored_entries(
     source: &dyn Source,
+    entries: &mut IndexKeys,
+    position: usize,
     index: &IndexDef,
     collection: &CollectionDef,
     record: &[u8],
     key: &[u8],
-) -> Result<Entries> {
+) -> Result<()> {
     let field = indexed_field(index, collection)?;
     let found = codec::find_field(record, field.id)
         .map_err(|reason| damaged(source, collection, reason))?;
 
-    if let Some(entries) = found.and_then(|found| scalar_entries(index, found, &field.kind, key)) {
-        return entries;
+    if let Some(found) = found {
+        if scalar_entry(entries, position, index, found, &field.kind, key)? {
+            return Ok(());
+        }
     }
 
     let value = match found {
@@ -457,7 +553,7 @@ fn stored_index_entries(
         },
     };
 
-    entries_of(index, &value, key)
+    value_entries(entries, position, index, &value, key)
 }
 
 /// The field of `collection` that `index` is on.
@@ -468,93 +564,122 @@ fn indexed_field<'c>(index: &IndexDef, collection: &'c CollectionDef) -> Result<
         .ok_or_else(|| internal("an index is on a field its collection does not have"))
 }
 
-/// The entries of `index` for an object whose value of the indexed field is
-/// `value` and whose primary key encodes as `key`.
-fn entries_of(index: &IndexDef, value: &Value, key: &[u8]) -> Result<Entries> {
+/// Adds the entries of `index`, at `position`, for an object whose value of
+/// the indexed field is `value` and whose primary key encodes as `key`.
+fn value_entries(
+    entries: &mut IndexKeys,
+    position: usize,
+    index: &IndexDef,
+    value: &Value,
+    key: &[u8],
+) -> Result<()> {
     // A list gives an entry for each of its values, once each and in order;
     // any other value gives one.
     let Value::List(elements) = value else {
-        return Ok(vec![index_entry(index, value, key)?]);
+        return entries.push(position, entry_len(index, value, key), |entry| {
+            encode_entry(index, value, key, entry)
+        });
     };
-    let mut entries = BTreeSet::new();
+    let mut keys = BTreeSet::new();
 
     for value in elements {
-        entries.insert(index_entry(index, value, key)?);
+        let mut entry = Vec::with_capacity(entry_len(index, value, key));
+
+        encode_entry(index, value, key, &mut entry)?;
+        keys.insert(entry);
     }
 
-    Ok(entries.into_iter().collect())
+    for entry in keys {
+        entries.push(position, entry.len(), |bytes| {
+            bytes.extend_from_slice(&entry);
+
+            Ok(())
+        })?;
+    }
+
+    Ok(())
 }
 
-/// The entries of `index` for an object whose indexed field holds `found`
-/// in its record, what [`entries_of`] gives for the value `found` reads as,
-/// encoded where the record holds it. `None` for anything but a scalar of
-/// the field's own kind, which goes through a value: making one first cost
-/// a string for every object whose string field an index is on, each time
-/// the object was written, replaced or deleted.
-fn scalar_entries(
+/// Adds the entry of `index`, at `position`, for an object whose indexed
+/// field holds `found` in its record, what [`value_entries`] adds for the
+/// value `found` reads as, encoded where the record holds it. Adds nothing
+/// and returns false for anything but a scalar of the field's own kind,
+/// which goes through a value: making one first cost a string for every
+/// object whose string field an index is on, each time the object was
+/// written, replaced or deleted.
+fn scalar_entry(
+    entries: &mut IndexKeys,
+    position: usize,
     index: &IndexDef,
     found: FieldRef<'_>,
     kind: &Kind,
     key: &[u8],
-) -> Option<Result<Entries>> {
+) -> Result<bool> {
     let len = match (found, kind) {
         (FieldRef::Bool(_), Kind::Bool)
         | (FieldRef::Int(_), Kind::Int)
         | (FieldRef::Float(_), Kind::Float) => 0,
         (FieldRef::String(text), Kind::String) => text.len(),
         (FieldRef::Bytes(bytes), Kind::Bytes) => bytes.len(),
-        _ => return None,
+        _ => return Ok(false),
     };
-    let entry = entry_with(index, false, len, key, |entry| {
-        key::encode_field(found, entry).map_err(internal)
-    });
 
-    Some(entry.map(|entry| vec![entry]))
+    entries.push(position, len + room(index, false, key), |entry| {
+        key::encode_field(found, entry).map_err(internal)?;
+        name_object(index, false, key, entry);
+
+        Ok(())
+    })?;
+
+    Ok(true)
 }
 
-/// The entry `value` gives index `index` for the object whose key is `key`.
-fn index_entry(index: &IndexDef, value: &Value, key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+/// About how many bytes the entry `value` gives `index` for the object whose
+/// key is `key` takes.
+fn entry_len(index: &IndexDef, value: &Value, key: &[u8]) -> usize {
     let len = match value {
         Value::String(text) => text.len(),
         Value::Bytes(bytes) => bytes.len(),
         _ => 0,
     };
 
-    entry_with(index, value.is_null(), len, key, |entry| {
-        key::encode(value, entry).map_err(internal)
-    })
+    len + room(index, value.is_null(), key)
 }
 
-/// The entry of index `index` for the object whose key is `key`, whose
-/// value `encode` writes: a null one when `null`, and one of about `len`
-/// bytes otherwise.
-fn entry_with(
-    index: &IndexDef,
-    null: bool,
-    len: usize,
-    key: &[u8],
-    encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
-) -> Result<(Vec<u8>, Vec<u8>)> {
-    // A unique index keys by the value alone, except for null, which any
-    // number of objects may hold. Its entries name the object in their value
-    // either way.
-    let keyed = !index.unique || null;
-    let room = len + 9 + if keyed { key.len() } else { 0 };
-    let mut entry = Vec::with_capacity(room);
+/// Writes the key of the entry `value` gives `index` for the object whose
+/// key is `key`.
+fn encode_entry(index: &IndexDef, value: &Value, key: &[u8], entry: &mut Vec<u8>) -> Result<()> {
+    key::encode(value, entry).map_err(internal)?;
+    name_object(index, value.is_null(), key, entry);
 
-    encode(&mut entry)?;
+    Ok(())
+}
 
-    if keyed {
+/// The bytes an entry of `index` takes beyond its value's own: its tag and
+/// length, and the object's key where the entry's key holds it.
+fn room(index: &IndexDef, null: bool, key: &[u8]) -> usize {
+    9 + if keyed(index, null) { key.len() } else { 0 }
+}
+
+/// Ends the key of an entry of `index` for the object whose key is `key`,
+/// whose value is null when `null`.
+fn name_object(index: &IndexDef, null: bool, key: &[u8], entry: &mut Vec<u8>) {
+    if keyed(index, null) {
         entry.extend_from_slice(key);
     }
+}
 
-    let named = if index.unique {
-        key.to_vec()
-    } else {
-        Vec::new()
-    };
+/// Whether the key of an entry of `index` ends with the object's key. A
+/// unique index keys by the value alone, except for null, which any number
+/// of objects may hold. Its entries name the object in their value either
+/// way.
+fn keyed(index: &IndexDef, null: bool) -> bool {
+    !index.unique || null
+}
 
-    Ok((entry, named))
+/// The value of an entry of `index` for the object whose key is `key`.
+fn entry_value<'k>(index: &IndexDef, key: &'k [u8]) -> &'k [u8] {
+    if index.unique { key } else { &[] }
 }
 
 /// A collection of a read transaction: its objects as of the transaction's
@@ -649,8 +774,8 @@ struct Written {
     /// The primary key, which the write returns.
     key_value: Value,
     record: Vec<u8>,
-    /// The object's entries in each index of its collection, in their order.
-    entries: Vec<Vec<(Vec<u8>, Vec<u8>)>>,
+    /// The object's entries in the indexes of its collection.
+    entries: IndexKeys,
     /// The auto-increment counter to store, if the write moves it.
     raised: Option<u64>,
 }
@@ -714,13 +839,21 @@ impl<'a> CollectionWriter<'a> {
         let schema = Arc::clone(&self.schema);
         let collection = &schema.schema.collections[self.position];
         let key = key_bytes(collection, &key.into())?;
-        let mut entries = Vec::new();
+        let mut entries = IndexKeys::default();
         let source: &dyn Source = &*self.txn;
         let found = source.get_in_with(&records(collection.id), &key, &mut |stored| {
-            for index in &collection.indexes {
-                for (entry, _) in stored_index_entries(source, index, collection, stored, &key)? {
-                    entries.push((index_tree(index.id), entry));
-                }
+            entries.ends.reserve(collection.indexes.len());
+
+            for (position, index) in collection.indexes.iter().enumerate() {
+                stored_entries(
+                    source,
+                    &mut entries,
+                    position,
+                    index,
+                    collection,
+                    stored,
+                    &key,
+                )?;
             }
 
             Ok(())
@@ -731,8 +864,10 @@ impl<'a> CollectionWriter<'a> {
         }
 
         // The object and its entries, which it has just been read for.
-        for (tree, entry) in entries {
-            self.txn.remove_present_in(&tree, &entry)?;
+        for (position, entry) in entries.iter() {
+            let tree = index_tree(collection.indexes[position].id);
+
+            self.txn.remove_present_in(&tree, entry)?;
         }
 
         self.txn.remove_present_in(&records(collection.id), &key)
@@ -837,9 +972,9 @@ impl<'a> CollectionWriter<'a> {
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-        let mut entries = Vec::with_capacity(collection.indexes.len());
+        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
 
-        for index in &collection.indexes {
+        for (index_position, index) in collection.indexes.iter().enumerate() {
             let (position, field) = collection
                 .fields
                 .list
@@ -849,15 +984,20 @@ impl<'a> CollectionWriter<'a> {
                 .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
             let found = present.iter().find(|(at, _)| *at == position);
 
-            if let Some(scalar) =
-                found.and_then(|(_, found)| scalar_entries(index, *found, &field.kind, &key))
-            {
-                entries.push(scalar?);
-
-                continue;
+            if let Some((_, found)) = found {
+                if scalar_entry(
+                    &mut entries,
+                    index_position,
+                    index,
+                    *found,
+                    &field.kind,
+                    &key,
+                )? {
+                    continue;
+                }
             }
 
-            // The value the object is stored with, as `index_entries` finds
+            // The value the object is stored with, as `object_entries` finds
             // it in the object.
             let value = match found {
                 Some((_, found)) => codec::field_value(*found, &field.kind).map_err(refused)?,
@@ -866,7 +1006,7 @@ impl<'a> CollectionWriter<'a> {
                 None => Value::Null,
             };
 
-            entries.push(entries_of(index, &value, &key)?);
+            value_entries(&mut entries, index_position, index, &value, &key)?;
         }
 
         self.store(
@@ -937,11 +1077,11 @@ impl<'a> CollectionWriter<'a> {
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-        let entries = collection
-            .indexes
-            .iter()
-            .map(|index| index_entries(index, collection, &object, &key))
-            .collect::<Result<_>>()?;
+        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
+
+        for (position, index) in collection.indexes.iter().enumerate() {
+            object_entries(&mut entries, position, index, collection, &object, &key)?;
+        }
 
         self.store(
             collection,
@@ -977,16 +1117,16 @@ impl<'a> CollectionWriter<'a> {
         // An insert finds out whether the key is taken by storing the record,
         // below, rather than by looking it up first. A replacement reads the
         // entries the object it replaces has in each index.
-        let mut old: Vec<Vec<(Vec<u8>, Vec<u8>)>> = Vec::new();
+        let mut old = IndexKeys::default();
 
         if replace {
             let source: &dyn Source = &*self.txn;
 
             source.get_in_with(&records(collection.id), &key, &mut |stored| {
-                for index in &collection.indexes {
-                    old.push(stored_index_entries(
-                        source, index, collection, stored, &key,
-                    )?);
+                old.ends.reserve(collection.indexes.len());
+
+                for (position, index) in collection.indexes.iter().enumerate() {
+                    stored_entries(source, &mut old, position, index, collection, stored, &key)?;
                 }
 
                 Ok(())
@@ -1011,53 +1151,41 @@ impl<'a> CollectionWriter<'a> {
             });
         }
 
-        let mut removals = Vec::new();
-        let mut additions = Vec::with_capacity(collection.indexes.len());
-
-        for ((position, index), after) in collection.indexes.iter().enumerate().zip(entries) {
-            let tree = index_tree(index.id);
-            let before = old.get(position).map_or(&[][..], Vec::as_slice);
-
-            for entry in before {
-                if !after.contains(entry) {
-                    removals.push((tree, entry.0.clone()));
-                }
+        // The entries the object adds: those the object it replaces lacks.
+        for (position, entry) in entries.iter() {
+            if old.contains(position, entry) {
+                continue;
             }
 
-            for entry in after {
-                if before.contains(&entry) {
-                    continue;
-                }
+            if entry.len() > max_key_len {
+                return Err(too_long());
+            }
 
-                if entry.0.len() > max_key_len {
-                    return Err(too_long());
-                }
+            let index = &collection.indexes[position];
 
-                if index.unique {
-                    let mut taken = false;
+            if index.unique {
+                let mut taken = false;
 
-                    self.txn.get_in_with(&tree, &entry.0, &mut |holder| {
+                self.txn
+                    .get_in_with(&index_tree(index.id), entry, &mut |holder| {
                         taken = holder != key;
 
                         Ok(())
                     })?;
 
-                    if taken {
-                        let field = collection
-                            .fields
-                            .by_id(index.field)
-                            .map_or("", |field| field.name.as_str());
+                if taken {
+                    let field = collection
+                        .fields
+                        .by_id(index.field)
+                        .map_or("", |field| field.name.as_str());
 
-                        return Err(Error::DuplicateKey {
-                            message: format!(
-                                "another object of `{}` holds this value of its unique field `{field}`",
-                                collection.name
-                            ),
-                        });
-                    }
+                    return Err(Error::DuplicateKey {
+                        message: format!(
+                            "another object of `{}` holds this value of its unique field `{field}`",
+                            collection.name
+                        ),
+                    });
                 }
-
-                additions.push((tree, entry));
             }
         }
 
@@ -1078,14 +1206,23 @@ impl<'a> CollectionWriter<'a> {
 
         // Nothing below can refuse the object; only a failure of the file can
         // stop it now, and that leaves the transaction unable to commit.
-        // The entries of the object replaced, which it has just been read
-        // for.
-        for (tree, entry) in removals {
-            self.txn.remove_present_in(&tree, &entry)?;
+        // The entries of the object replaced that the object lacks, which
+        // it has just been read for.
+        for (position, entry) in old.iter() {
+            if !entries.contains(position, entry) {
+                let tree = index_tree(collection.indexes[position].id);
+
+                self.txn.remove_present_in(&tree, entry)?;
+            }
         }
 
-        for (tree, (entry, value)) in additions {
-            self.txn.insert_in(&tree, &entry, &value)?;
+        for (position, entry) in entries.iter() {
+            if !old.contains(position, entry) {
+                let index = &collection.indexes[position];
+
+                self.txn
+                    .insert_in(&index_tree(index.id), entry, entry_value(index, &key))?;
+            }
         }
 
         // The counter is stored once, when the transaction commits, however
