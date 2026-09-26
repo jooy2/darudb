@@ -92,7 +92,14 @@ describe('records', () => {
       { a: 'héllo', b: 'city 2', c: new Uint8Array([255]), d: { inner: 'wörld' } },
       { a: 'a'.repeat(64), b: 'b'.repeat(65), c: new Uint8Array(3), d: { inner: 'inner' } },
       { a: 'short', b: 'x'.repeat(600), c: new Uint8Array(700).fill(233), d: { inner: 'last' } },
-      { a: 'after the long one', b: 'y', c: new Uint8Array([1]), d: { inner: 'z' } }
+      { a: 'after the long one', b: 'y', c: new Uint8Array([1]), d: { inner: 'z' } },
+      // ASCII long enough to grow the buffer before a character that is not.
+      {
+        a: `${'a'.repeat(300)}é`,
+        b: 'z',
+        c: new Uint8Array(0),
+        d: { inner: `${'b'.repeat(280)}ü` }
+      }
     ];
     const bytes = encodeRecords(texts, objects);
 

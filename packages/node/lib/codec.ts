@@ -309,37 +309,49 @@ class Writer {
     this.at += 8;
   }
 
+  /**
+   * A string's length and UTF-8. An ASCII string, as nearly every one is,
+   * is written in one pass that checks each character as it copies it,
+   * through locals: a pass to check and another to copy, each storing the
+   * position on every character, took twice as long.
+   */
   string(value: string): void {
     const length = value.length;
-    let ascii = true;
+    const start = this.at;
 
-    for (let index = 0; index < length; index++) {
-      if (value.charCodeAt(index) > 0x7f) {
-        ascii = false;
-        break;
-      }
-    }
-
-    if (!ascii) {
-      // An unpaired surrogate has no UTF-8, and `encode` would turn it into
-      // U+FFFD without a word.
-      if (!value.isWellFormed()) {
-        throw invalid(
-          `the string ${JSON.stringify(value)} holds an unpaired surrogate, which UTF-8 cannot hold`
-        );
-      }
-
-      this.bytesOf(encoder.encode(value));
-
-      return;
-    }
-
+    this.reserve(10 + length);
     this.varint(length);
-    this.reserve(length);
+
+    const bytes = this.bytes;
+    let at = this.at;
 
     for (let index = 0; index < length; index++) {
-      this.bytes[this.at++] = value.charCodeAt(index);
+      const code = value.charCodeAt(index);
+
+      if (code > 0x7f) {
+        this.at = start;
+        this.unicode(value);
+
+        return;
+      }
+
+      bytes[at++] = code;
     }
+
+    this.at = at;
+  }
+
+  /** A string that is not ASCII. */
+  unicode(value: string): void {
+    // An unpaired surrogate has no UTF-8, and `encode` would turn it into
+    // U+FFFD without a word.
+    if (!value.isWellFormed()) {
+      throw invalid(
+        `the string ${JSON.stringify(value)} holds an unpaired surrogate, which UTF-8 cannot hold`
+      );
+    }
+
+    this.bytesOf(encoder.encode(value));
   }
 
   bytesOf(value: Uint8Array): void {
