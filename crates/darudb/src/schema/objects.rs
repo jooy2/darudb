@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
-use crate::format::object::codec;
+use crate::format::object::codec::{self, FieldRef};
 use crate::format::object::key;
 use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
@@ -395,6 +395,9 @@ pub(crate) fn scan<'a>(
     Ok(range.map(move |entry| entry.and_then(|(_, bytes)| decoder.decode(source, &bytes))))
 }
 
+/// The entries of one object in one index: a key and a value each.
+type Entries = Vec<(Vec<u8>, Vec<u8>)>;
+
 /// The entries that `object`, whose primary key encodes as `key`, has in
 /// `index`: a key and a value each, without repeats.
 pub(crate) fn index_entries(
@@ -402,7 +405,7 @@ pub(crate) fn index_entries(
     collection: &CollectionDef,
     object: &Object,
     key: &[u8],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+) -> Result<Entries> {
     let field = indexed_field(index, collection)?;
     // The value the object is stored with: a required field left out holds
     // its default, as the record does.
@@ -429,11 +432,16 @@ fn stored_index_entries(
     collection: &CollectionDef,
     record: &[u8],
     key: &[u8],
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+) -> Result<Entries> {
     let field = indexed_field(index, collection)?;
-    let value = match codec::find_field(record, field.id)
-        .map_err(|reason| damaged(source, collection, reason))?
-    {
+    let found = codec::find_field(record, field.id)
+        .map_err(|reason| damaged(source, collection, reason))?;
+
+    if let Some(entries) = found.and_then(|found| scalar_entries(index, found, &field.kind, key)) {
+        return entries;
+    }
+
+    let value = match found {
         Some(found) => codec::field_value(found, &field.kind)
             .map_err(|reason| damaged(source, collection, reason))?,
         None => match &field.default {
@@ -462,7 +470,7 @@ fn indexed_field<'c>(index: &IndexDef, collection: &'c CollectionDef) -> Result<
 
 /// The entries of `index` for an object whose value of the indexed field is
 /// `value` and whose primary key encodes as `key`.
-fn entries_of(index: &IndexDef, value: &Value, key: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+fn entries_of(index: &IndexDef, value: &Value, key: &[u8]) -> Result<Entries> {
     // A list gives an entry for each of its values, once each and in order;
     // any other value gives one.
     let Value::List(elements) = value else {
@@ -477,21 +485,64 @@ fn entries_of(index: &IndexDef, value: &Value, key: &[u8]) -> Result<Vec<(Vec<u8
     Ok(entries.into_iter().collect())
 }
 
+/// The entries of `index` for an object whose indexed field holds `found`
+/// in its record, what [`entries_of`] gives for the value `found` reads as,
+/// encoded where the record holds it. `None` for anything but a scalar of
+/// the field's own kind, which goes through a value: making one first cost
+/// a string for every object whose string field an index is on, each time
+/// the object was written, replaced or deleted.
+fn scalar_entries(
+    index: &IndexDef,
+    found: FieldRef<'_>,
+    kind: &Kind,
+    key: &[u8],
+) -> Option<Result<Entries>> {
+    let len = match (found, kind) {
+        (FieldRef::Bool(_), Kind::Bool)
+        | (FieldRef::Int(_), Kind::Int)
+        | (FieldRef::Float(_), Kind::Float) => 0,
+        (FieldRef::String(text), Kind::String) => text.len(),
+        (FieldRef::Bytes(bytes), Kind::Bytes) => bytes.len(),
+        _ => return None,
+    };
+    let entry = entry_with(index, false, len, key, |entry| {
+        key::encode_field(found, entry).map_err(internal)
+    });
+
+    Some(entry.map(|entry| vec![entry]))
+}
+
 /// The entry `value` gives index `index` for the object whose key is `key`.
 fn index_entry(index: &IndexDef, value: &Value, key: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
-    // A unique index keys by the value alone, except for null, which any
-    // number of objects may hold. Its entries name the object in their value
-    // either way.
-    let keyed = !index.unique || value.is_null();
-    let room = match value {
+    let len = match value {
         Value::String(text) => text.len(),
         Value::Bytes(bytes) => bytes.len(),
         _ => 0,
-    } + 9
-        + if keyed { key.len() } else { 0 };
+    };
+
+    entry_with(index, value.is_null(), len, key, |entry| {
+        key::encode(value, entry).map_err(internal)
+    })
+}
+
+/// The entry of index `index` for the object whose key is `key`, whose
+/// value `encode` writes: a null one when `null`, and one of about `len`
+/// bytes otherwise.
+fn entry_with(
+    index: &IndexDef,
+    null: bool,
+    len: usize,
+    key: &[u8],
+    encode: impl FnOnce(&mut Vec<u8>) -> Result<()>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    // A unique index keys by the value alone, except for null, which any
+    // number of objects may hold. Its entries name the object in their value
+    // either way.
+    let keyed = !index.unique || null;
+    let room = len + 9 + if keyed { key.len() } else { 0 };
     let mut entry = Vec::with_capacity(room);
 
-    key::encode(value, &mut entry).map_err(internal)?;
+    encode(&mut entry)?;
 
     if keyed {
         entry.extend_from_slice(key);
@@ -796,9 +847,19 @@ impl<'a> CollectionWriter<'a> {
                 .enumerate()
                 .find(|(_, field)| field.id == index.field)
                 .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+            let found = present.iter().find(|(at, _)| *at == position);
+
+            if let Some(scalar) =
+                found.and_then(|(_, found)| scalar_entries(index, *found, &field.kind, &key))
+            {
+                entries.push(scalar?);
+
+                continue;
+            }
+
             // The value the object is stored with, as `index_entries` finds
             // it in the object.
-            let value = match present.iter().find(|(at, _)| *at == position) {
+            let value = match found {
                 Some((_, found)) => codec::field_value(*found, &field.kind).map_err(refused)?,
                 None if position == key_position => key_value.clone(),
                 None if !field.optional => field.default.clone().unwrap_or(Value::Null),

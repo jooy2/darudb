@@ -8,6 +8,7 @@
 
 use std::cmp::Ordering;
 
+use super::codec::FieldRef;
 use super::value::Value;
 
 pub(crate) const NULL: u8 = 0x01;
@@ -36,6 +37,23 @@ pub(crate) fn encode(value: &Value, out: &mut Vec<u8>) -> Result<(), &'static st
         Value::String(value) => escape(STRING, value.as_bytes(), out),
         Value::Bytes(value) => escape(BYTES, value, out),
         Value::List(_) | Value::Object(_) => return Err("a list or an object is not a key"),
+    }
+
+    Ok(())
+}
+
+/// [`encode`] for a scalar where a record holds it: the encoding of the
+/// value the record reads as, with no value made for it. An encoding of a
+/// list, an object or a link is refused, as a list or an object is.
+pub(crate) fn encode_field(value: FieldRef<'_>, out: &mut Vec<u8>) -> Result<(), &'static str> {
+    match value {
+        FieldRef::Bool(false) => out.push(FALSE),
+        FieldRef::Bool(true) => out.push(TRUE),
+        FieldRef::Int(value) => number(INT, u64::from_be_bytes(value.to_be_bytes()) ^ SIGN, out),
+        FieldRef::Float(value) => number(FLOAT, ordered_float(value), out),
+        FieldRef::String(value) => escape(STRING, value, out),
+        FieldRef::Bytes(value) => escape(BYTES, value, out),
+        FieldRef::Encoded(_) => return Err("only a scalar is encoded where a record holds it"),
     }
 
     Ok(())
@@ -326,6 +344,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A scalar encoded where a record holds it gives the encoding of the
+    /// value it reads as.
+    #[test]
+    fn a_scalar_in_a_record_encodes_as_its_value() {
+        let mut rng = Rng::new(6);
+
+        for kind in 0..5 {
+            for _ in 0..4000 {
+                let value = random(&mut rng, kind);
+                let found = match &value {
+                    Value::Null => continue,
+                    Value::Bool(value) => FieldRef::Bool(*value),
+                    Value::Int(value) => FieldRef::Int(*value),
+                    Value::Float(value) => FieldRef::Float(*value),
+                    Value::String(text) => FieldRef::String(text.as_bytes()),
+                    Value::Bytes(bytes) => FieldRef::Bytes(bytes),
+                    Value::List(_) | Value::Object(_) => unreachable!(),
+                };
+                let mut out = vec![0xAA];
+
+                encode_field(found, &mut out).unwrap();
+                assert_eq!(out[1..], encoded(&value).unwrap(), "{value:?}");
+            }
+        }
+
+        assert!(encode_field(FieldRef::Encoded(&[0x08]), &mut Vec::new()).is_err());
     }
 
     #[test]
