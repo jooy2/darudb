@@ -301,6 +301,27 @@ fn agree(
     assert_eq!(lent, run::stored(source, &planned).unwrap(), "{ir:?}");
 
     assert_eq!(found, expected, "{ir:?}\nplanned {planned:?}");
+
+    // The same query without its offset and limit, cut here: what a sort
+    // that keeps only the objects still able to be in the result has to
+    // give, found without cutting anything, so that a mistake shared by the
+    // plan and the scan shows.
+    let everything = Ir {
+        offset: 0,
+        limit: None,
+        ..ir.clone()
+    };
+    let everything = plan::scan(db_schema, collection, &everything, parameters).unwrap();
+    let cut: Vec<i64> = ids(&run::whole(|| run::objects(source, &everything, None)).unwrap())
+        .into_iter()
+        .skip(usize::try_from(ir.offset).unwrap())
+        .take(
+            ir.limit
+                .map_or(usize::MAX, |limit| usize::try_from(limit).unwrap()),
+        )
+        .collect();
+
+    assert_eq!(found, cut, "{ir:?}, cut from every object it finds");
     assert_eq!(
         run::count(source, &planned).unwrap(),
         run::whole(|| run::count(source, &scanned)).unwrap(),

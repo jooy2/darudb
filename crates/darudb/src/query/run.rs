@@ -773,12 +773,8 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
                 record: Vec::new(),
             }
         } else {
-            let admit = |values: &[Value], key: &[u8]| {
-                bound.is_none_or(|bound| {
-                    order_of(plan, (values, key), (&bound.sort, &bound.key)).is_lt()
-                })
-            };
-            let Some(hit) = read(&reader, plan, key, record, &admit, &mut values)? else {
+            let bound = bound.map(|bound| (bound.sort.as_slice(), bound.key.as_slice()));
+            let Some(hit) = read(&reader, plan, key, record, bound, &mut values)? else {
                 return Ok(false);
             };
 
@@ -832,28 +828,31 @@ fn order_of(plan: &Plan<'_>, a: (&[Value], &[u8]), b: (&[Value], &[u8])) -> Orde
     a.1.cmp(b.1)
 }
 
-/// Whether an object with the values it sorts by and its key may be in a
-/// result.
-type Admit<'a> = dyn Fn(&[Value], &[u8]) -> bool + 'a;
-
 /// The object with primary key `key`, whose record the walk may have lent
 /// already, if it meets the plan's filter, with the values it sorts by, and
-/// only if `admit` says an object with those values and that key may be in
-/// the result. The filter and the sort read the fields they need from the
-/// record, and the sort's values go into `values`; the values, the key and
-/// the record are taken or copied only for an object that is kept.
+/// only if it sorts before `bound`, the values and the key of the last object
+/// kept once the kept ones have been cut down. The filter and the sort read
+/// the fields they need from the record, and the sort's values go into
+/// `values`; the values, the key and the record are taken or copied only for
+/// an object that is kept.
 fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
     walked: Option<&[u8]>,
-    admit: &Admit<'_>,
+    bound: Option<(&[Value], &[u8])>,
     values: &mut Vec<Value>,
 ) -> Result<Option<Found>> {
     let mut hit = None;
 
     with_record(reader.source, plan, key, walked, &mut |record| {
-        if meets(reader, plan, Some(record), Some(values))? && admit(values, key) {
+        if let Some(bound) = bound {
+            if !sorts_before(reader, plan, record, key, bound)? {
+                return Ok(());
+            }
+        }
+
+        if meets(reader, plan, Some(record), Some(values))? {
             hit = Some(Found {
                 sort: std::mem::take(values),
                 key: key.to_vec(),
@@ -890,6 +889,57 @@ fn with_record(
             plan.collection.name
         )))
     }
+}
+
+/// Whether the object whose record is `record` and whose key is `key` sorts
+/// before the object that sorts by `bound`'s values and has its key: what
+/// [`order_of`] says of the values [`meets`] would give it, with each value
+/// compared where the record holds it. A sort with a limit asks this of every
+/// object once it has kept enough of them, and nearly every one it reads
+/// after the first few does not sort before; its values are made only for
+/// an object that does.
+fn sorts_before(
+    reader: &Reader<'_>,
+    plan: &Plan<'_>,
+    record: &[u8],
+    key: &[u8],
+    bound: (&[Value], &[u8]),
+) -> Result<bool> {
+    let view = View {
+        source: reader.source,
+        collection: plan.collection,
+        record,
+    };
+    #[cfg(test)]
+    let object = WHOLE
+        .with(std::cell::Cell::get)
+        .then(|| objects::decode(reader.source, plan.collection, record))
+        .transpose()?;
+    #[cfg(test)]
+    let fields: &dyn Fields = match &object {
+        Some(object) => object,
+        None => &view,
+    };
+    #[cfg(not(test))]
+    let fields = &view;
+
+    for ((path, descending), other) in plan.sort.iter().zip(bound.0) {
+        // Null where the path reaches no value, as `value_at` gives it.
+        let mut order = ValueRef::Null.compare(other);
+
+        reader.any_in(fields, path, &mut |value| {
+            order = value.compare(other);
+            true
+        })?;
+
+        let order = if *descending { order.reverse() } else { order };
+
+        if order.is_ne() {
+            return Ok(order.is_lt());
+        }
+    }
+
+    Ok(key < bound.1)
 }
 
 /// Whether the object whose record is `record` meets the plan's filter.
