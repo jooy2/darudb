@@ -95,6 +95,10 @@ impl<'a> Range<'a> {
     }
 }
 
+/// Lookups of one key after another in one tree of a transaction, each from
+/// where the last one ended (`btree::Seeker`).
+pub(crate) type Seeker<'a> = btree::Seeker<'a, Loader>;
+
 /// A bound on any byte-like key as a bound on bytes.
 fn as_bytes<K: AsRef<[u8]>>(bound: Bound<&K>) -> Bound<&[u8]> {
     match bound {

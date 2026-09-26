@@ -15,6 +15,7 @@ use crate::format::object::codec::{self, FieldRef, NameOrder};
 use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
 use crate::schema::objects::{self, Source, index_tree, records};
+use crate::txn::Seeker;
 
 /// How many linked objects a query keeps once read, so that a filter or a
 /// sort that follows the same link twice reads the object once.
@@ -27,10 +28,31 @@ const TRIM_AT: usize = 256;
 /// Linked objects already read, by collection id and encoded key.
 type Links = HashMap<(u64, Vec<u8>), Option<Object>>;
 
-/// A query's reads: its transaction, and the linked objects already read.
+/// A query's reads: its transaction, the linked objects already read, and
+/// the lookups of the records an index names.
 struct Reader<'a> {
     source: &'a dyn Source,
     links: RefCell<Links>,
+    records: RefCell<Records<'a>>,
+}
+
+/// How a query reads the records an index names: the first one from the
+/// root, as a query of one object reads it, which is not worth the seeker's
+/// path, and the rest through a seeker made for the second.
+enum Records<'a> {
+    None,
+    One,
+    Many(Seeker<'a>),
+}
+
+impl<'a> Reader<'a> {
+    fn new(source: &'a dyn Source) -> Self {
+        Self {
+            source,
+            links: RefCell::new(HashMap::new()),
+            records: RefCell::new(Records::None),
+        }
+    }
 }
 
 impl Reader<'_> {
@@ -710,10 +732,7 @@ pub(crate) fn whole<T>(run: impl FnOnce() -> T) -> T {
 /// it, and nothing of it is copied. Otherwise the objects are gathered and
 /// sorted first.
 fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()> {
-    let reader = Reader {
-        source,
-        links: RefCell::new(HashMap::new()),
-    };
+    let reader = Reader::new(source);
     let limit = plan.limit.map_or(usize::MAX, |limit| {
         usize::try_from(limit).unwrap_or(usize::MAX)
     });
@@ -730,7 +749,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
         walk(source, plan, &mut |key, walked| {
             let mut stop = false;
 
-            with_record(source, plan, key, walked, &mut |record| {
+            with_record(&reader, plan, key, walked, &mut |record| {
                 if !meets(&reader, plan, Some(record), None)? {
                     return Ok(());
                 }
@@ -809,7 +828,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
 
     for hit in found.into_iter().skip(offset).take(limit) {
         if deferred {
-            with_record(source, plan, &hit.key, None, &mut |record| {
+            with_record(&reader, plan, &hit.key, None, &mut |record| {
                 take(Cow::Borrowed(record))
             })?;
         } else {
@@ -856,7 +875,7 @@ fn read(
 ) -> Result<Option<Found>> {
     let mut hit = None;
 
-    with_record(reader.source, plan, key, walked, &mut |record| {
+    with_record(reader, plan, key, walked, &mut |record| {
         if let Some(bound) = bound {
             if !sorts_before(reader, plan, record, key, bound)? {
                 return Ok(());
@@ -878,11 +897,11 @@ fn read(
 }
 
 /// Gives `visit` the record of the object with primary key `key`: the one
-/// the walk lent, or else the object's record, read where it lies. Either
-/// way it is borrowed, so that a record the query does not keep is never
-/// copied.
+/// the walk lent, or else the object's record, read where it lies through
+/// the reader's lookups of records. Either way it is borrowed, so that a
+/// record the query does not keep is never copied.
 fn with_record(
-    source: &dyn Source,
+    reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
     walked: Option<&[u8]>,
@@ -892,10 +911,27 @@ fn with_record(
         return visit(record);
     }
 
-    if source.get_in_with(&records(plan.collection.id), key, visit)? {
+    let tree = records(plan.collection.id);
+    let mut records = reader.records.borrow_mut();
+    let found = match &mut *records {
+        Records::Many(seeker) => seeker.get_with(key, visit)?,
+        Records::One => {
+            let mut seeker = reader.source.seeker_in(&tree)?;
+            let found = seeker.get_with(key, visit)?;
+
+            *records = Records::Many(seeker);
+            found
+        }
+        Records::None => {
+            *records = Records::One;
+            reader.source.get_in_with(&tree, key, visit)?
+        }
+    };
+
+    if found {
         Ok(())
     } else {
-        Err(source.corrupted(format!(
+        Err(reader.source.corrupted(format!(
             "an index of `{}` names an object that is not there",
             plan.collection.name
         )))
@@ -1058,14 +1094,11 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
             }
         }
     } else {
-        let reader = Reader {
-            source,
-            links: RefCell::new(HashMap::new()),
-        };
+        let reader = Reader::new(source);
         let mut found = 0u64;
 
         walk(source, plan, &mut |key, walked| {
-            with_record(source, plan, key, walked, &mut |record| {
+            with_record(&reader, plan, key, walked, &mut |record| {
                 found += u64::from(meets(&reader, plan, Some(record), None)?);
 
                 Ok(())

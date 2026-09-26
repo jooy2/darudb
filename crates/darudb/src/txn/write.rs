@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use super::{
-    Descriptors, Range, catalog_names, check_key, check_value, engine_tree, find_tree, root_child,
-    tree_key, user_tree,
+    Descriptors, Range, Seeker, catalog_names, check_key, check_value, engine_tree, find_tree,
+    root_child, tree_key, user_tree,
 };
 use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
@@ -666,6 +666,27 @@ impl WriteTransaction {
                     Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
                 }
                 _ => Ok(Range::empty()),
+            },
+        }
+    }
+
+    /// Lookups in tree `tree` of one key after another, each from where the
+    /// last one ended, including changes made in this transaction; none find
+    /// anything if the tree does not exist. Refused, as a walk is, for a tree
+    /// with values waiting to be stored.
+    pub(crate) fn seeker_in(&self, tree: &str) -> Result<Seeker<'_>> {
+        self.check_open()?;
+        self.check_not_waiting(tree)?;
+
+        let loader = &self.shared.loader;
+        let name = tree_key(tree, loader.page_size())?;
+
+        match self.trees.get(tree) {
+            Some(state) if state.deleted => Seeker::new(loader, state.id, None),
+            Some(state) => Seeker::new(loader, state.id, state.root.as_ref()),
+            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+                Some(descriptor) => Seeker::from_pointer(loader, descriptor.id, descriptor.root),
+                None => Seeker::new(loader, 0, None),
             },
         }
     }

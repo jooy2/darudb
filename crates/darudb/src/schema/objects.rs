@@ -19,7 +19,7 @@ use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
 };
 use crate::format::object::{Object, Value};
-use crate::txn::{Range, ReadTransaction, WriteTransaction};
+use crate::txn::{Range, ReadTransaction, Seeker, WriteTransaction};
 
 /// The tree of the object layer's own records: the stored schema and the
 /// auto-increment counters.
@@ -120,6 +120,10 @@ pub(crate) trait Source {
 
     fn len_in(&self, tree: &str) -> Result<u64>;
 
+    /// Lookups in `tree` of one key after another, each from where the last
+    /// one ended.
+    fn seeker_in(&self, tree: &str) -> Result<Seeker<'_>>;
+
     /// The error for damage found in the file.
     fn corrupted(&self, reason: String) -> Error;
 
@@ -157,6 +161,10 @@ impl Source for ReadTransaction {
         ReadTransaction::len_in(self, tree)
     }
 
+    fn seeker_in(&self, tree: &str) -> Result<Seeker<'_>> {
+        ReadTransaction::seeker_in(self, tree)
+    }
+
     fn corrupted(&self, reason: String) -> Error {
         ReadTransaction::corrupted(self, reason)
     }
@@ -192,6 +200,10 @@ impl Source for WriteTransaction {
 
     fn len_in(&self, tree: &str) -> Result<u64> {
         WriteTransaction::len_in(self, tree)
+    }
+
+    fn seeker_in(&self, tree: &str) -> Result<Seeker<'_>> {
+        WriteTransaction::seeker_in(self, tree)
     }
 
     fn corrupted(&self, reason: String) -> Error {

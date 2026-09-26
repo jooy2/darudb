@@ -375,6 +375,89 @@ fn random_changes_match_a_model() {
     }
 }
 
+/// A seeker finds what a lookup from the root finds, whatever order the keys
+/// come in: ascending, descending, at random, each twice, and keys the tree
+/// does not hold, in a tree changed and not committed yet and in one
+/// committed, three levels deep and more.
+#[test]
+fn a_seeker_finds_what_a_lookup_from_the_root_finds() {
+    let mut deepest = 0;
+
+    for seed in 0..6 {
+        let page_size = if seed % 3 == 0 { 16384 } else { 4096 };
+        let mut rng = Rng::new(700 + seed);
+        let mut harness = Harness::new(page_size);
+        let mut model = BTreeMap::new();
+
+        for round in 0..6 {
+            for _ in 0..400 + rng.index(800) {
+                let key = key_of(&mut rng, page_size);
+
+                if rng.below(5) == 0 {
+                    harness.remove(&key);
+                    model.remove(&key);
+                } else {
+                    let value = value_of(&mut rng, page_size);
+
+                    harness.insert(&key, &value);
+                    model.insert(key, value);
+                }
+            }
+
+            if round % 2 == 1 {
+                harness.commit();
+            }
+
+            let mut probes: Vec<Vec<u8>> = model.keys().cloned().collect();
+
+            probes.extend((0..300).map(|_| key_of(&mut rng, page_size)));
+
+            for order in 0..4 {
+                let mut keys = probes.clone();
+
+                match order {
+                    0 => keys.sort(),
+                    1 => {
+                        keys.sort();
+                        keys.reverse();
+                    }
+                    2 => rng.shuffle(&mut keys),
+                    _ => {
+                        keys.extend(probes.iter().cloned());
+                        rng.shuffle(&mut keys);
+                    }
+                }
+
+                let mut seeker = Seeker::new(&harness.loader, TREE, harness.root.as_ref()).unwrap();
+
+                for key in &keys {
+                    let mut found = None;
+                    let hit = seeker
+                        .get_with(key, &mut |value| {
+                            found = Some(value.to_vec());
+
+                            Ok(())
+                        })
+                        .unwrap();
+
+                    assert_eq!(hit, found.is_some());
+                    assert_eq!(
+                        found.as_ref(),
+                        model.get(key),
+                        "seed {seed} round {round} order {order}"
+                    );
+                    deepest = deepest.max(seeker.depth());
+                }
+            }
+        }
+    }
+
+    assert!(
+        deepest >= 2,
+        "the trees reached {deepest} levels of branches"
+    );
+}
+
 #[test]
 fn removing_everything_empties_the_tree_and_frees_its_pages() {
     let mut rng = Rng::new(99);

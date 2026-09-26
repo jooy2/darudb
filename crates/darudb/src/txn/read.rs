@@ -4,7 +4,9 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::{Descriptors, Range, catalog_names, engine_tree, root_child, tree_key, user_tree};
+use super::{
+    Descriptors, Range, Seeker, catalog_names, engine_tree, root_child, tree_key, user_tree,
+};
 use crate::btree::{self, Load};
 use crate::error::{Error, Result};
 use crate::format::CommitRecord;
@@ -132,6 +134,19 @@ impl ReadTransaction {
             key,
             visit,
         )
+    }
+
+    /// Lookups in tree `tree` of one key after another, each from where the
+    /// last one ended; none find anything if the tree does not exist.
+    pub(crate) fn seeker_in(&self, tree: &str) -> Result<Seeker<'_>> {
+        let loader = &self.shared.loader;
+        let name = tree_key(tree, loader.page_size())?;
+        let catalog = root_child(self.record.catalog);
+
+        match self.descriptors.find(loader, catalog.as_ref(), name)? {
+            Some(descriptor) => Seeker::from_pointer(loader, descriptor.id, descriptor.root),
+            None => Seeker::new(loader, 0, None),
+        }
     }
 
     /// Every entry of tree `tree`, in key order.

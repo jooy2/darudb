@@ -1,9 +1,10 @@
 //! Looking keys up and walking ranges of keys.
 
+use std::cmp::Ordering;
 use std::ops::Bound;
 
 use super::Load;
-use super::node::{Child, Node, NodeRef};
+use super::node::{Child, Node, NodeRef, compare};
 use crate::error::{Error, Result};
 use crate::format::{Pointer, StoredRef, StoredValue};
 
@@ -138,6 +139,131 @@ pub(crate) fn get<L: Load>(
         Some(StoredValue::Inline(value)) => Ok(Some(value)),
         Some(StoredValue::Overflow(reference)) => Ok(Some(load.read_overflow(&reference, tree)?)),
     }
+}
+
+/// Lookups of one key after another in one tree, each going down from the
+/// deepest node of the last one's path whose range holds the new key, rather
+/// than from the root.
+///
+/// A query reads the objects an index names in the index's order, which for
+/// one value of the index is the order of their keys, so one lookup after
+/// another lands in a leaf near the last: going down from the root each
+/// time looked up the same upper nodes in the page cache again and searched
+/// them again.
+pub(crate) struct Seeker<'a, L: Load> {
+    load: &'a L,
+    tree: u64,
+    root: Option<NodeRef<'a>>,
+    /// The branches from the root to the last leaf found, each with the
+    /// child the path took.
+    path: Vec<(NodeRef<'a>, usize)>,
+    /// The last leaf found.
+    leaf: Option<NodeRef<'a>>,
+}
+
+impl<'a, L: Load> Seeker<'a, L> {
+    /// Lookups in the tree rooted at `root`, empty with no root.
+    pub(crate) fn new(load: &'a L, tree: u64, root: Option<&'a Child>) -> Result<Self> {
+        let root = root
+            .map(|root| resolve(load, root, tree, None))
+            .transpose()?;
+
+        Ok(Self::rooted(load, tree, root))
+    }
+
+    /// Lookups in the committed tree rooted at `root`, empty for the null
+    /// pointer.
+    pub(crate) fn from_pointer(load: &'a L, tree: u64, root: Pointer) -> Result<Self> {
+        let root = if root.is_null() {
+            None
+        } else {
+            Some(NodeRef::Loaded(load.load(&root, tree, None)?))
+        };
+
+        Ok(Self::rooted(load, tree, root))
+    }
+
+    fn rooted(load: &'a L, tree: u64, root: Option<NodeRef<'a>>) -> Self {
+        Self {
+            load,
+            tree,
+            root,
+            path: Vec::new(),
+            leaf: None,
+        }
+    }
+
+    /// [`get_with`]: gives `visit` the value stored under `key`, borrowed
+    /// when the leaf holds it, and returns whether there was one.
+    pub(crate) fn get_with(
+        &mut self,
+        key: &[u8],
+        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<bool> {
+        // Every node on the path holds the key while each child it took does;
+        // the first child that does not is where the path turns.
+        let kept = self
+            .path
+            .iter()
+            .take_while(|(node, child)| holds(node, *child, key))
+            .count();
+        let turn = self.path.get(kept).map(|(node, _)| node.clone());
+        let mut node = match (turn, self.leaf.take()) {
+            (Some(node), _) => {
+                self.path.truncate(kept);
+                node
+            }
+            (None, Some(leaf)) => leaf,
+            // The first lookup, or one after a lookup that failed on its way
+            // down.
+            (None, None) => {
+                self.path.clear();
+
+                match &self.root {
+                    Some(root) => root.clone(),
+                    None => return Ok(false),
+                }
+            }
+        };
+
+        while !node.is_leaf() {
+            let index = node.rank(key, true);
+            let child = descend(self.load, &node, self.tree, index)?;
+
+            self.path.push((node, index));
+            node = child;
+        }
+
+        let leaf = self.leaf.insert(node);
+        let index = leaf.rank(key, false);
+
+        if index == leaf.count() || leaf.key(index) != key {
+            return Ok(false);
+        }
+
+        match leaf.value(index)? {
+            StoredRef::Inline(value) => visit(value)?,
+            StoredRef::Overflow(reference) => {
+                visit(&self.load.read_overflow(&reference, self.tree)?)?;
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// The branches on the path to the last leaf found.
+    #[cfg(test)]
+    pub(crate) fn depth(&self) -> usize {
+        self.path.len()
+    }
+}
+
+/// Whether child `child` of the branch `node` holds `key`: whether `key` lies
+/// from the separator before the child up to, but not including, the one
+/// after it.
+fn holds(node: &NodeRef<'_>, child: usize, key: &[u8]) -> bool {
+    (child == 0 || compare(node.key(child - 1), key) != Ordering::Greater)
+        && (child == node.count() || compare(key, node.key(child)) == Ordering::Less)
 }
 
 /// What [`Range::for_each`] gives each entry to: a key and a value, borrowed.
