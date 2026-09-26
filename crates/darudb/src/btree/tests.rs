@@ -254,17 +254,19 @@ impl Harness {
                     assert!(!branch.keys.is_empty(), "a branch without keys");
                     assert_eq!(branch.children.len(), branch.keys.len() + 1);
 
-                    for pair in branch.keys.windows(2) {
-                        assert!(pair[0] < pair[1]);
+                    for index in 1..branch.keys.len() {
+                        assert!(branch.keys.get(index - 1) < branch.keys.get(index));
                     }
 
                     for (index, child) in branch.children.iter().enumerate() {
                         let child_low = if index == 0 {
                             low.clone()
                         } else {
-                            Some(branch.keys[index - 1].clone())
+                            Some(branch.keys.get(index - 1).to_vec())
                         };
-                        let child_high = branch.keys.get(index).cloned().or(high.clone());
+                        let child_high = (index < branch.keys.len())
+                            .then(|| branch.keys.get(index).to_vec())
+                            .or(high.clone());
 
                         pending.push((
                             child.clone(),

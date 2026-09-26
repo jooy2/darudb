@@ -10,13 +10,13 @@
 use std::mem;
 
 use super::leaf::Leaf;
-use super::node::{Branch, Child, Node, child_index};
+use super::node::{Branch, Child, Keys, Node};
 use super::read::{contains, internal};
 use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
     CONTENT_OFFSET, Check, LeafEntry, OverflowRef, POINTER_LEN, PageHeader, PageKind, Pointer,
-    StoredRef, branch_key_len, branch_len, cell_len, content_len, inline_entry_len, inline_limit,
+    StoredRef, branch_key_len, cell_len, content_len, inline_entry_len, inline_limit,
     overflow_pages,
 };
 
@@ -90,7 +90,7 @@ pub(crate) fn insert<L: Load, S: Store>(
             page,
             Node::Branch(Branch {
                 level,
-                keys: vec![separator],
+                keys: Keys::of([separator.as_slice()]),
                 children: vec![left, right],
             }),
         );
@@ -198,7 +198,7 @@ fn insert_into<L: Load, S: Store>(
             ))
         }
         Node::Branch(branch) => {
-            let index = child_index(&branch.keys, key);
+            let index = branch.keys.child_index(key);
             let (replaced, split) = insert_into(
                 load,
                 store,
@@ -210,10 +210,10 @@ fn insert_into<L: Load, S: Store>(
             let mut split_up = None;
 
             if let Some((separator, right)) = split {
-                branch.keys.insert(index, separator);
+                branch.keys.insert(index, &separator);
                 branch.children.insert(index + 1, right);
 
-                if branch_len(&branch.keys) > capacity {
+                if branch.keys.branch_len() > capacity {
                     split_up = Some(split_branch(store, branch, capacity)?);
                 }
             }
@@ -279,7 +279,7 @@ fn remove_from<L: Load, S: Store>(
             Err(_) => Ok(None),
         },
         Node::Branch(branch) => {
-            let index = child_index(&branch.keys, key);
+            let index = branch.keys.child_index(key);
             let removed = remove_from(
                 load,
                 store,
@@ -365,7 +365,7 @@ fn rebalance<L: Load, S: Store>(
     let left = if index > 0 { index - 1 } else { index };
     let right = left + 1;
     let children_are_leaves = branch.level == 1;
-    let separator = branch.keys[left].clone();
+    let separator = branch.keys.get(left).to_vec();
     let (before, after) = branch.children.split_at_mut(right);
     let (left_child, right_child) = (&mut before[left], &mut after[0]);
     let left_len = super::resolve(load, left_child, tree, child_level)?.size();
@@ -407,11 +407,11 @@ fn rebalance<L: Load, S: Store>(
             return Err(internal("a branch's neighbour is a leaf"));
         };
 
-        kept.keys.push(separator);
-        kept.keys.extend(moved.keys);
+        kept.keys.push(&separator);
+        kept.keys.append(&moved.keys);
         kept.children.extend(moved.children);
 
-        if branch_len(&kept.keys) <= capacity {
+        if kept.keys.branch_len() <= capacity {
             (true, None)
         } else {
             (false, Some(split_branch(store, kept, capacity)?))
@@ -420,7 +420,7 @@ fn rebalance<L: Load, S: Store>(
 
     if let Some((separator, new_right)) = split {
         *right_child = new_right;
-        branch.keys[left] = separator;
+        branch.keys.set(left, &separator);
     }
 
     if merged {

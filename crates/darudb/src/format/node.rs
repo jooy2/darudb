@@ -150,6 +150,7 @@ pub(crate) fn inline_entry_len(key_len: usize, value_len: usize) -> usize {
 
 /// The bytes a branch with these keys takes, including one more child than
 /// keys.
+#[cfg(test)]
 pub(crate) fn branch_len<K: AsRef<[u8]>>(keys: &[K]) -> usize {
     POINTER_LEN
         + keys
@@ -396,17 +397,20 @@ pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &
 
 /// Writes a branch's keys and children as its content. There is one more
 /// child than keys, and the caller has checked that they fit.
-pub(crate) fn encode_branch<K: AsRef<[u8]>>(keys: &[K], children: &[Pointer], page: &mut [u8]) {
-    debug_assert_eq!(children.len(), keys.len() + 1);
-
+pub(crate) fn encode_branch<K: AsRef<[u8]>>(
+    keys: impl IntoIterator<Item = K>,
+    children: &[Pointer],
+    page: &mut [u8],
+) {
     for (index, child) in children.iter().enumerate() {
         child.write(&mut page[CONTENT_OFFSET + POINTER_LEN * index..]);
     }
 
     let slots = CONTENT_OFFSET + POINTER_LEN * children.len();
     let mut cursor = check_offset(page.len());
+    let mut count = 0;
 
-    for (index, key) in keys.iter().enumerate() {
+    for (index, key) in keys.into_iter().enumerate() {
         let key = key.as_ref();
 
         cursor -= 2 + key.len();
@@ -416,9 +420,11 @@ pub(crate) fn encode_branch<K: AsRef<[u8]>>(keys: &[K], children: &[Pointer], pa
         let slot = slots + 2 * index;
 
         page[slot..slot + 2].copy_from_slice(&offset(cursor));
+        count += 1;
     }
 
-    debug_assert!(cursor >= slots + 2 * keys.len());
+    debug_assert_eq!(children.len(), count + 1);
+    debug_assert!(cursor >= slots + 2 * count);
 }
 
 /// Checks the children, the key offsets and lengths of a branch with
@@ -495,6 +501,7 @@ pub(crate) fn branch_size(page: &[u8], count: usize) -> usize {
 }
 
 /// Reads the `count` keys and `count + 1` children of a branch.
+#[cfg(test)]
 pub(crate) fn decode_branch(
     page: &[u8],
     count: usize,
@@ -651,7 +658,7 @@ mod tests {
     fn a_branch_pointing_at_page_zero_is_refused() {
         let mut page = vec![0u8; P];
 
-        encode_branch(&[b"k"], &[Pointer::NULL, Pointer::NULL], &mut page);
+        encode_branch([b"k"], &[Pointer::NULL, Pointer::NULL], &mut page);
 
         assert!(decode_branch(&page, 1).is_err());
     }

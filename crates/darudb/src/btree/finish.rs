@@ -54,7 +54,7 @@ pub(crate) fn finish(
 
             let mut bytes = vec![0u8; pager.page_size()];
 
-            encode_branch(&keys, &pointers, &mut bytes);
+            encode_branch(keys.iter(), &pointers, &mut bytes);
 
             (
                 header(PageKind::Branch, level, keys.len(), txn, tree)?,

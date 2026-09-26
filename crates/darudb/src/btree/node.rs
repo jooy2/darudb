@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use super::leaf::Leaf;
 use crate::format::{
-    PageHeader, PageKind, Pointer, StoredRef, branch_child, branch_key, branch_len, branch_size,
-    check_branch, check_leaf, decode_branch, leaf_entry, leaf_extent, leaf_inline, leaf_key,
-    leaf_value,
+    POINTER_LEN, PageHeader, PageKind, Pointer, StoredRef, branch_child, branch_key,
+    branch_key_len, branch_size, check_branch, check_leaf, leaf_entry, leaf_extent, leaf_inline,
+    leaf_key, leaf_value,
 };
 use crate::storage::Weigh;
 
@@ -50,7 +50,7 @@ pub(crate) struct Branch {
     /// One more than the level of the children.
     pub(crate) level: u8,
     /// The separator keys, in ascending order.
-    pub(crate) keys: Vec<Vec<u8>>,
+    pub(crate) keys: Keys,
     /// The children: child `i` holds the keys from `keys[i − 1]` up to, but
     /// not including, `keys[i]`.
     pub(crate) children: Vec<Child>,
@@ -69,14 +69,149 @@ impl Node {
     pub(crate) fn len(&self) -> usize {
         match self {
             Node::Leaf(leaf) => leaf.size(),
-            Node::Branch(branch) => branch_len(&branch.keys),
+            Node::Branch(branch) => branch.keys.branch_len(),
         }
     }
 }
 
-/// The child that holds `key`: the number of separators at or below it.
-pub(crate) fn child_index(keys: &[Vec<u8>], key: &[u8]) -> usize {
-    keys.partition_point(|separator| compare(separator, key) != Ordering::Greater)
+/// The separator keys of a branch a write transaction changes, one after
+/// another in one buffer, with where each of them ends.
+///
+/// A key in a vector of its own cost an allocation for every key of a
+/// branch, both when a transaction first changed the branch and when it let
+/// it go, and a small transaction changes a branch on every level of every
+/// tree it writes: that took a tenth of a deferred commit of one object.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Keys {
+    bytes: Vec<u8>,
+    /// Where each key ends in `bytes`.
+    ends: Vec<usize>,
+}
+
+impl Keys {
+    /// The keys `keys` gives, in its order.
+    pub(crate) fn of<'k>(keys: impl IntoIterator<Item = &'k [u8]>) -> Self {
+        let mut all = Self::default();
+
+        for key in keys {
+            all.push(key);
+        }
+
+        all
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    /// Where key `index` starts in `bytes`.
+    fn start(&self, index: usize) -> usize {
+        index.checked_sub(1).map_or(0, |before| self.ends[before])
+    }
+
+    /// Key `index`.
+    pub(crate) fn get(&self, index: usize) -> &[u8] {
+        &self.bytes[self.start(index)..self.ends[index]]
+    }
+
+    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
+        (0..self.len()).map(|index| self.get(index))
+    }
+
+    pub(crate) fn push(&mut self, key: &[u8]) {
+        self.bytes.extend_from_slice(key);
+        self.ends.push(self.bytes.len());
+    }
+
+    /// Puts `key` in place `index`, before the key there.
+    pub(crate) fn insert(&mut self, index: usize, key: &[u8]) {
+        let at = self.start(index);
+
+        self.bytes.splice(at..at, key.iter().copied());
+
+        for end in &mut self.ends[index..] {
+            *end += key.len();
+        }
+
+        self.ends.insert(index, at + key.len());
+    }
+
+    /// Takes key `index` out.
+    pub(crate) fn remove(&mut self, index: usize) {
+        let (start, end) = (self.start(index), self.ends[index]);
+
+        self.bytes.drain(start..end);
+        self.ends.remove(index);
+
+        for later in &mut self.ends[index..] {
+            *later -= end - start;
+        }
+    }
+
+    /// Makes `key` key `index`, in place of the one there.
+    pub(crate) fn set(&mut self, index: usize, key: &[u8]) {
+        self.remove(index);
+        self.insert(index, key);
+    }
+
+    /// Adds `other`'s keys after these.
+    pub(crate) fn append(&mut self, other: &Keys) {
+        let base = self.bytes.len();
+
+        self.bytes.extend_from_slice(&other.bytes);
+        self.ends.extend(other.ends.iter().map(|end| end + base));
+    }
+
+    /// Takes the keys from `at` on out, and returns them.
+    pub(crate) fn split_off(&mut self, at: usize) -> Keys {
+        let start = self.start(at);
+        let bytes = self.bytes.split_off(start);
+        let ends = self
+            .ends
+            .split_off(at)
+            .into_iter()
+            .map(|end| end - start)
+            .collect();
+
+        Keys { bytes, ends }
+    }
+
+    /// Takes the last key out, and returns it.
+    pub(crate) fn pop(&mut self) -> Option<Vec<u8>> {
+        let last = self.len().checked_sub(1)?;
+        let key = self.get(last).to_vec();
+
+        self.bytes.truncate(self.start(last));
+        self.ends.pop();
+
+        Some(key)
+    }
+
+    /// The child that holds `key`: the number of separators at or below it.
+    pub(crate) fn child_index(&self, key: &[u8]) -> usize {
+        let (mut low, mut high) = (0, self.len());
+
+        while low < high {
+            let middle = low + (high - low) / 2;
+
+            if compare(self.get(middle), key) == Ordering::Greater {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+
+        low
+    }
+
+    /// The bytes of a page's content a branch with these keys takes.
+    pub(crate) fn branch_len(&self) -> usize {
+        POINTER_LEN + self.len() * branch_key_len(0) + self.bytes.len()
+    }
 }
 
 /// A committed node as the page cache keeps it: its page, checked once and
@@ -218,11 +353,15 @@ impl LoadedNode {
                 usize::from(self.low),
             )))
         } else {
-            decode_branch(&self.page, self.count()).map(|(keys, children)| {
+            let (page, count) = (&self.page, self.count());
+
+            check_branch(page, count).map(|()| {
                 Node::Branch(Branch {
                     level: self.level,
-                    keys,
-                    children: children.into_iter().map(Child::Clean).collect(),
+                    keys: Keys::of((0..count).map(|index| branch_key(page, count, index))),
+                    children: (0..=count)
+                        .map(|index| Child::Clean(branch_child(page, index)))
+                        .collect(),
                 })
             })
         };
@@ -295,7 +434,7 @@ impl NodeRef<'_> {
     pub(crate) fn key(&self, index: usize) -> &[u8] {
         match self {
             NodeRef::Borrowed(Node::Leaf(leaf)) => leaf.key(index),
-            NodeRef::Borrowed(Node::Branch(branch)) => &branch.keys[index],
+            NodeRef::Borrowed(Node::Branch(branch)) => branch.keys.get(index),
             NodeRef::Loaded(loaded) if loaded.leaf => leaf_key(&loaded.page, index),
             NodeRef::Loaded(loaded) => branch_key(&loaded.page, loaded.count(), index),
         }
@@ -689,12 +828,68 @@ mod tests {
 
     #[test]
     fn a_key_goes_to_the_child_whose_range_holds_it() {
-        let keys = vec![b"g".to_vec(), b"p".to_vec()];
+        let keys = Keys::of([&b"g"[..], b"p"]);
 
-        assert_eq!(child_index(&keys, b"a"), 0);
-        assert_eq!(child_index(&keys, b"g"), 1, "a separator starts its child");
-        assert_eq!(child_index(&keys, b"o"), 1);
-        assert_eq!(child_index(&keys, b"p"), 2);
-        assert_eq!(child_index(&keys, b"z"), 2);
+        assert_eq!(keys.child_index(b"a"), 0);
+        assert_eq!(keys.child_index(b"g"), 1, "a separator starts its child");
+        assert_eq!(keys.child_index(b"o"), 1);
+        assert_eq!(keys.child_index(b"p"), 2);
+        assert_eq!(keys.child_index(b"z"), 2);
+        assert_eq!(Keys::default().child_index(b"a"), 0);
+    }
+
+    /// Keys changed at random hold what a vector of keys changed the same
+    /// way holds.
+    #[test]
+    fn keys_change_as_a_vector_of_keys_does() {
+        let mut rng = Rng::new(21);
+
+        for _ in 0..200 {
+            let mut keys = Keys::default();
+            let mut model: Vec<Vec<u8>> = Vec::new();
+
+            for _ in 0..60 {
+                let len = rng.index(6);
+                let key: Vec<u8> = rng.bytes(len);
+
+                match rng.below(7) {
+                    0 | 1 => {
+                        let at = rng.index(model.len() + 1);
+
+                        keys.insert(at, &key);
+                        model.insert(at, key);
+                    }
+                    2 if !model.is_empty() => {
+                        let at = rng.index(model.len());
+
+                        keys.remove(at);
+                        model.remove(at);
+                    }
+                    3 if !model.is_empty() => {
+                        let at = rng.index(model.len());
+
+                        keys.set(at, &key);
+                        model[at] = key;
+                    }
+                    4 => {
+                        let at = rng.index(model.len() + 1);
+                        let (tail, model_tail) = (keys.split_off(at), model.split_off(at));
+
+                        assert_eq!(tail.iter().collect::<Vec<_>>(), model_tail);
+                        keys.append(&tail);
+                        model.extend(model_tail);
+                    }
+                    5 => assert_eq!(keys.pop(), model.pop()),
+                    _ => {
+                        keys.push(&key);
+                        model.push(key);
+                    }
+                }
+
+                assert_eq!(keys.len(), model.len());
+                assert_eq!(keys.iter().collect::<Vec<_>>(), model);
+                assert_eq!(keys.branch_len(), branch_len(&model));
+            }
+        }
     }
 }
