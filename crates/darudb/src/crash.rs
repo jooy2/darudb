@@ -715,6 +715,40 @@ fn rewriting_the_same_data_reuses_pages_once_no_reader_holds_them() {
     check_integrity(&db).unwrap();
 }
 
+/// A removal that goes straight down to a key it expects to find copies the
+/// nodes on the way whether the key is there or not. When it is not, the
+/// tree still has to be written, or the catalog keeps pointing at pages the
+/// copy gave back.
+#[test]
+fn a_removal_that_finds_nothing_leaves_every_page_accounted_for() {
+    let disk = Arc::new(SimDisk::default());
+    let db = Database::create_io(disk, 4096, &OpenOptions::new()).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    for index in 0..300u32 {
+        txn.insert("t", &index.to_be_bytes(), &[7; 100]).unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let mut txn = db.begin_write().unwrap();
+
+    assert!(!txn.remove_present_in("t", b"not there").unwrap());
+    txn.commit().unwrap();
+    check_integrity(&db).unwrap();
+
+    // Commits that reuse the pages given back must leave the tree whole.
+    for round in 0..4u8 {
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("u", &[round], &[round; 100]).unwrap();
+        txn.commit().unwrap();
+    }
+
+    check_integrity(&db).unwrap();
+    assert_eq!(db.begin_read().unwrap().len("t").unwrap(), 300);
+}
+
 #[test]
 fn deferred_commits_reuse_the_pages_they_write_before_the_window_ends() {
     let disk = Arc::new(SimDisk::default());

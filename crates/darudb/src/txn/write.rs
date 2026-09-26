@@ -492,6 +492,10 @@ impl WriteTransaction {
         };
 
         let removed = if present {
+            // The nodes on the way are copied, and the committed ones given
+            // back, whether the key is there or not: the copies are the tree
+            // now, and the commit has to write them.
+            state.changed = true;
             btree::remove_present(loader, &mut self.space, state.id, &mut state.root, key)?
         } else {
             btree::remove(loader, &mut self.space, state.id, &mut state.root, key)?
