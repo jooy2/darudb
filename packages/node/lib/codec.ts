@@ -696,6 +696,29 @@ function writeFields(writer: Writer, fields: Layout, object: object, where: stri
 
   let present = 0;
 
+  // Fewer than 128 fields are counted in one byte, which is kept for the
+  // count and filled in once the fields are written, each read once: read
+  // twice, to count them first, every field cost two lookups by name.
+  if (fields.list.length < 0x80) {
+    writer.byte(0);
+
+    const count = writer.at - 1;
+
+    for (const field of fields.list) {
+      const value = own(object, field.name);
+
+      if (value !== undefined && value !== null) {
+        present++;
+        writer.varint(field.id);
+        writeValue(writer, field.kind, value, where ? `${where}.${field.name}` : field.name);
+      }
+    }
+
+    writer.bytes[count] = present;
+
+    return;
+  }
+
   for (const field of fields.list) {
     const value = own(object, field.name);
 
