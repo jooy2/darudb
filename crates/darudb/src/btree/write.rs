@@ -446,7 +446,7 @@ fn make_dirty<'c, L: Load, S: Store>(
         let page = store.allocate()?;
 
         store.release(pointer.page, pointer.txn);
-        *child = Child::dirty(page, loaded.to_node()?);
+        *child = Child::dirty(page, loaded.to_node());
     }
 
     match child {
@@ -469,7 +469,7 @@ fn take_node<L: Load, S: Store>(
 
             store.release(pointer.page, pointer.txn);
 
-            loaded.to_node()
+            Ok(loaded.to_node())
         }
         Child::Dirty { page, node } => {
             store.release(page, store.txn());
@@ -668,7 +668,7 @@ pub(crate) fn delete_tree<L: Load, S: Store>(
                 let loaded = load.load(&pointer, tree, level)?;
 
                 store.release(pointer.page, pointer.txn);
-                loaded.to_node()?
+                loaded.to_node()
             }
             Child::Dirty { page, node } => {
                 store.release(page, store.txn());

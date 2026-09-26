@@ -231,7 +231,7 @@ impl Harness {
                     && high.as_deref().is_none_or(|high| key < high)
             };
 
-            match &node.to_node().unwrap() {
+            match &node.to_node() {
                 Node::Leaf(leaf) => {
                     let entries = leaf.to_entries().unwrap();
 
@@ -491,7 +491,6 @@ fn collect_pages(harness: &Harness) -> HashSet<u64> {
         if let Node::Branch(branch) = &resolve(&harness.loader, &child, TREE, level)
             .unwrap()
             .to_node()
-            .unwrap()
         {
             pending.extend(
                 branch

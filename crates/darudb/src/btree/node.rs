@@ -571,41 +571,40 @@ impl LoadedNode {
     }
 
     /// The node, decoded for a write transaction to change, with its heads.
-    pub(crate) fn to_node(&self) -> crate::error::Result<Node> {
+    /// The page passed its check when the node was made, so nothing here
+    /// can fail.
+    pub(crate) fn to_node(&self) -> Node {
         let heads = Heads {
             prefix: usize::from(self.prefix),
             heads: self.heads.to_vec(),
         };
-        let node = if self.leaf {
-            Ok(Node::Leaf(Leaf::from_loaded(
+
+        if self.leaf {
+            return Node::Leaf(Leaf::from_loaded(
                 &self.page,
                 self.count(),
                 usize::from(self.size),
                 usize::from(self.low),
                 heads,
-            )))
-        } else {
-            let (page, count) = (&self.page, self.count());
-            let key_bytes =
-                usize::from(self.size).saturating_sub(POINTER_LEN + count * branch_key_len(0));
+            ));
+        }
 
-            check_branch(page, count).map(|()| {
-                Node::Branch(Branch {
-                    level: self.level,
-                    keys: Keys::with_heads(
-                        count,
-                        key_bytes,
-                        |index| branch_key(page, count, index),
-                        heads,
-                    ),
-                    children: (0..=count)
-                        .map(|index| Child::Clean(branch_child(page, index)))
-                        .collect(),
-                })
-            })
-        };
+        let (page, count) = (&self.page, self.count());
+        let key_bytes =
+            usize::from(self.size).saturating_sub(POINTER_LEN + count * branch_key_len(0));
 
-        node.map_err(super::read::internal)
+        Node::Branch(Branch {
+            level: self.level,
+            keys: Keys::with_heads(
+                count,
+                key_bytes,
+                |index| branch_key(page, count, index),
+                heads,
+            ),
+            children: (0..=count)
+                .map(|index| Child::Clean(branch_child(page, index)))
+                .collect(),
+        })
     }
 
     /// Child `index` of a branch.
@@ -738,9 +737,9 @@ impl NodeRef<'_> {
 
     /// The node, decoded, for a check that reads all of it.
     #[cfg(test)]
-    pub(crate) fn to_node(&self) -> crate::error::Result<Node> {
+    pub(crate) fn to_node(&self) -> Node {
         match self {
-            NodeRef::Borrowed(node) => Ok((*node).clone()),
+            NodeRef::Borrowed(node) => (*node).clone(),
             NodeRef::Loaded(loaded) => loaded.to_node(),
         }
     }
