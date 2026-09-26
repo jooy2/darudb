@@ -190,7 +190,7 @@ function irOf(
   const prepared = preparedOf(collection, query);
 
   if (prepared !== null) {
-    return prepared.bind(parametersOf(parameters), count);
+    return prepared.prepared.bind(parametersOf(parameters), count);
   }
 
   if (typeof query === 'string') {
@@ -230,9 +230,9 @@ const NATIVE = Symbol('native');
  */
 class Prepared {
   #collection: string;
-  #native: native.NativePrepared;
+  #native: NativeQuery;
 
-  constructor(token: symbol, collection: string, prepared: native.NativePrepared) {
+  constructor(token: symbol, collection: string, prepared: NativeQuery) {
     if (token !== PREPARE) {
       throw invalid('a query is prepared with `Database.prepare`');
     }
@@ -246,9 +246,23 @@ class Prepared {
     return this.#collection;
   }
 
-  get [NATIVE](): native.NativePrepared {
+  get [NATIVE](): NativeQuery {
     return this.#native;
   }
+}
+
+/**
+ * A native prepared query, and its handle, which the functions that run it
+ * take (`NativePrepared.handle`): got once, since reading it is a method
+ * call.
+ */
+interface NativeQuery {
+  prepared: native.NativePrepared;
+  handle: native.ExternalObject<'NativePrepared'>;
+}
+
+function nativeQuery(prepared: native.NativePrepared): NativeQuery {
+  return { prepared, handle: prepared.handle };
 }
 
 /** Prepares `query`, text or built, on `collection`. */
@@ -258,7 +272,7 @@ function prepare(collection: string, query: QueryInput): Prepared {
       ? native.NativePrepared.fromText(collection, query)
       : native.NativePrepared.fromIr(irOf(collection, query, undefined, false, false, true));
 
-  return new Prepared(PREPARE, collection, prepared);
+  return new Prepared(PREPARE, collection, nativeQuery(prepared));
 }
 
 /** How many texts `preparedOf` keeps prepared, and how long each may be. */
@@ -271,14 +285,14 @@ const KEPT_LENGTH = 4096;
  * the map is full. A longer text is parsed each time instead, so that what
  * is kept stays small.
  */
-const texts = new Map<string, { collection: string; prepared: native.NativePrepared }>();
+const texts = new Map<string, { collection: string; prepared: NativeQuery }>();
 
 /**
  * The native prepared query to run `query` on `collection` with: a
  * `Prepared`, which has to be on `collection`, or text, which is prepared
  * the first time and kept. `null` for a query to encode as IR.
  */
-function preparedOf(collection: string, query: QueryInput): native.NativePrepared | null {
+function preparedOf(collection: string, query: QueryInput): NativeQuery | null {
   if (query instanceof Prepared) {
     if (query.collection !== collection) {
       throw codeError(
@@ -300,7 +314,7 @@ function preparedOf(collection: string, query: QueryInput): native.NativePrepare
     return kept.prepared;
   }
 
-  const prepared = native.NativePrepared.fromText(collection, query);
+  const prepared = nativeQuery(native.NativePrepared.fromText(collection, query));
 
   if (kept === undefined && texts.size >= KEPT_TEXTS) {
     // The map is full, so it has a first key.

@@ -32,7 +32,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use napi::bindgen_prelude::{
-    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, Null, ToNapiValue, TypeName,
+    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, External, Null, ToNapiValue, TypeName,
     Uint8Array,
 };
 use napi::{Env, Task};
@@ -564,10 +564,13 @@ impl Txn {
     }
 }
 
+/// What a transaction object holds, and shares with its handle.
+type Held = Arc<Mutex<Option<Txn>>>;
+
 /// A transaction, or a migration under way.
 #[napi]
 pub struct NativeTransaction {
-    held: Arc<Mutex<Option<Txn>>>,
+    held: Held,
 }
 
 #[napi]
@@ -576,6 +579,16 @@ impl NativeTransaction {
         Self {
             held: Arc::new(Mutex::new(Some(txn))),
         }
+    }
+
+    /// The transaction as the functions that make the calls a transaction
+    /// makes most take it: `getRecord`, `find`, `writeRecord` and the rest.
+    /// A method call costs napi-rs an unwrap of the object and a registration
+    /// of the borrow in a map behind a lock, about 80 nanoseconds more than a
+    /// function given this handle.
+    #[napi(getter, ts_return_type = "ExternalObject<'NativeTransaction'>")]
+    pub fn handle(&self) -> External<Held> {
+        External::new(Arc::clone(&self.held))
     }
 
     /// Runs `operation` on the transaction here.
@@ -640,117 +653,6 @@ impl NativeTransaction {
 
             Ok(batch.0)
         }))
-    }
-
-    /// The record of the object whose key is `key`, delivered as
-    /// [`delivered`] says, or `null`.
-    #[napi(ts_return_type = "number | Buffer | null")]
-    pub fn get_record<'env>(
-        &self,
-        env: &'env Env,
-        collection: String,
-        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
-        mut scratch: BufferSlice<'_>,
-    ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
-        let key = key_in(key)?;
-        let mut copied = None;
-
-        self.now(|txn| {
-            txn.get_record_with(&collection, key, &mut |record| {
-                copied = Some(copy_lent(record, &mut scratch));
-
-                Ok(())
-            })
-        })?;
-
-        copied.map(|copied| handed(env, copied)).transpose()
-    }
-
-    /// The records a query finds, one after another, each after its length;
-    /// only the first with `first`. Delivered as [`delivered`] says.
-    #[napi(ts_return_type = "number | Buffer")]
-    pub fn find<'env>(
-        &self,
-        env: &'env Env,
-        ir: BufferSlice<'_>,
-        first: bool,
-        mut scratch: BufferSlice<'_>,
-    ) -> Result<Either<u32, BufferSlice<'env>>> {
-        let records = self.now(|txn| txn.find_ir(&ir, first))?;
-
-        delivered(env, records, &mut scratch)
-    }
-
-    #[napi]
-    pub fn count(&self, ir: BufferSlice<'_>) -> Result<f64> {
-        self.now(|txn| txn.count_ir(&ir))
-    }
-
-    /// The records a prepared query finds with `parameters`, encoded as
-    /// `Query::bind_encoded` reads them, as `find` delivers them.
-    #[napi(ts_return_type = "number | Buffer")]
-    pub fn find_prepared<'env>(
-        &self,
-        env: &'env Env,
-        prepared: &NativePrepared,
-        parameters: BufferSlice<'_>,
-        first: bool,
-        mut scratch: BufferSlice<'_>,
-    ) -> Result<Either<u32, BufferSlice<'env>>> {
-        let query = prepared.bound(&parameters, first)?;
-        let records = self.now(|txn| txn.find(&prepared.collection, &query))?;
-
-        delivered(env, records, &mut scratch)
-    }
-
-    #[napi]
-    pub fn count_prepared(
-        &self,
-        prepared: &NativePrepared,
-        parameters: BufferSlice<'_>,
-    ) -> Result<f64> {
-        let query = prepared.bound(&parameters, false)?;
-
-        self.now(|txn| txn.count(&prepared.collection, &query))
-    }
-
-    #[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
-    pub fn write_records(
-        &self,
-        collection: String,
-        records: BufferSlice<'_>,
-        replace: bool,
-    ) -> Result<Vec<JsKeyOut>> {
-        self.now(|txn| txn.write_records(&collection, &records, replace))?
-            .deliver()
-    }
-
-    /// Writes the record of one object, as `writeRecords` writes a batch,
-    /// and returns its key rather than an array of one: making the array
-    /// cost more than a twentieth of an `insert`.
-    #[napi(ts_return_type = "number | bigint | string | Buffer")]
-    pub fn write_record(
-        &self,
-        collection: String,
-        records: BufferSlice<'_>,
-        replace: bool,
-    ) -> Result<JsKeyOut> {
-        let Keys(keys) = self.now(|txn| txn.write_records(&collection, &records, replace))?;
-        let [key] = <[darudb::Value; 1]>::try_from(keys)
-            .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
-
-        key_out(key)
-    }
-
-    #[napi]
-    pub fn delete(
-        &self,
-        collection: String,
-        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
-    ) -> Result<bool> {
-        let key = key_in(key)?;
-
-        self.now(|txn| txn.delete(&collection, key))
     }
 
     /// Commits a write transaction, deferred or not, and ends it.
@@ -1024,6 +926,124 @@ fn finish(txn: Txn) -> Result<darudb::Database> {
     }
 }
 
+/// The record of the object whose key is `key`, delivered as [`delivered`]
+/// says, or `null`.
+#[napi(ts_return_type = "number | Buffer | null")]
+pub fn get_record<'env>(
+    env: &'env Env,
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    collection: String,
+    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+    mut scratch: BufferSlice<'_>,
+) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
+    let key = key_in(key)?;
+    let mut copied = None;
+
+    with(txn, |txn| {
+        txn.get_record_with(&collection, key, &mut |record| {
+            copied = Some(copy_lent(record, &mut scratch));
+
+            Ok(())
+        })
+    })?;
+
+    copied.map(|copied| handed(env, copied)).transpose()
+}
+
+/// The records a query finds, one after another, each after its length;
+/// only the first with `first`. Delivered as [`delivered`] says.
+#[napi(ts_return_type = "number | Buffer")]
+pub fn find<'env>(
+    env: &'env Env,
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    ir: BufferSlice<'_>,
+    first: bool,
+    mut scratch: BufferSlice<'_>,
+) -> Result<Either<u32, BufferSlice<'env>>> {
+    let records = with(txn, |txn| txn.find_ir(&ir, first))?;
+
+    delivered(env, records, &mut scratch)
+}
+
+#[napi]
+pub fn count(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    ir: BufferSlice<'_>,
+) -> Result<f64> {
+    with(txn, |txn| txn.count_ir(&ir))
+}
+
+/// The records a prepared query finds with `parameters`, encoded as
+/// `Query::bind_encoded` reads them, as `find` delivers them.
+#[napi(ts_return_type = "number | Buffer")]
+pub fn find_prepared<'env>(
+    env: &'env Env,
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    #[napi(ts_arg_type = "ExternalObject<'NativePrepared'>")] prepared: &External<
+        Arc<PreparedQuery>,
+    >,
+    parameters: BufferSlice<'_>,
+    first: bool,
+    mut scratch: BufferSlice<'_>,
+) -> Result<Either<u32, BufferSlice<'env>>> {
+    let query = prepared.bound(&parameters, first)?;
+    let records = with(txn, |txn| txn.find(&prepared.collection, &query))?;
+
+    delivered(env, records, &mut scratch)
+}
+
+#[napi]
+pub fn count_prepared(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    #[napi(ts_arg_type = "ExternalObject<'NativePrepared'>")] prepared: &External<
+        Arc<PreparedQuery>,
+    >,
+    parameters: BufferSlice<'_>,
+) -> Result<f64> {
+    let query = prepared.bound(&parameters, false)?;
+
+    with(txn, |txn| txn.count(&prepared.collection, &query))
+}
+
+#[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
+pub fn write_records(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    collection: String,
+    records: BufferSlice<'_>,
+    replace: bool,
+) -> Result<Vec<JsKeyOut>> {
+    with(txn, |txn| txn.write_records(&collection, &records, replace))?.deliver()
+}
+
+/// Writes the record of one object, as `writeRecords` writes a batch, and
+/// returns its key rather than an array of one: making the array cost more
+/// than a twentieth of an `insert`.
+#[napi(ts_return_type = "number | bigint | string | Buffer")]
+pub fn write_record(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    collection: String,
+    records: BufferSlice<'_>,
+    replace: bool,
+) -> Result<JsKeyOut> {
+    let Keys(keys) = with(txn, |txn| txn.write_records(&collection, &records, replace))?;
+    let [key] = <[darudb::Value; 1]>::try_from(keys)
+        .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
+
+    key_out(key)
+}
+
+/// Deletes the object whose key is `key`, and says whether there was one.
+#[napi]
+pub fn delete_object(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    collection: String,
+    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+) -> Result<bool> {
+    let key = key_in(key)?;
+
+    with(txn, |txn| txn.delete(&collection, key))
+}
+
 fn lock(held: &Mutex<Option<Txn>>) -> Result<MutexGuard<'_, Option<Txn>>> {
     held.lock()
         .map_err(|_| napi::Error::new("INTERNAL", "a transaction's lock was poisoned".to_owned()))
@@ -1058,6 +1078,11 @@ pub fn parse_query(
 /// It holds no database, so one runs in any transaction.
 #[napi]
 pub struct NativePrepared {
+    inner: Arc<PreparedQuery>,
+}
+
+/// What a prepared query holds, and shares with its handle.
+pub struct PreparedQuery {
     collection: String,
     query: darudb::Query,
     /// The query cut to its first object, kept apart so that each run binds
@@ -1084,13 +1109,20 @@ impl NativePrepared {
         ))
     }
 
+    /// The query as `findPrepared` and `countPrepared` take it; see
+    /// [`NativeTransaction::handle`].
+    #[napi(getter, ts_return_type = "ExternalObject<'NativePrepared'>")]
+    pub fn handle(&self) -> External<Arc<PreparedQuery>> {
+        External::new(Arc::clone(&self.inner))
+    }
+
     /// The IR of the query with `parameters` for its parameters, for the
     /// asynchronous API, which passes queries to the thread pool as IR.
     #[napi]
     pub fn bind(&self, parameters: BufferSlice<'_>, count: bool) -> Result<Buffer> {
         let request = darudb::QueryRequest {
-            collection: self.collection.clone(),
-            query: self.bound(&parameters, false)?,
+            collection: self.inner.collection.clone(),
+            query: self.inner.bound(&parameters, false)?,
             count,
         };
 
@@ -1099,12 +1131,16 @@ impl NativePrepared {
 
     fn new(collection: String, query: darudb::Query) -> Self {
         Self {
-            collection,
-            first: query.clone().first(),
-            query,
+            inner: Arc::new(PreparedQuery {
+                collection,
+                first: query.clone().first(),
+                query,
+            }),
         }
     }
+}
 
+impl PreparedQuery {
     /// The query with `parameters`, encoded as `Query::bind_encoded` reads
     /// them, for its parameters, cut to its first object with `first`.
     fn bound(&self, parameters: &[u8], first: bool) -> Result<darudb::Query> {

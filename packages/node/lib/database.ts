@@ -79,12 +79,19 @@ const CREATE = Symbol('create');
 const TXN = Symbol('txn');
 const LAYOUT = Symbol('layout');
 
+/**
+ * A transaction as the native functions that read and write objects take
+ * it: its handle, which each transaction object gets once, rather than the
+ * object, whose methods cost more to call (`NativeTransaction.handle`).
+ */
+type Handle = native.ExternalObject<'NativeTransaction'>;
+
 /** A collection of a transaction, for reading its objects. */
 class ReadCollection {
-  #txn: native.NativeTransaction;
+  #txn: Handle;
   #layout: CollectionLayout;
 
-  constructor(txn: native.NativeTransaction, layout: CollectionLayout) {
+  constructor(txn: Handle, layout: CollectionLayout) {
     this.#txn = txn;
     this.#layout = layout;
   }
@@ -96,7 +103,7 @@ class ReadCollection {
 
   /** The object whose primary key is `key`, or `null`. */
   get(key: unknown): Record<string, unknown> | null {
-    const record = this.#txn.getRecord(this.#layout.name, keyOf(key), scratch);
+    const record = native.getRecord(this.#txn, this.#layout.name, keyOf(key), scratch);
 
     return record === null ? null : decodeRecord(this.#layout, delivered(record));
   }
@@ -117,10 +124,10 @@ class ReadCollection {
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
-      return this.#txn.countPrepared(prepared, parametersOf(parameters));
+      return native.countPrepared(this.#txn, prepared.handle, parametersOf(parameters));
     }
 
-    return this.#txn.count(irOf(name, query, parameters, true, false, true));
+    return native.count(this.#txn, irOf(name, query, parameters, true, false, true));
   }
 
   /** The records a query finds; only the first with `first`. */
@@ -129,16 +136,18 @@ class ReadCollection {
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
-      return delivered(this.#txn.findPrepared(prepared, parametersOf(parameters), first, scratch));
+      return delivered(
+        native.findPrepared(this.#txn, prepared.handle, parametersOf(parameters), first, scratch)
+      );
     }
 
     // The IR is lent: the engine reads it before the call returns.
     return delivered(
-      this.#txn.find(irOf(name, query, parameters, false, first, true), first, scratch)
+      native.find(this.#txn, irOf(name, query, parameters, false, first, true), first, scratch)
     );
   }
 
-  get [TXN](): native.NativeTransaction {
+  get [TXN](): Handle {
     return this.#txn;
   }
 
@@ -175,13 +184,13 @@ class WriteCollection extends ReadCollection {
 
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: unknown): boolean {
-    return this[TXN].delete(this[LAYOUT].name, keyOf(key));
+    return native.deleteObject(this[TXN], this[LAYOUT].name, keyOf(key));
   }
 
   #writeOne(object: unknown, replace: boolean) {
     const records = lendRecords(this[LAYOUT], [object]);
 
-    return this[TXN].writeRecord(this[LAYOUT].name, records, replace);
+    return native.writeRecord(this[TXN], this[LAYOUT].name, records, replace);
   }
 
   #write(objects: unknown, replace: boolean) {
@@ -195,17 +204,17 @@ class WriteCollection extends ReadCollection {
 
     const records = lendRecords(this[LAYOUT], objects);
 
-    return this[TXN].writeRecords(this[LAYOUT].name, records, replace);
+    return native.writeRecords(this[TXN], this[LAYOUT].name, records, replace);
   }
 }
 
 /** A read transaction: one commit, for as long as its function runs. */
 class ReadTransaction {
-  #txn: native.NativeTransaction;
+  #txn: Handle;
   #layout: SchemaLayout | null;
 
   constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
-    this.#txn = txn;
+    this.#txn = txn.handle;
     this.#layout = layout;
   }
 
@@ -217,11 +226,11 @@ class ReadTransaction {
 
 /** A write transaction: changes that commit together when its function returns. */
 class WriteTransaction {
-  #txn: native.NativeTransaction;
+  #txn: Handle;
   #layout: SchemaLayout | null;
 
   constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
-    this.#txn = txn;
+    this.#txn = txn.handle;
     this.#layout = layout;
   }
 
@@ -238,6 +247,7 @@ class WriteTransaction {
  */
 class Migrating {
   #txn: native.NativeTransaction;
+  #handle: Handle;
   #layout: SchemaLayout;
   #previous: SchemaLayout;
   #version: number;
@@ -249,6 +259,7 @@ class Migrating {
     version: number
   ) {
     this.#txn = txn;
+    this.#handle = txn.handle;
     this.#layout = layout;
     this.#previous = previous;
     this.#version = version;
@@ -266,7 +277,7 @@ class Migrating {
 
   /** Collection `name` of the new schema, for reading and writing. */
   collection(name: string): WriteCollection {
-    return new WriteCollection(this.#txn, collectionOf(this.#layout, name));
+    return new WriteCollection(this.#handle, collectionOf(this.#layout, name));
   }
 
   /**
