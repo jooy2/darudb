@@ -944,13 +944,21 @@ fn finish(txn: Txn) -> Result<darudb::Database> {
     }
 }
 
+/// The name of a collection, made once for the calls that read and write its
+/// objects: turning the JavaScript string into one of Rust's on every call
+/// cost a twentieth of a `get`.
+#[napi(ts_return_type = "ExternalObject<'CollectionName'>")]
+pub fn collection_name(name: String) -> External<String> {
+    External::new(name)
+}
+
 /// The record of the object whose key is `key`, delivered as [`delivered`]
 /// says, or `null`.
 #[napi(ts_return_type = "number | Buffer | null")]
 pub fn get_record<'env>(
     env: &'env Env,
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
-    collection: String,
+    #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
     #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
     mut scratch: BufferSlice<'_>,
 ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
@@ -958,7 +966,7 @@ pub fn get_record<'env>(
     let mut copied = None;
 
     with(txn, |txn| {
-        txn.get_record_with(&collection, key, &mut |record| {
+        txn.get_record_with(collection, key, &mut |record| {
             copied = Some(copy_lent(record, &mut scratch));
 
             Ok(())
@@ -1026,11 +1034,11 @@ pub fn count_prepared(
 #[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
 pub fn write_records(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
-    collection: String,
+    #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
     records: BufferSlice<'_>,
     replace: bool,
 ) -> Result<Vec<JsKeyOut>> {
-    with(txn, |txn| txn.write_records(&collection, &records, replace))?.deliver()
+    with(txn, |txn| txn.write_records(collection, &records, replace))?.deliver()
 }
 
 /// Writes the record of one object, as `writeRecords` writes a batch, and
@@ -1039,11 +1047,11 @@ pub fn write_records(
 #[napi(ts_return_type = "number | bigint | string | Buffer")]
 pub fn write_record(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
-    collection: String,
+    #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
     records: BufferSlice<'_>,
     replace: bool,
 ) -> Result<JsKeyOut> {
-    let Keys(keys) = with(txn, |txn| txn.write_records(&collection, &records, replace))?;
+    let Keys(keys) = with(txn, |txn| txn.write_records(collection, &records, replace))?;
     let [key] = <[darudb::Value; 1]>::try_from(keys)
         .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
 
@@ -1076,12 +1084,12 @@ pub fn end_transaction(
 #[napi]
 pub fn delete_object(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
-    collection: String,
+    #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
     #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
 ) -> Result<bool> {
     let key = key_in(key)?;
 
-    with(txn, |txn| txn.delete(&collection, key))
+    with(txn, |txn| txn.delete(collection, key))
 }
 
 fn lock(held: &Mutex<Option<Txn>>) -> Result<MutexGuard<'_, Option<Txn>>> {

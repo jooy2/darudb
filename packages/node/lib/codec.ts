@@ -11,6 +11,7 @@
  * that does not fit throws an error whose `code` is `CORRUPTED`.
  */
 
+import type { ExternalObject } from '../native.js';
 import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
 import type { FilterNode, QueryParts } from './query.js';
 
@@ -119,7 +120,8 @@ export interface Layout {
 
 /**
  * A collection of a stored schema: its id, name and fields, its key field,
- * and whether the engine numbers its keys.
+ * and whether the engine numbers its keys, with the name as the native calls
+ * take it once `nameOf` has made it.
  */
 export interface CollectionLayout {
   id: number | bigint;
@@ -127,6 +129,7 @@ export interface CollectionLayout {
   fields: Layout;
   key: FieldLayout;
   auto: boolean;
+  native?: ExternalObject<'CollectionName'>;
 }
 
 /** A stored schema as `decodeSchema` reads it: its version and its collections by name. */

@@ -389,6 +389,15 @@ function looseLayoutOf(record: Uint8Array): SchemaLayout {
   return layout;
 }
 
+/**
+ * The name of the collection `layout` as the native calls that read and write
+ * its objects take it, made the first time it is asked for: the call
+ * converted a string on every `get` otherwise.
+ */
+function nameOf(layout: CollectionLayout): native.ExternalObject<'CollectionName'> {
+  return (layout.native ??= native.collectionName(layout.name));
+}
+
 /** The collection `name` of `layout`, or an error. */
 function collectionOf(layout: SchemaLayout | null, name: string): CollectionLayout {
   if (layout === null) {
@@ -419,6 +428,7 @@ export {
   preparedOf,
   layoutOf,
   looseLayoutOf,
+  nameOf,
   collectionOf
 };
 export type { Prepared };

@@ -38,6 +38,7 @@ import {
   preparedOf,
   layoutOf,
   looseLayoutOf,
+  nameOf,
   collectionOf
 } from './shared.js';
 import type { Migration, Prepared, QueryInput } from './shared.js';
@@ -103,7 +104,7 @@ class ReadCollection {
 
   /** The object whose primary key is `key`, or `null`. */
   get(key: unknown): Record<string, unknown> | null {
-    const record = native.getRecord(this.#txn, this.#layout.name, keyOf(key), scratch);
+    const record = native.getRecord(this.#txn, nameOf(this.#layout), keyOf(key), scratch);
 
     return record === null ? null : decodeRecord(this.#layout, delivered(record));
   }
@@ -184,13 +185,13 @@ class WriteCollection extends ReadCollection {
 
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: unknown): boolean {
-    return native.deleteObject(this[TXN], this[LAYOUT].name, keyOf(key));
+    return native.deleteObject(this[TXN], nameOf(this[LAYOUT]), keyOf(key));
   }
 
   #writeOne(object: unknown, replace: boolean) {
     const records = lendRecords(this[LAYOUT], [object]);
 
-    return native.writeRecord(this[TXN], this[LAYOUT].name, records, replace);
+    return native.writeRecord(this[TXN], nameOf(this[LAYOUT]), records, replace);
   }
 
   #write(objects: unknown, replace: boolean) {
@@ -204,7 +205,7 @@ class WriteCollection extends ReadCollection {
 
     const records = lendRecords(this[LAYOUT], objects);
 
-    return native.writeRecords(this[TXN], this[LAYOUT].name, records, replace);
+    return native.writeRecords(this[TXN], nameOf(this[LAYOUT]), records, replace);
   }
 }
 
