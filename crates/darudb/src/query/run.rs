@@ -370,11 +370,17 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
         Access::Keys { keys, backward } => {
             for at in 0..keys.len() {
                 let key = &keys[in_order(at, keys.len(), *backward)];
+                let mut stop = false;
 
-                if let Some(record) = source.get_in(&records, key)? {
-                    if visit(key, Some(&record))? {
-                        break;
-                    }
+                // The record is lent where it lies, as a walk lends it.
+                source.get_in_with(&records, key, &mut |record| {
+                    stop = visit(key, Some(record))?;
+
+                    Ok(())
+                })?;
+
+                if stop {
+                    break;
                 }
             }
         }
@@ -401,11 +407,16 @@ fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<(
                 let stop = if let Some(value) = unique_value(index, *values, range) {
                     // One value of a unique index is one entry, whose key is
                     // the value and whose value is the object's key: looked
-                    // up, not walked.
-                    match source.get_in(&tree, value)? {
-                        Some(key) => give(&key, &mut seen)?,
-                        None => false,
-                    }
+                    // up, not walked, and the key lent rather than copied.
+                    let mut stop = false;
+
+                    source.get_in_with(&tree, value, &mut |key| {
+                        stop = give(key, &mut seen)?;
+
+                        Ok(())
+                    })?;
+
+                    stop
                 } else if *backward {
                     walk_back(source, index, &tree, range, &mut |key| give(key, &mut seen))?
                 } else {
