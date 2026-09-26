@@ -293,7 +293,7 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
         }
 
         if field < id {
-            reader.skip(0)?;
+            reader.skip_scalar()?;
 
             continue;
         }
@@ -601,6 +601,36 @@ impl<'a> Reader<'a> {
         }
 
         Ok(fields)
+    }
+
+    /// [`skip`](Self::skip), with a scalar stepped over in the caller: most
+    /// fields a filter steps over on its way to the one it tests are
+    /// scalars, and a call for each cost more than stepping over it.
+    #[inline(always)]
+    fn skip_scalar(&mut self) -> Result<(), &'static str> {
+        match self.bytes.get(self.at) {
+            Some(&(FALSE | TRUE)) => {
+                self.at += 1;
+            }
+            Some(&INT) => {
+                self.at += 1;
+                self.varint()?;
+            }
+            Some(&FLOAT) => {
+                self.at += 1;
+                self.take(8)?;
+            }
+            Some(&(STRING | BYTES)) => {
+                self.at += 1;
+
+                let len = self.varint()?;
+
+                self.take(len)?;
+            }
+            _ => self.skip(0)?,
+        }
+
+        Ok(())
     }
 
     /// Steps over a value without reading it into one.
