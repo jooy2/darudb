@@ -24,7 +24,9 @@ pub use build::{Filter, Query, QueryRequest};
 
 use crate::error::Result;
 use crate::format::object::Object;
+use crate::format::object::codec::NameOrder;
 use crate::format::object::schema::{CollectionDef, StoredSchema};
+use crate::schema::objects::{Decoder, Source};
 use crate::schema::{CollectionReader, CollectionWriter};
 
 /// `query` on `collection`, checked and planned, with its parameters'
@@ -34,12 +36,88 @@ fn plan<'s>(
     collection: &'s CollectionDef,
     query: &'s Query,
 ) -> Result<plan::Plan<'s>> {
-    plan::plan(
-        schema,
+    plan::plan(schema, collection, query.ir(), parameters(query))
+}
+
+/// The values of `query`'s parameters, none if it is not a bound prepared
+/// query.
+fn parameters(query: &Query) -> &[crate::format::object::Value] {
+    query.parameters.as_deref().unwrap_or_default()
+}
+
+/// Gives `take` the record of each object `query` finds, as
+/// [`run::each_stored`] does: through [`run::point`] when it is a lookup of
+/// one value, and planned otherwise.
+fn each_stored(
+    source: &dyn Source,
+    schema: &StoredSchema,
+    collection: &CollectionDef,
+    query: &Query,
+    take: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    if run::point(source, collection, query.ir(), parameters(query), take)? {
+        return Ok(());
+    }
+
+    run::each_stored(source, &plan(schema, collection, query)?, take)
+}
+
+/// The objects `query` finds, as [`run::objects`] gives them, through
+/// [`run::point`] when it is a lookup of one value.
+fn objects(
+    source: &dyn Source,
+    schema: &StoredSchema,
+    collection: &CollectionDef,
+    query: &Query,
+    order: Option<&NameOrder>,
+) -> Result<Vec<Object>> {
+    let mut found = Vec::new();
+    let mut decoder = Decoder::new(collection, order);
+    let point = run::point(
+        source,
         collection,
         query.ir(),
-        query.parameters.as_deref().unwrap_or_default(),
-    )
+        parameters(query),
+        &mut |record| {
+            found.push(decoder.decode(source, record)?);
+
+            Ok(())
+        },
+    )?;
+
+    if point {
+        return Ok(found);
+    }
+
+    run::objects(source, &plan(schema, collection, query)?, order)
+}
+
+/// The records `query` finds, as [`run::stored`] gives them, through
+/// [`run::point`] when it is a lookup of one value.
+fn stored(
+    source: &dyn Source,
+    schema: &StoredSchema,
+    collection: &CollectionDef,
+    query: &Query,
+) -> Result<Vec<Vec<u8>>> {
+    let mut found = Vec::new();
+    let point = run::point(
+        source,
+        collection,
+        query.ir(),
+        parameters(query),
+        &mut |record| {
+            found.push(record.to_vec());
+
+            Ok(())
+        },
+    )?;
+
+    if point {
+        return Ok(found);
+    }
+
+    run::stored(source, &plan(schema, collection, query)?)
 }
 
 impl CollectionReader<'_> {
@@ -51,7 +129,7 @@ impl CollectionReader<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan(schema, collection, query)?, self.order())
+        objects(source, schema, collection, query, self.order())
     }
 
     /// How many objects `query` finds, after its offset and within its
@@ -70,7 +148,7 @@ impl CollectionReader<'_> {
     pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
         let (source, schema, collection) = self.parts();
 
-        run::stored(source, &plan(schema, collection, query)?)
+        stored(source, schema, collection, query)
     }
 
     /// Gives `visit` the record of each object `query` finds, in its order,
@@ -85,7 +163,7 @@ impl CollectionReader<'_> {
     ) -> Result<()> {
         let (source, schema, collection) = self.parts();
 
-        run::each_stored(source, &plan(schema, collection, query)?, &mut visit)
+        each_stored(source, schema, collection, query, &mut visit)
     }
 }
 
@@ -95,7 +173,7 @@ impl CollectionWriter<'_> {
     pub fn query(&self, query: &Query) -> Result<Vec<Object>> {
         let (source, schema, collection) = self.parts();
 
-        run::objects(source, &plan(schema, collection, query)?, self.order())
+        objects(source, schema, collection, query, self.order())
     }
 
     /// How many objects `query` finds, with this transaction's changes; see
@@ -111,7 +189,7 @@ impl CollectionWriter<'_> {
     pub fn query_records(&self, query: &Query) -> Result<Vec<Vec<u8>>> {
         let (source, schema, collection) = self.parts();
 
-        run::stored(source, &plan(schema, collection, query)?)
+        stored(source, schema, collection, query)
     }
 
     /// Gives `visit` the record of each object `query` finds, with this
@@ -123,6 +201,6 @@ impl CollectionWriter<'_> {
     ) -> Result<()> {
         let (source, schema, collection) = self.parts();
 
-        run::each_stored(source, &plan(schema, collection, query)?, &mut visit)
+        each_stored(source, schema, collection, query, &mut visit)
     }
 }

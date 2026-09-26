@@ -259,6 +259,11 @@ fn ids(objects: &[Object]) -> Vec<i64> {
         .collect()
 }
 
+thread_local! {
+    /// How many queries [`agree`] found to be lookups of one value.
+    static POINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Runs `ir`, with `parameters` for its parameters, through the planner and
 /// as a scan, and checks the two agree. Returns the planned objects' ids, or
 /// `None` for an invalid query.
@@ -299,6 +304,20 @@ fn agree(
     })
     .unwrap();
     assert_eq!(lent, run::stored(source, &planned).unwrap(), "{ir:?}");
+
+    // A lookup of one value, looked up without a plan, finds what the plan
+    // finds.
+    let mut looked_up = Vec::new();
+
+    if run::point(source, collection, ir, parameters, &mut |record| {
+        looked_up.push(record.to_vec());
+        Ok(())
+    })
+    .unwrap()
+    {
+        assert_eq!(looked_up, lent, "{ir:?} looked up");
+        POINTS.with(|points| points.set(points.get() + 1));
+    }
 
     assert_eq!(found, expected, "{ir:?}\nplanned {planned:?}");
 
@@ -415,6 +434,45 @@ fn every_query_gives_the_scans_answer() {
         }
 
         assert!(valid > 1000, "seed {seed}: only {valid} queries were valid");
+
+        // Lookups of one value, which the random queries seldom are: of the
+        // primary key and of a unique field, present and missing, of another
+        // type than the field's and of null, built and prepared.
+        for _ in 0..100 {
+            let value: Value = match rng.below(6) {
+                0 | 1 => pick(&mut rng, &HANDLES).into(),
+                2 => "nobody".into(),
+                3 => (1 + int(&mut rng, players + 5)).into(),
+                4 => Value::Null,
+                _ => 2.5.into(),
+            };
+            let field = if rng.below(2) == 0 { "handle" } else { "id" };
+            let mut query = Query::new().filter(Filter::eq(field, value));
+
+            if rng.below(3) == 0 {
+                query = query.first();
+            }
+
+            let found = agree(&read, &open.schema, query.ir(), &[]);
+            let (prepared, parameters) = prepared(&query);
+
+            assert_eq!(
+                agree(
+                    &read,
+                    &open.schema,
+                    prepared.bind(&parameters).unwrap().ir(),
+                    &parameters
+                ),
+                found
+            );
+        }
+
+        assert!(
+            POINTS.with(std::cell::Cell::get) > 30,
+            "seed {seed}: few lookups of one value: {}",
+            POINTS.with(std::cell::Cell::get)
+        );
+        POINTS.with(|points| points.set(0));
         assert!(
             nonempty > 300,
             "seed {seed}: only {nonempty} queries found anything"

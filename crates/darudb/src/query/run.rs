@@ -8,9 +8,9 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 
-use super::ir::Op;
+use super::ir::{Expr, Ir, Op, Operand};
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, NameOrder};
 use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
@@ -678,6 +678,95 @@ pub(crate) fn objects(
     })?;
 
     Ok(objects)
+}
+
+/// Gives `take` the record of the one object `ir` finds, when it asks for
+/// one value of the primary key or of a unique index and nothing else, and
+/// returns whether it was such a query: found with two lookups at most,
+/// and no plan. Any other query, and one with a value of another type than
+/// its field's or null, is left to the planner, which gives the same answer
+/// or the error.
+///
+/// A lookup by one value is what an application asks most often, and
+/// planning it, then walking the plan's one key, took a quarter of it.
+pub(crate) fn point(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    ir: &Ir,
+    parameters: &[Value],
+    take: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
+    if !ir.sort.is_empty() || ir.offset != 0 || ir.limit == Some(0) {
+        return Ok(false);
+    }
+
+    let (path, value) = match &ir.filter {
+        Some(Expr::Test {
+            op: Op::Eq,
+            path,
+            values,
+        }) if values.len() == 1 => (path, &values[0]),
+        Some(Expr::Prepared {
+            op: Op::Eq,
+            path,
+            values,
+        }) if values.len() == 1 => match &values[0] {
+            Operand::Value(value) => (path, value),
+            Operand::Param(index) => match parameters.get(*index) {
+                Some(value) => (path, value),
+                None => return Ok(false),
+            },
+        },
+        _ => return Ok(false),
+    };
+    let [name] = path.as_slice() else {
+        return Ok(false);
+    };
+    let Some(field) = collection.fields.by_name(name) else {
+        return Ok(false);
+    };
+
+    if !matches!(
+        (&field.kind, value),
+        (Kind::Int, Value::Int(_))
+            | (Kind::String, Value::String(_))
+            | (Kind::Bytes, Value::Bytes(_))
+    ) {
+        return Ok(false);
+    }
+
+    let records = records(collection.id);
+
+    if field.id == collection.key {
+        source.get_in_with(&records, &objects::key_bytes(collection, value)?, take)?;
+
+        return Ok(true);
+    }
+
+    let Some(index) = collection
+        .indexes
+        .iter()
+        .find(|index| index.unique && index.field == field.id)
+    else {
+        return Ok(false);
+    };
+    // A unique index keys a value that is not null by the value alone.
+    let entry = key::encoded(value).map_err(|reason| Error::Internal {
+        message: reason.to_owned(),
+    })?;
+
+    source.get_in_with(&index_tree(index.id), &entry, &mut |key| {
+        if source.get_in_with(&records, key, take)? {
+            Ok(())
+        } else {
+            Err(source.corrupted(format!(
+                "an index of `{}` names an object that is not there",
+                collection.name
+            )))
+        }
+    })?;
+
+    Ok(true)
 }
 
 /// Runs `plan` and returns the records of the objects it finds, in its
