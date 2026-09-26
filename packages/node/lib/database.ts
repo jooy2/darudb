@@ -213,8 +213,8 @@ class ReadTransaction {
   #txn: Handle;
   #layout: SchemaLayout | null;
 
-  constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
-    this.#txn = txn.handle;
+  constructor(txn: Handle, layout: SchemaLayout | null) {
+    this.#txn = txn;
     this.#layout = layout;
   }
 
@@ -229,8 +229,8 @@ class WriteTransaction {
   #txn: Handle;
   #layout: SchemaLayout | null;
 
-  constructor(txn: native.NativeTransaction, layout: SchemaLayout | null) {
-    this.#txn = txn.handle;
+  constructor(txn: Handle, layout: SchemaLayout | null) {
+    this.#txn = txn;
     this.#layout = layout;
   }
 
@@ -527,7 +527,7 @@ class Database {
    * `fn` runs, and returns what `fn` returns.
    */
   read<R>(fn: (txn: ReadTransaction) => R): R {
-    const txn = this.#database().beginRead();
+    const txn = this.#database().beginReadHandle();
 
     try {
       const result = fn(new ReadTransaction(txn, this.#layout));
@@ -536,7 +536,7 @@ class Database {
 
       return result;
     } finally {
-      txn.end();
+      native.endTransaction(txn);
     }
   }
 
@@ -550,20 +550,20 @@ class Database {
     const database = this.#database();
 
     return holdForSync(this.#file, 'a synchronous write transaction', () => {
-      const txn = database.beginWrite();
+      const txn = database.beginWriteHandle();
       let committed = false;
 
       try {
         const result = fn(new WriteTransaction(txn, this.#layout));
 
         synchronous(result);
-        txn.commit(deferred);
+        native.commitTransaction(txn, deferred);
         committed = true;
 
         return result;
       } finally {
         if (!committed) {
-          txn.end();
+          native.endTransaction(txn);
         }
       }
     });

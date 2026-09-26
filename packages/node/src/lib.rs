@@ -344,6 +344,31 @@ impl NativeDatabase {
         Ok(NativeTransaction::of(Txn::Write(Box::new(txn))))
     }
 
+    /// `beginRead`, giving the transaction only as its handle, which the
+    /// functions of a synchronous transaction take, `endTransaction` among
+    /// them. `read` begins a transaction for every call, and an object of
+    /// its own for each, with a finalizer, cost the garbage collector more
+    /// than the rest of a read transaction begun for one lookup.
+    #[napi(ts_return_type = "ExternalObject<'NativeTransaction'>")]
+    pub fn begin_read_handle(&self) -> Result<External<Held>> {
+        let txn = self.database()?.begin_read().map_err(to_js_error)?;
+
+        Ok(External::new(Arc::new(Mutex::new(Some(Txn::Read(
+            Box::new(txn),
+        ))))))
+    }
+
+    /// `beginWrite`, giving the transaction only as its handle; see
+    /// `beginReadHandle`.
+    #[napi(ts_return_type = "ExternalObject<'NativeTransaction'>")]
+    pub fn begin_write_handle(&self) -> Result<External<Held>> {
+        let txn = self.database()?.begin_write().map_err(to_js_error)?;
+
+        Ok(External::new(Arc::new(Mutex::new(Some(Txn::Write(
+            Box::new(txn),
+        ))))))
+    }
+
     /// `begin_write` on the thread pool, which waits there for another
     /// process's writer.
     #[napi(ts_return_type = "Promise<NativeTransaction | NativeFailure>")]
@@ -1030,6 +1055,28 @@ pub fn write_record(
         .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
 
     key_out(key)
+}
+
+/// Commits the write transaction `txn`, deferred or not, and ends it.
+#[napi]
+pub fn commit_transaction(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    deferred: bool,
+) -> Result<()> {
+    let taken = lock(txn)?.take().ok_or_else(ended)?;
+
+    commit(taken, deferred)
+}
+
+/// Ends the transaction `txn`, throwing a write's changes away. Ending one
+/// that has ended does nothing.
+#[napi]
+pub fn end_transaction(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+) {
+    if let Ok(mut held) = lock(txn) {
+        *held = None;
+    }
 }
 
 /// Deletes the object whose key is `key`, and says whether there was one.
