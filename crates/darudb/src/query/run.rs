@@ -373,14 +373,18 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
     }
 }
 
-/// What [`walk`] gives each object to: its primary key and, when the walk
-/// read it, its record, both borrowed. It returns whether to stop.
-type Visit<'v> = dyn FnMut(&[u8], Option<&[u8]>) -> Result<bool> + 'v;
-
 /// Walks the keys the access names, in its order, reading each object once.
 /// `visit` gets a primary key and, when the walk read it, the record, both
 /// borrowed; it returns whether to stop.
-fn walk(source: &dyn Source, plan: &Plan<'_>, visit: &mut Visit<'_>) -> Result<()> {
+///
+/// Generic over `visit`, which every object read goes through: a call
+/// through a pointer for each object was a tenth of a walk over every
+/// record that tests one field.
+fn walk(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    visit: &mut impl FnMut(&[u8], Option<&[u8]>) -> Result<bool>,
+) -> Result<()> {
     let records = records(plan.collection.id);
 
     match &plan.access {
@@ -748,8 +752,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
 
         walk(source, plan, &mut |key, walked| {
             let mut stop = false;
-
-            with_record(&reader, plan, key, walked, &mut |record| {
+            let mut each = |record: &[u8]| {
                 if !meets(&reader, plan, Some(record), None)? {
                     return Ok(());
                 }
@@ -765,7 +768,13 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
                 stop = taken >= limit;
 
                 Ok(())
-            })?;
+            };
+
+            // A record the walk lent is tested here, not through a pointer.
+            match walked {
+                Some(record) => each(record)?,
+                None => with_record(&reader, plan, key, None, &mut each)?,
+            }
 
             Ok(stop)
         })?;
