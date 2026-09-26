@@ -776,8 +776,21 @@ struct Written {
     record: Vec<u8>,
     /// The object's entries in the indexes of its collection.
     entries: IndexKeys,
-    /// The auto-increment counter to store, if the write moves it.
-    raised: Option<u64>,
+    /// What the write does to the auto-increment counter.
+    numbering: Numbering,
+}
+
+/// What writing an object does to its collection's auto-increment counter.
+#[derive(Clone, Copy)]
+enum Numbering {
+    /// Nothing.
+    Kept,
+    /// Stores this as the next number, past the one the object was given.
+    Raised(u64),
+    /// Raises it past the key the object brings, if the key is not below
+    /// it, unless the object replaces one: storing that one raised the
+    /// counter past the key already, so a replacement need not read it.
+    PastKey(i64),
 }
 
 /// A collection of a write transaction: its objects, with the transaction's
@@ -954,10 +967,10 @@ impl<'a> CollectionWriter<'a> {
             .map(|(_, found)| codec::field_value(*found, &key_field.kind))
             .transpose()
             .map_err(refused)?;
-        let (assigned, raised) = if collection.auto {
+        let (assigned, numbering) = if collection.auto {
             self.number(collection, given.as_ref())?
         } else {
-            (None, None)
+            (None, Numbering::Kept)
         };
         let key_value = match assigned {
             Some(number) => Value::Int(number),
@@ -1016,7 +1029,7 @@ impl<'a> CollectionWriter<'a> {
                 key_value,
                 record: stored,
                 entries,
-                raised,
+                numbering,
             },
             replace,
         )
@@ -1058,16 +1071,16 @@ impl<'a> CollectionWriter<'a> {
         let key_field = collection
             .key_field()
             .ok_or_else(|| internal("a collection has no key field"))?;
-        let raised = if collection.auto {
-            let (assigned, raised) = self.number(collection, object.get(&key_field.name))?;
+        let numbering = if collection.auto {
+            let (assigned, numbering) = self.number(collection, object.get(&key_field.name))?;
 
             if let Some(number) = assigned {
                 object.set_named(&key_field.name, Value::Int(number));
             }
 
-            raised
+            numbering
         } else {
-            None
+            Numbering::Kept
         };
         let key_value = object.get(&key_field.name).cloned().unwrap_or(Value::Null);
         let key = key_bytes(collection, &key_value)?;
@@ -1090,7 +1103,7 @@ impl<'a> CollectionWriter<'a> {
                 key_value,
                 record,
                 entries,
-                raised,
+                numbering,
             },
             replace,
         )
@@ -1111,18 +1124,19 @@ impl<'a> CollectionWriter<'a> {
             key_value,
             record,
             entries,
-            raised,
+            numbering,
         } = written;
 
         // An insert finds out whether the key is taken by storing the record,
         // below, rather than by looking it up first. A replacement reads the
         // entries the object it replaces has in each index.
         let mut old = IndexKeys::default();
+        let mut replaced = false;
 
         if replace {
             let source: &dyn Source = &*self.txn;
 
-            source.get_in_with(&records(collection.id), &key, &mut |stored| {
+            replaced = source.get_in_with(&records(collection.id), &key, &mut |stored| {
                 old.ends.reserve(collection.indexes.len());
 
                 for (position, index) in collection.indexes.iter().enumerate() {
@@ -1132,6 +1146,19 @@ impl<'a> CollectionWriter<'a> {
                 Ok(())
             })?;
         }
+
+        // The counter to store, if the write moves it.
+        let raised = match numbering {
+            Numbering::Kept => None,
+            Numbering::Raised(next) => Some(next),
+            Numbering::PastKey(_) if replaced => None,
+            Numbering::PastKey(chosen) => match u64::try_from(chosen) {
+                Ok(chosen) => {
+                    (chosen >= self.next_number(collection)?).then(|| chosen.saturating_add(1))
+                }
+                Err(_) => None,
+            },
+        };
 
         let max_key_len = self.txn.max_key_len();
         let too_long = || Error::InvalidArgument {
@@ -1240,13 +1267,30 @@ impl<'a> CollectionWriter<'a> {
     }
 
     /// The collection's next auto-increment number, if the object gives no
-    /// key, `given`, and the next number to store if it changes: past the
-    /// one assigned, or past a key the object brings that is not below it.
+    /// key, `given`, and what the write does to the counter.
     fn number(
         &self,
         collection: &CollectionDef,
         given: Option<&Value>,
-    ) -> Result<(Option<i64>, Option<u64>)> {
+    ) -> Result<(Option<i64>, Numbering)> {
+        match given {
+            None | Some(Value::Null) => {
+                let next = self.next_number(collection)?;
+                let assigned = i64::try_from(next).map_err(|_| Error::InvalidArgument {
+                    message: format!("`{}` has used every auto-increment number", collection.name),
+                })?;
+
+                Ok((Some(assigned), Numbering::Raised(next + 1)))
+            }
+            Some(Value::Int(chosen)) => Ok((None, Numbering::PastKey(*chosen))),
+            // Not an int: the key check refuses the object.
+            Some(_) => Ok((None, Numbering::Kept)),
+        }
+    }
+
+    /// The collection's next auto-increment number, with this
+    /// transaction's changes.
+    fn next_number(&self, collection: &CollectionDef) -> Result<u64> {
         let mut next = 1;
 
         self.txn
@@ -1261,24 +1305,7 @@ impl<'a> CollectionWriter<'a> {
                 Ok(())
             })?;
 
-        match given {
-            None | Some(Value::Null) => {
-                let assigned = i64::try_from(next).map_err(|_| Error::InvalidArgument {
-                    message: format!("`{}` has used every auto-increment number", collection.name),
-                })?;
-
-                Ok((Some(assigned), Some(next + 1)))
-            }
-            Some(Value::Int(chosen)) => Ok((
-                None,
-                u64::try_from(*chosen)
-                    .ok()
-                    .filter(|chosen| *chosen >= next)
-                    .map(|chosen| chosen.saturating_add(1)),
-            )),
-            // Not an int: the key check refuses the object.
-            Some(_) => Ok((None, None)),
-        }
+        Ok(next)
     }
 }
 

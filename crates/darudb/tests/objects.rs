@@ -337,6 +337,19 @@ fn an_auto_increment_never_gives_a_number_twice() {
         txn.collection("users").unwrap().insert(user("l")).unwrap(),
         Value::Int(15)
     );
+
+    // A put with a number of its own raises the counter past it as an insert
+    // does, unless it replaces an object, which is below the counter already.
+    let mut users = txn.collection("users").unwrap();
+
+    users.put(user("m").with("id", 3)).unwrap();
+    assert_eq!(users.insert(user("n")).unwrap(), Value::Int(16));
+    users.put(user("o").with("id", 30)).unwrap();
+    assert_eq!(
+        users.insert(user("p")).unwrap(),
+        Value::Int(31),
+        "a put that adds an object raises the counter"
+    );
 }
 
 #[test]
