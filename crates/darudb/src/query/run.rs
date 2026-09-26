@@ -240,6 +240,19 @@ impl ValueRef<'_> {
         }
     }
 
+    /// Whether this value equals `other`, as [`compare`](Self::compare)
+    /// finds them equal: strings and bytes compared as bytes, which tells two
+    /// of different lengths apart without reading them, as nearly every
+    /// object an equality on a field without an index tests differs.
+    #[inline(always)]
+    fn equals(self, other: &Value) -> bool {
+        match (self, other) {
+            (ValueRef::String(value), Value::String(other)) => value == other.as_bytes(),
+            (ValueRef::Bytes(value), Value::Bytes(other)) => value == other.as_slice(),
+            _ => self.compare(other).is_eq(),
+        }
+    }
+
     /// The order of this value and `other`, as [`key::compare`] gives it.
     fn compare(self, other: &Value) -> Ordering {
         match (self, other) {
@@ -345,6 +358,8 @@ impl Fields for View<'_> {
 /// Whether `test` holds for the value `value`, which is not null.
 fn passes(test: &Test, value: ValueRef<'_>) -> bool {
     match test {
+        Test::Compare(Op::Eq, other) | Test::Element(other) => value.equals(other),
+        Test::Compare(Op::Ne, other) => !value.equals(other),
         Test::Compare(op, other) => {
             let order = value.compare(other);
 
@@ -361,7 +376,6 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
         Test::In(values) => values
             .binary_search_by(|other| value.compare(other).reverse())
             .is_ok(),
-        Test::Element(other) => value.compare(other).is_eq(),
         Test::Substring(text) => value.as_str().is_some_and(|value| value.contains(*text)),
         Test::StartsWith(text) => value
             .string_bytes()
