@@ -53,6 +53,12 @@ impl Pager {
         self.page_size
     }
 
+    /// Whether the file is encrypted, which makes a sealed page unreadable
+    /// until it is opened again.
+    pub(crate) fn is_encrypted(&self) -> bool {
+        self.cipher.is_some()
+    }
+
     /// The path of the file, for error messages.
     pub(crate) fn path(&self) -> &Path {
         &self.path

@@ -612,6 +612,11 @@ impl LoadedNode {
         branch_child(&self.page, index)
     }
 
+    /// The page the node was made from.
+    pub(crate) fn page(&self) -> &[u8] {
+        &self.page
+    }
+
     /// A leaf's entries, or a branch's keys.
     fn count(&self) -> usize {
         self.heads.len()

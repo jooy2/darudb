@@ -187,7 +187,7 @@ impl Harness {
         for page in pages {
             self.store
                 .pager
-                .write_sealed_run(page.page, &page.bytes)
+                .write_sealed_run(page.page, page.bytes())
                 .unwrap();
         }
 

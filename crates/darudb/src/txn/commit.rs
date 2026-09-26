@@ -265,9 +265,9 @@ fn write_and_publish(
         .flat_map(|run| run.chunks(pager.run_pages()))
     {
         match run {
-            [page] => pager.write_sealed_run(page.page, &page.bytes)?,
+            [page] => pager.write_sealed_run(page.page, page.bytes())?,
             _ => {
-                let bytes: Vec<&[u8]> = run.iter().map(|page| page.bytes.as_slice()).collect();
+                let bytes: Vec<&[u8]> = run.iter().map(FinishedPage::bytes).collect();
 
                 pager.write_sealed_run(run[0].page, &bytes.concat())?;
             }

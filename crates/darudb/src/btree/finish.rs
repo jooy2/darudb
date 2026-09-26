@@ -15,11 +15,22 @@ use crate::storage::Pager;
 #[derive(Debug)]
 pub(crate) struct FinishedPage {
     pub(crate) page: u64,
-    pub(crate) bytes: Vec<u8>,
+    /// The sealed page, in an encrypted file. A plain file's sealed page is
+    /// the page the cached node keeps, which is written instead: copying
+    /// every page of a commit for the cache took a twentieth of a small
+    /// deferred commit.
+    sealed: Option<Vec<u8>>,
     pub(crate) pointer: Pointer,
     /// The node as the page cache keeps it, from the page before sealing,
     /// which in an encrypted file is the last time it is plain.
     pub(crate) loaded: LoadedNode,
+}
+
+impl FinishedPage {
+    /// The bytes to write.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.sealed.as_deref().unwrap_or_else(|| self.loaded.page())
+    }
 }
 
 /// Encodes every page of `child` this transaction holds, children first, and
@@ -73,13 +84,27 @@ pub(crate) fn finish(
 
     header.write(&mut bytes);
 
-    let loaded = LoadedNode::encoded(bytes.clone(), &header, heads, size, low);
-    let check = pager.seal(page, &mut bytes)?;
+    // A plain page is sealed by writing its check after its content, which
+    // the cached node never reads.
+    let (check, sealed, loaded) = if pager.is_encrypted() {
+        let loaded = LoadedNode::encoded(bytes.clone(), &header, heads, size, low);
+        let check = pager.seal(page, &mut bytes)?;
+
+        (check, Some(bytes), loaded)
+    } else {
+        let check = pager.seal(page, &mut bytes)?;
+
+        (
+            check,
+            None,
+            LoadedNode::encoded(bytes, &header, heads, size, low),
+        )
+    };
     let pointer = Pointer { page, txn, check };
 
     out.push(FinishedPage {
         page,
-        bytes,
+        sealed,
         pointer,
         loaded,
     });
