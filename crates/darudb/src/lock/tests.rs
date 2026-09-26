@@ -795,24 +795,28 @@ fn a_snapshot_lock_outlives_its_last_reader_only_for_a_moment() {
 
     assert_eq!(other.ask("put k 1"), "done");
 
-    let snapshot: u64 = other.ask("read-id").parse().unwrap();
     let locks = locks_on(&path);
 
-    // Kept for the next read transaction to join...
-    assert!(locks.snapshot_below(snapshot + 1).unwrap());
+    // The second time, the keeper thread has released the first lock and
+    // waits for more work, far longer than a lock is kept: it has to be
+    // woken for the new one.
+    for _ in 0..2 {
+        let snapshot: u64 = other.ask("read-id").parse().unwrap();
 
-    // ...and released by the keeper thread soon after.
-    let deadline = Instant::now() + Duration::from_secs(5);
+        // Kept for the next read transaction to join...
+        assert!(locks.snapshot_below(snapshot + 1).unwrap());
 
-    while locks.snapshot_below(snapshot + 1).unwrap() {
-        assert!(
-            Instant::now() < deadline,
-            "the kept lock was never released"
-        );
-        thread::sleep(Duration::from_millis(5));
+        // ...and released by the keeper thread soon after.
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        while locks.snapshot_below(snapshot + 1).unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "the kept lock was never released"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
-
-    assert_eq!(other.ask("read-id"), snapshot.to_string());
 }
 
 #[test]

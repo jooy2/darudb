@@ -859,12 +859,16 @@ struct Keeper {
     /// Whether a lock was kept since the thread last looked, which keeps it
     /// from ending.
     pending: bool,
+    /// When the thread, parked, looks again at the latest; `None` while it
+    /// is looking.
+    awake_by: Option<Instant>,
 }
 
 static KEEPER: Mutex<Keeper> = Mutex::new(Keeper {
     instances: Vec::new(),
     thread: None,
     pending: false,
+    awake_by: None,
 });
 
 /// Makes sure the idle snapshot locks of `shared` are released in a moment.
@@ -882,6 +886,14 @@ fn keep_for_a_moment(shared: &Arc<Shared>) {
     }
 
     match &keeper.thread {
+        // The thread looks again before this lock is due anyway: waking it
+        // for every read transaction that ends cost a signal to the system
+        // each, a tenth of a read transaction begun for one lookup.
+        Some((owner, _))
+            if *owner == std::process::id()
+                && keeper
+                    .awake_by
+                    .is_some_and(|by| by <= Instant::now() + KEEP_SNAPSHOT_LOCK) => {}
         Some((owner, thread)) if *owner == std::process::id() => thread.unpark(),
         _ => {
             let spawned = thread::Builder::new()
@@ -908,6 +920,7 @@ fn release_kept_locks() {
             let mut keeper = lock(&KEEPER);
 
             keeper.pending = false;
+            keeper.awake_by = None;
             keeper.instances.retain(|kept| kept.strong_count() > 0);
             keeper.instances.clone()
         };
@@ -943,11 +956,14 @@ fn release_kept_locks() {
             }
         }
 
-        let wait = next.map_or(KEEPER_IDLE, |next| {
-            next.saturating_duration_since(Instant::now())
-        });
+        let wait = next
+            .map_or(KEEPER_IDLE, |next| {
+                next.saturating_duration_since(Instant::now())
+            })
+            .max(Duration::from_millis(1));
 
-        thread::park_timeout(wait.max(Duration::from_millis(1)));
+        lock(&KEEPER).awake_by = Instant::now().checked_add(wait);
+        thread::park_timeout(wait);
     }
 }
 
