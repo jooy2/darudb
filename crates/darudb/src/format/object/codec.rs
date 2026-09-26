@@ -275,12 +275,22 @@ fn ascii(bytes: &[u8]) -> bool {
 /// found by stepping over the fields before it without reading them into
 /// values. For a filter or a sort that reads a field or two of many records;
 /// an object that is kept is read whole, and checked whole, by [`read`].
+///
+/// The position is a local, handed to the slow paths by value: a reader
+/// passed to them by reference lived in memory, and stepping over each field
+/// then waited for its position to be stored and loaded again.
 pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, &'static str> {
-    let mut reader = Reader { bytes, at: 0 };
+    let (count, mut at) = {
+        let mut reader = Reader { bytes, at: 0 };
+
+        (reader.count(2)?, reader.at)
+    };
     let mut last = None;
 
-    for _ in 0..reader.count(2)? {
-        let field = reader.quick_varint()?;
+    for _ in 0..count {
+        let field;
+
+        (field, at) = quick_varint(bytes, at)?;
 
         if last.is_some_and(|last| last >= field) {
             return Err("a record's field ids are out of order");
@@ -293,12 +303,13 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
         }
 
         if field < id {
-            reader.skip_scalar()?;
+            at = skip_scalar(bytes, at)?;
 
             continue;
         }
 
-        let start = reader.at;
+        let start = at;
+        let mut reader = Reader { bytes, at };
 
         return Ok(Some(match reader.byte()? {
             FALSE => FieldRef::Bool(false),
@@ -372,6 +383,64 @@ struct Reader<'a> {
     at: usize,
 }
 
+/// The varint at `at` of `bytes`, and where it ends, with a varint of one
+/// byte, as field ids, lengths and small numbers are, read where it is used:
+/// for stepping over the fields of every record a filter tests. Reading a
+/// record whole keeps the call, which inlined there made queries that read
+/// whole objects slower.
+#[inline(always)]
+fn quick_varint(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
+    match bytes.get(at) {
+        Some(&byte) if byte < 0x80 => Ok((u64::from(byte), at + 1)),
+        _ => varint_at(bytes, at),
+    }
+}
+
+/// [`Reader::varint`] at `at` of `bytes`, and where it ends, for
+/// [`quick_varint`] to call with the position as a value.
+#[inline(never)]
+fn varint_at(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
+    let mut reader = Reader { bytes, at };
+
+    reader.varint().map(|value| (value, reader.at))
+}
+
+/// Where the value at `at` of `bytes` ends, a scalar stepped over in the
+/// caller: most fields a filter steps over on its way to the one it tests
+/// are scalars, and a call for each cost more than stepping over it.
+#[inline(always)]
+fn skip_scalar(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
+    match bytes.get(at) {
+        Some(&(FALSE | TRUE)) => Ok(at + 1),
+        Some(&INT) => quick_varint(bytes, at + 1).map(|(_, end)| end),
+        Some(&FLOAT) => skip_bytes(bytes, at + 1, 8),
+        Some(&(STRING | BYTES)) => {
+            let (len, start) = quick_varint(bytes, at + 1)?;
+
+            skip_bytes(bytes, start, len)
+        }
+        _ => skip_at(bytes, at),
+    }
+}
+
+/// Where `len` bytes from `at` of `bytes` end, if `bytes` holds them.
+#[inline(always)]
+fn skip_bytes(bytes: &[u8], at: usize, len: u64) -> Result<usize, &'static str> {
+    usize::try_from(len)
+        .ok()
+        .and_then(|len| at.checked_add(len))
+        .filter(|&end| end <= bytes.len())
+        .ok_or("a record ends early")
+}
+
+/// [`Reader::skip`] at `at` of `bytes`, for [`skip_scalar`].
+#[inline(never)]
+fn skip_at(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
+    let mut reader = Reader { bytes, at };
+
+    reader.skip(0).map(|()| reader.at)
+}
+
 impl<'a> Reader<'a> {
     fn left(&self) -> usize {
         self.bytes.len() - self.at
@@ -397,23 +466,6 @@ impl<'a> Reader<'a> {
         self.at += len;
 
         Ok(&bytes[self.at - len..self.at])
-    }
-
-    /// [`varint`](Self::varint), with a varint of one byte, as field ids,
-    /// lengths and small numbers are, read where it is used: for stepping
-    /// over the fields of every record a filter tests. Reading a record
-    /// whole keeps the call, which inlined there made queries that read
-    /// whole objects slower.
-    #[inline(always)]
-    fn quick_varint(&mut self) -> Result<u64, &'static str> {
-        match self.bytes.get(self.at) {
-            Some(&byte) if byte < 0x80 => {
-                self.at += 1;
-
-                Ok(u64::from(byte))
-            }
-            _ => self.varint(),
-        }
     }
 
     fn varint(&mut self) -> Result<u64, &'static str> {
@@ -618,36 +670,6 @@ impl<'a> Reader<'a> {
         }
 
         Ok(fields)
-    }
-
-    /// [`skip`](Self::skip), with a scalar stepped over in the caller: most
-    /// fields a filter steps over on its way to the one it tests are
-    /// scalars, and a call for each cost more than stepping over it.
-    #[inline(always)]
-    fn skip_scalar(&mut self) -> Result<(), &'static str> {
-        match self.bytes.get(self.at) {
-            Some(&(FALSE | TRUE)) => {
-                self.at += 1;
-            }
-            Some(&INT) => {
-                self.at += 1;
-                self.quick_varint()?;
-            }
-            Some(&FLOAT) => {
-                self.at += 1;
-                self.take(8)?;
-            }
-            Some(&(STRING | BYTES)) => {
-                self.at += 1;
-
-                let len = self.quick_varint()?;
-
-                self.take(len)?;
-            }
-            _ => self.skip(0)?,
-        }
-
-        Ok(())
     }
 
     /// Steps over a value without reading it into one.
