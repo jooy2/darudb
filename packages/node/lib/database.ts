@@ -151,7 +151,7 @@ class ReadCollection {
 class WriteCollection extends ReadCollection {
   /** Inserts `object` and returns its primary key. */
   insert(object: unknown) {
-    return this.insertMany([object])[0];
+    return this.#writeOne(object, false);
   }
 
   /**
@@ -165,7 +165,7 @@ class WriteCollection extends ReadCollection {
 
   /** Inserts `object`, or replaces the object with its key. */
   put(object: unknown) {
-    return this.putMany([object])[0];
+    return this.#writeOne(object, true);
   }
 
   /** Inserts or replaces `objects`; see `insertMany`. */
@@ -176,6 +176,12 @@ class WriteCollection extends ReadCollection {
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: unknown): boolean {
     return this[TXN].delete(this[LAYOUT].name, keyOf(key));
+  }
+
+  #writeOne(object: unknown, replace: boolean) {
+    const records = lendRecords(this[LAYOUT], [object]);
+
+    return this[TXN].writeRecord(this[LAYOUT].name, records, replace);
   }
 
   #write(objects: unknown, replace: boolean) {

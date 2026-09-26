@@ -725,6 +725,23 @@ impl NativeTransaction {
             .deliver()
     }
 
+    /// Writes the record of one object, as `writeRecords` writes a batch,
+    /// and returns its key rather than an array of one: making the array
+    /// cost more than a twentieth of an `insert`.
+    #[napi(ts_return_type = "number | bigint | string | Buffer")]
+    pub fn write_record(
+        &self,
+        collection: String,
+        records: BufferSlice<'_>,
+        replace: bool,
+    ) -> Result<JsKeyOut> {
+        let Keys(keys) = self.now(|txn| txn.write_records(&collection, &records, replace))?;
+        let [key] = <[darudb::Value; 1]>::try_from(keys)
+            .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
+
+        key_out(key)
+    }
+
     #[napi]
     pub fn delete(
         &self,
