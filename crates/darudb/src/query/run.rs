@@ -12,7 +12,7 @@ use super::ir::Op;
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
 use crate::error::Result;
 use crate::format::object::codec::{self, FieldRef, NameOrder};
-use crate::format::object::schema::{CollectionDef, IndexDef, Kind};
+use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
 use crate::schema::objects::{self, Source, index_tree, records};
 
@@ -72,17 +72,23 @@ impl Reader<'_> {
     }
 
     /// Whether `test` holds for any value at `path` of an object.
-    fn any_in(
+    fn any_in<F: Fields + ?Sized>(
         &self,
-        fields: &dyn Fields,
+        fields: &F,
         path: &Resolved<'_>,
         test: &mut dyn FnMut(ValueRef<'_>) -> bool,
     ) -> Result<bool> {
         let Some((Step::Field(name), rest)) = path.steps.split_first() else {
             return Ok(false);
         };
+        // A field of the collection itself was found in the schema when the
+        // query was planned, and is not looked up by name for each object.
+        let current = match path.direct {
+            Some(field) => fields.field_of(field)?,
+            None => fields.field(name)?,
+        };
 
-        match fields.field(name)? {
+        match current {
             Current::Borrowed(ValueRef::Value(value)) => self.any(value, rest, test),
             Current::Borrowed(value) if rest.is_empty() => Ok(test(value)),
             Current::Borrowed(value) => self.any(&value.to_value(), rest, test),
@@ -119,7 +125,7 @@ impl Reader<'_> {
         Ok(object)
     }
 
-    fn holds(&self, cond: &Cond<'_>, fields: &dyn Fields) -> Result<bool> {
+    fn holds<F: Fields + ?Sized>(&self, cond: &Cond<'_>, fields: &F) -> Result<bool> {
         match cond {
             Cond::And(terms) => {
                 for term in terms {
@@ -151,7 +157,7 @@ impl Reader<'_> {
     }
 
     /// The value at a single-valued `path` of an object, for sorting.
-    fn value_at(&self, fields: &dyn Fields, path: &Resolved<'_>) -> Result<Value> {
+    fn value_at<F: Fields + ?Sized>(&self, fields: &F, path: &Resolved<'_>) -> Result<Value> {
         let mut found = Value::Null;
 
         self.any_in(fields, path, &mut |value| {
@@ -240,6 +246,9 @@ enum Current<'a> {
 trait Fields {
     /// The value of the collection's field `name`.
     fn field(&self, name: &str) -> Result<Current<'_>>;
+
+    /// The value of `field`, one of the collection's fields.
+    fn field_of<'a>(&'a self, field: &'a FieldDef) -> Result<Current<'a>>;
 }
 
 impl Fields for Object {
@@ -247,6 +256,10 @@ impl Fields for Object {
         Ok(Current::Borrowed(
             self.get(name).map_or(ValueRef::Null, ValueRef::Value),
         ))
+    }
+
+    fn field_of<'a>(&'a self, field: &'a FieldDef) -> Result<Current<'a>> {
+        self.field(&field.name)
     }
 }
 
@@ -261,12 +274,20 @@ struct View<'a> {
 
 impl Fields for View<'_> {
     fn field(&self, name: &str) -> Result<Current<'_>> {
+        match self.collection.fields.by_name(name) {
+            Some(field) => self.field_of(field),
+            None => Ok(Current::Borrowed(ValueRef::Null)),
+        }
+    }
+
+    // Inlined into the filter that asks, which reads the value where this
+    // writes it: returned through memory instead, a byte at a time, the
+    // value took a filter on one string field a fifth longer.
+    #[inline(always)]
+    fn field_of<'a>(&'a self, field: &'a FieldDef) -> Result<Current<'a>> {
         let damaged = |reason: &str| {
             self.source
                 .corrupted(format!("an object of `{}`: {reason}", self.collection.name))
-        };
-        let Some(field) = self.collection.fields.by_name(name) else {
-            return Ok(Current::Borrowed(ValueRef::Null));
         };
         let found = codec::find_field(self.record, field.id).map_err(damaged)?;
 
@@ -910,7 +931,7 @@ fn meets(
         None => &view,
     };
     #[cfg(not(test))]
-    let fields: &dyn Fields = &view;
+    let fields = &view;
 
     if let Some(filter) = &plan.filter {
         if !reader.holds(filter, fields)? {
