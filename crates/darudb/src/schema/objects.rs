@@ -122,6 +122,11 @@ pub(crate) trait Source {
 
     /// The error for damage found in the file.
     fn corrupted(&self, reason: String) -> Error;
+
+    /// Whether the file holds the schema whose record is `encoded`.
+    fn holds_schema(&self, encoded: &[u8]) -> Result<bool> {
+        Ok(self.get_in(META, SCHEMA_KEY)?.as_deref() == Some(encoded))
+    }
 }
 
 impl Source for ReadTransaction {
@@ -154,6 +159,10 @@ impl Source for ReadTransaction {
 
     fn corrupted(&self, reason: String) -> Error {
         ReadTransaction::corrupted(self, reason)
+    }
+
+    fn holds_schema(&self, encoded: &[u8]) -> Result<bool> {
+        Ok(self.get_in_kept(META, SCHEMA_KEY)?.as_deref() == Some(encoded))
     }
 }
 
@@ -206,7 +215,7 @@ pub(crate) fn checked_schema(
         return Ok(Arc::clone(schema));
     }
 
-    if source.get_in(META, SCHEMA_KEY)?.as_deref() != Some(schema.encoded.as_slice()) {
+    if !source.holds_schema(&schema.encoded)? {
         return Err(Error::SchemaMismatch {
             message: "another process migrated the database's schema since this handle opened it; open it again with the new schema".to_owned(),
         });

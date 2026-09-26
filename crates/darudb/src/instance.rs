@@ -20,7 +20,7 @@ use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
     CommitRecord, HEADER_LEN, KeyBlock, RECORD_LEN, SELECTOR_OFFSET, SLOT_COUNT, Selector,
-    StaticHeader, slot_offset,
+    StaticHeader, TreeDescriptor, slot_offset,
 };
 use crate::lock::{LockError, Locks};
 use crate::space::YoungParts;
@@ -64,6 +64,22 @@ struct Unsynced {
     window: Option<Window>,
     flusher: Option<Thread>,
 }
+
+/// What the read transactions that see one commit have found out about it,
+/// which does not change, since a commit never does: the trees they looked up
+/// in its catalog, with what the catalog says of each, nothing included, and
+/// values nearly every one of them reads, such as the stored schema's record.
+/// The read transactions of one commit share it, so that one begun for a
+/// single lookup does not look up the same trees and values again: that took
+/// a quarter of such a transaction.
+#[derive(Debug, Default)]
+pub(crate) struct Learned {
+    pub(crate) trees: Vec<(Box<[u8]>, Option<TreeDescriptor>)>,
+    pub(crate) values: Vec<KeptValue>,
+}
+
+/// A value kept by tree and key, `None` for a key the tree does not hold.
+pub(crate) type KeptValue = (Box<str>, Box<[u8]>, Option<Arc<[u8]>>);
 
 /// The committed state every transaction starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +129,9 @@ pub(crate) struct Shared {
     /// transaction id, which only the writer that made them knows: another
     /// process's writer reclaims their groups whole, once the window ends.
     young: Mutex<Option<(u64, YoungParts)>>,
+    /// What the read transactions of the commit with the given transaction id
+    /// have found out about it, for the next one of that commit.
+    learned: Mutex<Option<(u64, Arc<Mutex<Learned>>)>>,
     writer: Mutex<bool>,
     writer_free: Condvar,
     sync_failed: AtomicBool,
@@ -177,6 +196,7 @@ impl Shared {
             unsynced: Mutex::new(Unsynced::default()),
             free_runs: Mutex::new(None),
             young: Mutex::new(None),
+            learned: Mutex::new(None),
             writer: Mutex::new(false),
             writer_free: Condvar::new(),
             sync_failed: AtomicBool::new(false),
@@ -539,6 +559,24 @@ impl Shared {
     /// write transaction.
     pub(crate) fn leave_young(&self, txn: u64, parts: YoungParts) {
         *lock(&self.young) = Some((txn, parts));
+    }
+
+    /// What the read transactions of commit `txn` have found out about it,
+    /// shared with them: the kept one if it is of `txn`, or else a new one,
+    /// kept in its place.
+    pub(crate) fn learned(&self, txn: u64) -> Arc<Mutex<Learned>> {
+        let mut kept = lock(&self.learned);
+
+        match &*kept {
+            Some((of, learned)) if *of == txn => Arc::clone(learned),
+            _ => {
+                let learned = Arc::default();
+
+                *kept = Some((txn, Arc::clone(&learned)));
+
+                learned
+            }
+        }
     }
 
     /// The largest of `groups`, commits after the durable commit `durable` in

@@ -14,11 +14,12 @@ pub(crate) mod recovery;
 mod write;
 
 use std::ops::{Bound, RangeBounds};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::btree::{self, Child, Loader};
 use crate::error::{Error, Result};
 use crate::format::{CATALOG_TREE, Pointer, TreeDescriptor, max_key_len};
+use crate::instance::Learned;
 
 pub use read::ReadTransaction;
 pub use write::WriteTransaction;
@@ -164,25 +165,32 @@ fn check_value(value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The descriptor the catalog rooted at `catalog` keeps for `name`.
 /// The trees a transaction has looked up in its catalog, by name, with what
-/// the catalog says of each, nothing included.
+/// the catalog says of each, nothing included, and the values it keeps
+/// ([`ReadTransaction::get_in_kept`]).
 ///
 /// A lookup walks the catalog's tree and decodes a descriptor, which a
 /// transaction reading one tree many times would otherwise repeat for every
 /// read: two of the five nodes a lookup of one object visits. A transaction's
 /// catalog does not change while it lives, and a write transaction keeps a
-/// tree it changes apart, in its own state, which it consults first.
+/// tree it changes apart, in its own state, which it consults first. A read
+/// transaction shares what it learns with the others of its commit
+/// ([`Learned`]).
 #[derive(Debug, Default)]
-pub(crate) struct Descriptors(Mutex<Vec<Known>>);
-
-/// A tree's name, and what the catalog says of it.
-type Known = (Box<[u8]>, Option<TreeDescriptor>);
+pub(crate) struct Descriptors(Arc<Mutex<Learned>>);
 
 /// How many trees a transaction remembers; the few a query reads fit.
 const DESCRIPTORS: usize = 32;
 
+/// How many values a transaction keeps.
+const KEPT_VALUES: usize = 4;
+
 impl Descriptors {
+    /// What `learned` holds, and what this transaction learns added to it.
+    fn shared(learned: Arc<Mutex<Learned>>) -> Self {
+        Self(learned)
+    }
+
     fn find(
         &self,
         loader: &Loader,
@@ -190,24 +198,53 @@ impl Descriptors {
         name: &[u8],
     ) -> Result<Option<TreeDescriptor>> {
         {
-            let known = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let learned = self.0.lock().unwrap_or_else(PoisonError::into_inner);
 
-            if let Some((_, descriptor)) = known.iter().find(|(known, _)| **known == *name) {
+            if let Some((_, descriptor)) = learned.trees.iter().find(|(known, _)| **known == *name)
+            {
                 return Ok(*descriptor);
             }
         }
 
         let descriptor = find_tree(loader, catalog, name)?;
-        let mut known = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut learned = self.0.lock().unwrap_or_else(PoisonError::into_inner);
 
-        if known.len() < DESCRIPTORS {
-            known.push((name.into(), descriptor));
+        if learned.trees.len() < DESCRIPTORS
+            && !learned.trees.iter().any(|(known, _)| **known == *name)
+        {
+            learned.trees.push((name.into(), descriptor));
         }
 
         Ok(descriptor)
     }
+
+    /// The value kept for `key` of tree `tree`, if one is: `Some(None)` for a
+    /// key the tree does not hold.
+    fn kept(&self, tree: &str, key: &[u8]) -> Option<Option<Arc<[u8]>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values
+            .iter()
+            .find(|(of, at, _)| **of == *tree && **at == *key)
+            .map(|(_, _, value)| value.clone())
+    }
+
+    fn keep(&self, tree: &str, key: &[u8], value: Option<Arc<[u8]>>) {
+        let mut learned = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if learned.values.len() < KEPT_VALUES
+            && !learned
+                .values
+                .iter()
+                .any(|(of, at, _)| **of == *tree && **at == *key)
+        {
+            learned.values.push((tree.into(), key.into(), value));
+        }
+    }
 }
 
+/// The descriptor the catalog rooted at `catalog` keeps for `name`.
 fn find_tree(
     loader: &Loader,
     catalog: Option<&Child>,

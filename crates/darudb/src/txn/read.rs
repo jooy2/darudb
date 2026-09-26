@@ -41,7 +41,7 @@ impl ReadTransaction {
             record,
             schema,
             schema_checked: AtomicBool::new(false),
-            descriptors: Descriptors::default(),
+            descriptors: Descriptors::shared(shared.learned(record.txn)),
         })
     }
 
@@ -92,6 +92,21 @@ impl ReadTransaction {
             root_child(descriptor.root).as_ref(),
             key,
         )
+    }
+
+    /// [`get_in`](Self::get_in), for a value nearly every read transaction
+    /// reads, such as the stored schema's record: kept for the other read
+    /// transactions of this commit, which take it from there.
+    pub(crate) fn get_in_kept(&self, tree: &str, key: &[u8]) -> Result<Option<Arc<[u8]>>> {
+        if let Some(value) = self.descriptors.kept(tree, key) {
+            return Ok(value);
+        }
+
+        let value: Option<Arc<[u8]>> = self.get_in(tree, key)?.map(Arc::from);
+
+        self.descriptors.keep(tree, key, value.clone());
+
+        Ok(value)
     }
 
     /// [`get_in`](Self::get_in), giving `visit` the value borrowed where it
