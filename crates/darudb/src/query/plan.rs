@@ -836,24 +836,26 @@ fn choose<'s>(
     filter: Option<&Cond<'s>>,
     sort: &[(Resolved<'s>, bool)],
 ) -> (Access<'s>, Vec<usize>, bool) {
-    let terms: Vec<&Cond<'s>> = match filter {
-        Some(Cond::And(terms)) => terms.iter().collect(),
-        Some(cond) => vec![cond],
-        None => Vec::new(),
+    // The terms are borrowed and the candidates made again where they are
+    // needed, rather than gathered: a lookup by one value planned both into
+    // vectors of their own every time it ran.
+    let terms: &[Cond<'s>] = match filter {
+        Some(Cond::And(terms)) => terms,
+        Some(cond) => std::slice::from_ref(cond),
+        None => &[],
     };
-    let candidates: Vec<Candidate<'s, '_>> = terms
-        .iter()
-        .enumerate()
-        .filter_map(|(position, cond)| candidate(collection, position, cond))
-        .collect();
+    let candidates = || {
+        terms
+            .iter()
+            .enumerate()
+            .filter_map(|(position, cond)| candidate(collection, position, cond))
+    };
     // The field the query sorts by alone, and whether descending.
     let sorted_by = match sort {
         [(path, descending)] => path.direct.map(|field| (field.id, *descending)),
         _ => None,
     };
-    let best = candidates
-        .iter()
-        .min_by_key(|candidate| (candidate.rank(), candidate.term));
+    let best = candidates().min_by_key(|candidate| (candidate.rank(), candidate.term));
 
     let Some(best) = best else {
         return unfiltered(collection, sort, sorted_by);
@@ -909,7 +911,7 @@ fn choose<'s>(
             let mut prefix: Option<&str> = None;
             let mut consumed = Vec::new();
 
-            for candidate in &candidates {
+            for candidate in candidates() {
                 let merges =
                     candidate.term == best.term || (!list && candidate.field.id == best.field.id);
 
