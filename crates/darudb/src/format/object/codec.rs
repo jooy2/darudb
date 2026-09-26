@@ -280,11 +280,12 @@ fn ascii(bytes: &[u8]) -> bool {
 /// passed to them by reference lived in memory, and stepping over each field
 /// then waited for its position to be stored and loaded again.
 pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, &'static str> {
-    let (count, mut at) = {
-        let mut reader = Reader { bytes, at: 0 };
-
-        (reader.count(2)?, reader.at)
-    };
+    let (count, mut at) = quick_varint(bytes, 0)?;
+    // Two bytes a field at least, as `Reader::count` checks it.
+    let count = usize::try_from(count)
+        .ok()
+        .filter(|count| count.saturating_mul(2) <= bytes.len() - at)
+        .ok_or("a record counts more than it holds")?;
     let mut last = None;
 
     for _ in 0..count {
@@ -309,21 +310,25 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
         }
 
         let start = at;
-        let mut reader = Reader { bytes, at };
+        let tag = *bytes.get(at).ok_or("a record ends early")?;
 
-        return Ok(Some(match reader.byte()? {
+        at += 1;
+
+        return Ok(Some(match tag {
             FALSE => FieldRef::Bool(false),
             TRUE => FieldRef::Bool(true),
-            INT => FieldRef::Int(unzigzag(reader.varint()?)),
+            INT => FieldRef::Int(unzigzag(quick_varint(bytes, at)?.0)),
             FLOAT => {
-                let mut exact = [0u8; 8];
+                let exact = bytes
+                    .get(at..)
+                    .and_then(<[u8]>::first_chunk::<8>)
+                    .ok_or("a record ends early")?;
 
-                exact.copy_from_slice(reader.take(8)?);
-                FieldRef::Float(f64::from_le_bytes(exact))
+                FieldRef::Float(f64::from_le_bytes(*exact))
             }
             STRING => {
-                let len = reader.varint()?;
-                let text = reader.take(len)?;
+                let (len, from) = quick_varint(bytes, at)?;
+                let text = &bytes[from..skip_bytes(bytes, from, len)?];
 
                 if !utf8(text) {
                     return Err("a record holds a string that is not UTF-8");
@@ -332,15 +337,11 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
                 FieldRef::String(text)
             }
             BYTES => {
-                let len = reader.varint()?;
+                let (len, from) = quick_varint(bytes, at)?;
 
-                FieldRef::Bytes(reader.take(len)?)
+                FieldRef::Bytes(&bytes[from..skip_bytes(bytes, from, len)?])
             }
-            _ => {
-                reader.at = start;
-                reader.skip(0)?;
-                FieldRef::Encoded(&bytes[start..reader.at])
-            }
+            _ => FieldRef::Encoded(&bytes[start..skip_at(bytes, start)?]),
         }));
     }
 
@@ -1600,6 +1601,29 @@ mod tests {
 
             let staged = read(&bytes).and_then(|raw| to_object(raw, &fields));
             let direct = object_of(&bytes, &fields);
+
+            // A field a filter finds in a record is the one reading the whole
+            // record gives, and a damaged record is an error there too.
+            for id in 0..12 {
+                let _ = find_field(&bytes, id);
+            }
+
+            if let Ok(object) = &direct {
+                for field in &fields.list {
+                    let scalar = matches!(
+                        field.kind,
+                        Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+                    );
+
+                    if let (true, Some(found)) = (scalar, find_field(&bytes, field.id).unwrap()) {
+                        assert_eq!(
+                            format!("{:?}", field_value(found, &field.kind).unwrap()),
+                            format!("{:?}", object.get(&field.name).unwrap()),
+                            "{bytes:?}"
+                        );
+                    }
+                }
+            }
 
             match (staged, direct) {
                 (Ok(staged), Ok(direct)) => assert_eq!(staged, direct, "{bytes:?}"),
