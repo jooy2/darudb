@@ -28,6 +28,8 @@ struct State {
     pending: Vec<Pending>,
     fail_syncs: bool,
     budget: Option<usize>,
+    /// How many barriers succeeded.
+    syncs: usize,
 }
 
 /// A file that lives in memory and can lose power.
@@ -46,6 +48,7 @@ impl SimDisk {
                 pending: Vec::new(),
                 fail_syncs: false,
                 budget: None,
+                syncs: 0,
             }),
         }
     }
@@ -58,6 +61,11 @@ impl SimDisk {
     /// survives when only the process dies.
     pub(crate) fn current(&self) -> Vec<u8> {
         self.state().current.clone()
+    }
+
+    /// How many barriers have succeeded.
+    pub(crate) fn syncs(&self) -> usize {
+        self.state().syncs
     }
 
     /// Makes every later barrier fail, the way a disk that stopped accepting
@@ -165,6 +173,7 @@ impl FileIo for SimDisk {
 
         state.durable = state.current.clone();
         state.pending.clear();
+        state.syncs += 1;
 
         Ok(())
     }

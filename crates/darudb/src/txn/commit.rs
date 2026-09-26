@@ -252,10 +252,10 @@ fn write_and_publish(
 ) -> Result<()> {
     let shared = Arc::clone(&txn.shared);
     let pager = &shared.pager;
-    let written = pages.len() as u64;
     // A deferred commit that would take the window past its limits is made
-    // durable instead.
-    let deferred = durability == Durability::Deferred && shared.may_defer(written);
+    // durable instead. What the transaction allocated is what it wrote: its
+    // tree pages, and the overflow runs it wrote along the way.
+    let deferred = durability == Durability::Deferred && shared.may_defer(txn.space.fresh());
 
     pages.sort_unstable_by_key(|page| page.page);
 
@@ -310,7 +310,7 @@ fn write_and_publish(
     }
 
     if deferred {
-        shared.extend_window(written);
+        shared.extend_window(txn.space.fresh());
     } else {
         shared.close_window();
 

@@ -109,11 +109,14 @@ impl OpenOptions {
     }
 
     /// How many pages deferred commits may write before one of them is made
-    /// durable anyway. 16384 by default: 64 MiB with 4096-byte pages.
+    /// durable anyway, each page counted once however often they write it.
+    /// 16384 by default: 64 MiB with 4096-byte pages.
     ///
-    /// The limit bounds what a power cut can undo, and how much recovery has
-    /// to check after one. The default is provisional until the benchmarks
-    /// settle it.
+    /// The limit bounds how much the barrier that makes them durable has to
+    /// write, and how much recovery has to check after a power cut. Deferred
+    /// commits reuse the pages they wrote before, so small ones that change
+    /// the same objects write the same pages again, and count them once. The
+    /// default is provisional until the benchmarks settle it.
     pub fn max_unsynced_pages(&mut self, pages: u64) -> &mut Self {
         self.max_unsynced_pages = pages;
         self

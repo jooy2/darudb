@@ -263,6 +263,11 @@ impl Space {
         Some(std::mem::take(&mut self.free))
     }
 
+    /// The pages this transaction allocated and still holds.
+    pub(crate) fn fresh(&self) -> &HashSet<u64> {
+        &self.fresh
+    }
+
     pub(crate) fn page_count(&self) -> u64 {
         self.page_count
     }

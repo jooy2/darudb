@@ -7,7 +7,7 @@
 //! second open file: closing a second descriptor of the file would release
 //! every lock the process holds on it (`design/locking.md`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,10 +52,14 @@ pub(crate) struct Settings {
 }
 
 /// The deferred commits since the last barrier.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct Window {
     opened: Instant,
-    pages: u64,
+    /// Every page they wrote, once however often they wrote it: what the
+    /// next barrier has to make durable and recovery may have to check.
+    /// Pages written in the window are reused in it, so the same pages are
+    /// written again and again.
+    pages: HashSet<u64>,
 }
 
 /// The unsynced window, and the thread that ends it when it is due.
@@ -677,28 +681,39 @@ impl Shared {
 
     /// Whether a deferred commit writing `pages` pages may stay deferred, or
     /// has to be made durable because the window would pass its limits.
-    pub(crate) fn may_defer(&self, pages: u64) -> bool {
+    pub(crate) fn may_defer(&self, pages: &HashSet<u64>) -> bool {
         let limits = &self.settings;
-
-        match lock(&self.unsynced).window {
-            None => pages <= limits.max_unsynced_pages,
+        let unsynced = lock(&self.unsynced);
+        let (held, fresh) = match &unsynced.window {
+            None => (0, pages.len()),
             Some(window) => {
-                window.pages + pages <= limits.max_unsynced_pages
-                    && window.opened.elapsed() < limits.max_unsynced_time
+                if window.opened.elapsed() >= limits.max_unsynced_time {
+                    return false;
+                }
+
+                (
+                    window.pages.len(),
+                    pages
+                        .iter()
+                        .filter(|page| !window.pages.contains(page))
+                        .count(),
+                )
             }
-        }
+        };
+
+        u64::try_from(held + fresh).is_ok_and(|total| total <= limits.max_unsynced_pages)
     }
 
-    /// Records a deferred commit of `pages` pages in the window, and makes
+    /// Records a deferred commit that wrote `pages` in the window, and makes
     /// sure a thread will end the window when it is due.
-    pub(crate) fn extend_window(self: &Arc<Self>, pages: u64) {
+    pub(crate) fn extend_window(self: &Arc<Self>, pages: &HashSet<u64>) {
         let mut unsynced = lock(&self.unsynced);
-        let window = unsynced.window.get_or_insert(Window {
+        let window = unsynced.window.get_or_insert_with(|| Window {
             opened: Instant::now(),
-            pages: 0,
+            pages: HashSet::new(),
         });
 
-        window.pages += pages;
+        window.pages.extend(pages);
 
         if unsynced.flusher.is_none() && self.window_due(&unsynced).is_some() {
             let shared = Arc::downgrade(self);
@@ -730,6 +745,7 @@ impl Shared {
     fn window_due(&self, unsynced: &Unsynced) -> Option<Instant> {
         unsynced
             .window
+            .as_ref()
             .and_then(|window| window.opened.checked_add(self.settings.max_unsynced_time))
     }
 

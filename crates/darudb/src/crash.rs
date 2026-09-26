@@ -769,6 +769,52 @@ fn deferred_commits_reuse_the_pages_they_write_before_the_window_ends() {
 }
 
 #[test]
+fn a_window_counts_a_page_it_writes_again_once() {
+    let disk = Arc::new(SimDisk::default());
+    let mut options = OpenOptions::new();
+
+    // Room for the pages a few commits write, where 500 of them write
+    // thousands.
+    options
+        .max_unsynced_pages(128)
+        .max_unsynced_time(Duration::MAX);
+
+    let db = Database::create_io(disk.clone(), 4096, &options).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    for index in 0..2000u32 {
+        txn.insert("t", &index.to_be_bytes(), &[0; 100]).unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let write = |round: u32| {
+        let mut txn = db.begin_write().unwrap();
+
+        // Ten keys, in ten different leaves.
+        txn.insert("t", &(round % 10 * 200).to_be_bytes(), &[1; 100])
+            .unwrap();
+        txn.commit_deferred().unwrap();
+    };
+
+    for round in 0..20 {
+        write(round);
+    }
+
+    let barriers = disk.syncs();
+
+    for round in 20..500 {
+        write(round);
+    }
+
+    assert_eq!(disk.syncs(), barriers, "the window reached its page limit");
+
+    db.sync().unwrap();
+    assert_eq!(disk.syncs(), barriers + 1);
+    check_integrity(&db).unwrap();
+}
+
+#[test]
 fn a_reader_in_the_window_keeps_its_snapshot_while_deferred_commits_reuse_pages() {
     let disk = Arc::new(SimDisk::default());
     let mut options = OpenOptions::new();

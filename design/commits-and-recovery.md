@@ -90,7 +90,7 @@ Deferred commits exist for the applications that would rather lose their last fe
 
 **Readers see a sync commit only once it is durable**, because it is published after its barrier. A deferred commit is seen before it is durable, which is the trade that mode makes.
 
-**The unsynced window is kept short.** The engine issues a barrier of its own once the window holds more than a set number of pages or has been open longer than a set time. That bounds how much a power cut can undo and how long recovery's check takes. The defaults come from the benchmarks.
+**The unsynced window is kept short.** The engine issues a barrier of its own once the deferred commits of the window have written more than a set number of pages, each page counted once however often it was written, or the window has been open longer than a set time. The pages bound what that barrier has to write and how long recovery's check takes, and the time bounds how much a power cut can undo. Deferred commits reuse the pages the window wrote ([Pages written in the unsynced window](#pages-written-in-the-unsynced-window)), so small commits that change the same objects write the same pages again; counting every write would end their window long before either bound mattered. The defaults come from the benchmarks.
 
 ## The durable commit
 
