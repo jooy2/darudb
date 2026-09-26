@@ -173,7 +173,13 @@ A write transaction offers these for a collection:
 - **Put** an object: inserts it, or replaces the object with its key.
 - **Delete** the object with a key: returns whether there was one.
 
-Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Every check that can refuse a write, the object against the schema, its key, the unique indexes and the length of every key it adds, happens before any tree changes, so a refused write leaves the transaction as it was and able to commit. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
+Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Every check that can refuse a write, the object against the schema, its key, the unique indexes and the length of every key it adds, happens before any index changes, so a refused write leaves the transaction holding what it held and able to commit. The record is where the order differs:
+
+- An insert learns whether its key is taken by storing the record, after every other check.
+- A put stores the record first, reading the object it replaces on the way down for that object's entries, so that it goes down the collection's tree once rather than twice. If a unique index then refuses a value the replaced object did not hold, the put stores the replaced record again, or takes out the new one if it replaced nothing. A record the put replaces is kept aside only when it may have to go back.
+- A delete takes the record out, reading it on the way for its entries, and then the entries. A key that is not there copies no page.
+
+A refused put, like an insert whose key is taken, may leave the pages on the way to its key copied, which the commit writes. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
 
 ## Queries
 

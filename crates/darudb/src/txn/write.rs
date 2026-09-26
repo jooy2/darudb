@@ -302,7 +302,7 @@ impl WriteTransaction {
         self.check_open()?;
         self.forget_later(tree, key);
 
-        let result = self.insert_inner(tree, key, value, true).map(drop);
+        let result = self.insert_inner(tree, key, value, true, None).map(drop);
 
         self.failed |= result.is_err();
 
@@ -318,11 +318,49 @@ impl WriteTransaction {
         self.check_open()?;
         self.store_later(tree)?;
 
-        let result = self.insert_inner(tree, key, value, false);
+        let result = self.insert_inner(tree, key, value, false, None);
 
         self.failed |= result.is_err();
 
         result
+    }
+
+    /// [`insert_in`](Self::insert_in), giving `visit` the value it replaces
+    /// before it goes, for a caller that needs that value: the key is gone
+    /// down to once, rather than once to read the value and once to replace
+    /// it. Returns whether there was a value. An error `visit` returns
+    /// stores nothing and leaves the transaction able to commit, though the
+    /// pages on the way to the key may have been copied.
+    pub(crate) fn insert_in_with(
+        &mut self,
+        tree: &str,
+        key: &[u8],
+        value: &[u8],
+        visit: &mut btree::Removed<'_>,
+    ) -> Result<bool> {
+        self.check_open()?;
+
+        // A value waiting to be stored is the key's, and any in the tree an
+        // older one.
+        if let Some(old) = self.later.get(tree).and_then(|waiting| waiting.get(key)) {
+            visit(old)?;
+            self.insert_in(tree, key, value)?;
+
+            return Ok(true);
+        }
+
+        let mut refused = false;
+        let result = self.insert_inner(
+            tree,
+            key,
+            value,
+            true,
+            Some(&mut |old| visit(old).inspect_err(|_| refused = true)),
+        );
+
+        self.failed |= result.is_err() && !refused;
+
+        result.map(|new| !new)
     }
 
     /// Stores `value` under `key` in tree `tree` of the engine's when the
@@ -364,7 +402,7 @@ impl WriteTransaction {
         };
 
         for (key, value) in waiting {
-            let result = self.insert_inner(tree, &key, &value, true);
+            let result = self.insert_inner(tree, &key, &value, true, None);
 
             self.failed |= result.is_err();
             result?;
@@ -407,6 +445,7 @@ impl WriteTransaction {
         key: &[u8],
         value: &[u8],
         replace: bool,
+        visit: Option<&mut btree::Removed<'_>>,
     ) -> Result<bool> {
         let loader = &self.shared.loader;
 
@@ -424,15 +463,33 @@ impl WriteTransaction {
         .ok_or_else(|| Error::Internal {
             message: "a tree was not created".to_owned(),
         })?;
-        let outcome = btree::insert(
-            loader,
-            &mut self.space,
-            state.id,
-            &mut state.root,
-            key,
-            value,
-            replace,
-        )?;
+        let outcome = match visit {
+            Some(visit) => {
+                // The nodes on the way are copied, and the committed ones
+                // given back, whether the visitor lets the value be replaced
+                // or not: the copies are the tree now, and the commit has to
+                // write them.
+                state.changed = true;
+                btree::insert_with(
+                    loader,
+                    &mut self.space,
+                    state.id,
+                    &mut state.root,
+                    key,
+                    value,
+                    visit,
+                )?
+            }
+            None => btree::insert(
+                loader,
+                &mut self.space,
+                state.id,
+                &mut state.root,
+                key,
+                value,
+                replace,
+            )?,
+        };
 
         if outcome == btree::Inserted::New {
             state.entries += 1;
@@ -473,7 +530,7 @@ impl WriteTransaction {
         &mut self,
         tree: &str,
         key: &[u8],
-        visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+        visit: &mut btree::Removed<'_>,
     ) -> Result<bool> {
         self.check_open()?;
 
@@ -883,7 +940,7 @@ enum Removal<'v> {
     Present,
     /// Gone down to once, with its value given to the visitor before it
     /// goes, and nothing copied when it is not there.
-    Visited(&'v mut dyn FnMut(&[u8]) -> Result<()>),
+    Visited(&'v mut btree::Removed<'v>),
 }
 
 /// The state of tree `name` in this transaction, loaded from the catalog on

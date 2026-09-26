@@ -122,6 +122,54 @@ impl Harness {
         super::remove_present(&self.loader, &mut self.store, TREE, &mut self.root, key).unwrap()
     }
 
+    /// Stores `value` under `key` through [`insert_with`], and returns the
+    /// value it gave the visitor.
+    fn insert_with(&mut self, key: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+        let mut visited = None;
+        let inserted = super::insert_with(
+            &self.loader,
+            &mut self.store,
+            TREE,
+            &mut self.root,
+            key,
+            value,
+            &mut |old| {
+                visited = Some(old.to_vec());
+
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(inserted == Inserted::Replaced, visited.is_some());
+        visited
+    }
+
+    /// Tries to store `value` under `key` through [`insert_with`] with a
+    /// visitor that refuses the value there, and returns whether there was
+    /// one to refuse.
+    fn refuse_insert(&mut self, key: &[u8], value: &[u8]) -> bool {
+        let mut seen = false;
+        let result = super::insert_with(
+            &self.loader,
+            &mut self.store,
+            TREE,
+            &mut self.root,
+            key,
+            value,
+            &mut |_| {
+                seen = true;
+
+                Err(crate::error::Error::InvalidArgument {
+                    message: "refused".to_owned(),
+                })
+            },
+        );
+
+        assert_eq!(result.is_err(), seen);
+        seen
+    }
+
     /// Removes `key` through [`remove_with`], and returns the value it gave
     /// the visitor.
     fn remove_with(&mut self, key: &[u8]) -> Option<Vec<u8>> {
@@ -394,11 +442,26 @@ fn random_changes_match_a_model() {
                 } else {
                     let value = value_of(&mut rng, page_size);
 
-                    assert_eq!(
-                        harness.insert(&key, &value),
-                        model.insert(key, value).is_some(),
-                        "seed {seed}"
-                    );
+                    // Some inserts read the value they replace, and some of
+                    // those are refused when there is one.
+                    match rng.below(4) {
+                        0 => {
+                            let visited = harness.insert_with(&key, &value);
+
+                            assert_eq!(visited.as_ref(), model.get(&key), "seed {seed}");
+                            model.insert(key, value);
+                        }
+                        1 => {
+                            if !harness.refuse_insert(&key, &value) {
+                                model.insert(key, value);
+                            }
+                        }
+                        _ => assert_eq!(
+                            harness.insert(&key, &value),
+                            model.insert(key, value).is_some(),
+                            "seed {seed}"
+                        ),
+                    }
                 }
             }
 
@@ -545,6 +608,37 @@ fn a_removal_that_reads_its_value_copies_nothing_for_a_missing_key() {
         Some(vec![7; 40])
     );
     assert!(harness.store.fresh.len() > copied);
+}
+
+/// An insert whose visitor refuses the value it would replace stores
+/// nothing, and gives back the pages it wrote for a value too long for a
+/// leaf.
+#[test]
+fn a_refused_replacement_stores_nothing() {
+    let mut harness = Harness::new(4096);
+
+    for n in 0..500u32 {
+        harness.insert(&n.to_be_bytes(), &[7; 40]);
+    }
+
+    harness.commit();
+
+    let long = vec![9; 3 * 4096];
+
+    assert!(harness.refuse_insert(&8u32.to_be_bytes(), &long));
+    assert_eq!(harness.get(&8u32.to_be_bytes()), Some(vec![7; 40]));
+
+    // What is left handed out is the path to the key, copied.
+    let depth = harness.store.fresh.len();
+
+    assert!(depth <= 3, "{depth} pages handed out");
+    assert_eq!(
+        harness.insert_with(&8u32.to_be_bytes(), &long),
+        Some(vec![7; 40])
+    );
+    assert_eq!(harness.get(&8u32.to_be_bytes()), Some(long));
+    harness.commit();
+    assert_eq!(harness.check_structure(), 500);
 }
 
 #[test]

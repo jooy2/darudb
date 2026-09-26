@@ -560,3 +560,86 @@ fn deleting_a_damaged_object_takes_nothing_out() {
     assert!(txn.collection("players").unwrap().delete(1).unwrap());
     txn.commit().unwrap();
 }
+
+/// A put refused after the transaction copied its way down the collection's
+/// tree, as the first change of the transaction to that tree, leaves the
+/// tree on the copies: the commit has to write them, or the tree it leaves
+/// behind is on pages given up for later commits to reuse. A put over a
+/// damaged record is refused on the way down; one that takes a unique value
+/// is refused after its record was stored, and puts the record back.
+#[test]
+fn a_put_refused_as_the_first_change_leaves_a_whole_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = OpenOptions::new();
+
+    options.schema(schema());
+
+    let db = options.open(dir.path().join("objects.darudb")).unwrap();
+    let open = db.begin_read().unwrap().schema().cloned().unwrap();
+    let players = open
+        .schema
+        .collections
+        .iter()
+        .find(|collection| collection.name == "players")
+        .unwrap();
+    let tree = records(players.id);
+    let damaged = crate::format::object::key::encoded(&Value::Int(2001)).unwrap();
+    let write = |round: i64| {
+        let mut txn = db.begin_write().unwrap();
+        let mut players = txn.collection("players").unwrap();
+
+        for n in 1..=2000 {
+            let handle = format!("h{n}");
+
+            players
+                .put(
+                    Object::new()
+                        .with("id", n)
+                        .with("handle", handle)
+                        .with("score", round),
+                )
+                .unwrap();
+        }
+
+        drop(players);
+        txn.commit().unwrap();
+    };
+
+    write(0);
+
+    let mut txn = db.begin_write().unwrap();
+
+    // A record that ends inside its count of fields.
+    txn.insert_in(&tree, &damaged, &[0x80]).unwrap();
+    txn.commit().unwrap();
+
+    for (id, handle, code) in [(2001, "new", "CORRUPTED"), (5, "h6", "DUPLICATE_KEY")] {
+        let mut txn = db.begin_write().unwrap();
+        let refused = txn
+            .collection("players")
+            .unwrap()
+            .put(Object::new().with("id", id).with("handle", handle))
+            .unwrap_err();
+
+        assert_eq!(refused.code(), code);
+        txn.commit().unwrap();
+
+        // Commits that reuse the pages the refused put gave up.
+        for round in 1..4 {
+            write(round);
+        }
+
+        let read = db.begin_read().unwrap();
+        let stored = read
+            .range_in::<Vec<u8>>(
+                &tree,
+                &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+                false,
+            )
+            .unwrap()
+            .collect::<crate::Result<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(stored.len(), 2001, "{code}");
+    }
+}

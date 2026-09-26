@@ -392,6 +392,25 @@ fn a_refused_write_leaves_the_transaction_able_to_commit() {
         code(users.insert(user("Carol").with("email", long.as_str()))),
         "INVALID_ARGUMENT"
     );
+    // A put is refused the same way, whether it replaces an object or adds
+    // one, and a refused replacement leaves the object it would replace.
+    assert_eq!(
+        code(users.put(user("Bob").with("id", 2).with("email", "alice@example.com"))),
+        "DUPLICATE_KEY"
+    );
+    assert_eq!(
+        code(users.put(user("Dan").with("id", 9).with("email", "alice@example.com"))),
+        "DUPLICATE_KEY"
+    );
+    assert_eq!(
+        code(users.put(user("Bob").with("id", 2).with("email", long.as_str()))),
+        "INVALID_ARGUMENT"
+    );
+    assert_eq!(
+        users.get(2).unwrap().unwrap().get("age"),
+        Some(&Value::Int(40))
+    );
+    assert_eq!(users.get(9).unwrap(), None);
 
     let mut posts = txn.collection("posts").unwrap();
 
@@ -410,6 +429,24 @@ fn a_refused_write_leaves_the_transaction_able_to_commit() {
 
     assert_eq!(objects(&db, "users")[1].get("age"), Some(&Value::Int(40)));
     assert_eq!(objects(&db, "users").len(), 2);
+
+    // The indexes hold what the objects do.
+    let read = db.begin_read().unwrap();
+    let users = read.collection("users").unwrap();
+    let keys = |filter| {
+        users
+            .query(&darudb::Query::new().filter(filter))
+            .unwrap()
+            .iter()
+            .map(|user| user.get("id").cloned())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        keys(darudb::Filter::eq("email", "alice@example.com")),
+        [Some(Value::Int(1))]
+    );
+    assert_eq!(keys(darudb::Filter::eq("age", 40)), [Some(Value::Int(2))]);
 }
 
 #[test]

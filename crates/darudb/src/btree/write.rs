@@ -27,15 +27,18 @@ type Split = Option<(Vec<u8>, Child)>;
 /// overflow run it kept, if any, for the caller to give back.
 type Replaced = Option<Option<OverflowRef>>;
 
-/// What an insert stores, and whether it replaces a value already there.
-#[derive(Clone, Copy)]
-struct Put<'a> {
+/// What an insert stores, as the caller gives it or as the leaf stores it,
+/// and whether it replaces a value already there, giving it to `visit`
+/// first.
+struct Put<'a, 'v, V = StoredRef<'a>> {
     key: &'a [u8],
-    value: StoredRef<'a>,
+    value: V,
     replace: bool,
+    visit: Option<&'v mut Removed<'v>>,
 }
 
-/// What is given the value a removal takes out, before it goes.
+/// What is given the value that an insert replaces or a removal takes out,
+/// before it goes.
 pub(crate) type Removed<'v> = dyn FnMut(&[u8]) -> Result<()> + 'v;
 
 /// What a removal looks for, and how it goes down to it.
@@ -71,6 +74,52 @@ pub(crate) fn insert<L: Load, S: Store>(
     value: &[u8],
     replace: bool,
 ) -> Result<Inserted> {
+    let put = Put {
+        key,
+        value,
+        replace,
+        visit: None,
+    };
+
+    insert_one(load, store, tree, root, put)
+}
+
+/// [`insert`], replacing any value already there, which it gives to `visit`
+/// before it goes, for a caller that needs the value it replaces. An error
+/// `visit` returns stores nothing, though the nodes on the way to the key
+/// have been copied.
+pub(crate) fn insert_with<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    key: &[u8],
+    value: &[u8],
+    visit: &mut Removed<'_>,
+) -> Result<Inserted> {
+    let put = Put {
+        key,
+        value,
+        replace: true,
+        visit: Some(visit),
+    };
+
+    insert_one(load, store, tree, root, put)
+}
+
+fn insert_one<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    put: Put<'_, '_, &[u8]>,
+) -> Result<Inserted> {
+    let Put {
+        key,
+        value,
+        replace,
+        visit,
+    } = put;
     let run = store_value(load.page_size(), store, tree, key.len(), value)?;
     let value = run.map_or(StoredRef::Inline(value), StoredRef::Overflow);
 
@@ -91,6 +140,7 @@ pub(crate) fn insert<L: Load, S: Store>(
         key,
         value,
         replace,
+        visit,
     };
     let (replaced, split) = insert_into(load, store, tree, child, None, put)?;
 
@@ -131,12 +181,13 @@ fn insert_into<L: Load, S: Store>(
     tree: u64,
     child: &mut Child,
     level: Option<u8>,
-    put: Put<'_>,
+    put: Put<'_, '_>,
 ) -> Result<(Replaced, Split)> {
     let Put {
         key,
         value,
         replace,
+        visit,
     } = put;
     let page_size = load.page_size();
     let capacity = content_len(page_size);
@@ -153,6 +204,24 @@ fn insert_into<L: Load, S: Store>(
                 };
 
                 return Ok((Some(kept), None));
+            }
+
+            if let (Ok(index), Some(visit)) = (found, visit) {
+                let visited = match leaf.value(index).map_err(internal)? {
+                    StoredRef::Inline(old) => visit(old),
+                    StoredRef::Overflow(reference) => load
+                        .read_overflow(&reference, tree)
+                        .and_then(|old| visit(&old)),
+                };
+
+                if let Err(error) = visited {
+                    // Nothing refers to the pages written for the value.
+                    if let StoredRef::Overflow(run) = value {
+                        release_run(store, Some(run));
+                    }
+
+                    return Err(error);
+                }
             }
 
             if let Ok(index) = found {
@@ -218,7 +287,12 @@ fn insert_into<L: Load, S: Store>(
                 tree,
                 &mut branch.children[index],
                 Some(branch.level - 1),
-                put,
+                Put {
+                    key,
+                    value,
+                    replace,
+                    visit,
+                },
             )?;
             let mut split_up = None;
 

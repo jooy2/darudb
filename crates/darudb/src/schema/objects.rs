@@ -4,8 +4,10 @@
 //!
 //! Every write checks everything that can refuse it, the object's types, its
 //! key, the unique indexes and the lengths of every key it adds, before it
-//! changes a tree. A refused write leaves the transaction as it was and able
-//! to commit.
+//! changes an index. A put stores its record before the unique indexes are
+//! checked, and stores the record it replaced again if one refuses it. A
+//! refused write leaves the transaction holding what it held and able to
+//! commit.
 
 use std::collections::BTreeSet;
 use std::ops::Bound;
@@ -519,23 +521,6 @@ fn object_entries(
 /// its entries, which decoding the whole object for cost more than the rest
 /// of a change that rewrites one index.
 fn stored_entries(
-    source: &dyn Source,
-    entries: &mut IndexKeys,
-    position: usize,
-    index: &IndexDef,
-    collection: &CollectionDef,
-    record: &[u8],
-    key: &[u8],
-) -> Result<()> {
-    read_entries(entries, position, index, collection, record, key)
-        .map_err(|unread| unread.error(source, collection))
-}
-
-/// [`stored_entries`] for a caller that makes the error for a damaged record
-/// itself, as one that reads the record while its transaction changes the
-/// tree does.
-#[inline(always)]
-fn read_entries(
     entries: &mut IndexKeys,
     position: usize,
     index: &IndexDef,
@@ -577,14 +562,57 @@ impl From<Error> for Unread {
     }
 }
 
-impl Unread {
-    /// The error, for an object of `collection` read from `source`.
-    fn error(self, source: &dyn Source, collection: &CollectionDef) -> Error {
-        match self {
-            Self::Damaged(reason) => damaged(source, collection, reason),
-            Self::Failed(error) => error,
-        }
+/// Adds the entries in every index of `collection` of the stored object
+/// whose record is `record` and whose key is `key`, for a visitor of the
+/// collection's tree while the transaction changes it: what is wrong with a
+/// damaged record goes to `damage`, since the transaction cannot make the
+/// error then, and [`released`] makes it.
+fn record_entries(
+    entries: &mut IndexKeys,
+    collection: &CollectionDef,
+    record: &[u8],
+    key: &[u8],
+    damage: &mut Option<&'static str>,
+) -> Result<()> {
+    entries.ends.reserve(collection.indexes.len());
+
+    for (position, index) in collection.indexes.iter().enumerate() {
+        stored_entries(entries, position, index, collection, record, key).map_err(|unread| {
+            match unread {
+                Unread::Damaged(reason) => {
+                    *damage = Some(reason);
+
+                    internal(reason)
+                }
+                Unread::Failed(error) => error,
+            }
+        })?;
     }
+
+    Ok(())
+}
+
+/// The outcome of a change to a collection's tree whose visitor read a
+/// record with [`record_entries`], with the error for a damaged record made
+/// now that the tree is free.
+fn released<T>(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    result: Result<T>,
+    damage: Option<&'static str>,
+) -> Result<T> {
+    match (result, damage) {
+        (Err(_), Some(reason)) => Err(damaged(source, collection, reason)),
+        (result, _) => result,
+    }
+}
+
+/// Whether the object whose entries are `entries` holds a unique value that
+/// the object it replaces, whose entries are `old`, did not.
+fn adds_unique(collection: &CollectionDef, entries: &IndexKeys, old: &IndexKeys) -> bool {
+    entries.iter().any(|(position, entry)| {
+        collection.indexes[position].unique && !old.contains(position, entry)
+    })
 }
 
 /// The field of `collection` that `index` is on.
@@ -824,6 +852,17 @@ enum Numbering {
     PastKey(i64),
 }
 
+/// What a replacement stored its record over, for a refusal to undo.
+enum Previous {
+    /// Nothing: undoing takes the record out again.
+    Nothing,
+    /// An object whose unique values the new one all holds too, so that
+    /// nothing after can refuse the new one.
+    Object,
+    /// An object whose record this is, to put back.
+    Record(Vec<u8>),
+}
+
 /// A collection of a write transaction: its objects, with the transaction's
 /// changes, and the calls that change them.
 #[derive(Debug)]
@@ -885,32 +924,13 @@ impl<'a> CollectionWriter<'a> {
         let key = key_bytes(collection, &key.into())?;
         let mut entries = IndexKeys::default();
         let mut damage = None;
-        // The object goes first, read on its way out for its entries: the
-        // transaction cannot make the error for a damaged record while it
-        // removes it, so the reason waits.
-        let found =
-            self.txn
-                .remove_in_with(&records(collection.id), &key, &mut |stored| {
-                    entries.ends.reserve(collection.indexes.len());
-
-                    for (position, index) in collection.indexes.iter().enumerate() {
-                        read_entries(&mut entries, position, index, collection, stored, &key)
-                            .map_err(|unread| match unread {
-                                Unread::Damaged(reason) => {
-                                    damage = Some(reason);
-
-                                    internal(reason)
-                                }
-                                Unread::Failed(error) => error,
-                            })?;
-                    }
-
-                    Ok(())
-                });
-        let found = match (found, damage) {
-            (Err(_), Some(reason)) => return Err(damaged(&*self.txn, collection, reason)),
-            (found, _) => found?,
-        };
+        // The object goes first, read on its way out for its entries.
+        let found = self
+            .txn
+            .remove_in_with(&records(collection.id), &key, &mut |stored| {
+                record_entries(&mut entries, collection, stored, &key, &mut damage)
+            });
+        let found = released(&*self.txn, collection, found, damage)?;
 
         // Its entries, which it has just been read for.
         for (position, entry) in entries.iter() {
@@ -1149,6 +1169,12 @@ impl<'a> CollectionWriter<'a> {
     /// checks that need the trees: a unique value or, for an insert, a
     /// primary key already taken. A replacement takes out the entries of the
     /// object it replaces that the new one does not have. Returns the key.
+    ///
+    /// A replacement stores its record first, reading the one it replaces on
+    /// the way for its entries, which goes down the collection's tree once
+    /// rather than twice; a unique value found taken after that puts the
+    /// replaced record back. An insert finds out whether its key is taken by
+    /// storing the record, after every other check.
     fn store(
         &mut self,
         collection: &CollectionDef,
@@ -1162,40 +1188,6 @@ impl<'a> CollectionWriter<'a> {
             entries,
             numbering,
         } = written;
-
-        // An insert finds out whether the key is taken by storing the record,
-        // below, rather than by looking it up first. A replacement reads the
-        // entries the object it replaces has in each index.
-        let mut old = IndexKeys::default();
-        let mut replaced = false;
-
-        if replace {
-            let source: &dyn Source = &*self.txn;
-
-            replaced = source.get_in_with(&records(collection.id), &key, &mut |stored| {
-                old.ends.reserve(collection.indexes.len());
-
-                for (position, index) in collection.indexes.iter().enumerate() {
-                    stored_entries(source, &mut old, position, index, collection, stored, &key)?;
-                }
-
-                Ok(())
-            })?;
-        }
-
-        // The counter to store, if the write moves it.
-        let raised = match numbering {
-            Numbering::Kept => None,
-            Numbering::Raised(next) => Some(next),
-            Numbering::PastKey(_) if replaced => None,
-            Numbering::PastKey(chosen) => match u64::try_from(chosen) {
-                Ok(chosen) => {
-                    (chosen >= self.next_number(collection)?).then(|| chosen.saturating_add(1))
-                }
-                Err(_) => None,
-            },
-        };
-
         let max_key_len = self.txn.max_key_len();
         let too_long = || Error::InvalidArgument {
             message: format!(
@@ -1214,43 +1206,36 @@ impl<'a> CollectionWriter<'a> {
             });
         }
 
-        // The entries the object adds: those the object it replaces lacks.
-        for (position, entry) in entries.iter() {
-            if old.contains(position, entry) {
-                continue;
-            }
-
-            if entry.len() > max_key_len {
-                return Err(too_long());
-            }
-
-            let index = &collection.indexes[position];
-
-            if index.unique {
-                let mut taken = false;
-
-                self.txn
-                    .get_in_with(&index_tree(index.id), entry, &mut |holder| {
-                        taken = holder != key;
-
-                        Ok(())
-                    })?;
-
-                if taken {
-                    let field = collection
-                        .fields
-                        .by_id(index.field)
-                        .map_or("", |field| field.name.as_str());
-
-                    return Err(Error::DuplicateKey {
-                        message: format!(
-                            "another object of `{}` holds this value of its unique field `{field}`",
-                            collection.name
-                        ),
-                    });
-                }
-            }
+        // Every key the object has in an index, those the object it replaces
+        // had too, which passed when they were written.
+        if entries.iter().any(|(_, entry)| entry.len() > max_key_len) {
+            return Err(too_long());
         }
+
+        let mut old = IndexKeys::default();
+        let previous = if replace {
+            Some(self.replace_record(collection, &key, &record, &entries, &mut old)?)
+        } else {
+            None
+        };
+        let replaced = matches!(previous, Some(Previous::Object | Previous::Record(_)));
+        let checked = self
+            .raised(collection, numbering, replaced)
+            .and_then(|raised| {
+                self.check_unique(collection, &key, &entries, &old)?;
+
+                Ok(raised)
+            });
+        let raised = match checked {
+            Ok(raised) => raised,
+            Err(error) => {
+                if let Some(previous) = previous {
+                    self.put_back(collection, &key, previous)?;
+                }
+
+                return Err(error);
+            }
+        };
 
         // The last refusal: a primary key already taken, which an insert
         // learns from storing the record, and which stores nothing then.
@@ -1295,11 +1280,124 @@ impl<'a> CollectionWriter<'a> {
                 .insert_later(META, counter(collection.id).as_bytes(), &next.to_le_bytes())?;
         }
 
-        if replace {
-            self.txn.insert_in(&records(collection.id), &key, &record)?;
+        Ok(key_value)
+    }
+
+    /// Stores `record` under `key`, replacing the object stored there, if
+    /// any, whose entries it adds to `old`. The object whose entries are
+    /// `entries` may be refused after this, for a unique value it did not
+    /// hold before, so the record it replaces is kept then, to be put back.
+    fn replace_record(
+        &mut self,
+        collection: &CollectionDef,
+        key: &[u8],
+        record: &[u8],
+        entries: &IndexKeys,
+        old: &mut IndexKeys,
+    ) -> Result<Previous> {
+        let mut damage = None;
+        let mut previous = Previous::Nothing;
+        let result = self
+            .txn
+            .insert_in_with(&records(collection.id), key, record, &mut |stored| {
+                record_entries(old, collection, stored, key, &mut damage)?;
+                previous = if adds_unique(collection, entries, old) {
+                    Previous::Record(stored.to_vec())
+                } else {
+                    Previous::Object
+                };
+
+                Ok(())
+            });
+
+        released(&*self.txn, collection, result, damage)?;
+
+        Ok(previous)
+    }
+
+    /// Undoes [`replace_record`](Self::replace_record) after a refusal.
+    fn put_back(
+        &mut self,
+        collection: &CollectionDef,
+        key: &[u8],
+        previous: Previous,
+    ) -> Result<()> {
+        let tree = records(collection.id);
+
+        match previous {
+            Previous::Nothing => self.txn.remove_present_in(&tree, key).map(drop),
+            Previous::Record(record) => self.txn.insert_in(&tree, key, &record),
+            // Only a unique value the object did not hold can refuse it after
+            // its record is stored, and the record replaced is kept then.
+            Previous::Object => Err(internal(
+                "a replacement was refused after nothing could refuse it",
+            )),
+        }
+    }
+
+    /// The counter to store, if the write moves it, where `replaced` says
+    /// whether the object replaces one.
+    fn raised(
+        &self,
+        collection: &CollectionDef,
+        numbering: Numbering,
+        replaced: bool,
+    ) -> Result<Option<u64>> {
+        Ok(match numbering {
+            Numbering::Kept => None,
+            Numbering::Raised(next) => Some(next),
+            Numbering::PastKey(_) if replaced => None,
+            Numbering::PastKey(chosen) => match u64::try_from(chosen) {
+                Ok(chosen) => {
+                    (chosen >= self.next_number(collection)?).then(|| chosen.saturating_add(1))
+                }
+                Err(_) => None,
+            },
+        })
+    }
+
+    /// Refuses the object whose key is `key` and whose entries are `entries`
+    /// if another object holds one of the unique values it adds: the values
+    /// the object it replaces, whose entries are `old`, did not hold.
+    fn check_unique(
+        &self,
+        collection: &CollectionDef,
+        key: &[u8],
+        entries: &IndexKeys,
+        old: &IndexKeys,
+    ) -> Result<()> {
+        for (position, entry) in entries.iter() {
+            let index = &collection.indexes[position];
+
+            if !index.unique || old.contains(position, entry) {
+                continue;
+            }
+
+            let mut taken = false;
+
+            self.txn
+                .get_in_with(&index_tree(index.id), entry, &mut |holder| {
+                    taken = holder != key;
+
+                    Ok(())
+                })?;
+
+            if taken {
+                let field = collection
+                    .fields
+                    .by_id(index.field)
+                    .map_or("", |field| field.name.as_str());
+
+                return Err(Error::DuplicateKey {
+                    message: format!(
+                        "another object of `{}` holds this value of its unique field `{field}`",
+                        collection.name
+                    ),
+                });
+            }
         }
 
-        Ok(key_value)
+        Ok(())
     }
 
     /// The collection's next auto-increment number, if the object gives no
