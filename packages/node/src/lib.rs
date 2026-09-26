@@ -463,9 +463,58 @@ impl Txn {
     /// from where the engine lends them.
     fn find(&mut self, collection: &str, query: &darudb::Query) -> Result<Vec<u8>> {
         let mut out = Vec::new();
-        let mut push = |record: &[u8]| {
+
+        self.find_with(collection, query, &mut |record| {
             push_varint(&mut out, record.len());
             out.extend_from_slice(record);
+        })?;
+
+        Ok(out)
+    }
+
+    /// [`find`](Self::find), delivered as [`handed`] says. The records are
+    /// gathered in a vector this thread keeps for its next query: a vector
+    /// made for each query cost an allocation, and more as it grew for a
+    /// large result.
+    fn find_into<'env>(
+        &mut self,
+        env: &'env Env,
+        collection: &str,
+        query: &darudb::Query,
+        scratch: &mut [u8],
+    ) -> Result<Either<u32, BufferSlice<'env>>> {
+        FOUND.with_borrow_mut(|out| {
+            out.clear();
+            self.find_with(collection, query, &mut |record| {
+                push_varint(out, record.len());
+                out.extend_from_slice(record);
+            })?;
+
+            match (scratch.get_mut(..out.len()), u32::try_from(out.len())) {
+                (Some(room), Ok(len)) => {
+                    room.copy_from_slice(out);
+
+                    Ok(Either::A(len))
+                }
+                // A result too large to copy is handed over, and the next
+                // query starts a vector again.
+                _ if out.len() > COPY_LIMIT => js_bytes(env, std::mem::take(out)).map(Either::B),
+                _ => BufferSlice::copy_from(env, &out[..])
+                    .map(Either::B)
+                    .map_err(|error| napi::Error::new("INTERNAL", error.reason.clone())),
+            }
+        })
+    }
+
+    /// Gives `push` each record `query` finds, where the engine lends it.
+    fn find_with(
+        &mut self,
+        collection: &str,
+        query: &darudb::Query,
+        push: &mut dyn FnMut(&[u8]),
+    ) -> Result<()> {
+        let mut push = |record: &[u8]| {
+            push(record);
 
             Ok(())
         };
@@ -479,9 +528,7 @@ impl Txn {
                 .collection(collection)
                 .and_then(|collection| collection.query_records_with(query, &mut push)),
         }
-        .map_err(to_js_error)?;
-
-        Ok(out)
+        .map_err(to_js_error)
     }
 
     fn count(&mut self, collection: &str, query: &darudb::Query) -> Result<f64> {
@@ -503,6 +550,20 @@ impl Txn {
         let request = request_of(ir, first)?;
 
         self.find(&request.collection, &request.query)
+    }
+
+    /// [`find_ir`](Self::find_ir), delivered as
+    /// [`find_into`](Self::find_into) delivers.
+    fn find_ir_into<'env>(
+        &mut self,
+        env: &'env Env,
+        ir: &[u8],
+        first: bool,
+        scratch: &mut [u8],
+    ) -> Result<Either<u32, BufferSlice<'env>>> {
+        let request = request_of(ir, first)?;
+
+        self.find_into(env, &request.collection, &request.query, scratch)
     }
 
     fn count_ir(&mut self, ir: &[u8]) -> Result<f64> {
@@ -952,7 +1013,7 @@ pub fn collection_name(name: String) -> External<String> {
     External::new(name)
 }
 
-/// The record of the object whose key is `key`, delivered as [`delivered`]
+/// The record of the object whose key is `key`, delivered as [`handed`]
 /// says, or `null`.
 #[napi(ts_return_type = "number | Buffer | null")]
 pub fn get_record<'env>(
@@ -977,7 +1038,7 @@ pub fn get_record<'env>(
 }
 
 /// The records a query finds, one after another, each after its length;
-/// only the first with `first`. Delivered as [`delivered`] says.
+/// only the first with `first`. Delivered as [`handed`] says.
 #[napi(ts_return_type = "number | Buffer")]
 pub fn find<'env>(
     env: &'env Env,
@@ -986,9 +1047,7 @@ pub fn find<'env>(
     first: bool,
     mut scratch: BufferSlice<'_>,
 ) -> Result<Either<u32, BufferSlice<'env>>> {
-    let records = with(txn, |txn| txn.find_ir(&ir, first))?;
-
-    delivered(env, records, &mut scratch)
+    with(txn, |txn| txn.find_ir_into(env, &ir, first, &mut scratch))
 }
 
 #[napi]
@@ -1013,9 +1072,10 @@ pub fn find_prepared<'env>(
     mut scratch: BufferSlice<'_>,
 ) -> Result<Either<u32, BufferSlice<'env>>> {
     let query = prepared.bound(&parameters, first)?;
-    let records = with(txn, |txn| txn.find(&prepared.collection, &query))?;
 
-    delivered(env, records, &mut scratch)
+    with(txn, |txn| {
+        txn.find_into(env, &prepared.collection, &query, &mut scratch)
+    })
 }
 
 #[napi]
@@ -1321,35 +1381,21 @@ fn key_out(key: darudb::Value) -> Result<JsKeyOut> {
     })
 }
 
+thread_local! {
+    /// The records of the last query this thread ran synchronously, kept
+    /// for the next to be gathered in ([`Txn::find_into`]).
+    static FOUND: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Up to this many bytes, a result is copied into a buffer JavaScript owns;
 /// beyond, the allocation is handed over. Handing it over saves the copy but
 /// costs more than copying a record or two: V8 registers the allocation, and
 /// a finalizer frees it.
 const COPY_LIMIT: usize = 1 << 20;
 
-/// What a synchronous read hands JavaScript: the length of `bytes` once
-/// they are copied into `scratch`, a buffer the JavaScript side keeps for
-/// the purpose and reads before its next call, or a `Buffer` of their own
-/// when they do not fit. A new `Buffer` for every read cost JavaScript an
-/// allocation and a collection each time.
-fn delivered<'env>(
-    env: &'env Env,
-    bytes: Vec<u8>,
-    scratch: &mut [u8],
-) -> Result<Either<u32, BufferSlice<'env>>> {
-    match (scratch.get_mut(..bytes.len()), u32::try_from(bytes.len())) {
-        (Some(room), Ok(len)) => {
-            room.copy_from_slice(&bytes);
-
-            Ok(Either::A(len))
-        }
-        _ => js_bytes(env, bytes).map(Either::B),
-    }
-}
-
-/// Bytes the engine lends, copied once for [`handed`] to deliver as
-/// [`delivered`] does: into `scratch` when they fit, their length then, and
-/// into a vector of their own when they do not.
+/// Bytes the engine lends, copied once for [`handed`] to deliver: into
+/// `scratch` when they fit, their length then, and into a vector of their
+/// own when they do not.
 fn copy_lent(bytes: &[u8], scratch: &mut [u8]) -> Either<u32, Vec<u8>> {
     match (scratch.get_mut(..bytes.len()), u32::try_from(bytes.len())) {
         (Some(room), Ok(len)) => {
@@ -1361,7 +1407,11 @@ fn copy_lent(bytes: &[u8], scratch: &mut [u8]) -> Either<u32, Vec<u8>> {
     }
 }
 
-/// What [`copy_lent`] copied, as a synchronous read hands it JavaScript.
+/// What [`copy_lent`] copied, as a synchronous read hands it JavaScript:
+/// the length of the bytes copied into `scratch`, a buffer the JavaScript
+/// side keeps for the purpose and reads before its next call, or a `Buffer`
+/// of their own when they did not fit. A new `Buffer` for every read cost
+/// JavaScript an allocation and a collection each time.
 fn handed(env: &Env, copied: Either<u32, Vec<u8>>) -> Result<Either<u32, BufferSlice<'_>>> {
     match copied {
         Either::A(len) => Ok(Either::A(len)),
