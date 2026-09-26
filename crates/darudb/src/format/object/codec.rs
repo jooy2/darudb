@@ -280,7 +280,7 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
     let mut last = None;
 
     for _ in 0..reader.count(2)? {
-        let field = reader.varint()?;
+        let field = reader.quick_varint()?;
 
         if last.is_some_and(|last| last >= field) {
             return Err("a record's field ids are out of order");
@@ -397,6 +397,23 @@ impl<'a> Reader<'a> {
         self.at += len;
 
         Ok(&bytes[self.at - len..self.at])
+    }
+
+    /// [`varint`](Self::varint), with a varint of one byte, as field ids,
+    /// lengths and small numbers are, read where it is used: for stepping
+    /// over the fields of every record a filter tests. Reading a record
+    /// whole keeps the call, which inlined there made queries that read
+    /// whole objects slower.
+    #[inline(always)]
+    fn quick_varint(&mut self) -> Result<u64, &'static str> {
+        match self.bytes.get(self.at) {
+            Some(&byte) if byte < 0x80 => {
+                self.at += 1;
+
+                Ok(u64::from(byte))
+            }
+            _ => self.varint(),
+        }
     }
 
     fn varint(&mut self) -> Result<u64, &'static str> {
@@ -614,7 +631,7 @@ impl<'a> Reader<'a> {
             }
             Some(&INT) => {
                 self.at += 1;
-                self.varint()?;
+                self.quick_varint()?;
             }
             Some(&FLOAT) => {
                 self.at += 1;
@@ -623,7 +640,7 @@ impl<'a> Reader<'a> {
             Some(&(STRING | BYTES)) => {
                 self.at += 1;
 
-                let len = self.varint()?;
+                let len = self.quick_varint()?;
 
                 self.take(len)?;
             }
