@@ -337,13 +337,6 @@ impl NativeDatabase {
         Ok(NativeTransaction::of(Txn::Read(Box::new(txn))))
     }
 
-    #[napi]
-    pub fn begin_write(&self) -> Result<NativeTransaction> {
-        let txn = self.database()?.begin_write().map_err(to_js_error)?;
-
-        Ok(NativeTransaction::of(Txn::Write(Box::new(txn))))
-    }
-
     /// `beginRead`, giving the transaction only as its handle, which the
     /// functions of a synchronous transaction take, `endTransaction` among
     /// them. `read` begins a transaction for every call, and an object of
@@ -358,7 +351,7 @@ impl NativeDatabase {
         ))))))
     }
 
-    /// `beginWrite`, giving the transaction only as its handle; see
+    /// Begins a write transaction, and gives it only as its handle; see
     /// `beginReadHandle`.
     #[napi(ts_return_type = "ExternalObject<'NativeTransaction'>")]
     pub fn begin_write_handle(&self) -> Result<External<Held>> {
