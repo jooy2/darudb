@@ -449,7 +449,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
     for (id, raw) in fields {
         match (id, raw) {
             (1, Raw::String(name)) => collection = Some(name),
-            (2, raw) => ir.filter = Some(decode_expr(&raw)?),
+            (2, raw) => ir.filter = Some(decode_expr(raw)?),
             (3, Raw::List(keys)) => {
                 for key in keys {
                     let Raw::Object(fields) = key else {
@@ -460,7 +460,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
 
                     for (id, raw) in fields {
                         match (id, raw) {
-                            (1, raw) => path = Some(decode_path(&raw)?),
+                            (1, raw) => path = Some(decode_path(raw)?),
                             (2, Raw::Bool(value)) => descending = value,
                             _ => return Err(invalid("the IR holds a sort key it cannot read")),
                         }
@@ -488,14 +488,17 @@ fn count_of(value: i64) -> Result<u64> {
     u64::try_from(value).map_err(|_| invalid("the IR holds a negative offset or limit"))
 }
 
-fn decode_path(raw: &Raw) -> Result<Vec<String>> {
+/// The path `raw` holds. Like the rest of the reading of the IR, it takes
+/// the strings `codec::read` made rather than copying them: the records are
+/// thrown away once read, and a binding's query is read on every call.
+fn decode_path(raw: Raw) -> Result<Vec<String>> {
     let Raw::List(names) = raw else {
         return Err(invalid("the IR holds a path that is not a list"));
     };
     let path = names
-        .iter()
+        .into_iter()
         .map(|name| match name {
-            Raw::String(name) if !name.is_empty() => Ok(name.clone()),
+            Raw::String(name) if !name.is_empty() => Ok(name),
             _ => Err(invalid("the IR holds a path with a name that is not one")),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -510,7 +513,7 @@ fn decode_path(raw: &Raw) -> Result<Vec<String>> {
 /// Reads an expression. Its recursion is bounded by the nesting a record
 /// allows, which `codec::read` has already held the IR to; the filter's own
 /// limit is checked on the flattened tree when the query is planned.
-fn decode_expr(raw: &Raw) -> Result<Expr> {
+fn decode_expr(raw: Raw) -> Result<Expr> {
     let Raw::Object(fields) = raw else {
         return Err(invalid("the IR holds an expression that is not an object"));
     };
@@ -521,13 +524,13 @@ fn decode_expr(raw: &Raw) -> Result<Expr> {
 
     for (id, raw) in fields {
         match (id, raw) {
-            (1, Raw::Int(value)) => code = Some(*value),
+            (1, Raw::Int(value)) => code = Some(value),
             (2, raw) => path = Some(decode_path(raw)?),
             (3, Raw::List(raw)) => {
-                values = raw.iter().map(raw_operand).collect::<Result<_>>()?;
+                values = raw.into_iter().map(raw_operand).collect::<Result<_>>()?;
             }
             (4, Raw::List(raw)) => {
-                terms = raw.iter().map(decode_expr).collect::<Result<_>>()?;
+                terms = raw.into_iter().map(decode_expr).collect::<Result<_>>()?;
             }
             _ => return Err(invalid("the IR holds an expression it cannot read")),
         }
@@ -583,7 +586,7 @@ fn decode_expr(raw: &Raw) -> Result<Expr> {
 }
 
 /// A value of a test as the IR holds it, or a parameter.
-fn raw_operand(raw: &Raw) -> Result<Operand> {
+fn raw_operand(raw: Raw) -> Result<Operand> {
     match raw {
         Raw::Object(fields) => match fields.as_slice() {
             [(1, Raw::Int(index))] => usize::try_from(*index)
@@ -639,13 +642,13 @@ pub(crate) fn decode_parameters(bytes: &[u8]) -> Result<Vec<Value>> {
     Ok(values)
 }
 
-fn raw_value(raw: &Raw) -> Result<Value> {
+fn raw_value(raw: Raw) -> Result<Value> {
     Ok(match raw {
-        Raw::Bool(value) => Value::Bool(*value),
-        Raw::Int(value) => Value::Int(*value),
-        Raw::Float(value) => Value::Float(*value),
-        Raw::String(value) => Value::String(value.clone()),
-        Raw::Bytes(value) => Value::Bytes(value.clone()),
+        Raw::Bool(value) => Value::Bool(value),
+        Raw::Int(value) => Value::Int(value),
+        Raw::Float(value) => Value::Float(value),
+        Raw::String(value) => Value::String(value),
+        Raw::Bytes(value) => Value::Bytes(value),
         _ => return Err(invalid("the IR holds a value that is not a single value")),
     })
 }
