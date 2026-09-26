@@ -246,7 +246,29 @@ pub(crate) enum FieldRef<'a> {
 /// filter on a short string.
 #[inline]
 pub(crate) fn utf8(bytes: &[u8]) -> bool {
-    bytes.is_ascii() || std::str::from_utf8(bytes).is_ok()
+    ascii(bytes) || std::str::from_utf8(bytes).is_ok()
+}
+
+/// Whether every byte of `bytes` is below `0x80`, eight bytes at a time, in
+/// the caller. The standard library's check is a call of its own, which cost
+/// a filter on a short string field an eighth of its time.
+#[inline(always)]
+fn ascii(bytes: &[u8]) -> bool {
+    let mut chunks = bytes.chunks_exact(8);
+    let mut high = 0u64;
+
+    for chunk in &mut chunks {
+        let mut word = [0u8; 8];
+
+        word.copy_from_slice(chunk);
+        high |= u64::from_le_bytes(word);
+    }
+
+    for byte in chunks.remainder() {
+        high |= u64::from(*byte);
+    }
+
+    high & 0x8080_8080_8080_8080 == 0
 }
 
 /// The value of field `id` in the record `bytes`, if the record holds it,
