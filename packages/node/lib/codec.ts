@@ -113,6 +113,13 @@ export type Builder = (values: unknown[]) => Record<string, unknown>;
 export interface Layout {
   list: FieldLayout[];
   positions: Map<number, number>;
+  /**
+   * One more than the position of each id, 0 for an id the layout does not
+   * have, for ids up to `DIRECT_IDS`; `null` when an id is beyond. Reading a
+   * field found its position through `positions` otherwise, a lookup in a
+   * map for every field of every record.
+   */
+  byId: Uint16Array | null;
   names: Set<string>;
   hasProto: boolean;
   build: Builder | null | undefined;
@@ -986,9 +993,11 @@ function readFields(
 
     last = id;
 
-    const position = fields.positions.get(id);
+    const byId = fields.byId;
+    const position =
+      byId !== null ? (id < byId.length ? byId[id] - 1 : -1) : (fields.positions.get(id) ?? -1);
 
-    if (position === undefined) {
+    if (position < 0) {
       skipValue(reader, depth);
     } else {
       values[position] = readValue(reader, fields.list[position].kind, depth);
@@ -1244,12 +1253,27 @@ function field<T extends Tagged['tag']>(record: AnyRecord, id: number, tag: T): 
 }
 
 /** The fields of a collection or an embedded object, ready to read and write. */
+/** The highest field id a layout finds positions of in an array. */
+const DIRECT_IDS = 4096;
+
 function fieldsOf(list: FieldLayout[]): Layout {
   list.sort((a, b) => a.id - b.id);
+
+  const highest = list.length === 0 ? 0 : list[list.length - 1].id;
+  let byId: Uint16Array | null = null;
+
+  if (highest <= DIRECT_IDS && list.length < 0xffff) {
+    byId = new Uint16Array(highest + 1);
+
+    for (let index = 0; index < list.length; index++) {
+      byId[list[index].id] = index + 1;
+    }
+  }
 
   return {
     list,
     positions: new Map(list.map((field, index) => [field.id, index])),
+    byId,
     names: new Set(list.map((field) => field.name)),
     hasProto: list.some((field) => field.name === '__proto__'),
     // Made by `builderOf` when the first object of the layout is read.

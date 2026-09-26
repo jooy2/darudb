@@ -13,15 +13,24 @@ const require = createRequire(import.meta.url);
 const { decodeRecords, encodeRecords } = require('../dist/codec.js');
 
 /** A layout as `decodeSchema` builds one, from fields in id order. */
-const layoutOf = (list) => ({
-  name: 'things',
-  fields: {
-    list,
-    positions: new Map(list.map((field, index) => [field.id, index])),
-    names: new Set(list.map((field) => field.name)),
-    hasProto: list.some((field) => field.name === '__proto__')
-  }
-});
+const layoutOf = (list) => {
+  const byId = new Uint16Array((list.at(-1)?.id ?? 0) + 1);
+
+  list.forEach((field, index) => {
+    byId[field.id] = index + 1;
+  });
+
+  return {
+    name: 'things',
+    fields: {
+      list,
+      positions: new Map(list.map((field, index) => [field.id, index])),
+      byId,
+      names: new Set(list.map((field) => field.name)),
+      hasProto: list.some((field) => field.name === '__proto__')
+    }
+  };
+};
 
 const field = (id, name, kind, optional = true) => ({
   id,
@@ -218,7 +227,7 @@ describe('records', () => {
     const script = `
       const { decodeRecords, encodeRecords } = require(${JSON.stringify(require.resolve('../dist/codec.js'))});
       const list = [{ id: 1, name: 'a', kind: { type: 'int' }, optional: true, default: undefined }];
-      const layout = { name: 't', fields: { list, positions: new Map([[1, 0]]), names: new Set(['a']), hasProto: false } };
+      const layout = { name: 't', fields: { list, positions: new Map([[1, 0]]), byId: null, names: new Set(['a']), hasProto: false } };
       process.stdout.write(JSON.stringify(decodeRecords(layout, encodeRecords(layout, [{ a: 7 }]))));
     `;
     const output = execFileSync(process.execPath, [
