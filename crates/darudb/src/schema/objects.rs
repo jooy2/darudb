@@ -501,9 +501,30 @@ fn object_entries(
     key: &[u8],
 ) -> Result<()> {
     let field = indexed_field(index, collection)?;
+
+    found_entries(
+        entries,
+        position,
+        index,
+        field,
+        object.get(&field.name),
+        key,
+    )
+}
+
+/// [`object_entries`] for an object whose value of the indexed field `field`
+/// is `found`.
+fn found_entries(
+    entries: &mut IndexKeys,
+    position: usize,
+    index: &IndexDef,
+    field: &FieldDef,
+    found: Option<&Value>,
+    key: &[u8],
+) -> Result<()> {
     // The value the object is stored with: a required field left out holds
     // its default, as the record does.
-    let value = match object.get(&field.name) {
+    let value = match found {
         None | Some(Value::Null) if !field.optional => {
             field.default.as_ref().unwrap_or(&Value::Null)
         }
@@ -1121,26 +1142,37 @@ impl<'a> CollectionWriter<'a> {
         self.len().map(|len| len == 0)
     }
 
-    fn write(&mut self, mut object: Object, replace: bool) -> Result<Value> {
+    fn write(&mut self, object: Object, replace: bool) -> Result<Value> {
         let schema = Arc::clone(&self.schema);
         let collection = &schema.schema.collections[self.position];
-        let key_field = collection
-            .key_field()
+        let order = schema
+            .order(self.position)
+            .ok_or_else(|| internal("a collection has no order of its fields"))?;
+        let key_position = collection
+            .fields
+            .list
+            .iter()
+            .position(|field| field.id == collection.key)
             .ok_or_else(|| internal("a collection has no key field"))?;
+        // The number an auto-increment assigns goes into the record without
+        // going into the object, which would have moved its later fields.
+        let assigned_value;
+        let mut slots = codec::Slots::of(&object, &collection.fields, order);
         let numbering = if collection.auto {
-            let (assigned, numbering) = self.number(collection, object.get(&key_field.name))?;
+            let (assigned, numbering) = self.number(collection, slots.get(key_position))?;
 
             if let Some(number) = assigned {
-                object.set_named(&key_field.name, Value::Int(number));
+                assigned_value = Value::Int(number);
+                slots.set(key_position, &assigned_value);
             }
 
             numbering
         } else {
             Numbering::Kept
         };
-        let key_value = object.get(&key_field.name).cloned().unwrap_or(Value::Null);
+        let key_value = slots.get(key_position).cloned().unwrap_or(Value::Null);
         let key = key_bytes(collection, &key_value)?;
-        let record = codec::record_of(&object, &collection.fields, &|id| {
+        let record = codec::record_of_slots(&object, &slots, &collection.fields, &|id| {
             schema.schema.key_kind(id)
         })
         .map_err(|message| Error::InvalidArgument {
@@ -1149,7 +1181,15 @@ impl<'a> CollectionWriter<'a> {
         let mut entries = IndexKeys::with_capacity(collection.indexes.len());
 
         for (position, index) in collection.indexes.iter().enumerate() {
-            object_entries(&mut entries, position, index, collection, &object, &key)?;
+            let (at, field) = collection
+                .fields
+                .list
+                .iter()
+                .enumerate()
+                .find(|(_, field)| field.id == index.field)
+                .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+
+            found_entries(&mut entries, position, index, field, slots.get(at), &key)?;
         }
 
         self.store(

@@ -236,19 +236,6 @@ impl Object {
         }
     }
 
-    /// [`set`](Self::set) with a name the caller keeps, which a short name
-    /// is copied from without an allocation.
-    pub(crate) fn set_named(&mut self, name: &str, value: Value) -> Option<Value> {
-        match self.find(name) {
-            Ok(at) => Some(std::mem::replace(&mut self.fields[at].1, value)),
-            Err(at) => {
-                self.fields.insert(at, (Name::from(name), value));
-
-                None
-            }
-        }
-    }
-
     /// The value of field `name`, if the object has the field.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.find(name).ok().map(|at| &self.fields[at].1)

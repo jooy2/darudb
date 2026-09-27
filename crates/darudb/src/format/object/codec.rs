@@ -816,7 +816,9 @@ pub(crate) type KeyKinds<'a> = &'a dyn Fn(u64) -> Option<Kind>;
 /// every value has its field's type, and every required field without a
 /// default has a value. A required field left out is written with its
 /// default, so that a later change of the default changes no object already
-/// written; an optional one left out or null is not written.
+/// written; an optional one left out or null is not written. `slots` holds
+/// the object's value of each field, and the value of fields the object
+/// lacks that the caller gives, such as a number it assigned.
 ///
 /// The object is written straight into the record's bytes. Going through
 /// [`Raw`] values first copied every string and byte value of the object, and
@@ -825,18 +827,91 @@ pub(crate) type KeyKinds<'a> = &'a dyn Fn(u64) -> Option<Kind>;
 /// The error says what is wrong, for the caller to report as an invalid
 /// argument. A name that is not a field is reported before anything else
 /// wrong with the object.
-pub(crate) fn record_of(
+pub(crate) fn record_of_slots(
     object: &Object,
+    slots: &Slots<'_>,
     fields: &Fields,
     keys: KeyKinds<'_>,
 ) -> Result<Vec<u8>, String> {
     // Room for the fields of a small object, which most are, so that the
     // record is written without growing its buffer.
     let mut out = Vec::with_capacity(16 * (fields.list.len() + 1));
+    let reserved = reserve_count(fields, &mut out);
+    let written = encode_fields(fields, keys, &mut out, |position, _| slots.get(position));
 
-    encode_object(object, fields, keys, &mut out)?;
+    refuse_unknown(object, fields, &written, slots.known)?;
+    set_count(&mut out, 0, reserved, written?, fields);
 
     Ok(out)
+}
+
+/// [`record_of_slots`] for an object whose values it finds itself.
+#[cfg(test)]
+pub(crate) fn record_of(
+    object: &Object,
+    fields: &Fields,
+    keys: KeyKinds<'_>,
+) -> Result<Vec<u8>, String> {
+    let order = NameOrder::of(fields);
+
+    record_of_slots(object, &Slots::of(object, fields, &order), fields, keys)
+}
+
+/// The value an object holds for each field of a collection, at the field's
+/// position in the collection's list, found in one walk of the object's
+/// fields and the collection's in name order at once. Looking each field up
+/// by its name searched the object's names once for every field, and a
+/// write looked some of them up again for the key and the indexes.
+pub(crate) struct Slots<'o> {
+    values: Vec<Option<&'o Value>>,
+    /// How many of the object's fields the collection has.
+    known: usize,
+}
+
+impl<'o> Slots<'o> {
+    /// The values of `object` for `fields`, in the order `order` worked out
+    /// from them.
+    pub(crate) fn of(object: &'o Object, fields: &Fields, order: &NameOrder) -> Self {
+        let mut values = vec![None; fields.list.len()];
+        let mut known = 0;
+        let mut ranked = order.ranked.iter();
+        let mut next = ranked.next();
+
+        for (name, value) in object.fields() {
+            // Fields the object lacks come before `name`; a field of the
+            // object that the collection lacks matches none.
+            while let Some(field) = next.and_then(|&position| fields.list.get(position)) {
+                match field.name.as_bytes().cmp(name.as_bytes()) {
+                    std::cmp::Ordering::Less => next = ranked.next(),
+                    std::cmp::Ordering::Equal => {
+                        if let Some(slot) = next.and_then(|&position| values.get_mut(position)) {
+                            *slot = Some(value);
+                            known += 1;
+                        }
+
+                        next = ranked.next();
+                        break;
+                    }
+                    std::cmp::Ordering::Greater => break,
+                }
+            }
+        }
+
+        Self { values, known }
+    }
+
+    /// The value of the field at `position`.
+    pub(crate) fn get(&self, position: usize) -> Option<&'o Value> {
+        self.values.get(position).copied().flatten()
+    }
+
+    /// Gives the field at `position` the value `value`, which the object
+    /// does not hold.
+    pub(crate) fn set(&mut self, position: usize, value: &'o Value) {
+        if let Some(slot) = self.values.get_mut(position) {
+            *slot = Some(value);
+        }
+    }
 }
 
 fn encode_object(
@@ -846,16 +921,54 @@ fn encode_object(
     out: &mut Vec<u8>,
 ) -> Result<(), String> {
     let start = out.len();
-    let most = fields.list.len() as u64;
-
-    // The count of fields comes first, and is known once they are written:
-    // room is left for the most it can be, and taken back if it is shorter.
-    write_varint(most, out);
-
-    let reserved = out.len() - start;
+    let reserved = reserve_count(fields, out);
     let mut known = 0;
-    let written = encode_fields(object, fields, keys, out, &mut known);
+    let written = encode_fields(fields, keys, out, |_, field| {
+        let value = object.get(&field.name);
 
+        known += usize::from(value.is_some());
+        value
+    });
+
+    refuse_unknown(object, fields, &written, known)?;
+    set_count(out, start, reserved, written?, fields);
+
+    Ok(())
+}
+
+/// Leaves room for the count of fields, which comes first and is known once
+/// they are written: the most it can be. Returns how many bytes it took.
+fn reserve_count(fields: &Fields, out: &mut Vec<u8>) -> usize {
+    let start = out.len();
+
+    write_varint(fields.list.len() as u64, out);
+
+    out.len() - start
+}
+
+/// Writes the count of fields written, `count`, in the room [`reserve_count`]
+/// left at `start`, taking back what a shorter count does not need.
+fn set_count(out: &mut Vec<u8>, start: usize, reserved: usize, count: u64, fields: &Fields) {
+    if count != fields.list.len() as u64 {
+        let (prefix, len) = varint_bytes(count);
+
+        if len == reserved {
+            out[start..start + len].copy_from_slice(&prefix[..len]);
+        } else {
+            out.splice(start..start + reserved, prefix[..len].iter().copied());
+        }
+    }
+}
+
+/// The error for an object with a name that is not a field, which is
+/// reported before anything else wrong with it: when writing it failed, or
+/// when fewer of its fields were found, `known`, than it has.
+fn refuse_unknown(
+    object: &Object,
+    fields: &Fields,
+    written: &Result<u64, String>,
+    known: usize,
+) -> Result<(), String> {
     if written.is_err() || known != object.len() {
         if let Some((name, _)) = object
             .fields()
@@ -865,41 +978,21 @@ fn encode_object(
         }
     }
 
-    let count = written?;
-
-    if count != most {
-        let (prefix, len) = varint_bytes(count);
-
-        if len == reserved {
-            out[start..start + len].copy_from_slice(&prefix[..len]);
-        } else {
-            out.splice(start..start + reserved, prefix[..len].iter().copied());
-        }
-    }
-
     Ok(())
 }
 
-/// Writes the fields of `object` that `fields` has, by id, and returns how
-/// many it wrote. `known` counts the object's fields that `fields` has, for
-/// the caller to tell whether the object has others.
-fn encode_fields(
-    object: &Object,
+/// Writes the fields `fields` has, by id, with the value `value_of` finds
+/// for each, and returns how many it wrote.
+fn encode_fields<'v>(
     fields: &Fields,
     keys: KeyKinds<'_>,
     out: &mut Vec<u8>,
-    known: &mut usize,
+    mut value_of: impl FnMut(usize, &FieldDef) -> Option<&'v Value>,
 ) -> Result<u64, String> {
     let mut count = 0;
 
-    for field in &fields.list {
-        let value = object.get(&field.name);
-
-        if value.is_some() {
-            *known += 1;
-        }
-
-        let value = match value {
+    for (position, field) in fields.list.iter().enumerate() {
+        let value = match value_of(position, field) {
             None | Some(Value::Null) if field.optional => continue,
             None | Some(Value::Null) => match &field.default {
                 Some(default) => default,
@@ -1298,6 +1391,62 @@ mod tests {
                 object_in_order(&record, &fields, &order),
                 object_of(&record, &fields),
                 "{names:?}"
+            );
+        }
+    }
+
+    /// Walking an object's fields and a schema's in name order finds the
+    /// value a lookup by name finds for every field, and counts the object's
+    /// fields the schema has, when the object lacks some of the schema's
+    /// fields and has names the schema lacks, before, between and after
+    /// them.
+    #[test]
+    fn slots_hold_what_a_lookup_by_name_finds() {
+        let mut rng = Rng::new(14);
+        let words = |rng: &mut Rng| -> String {
+            (0..1 + rng.index(3))
+                .map(|_| char::from(b"abz"[rng.index(3)]))
+                .collect()
+        };
+
+        for round in 0..600 {
+            let mut names: Vec<String> = Vec::new();
+
+            while names.len() < round % 20 {
+                let name = words(&mut rng);
+
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+
+            let fields = Fields {
+                list: names
+                    .iter()
+                    .enumerate()
+                    .map(|(at, name)| field(at as u64 + 1, name, Kind::Int, true))
+                    .collect(),
+                next_id: names.len() as u64 + 1,
+            };
+            let mut object = Object::new();
+
+            for _ in 0..rng.index(24) {
+                object.set(words(&mut rng), Value::Int(rng.index(100) as i64));
+            }
+
+            let order = NameOrder::of(&fields);
+            let slots = Slots::of(&object, &fields, &order);
+
+            for (position, field) in fields.list.iter().enumerate() {
+                assert_eq!(slots.get(position), object.get(&field.name), "{names:?}");
+            }
+
+            assert_eq!(
+                slots.known,
+                object
+                    .fields()
+                    .filter(|(name, _)| fields.by_name(name).is_some())
+                    .count()
             );
         }
     }
