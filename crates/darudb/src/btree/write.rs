@@ -598,11 +598,11 @@ fn make_dirty<'c, L: Load, S: Store>(
 ) -> Result<&'c mut Node> {
     if let Child::Clean(pointer) = child {
         let pointer = *pointer;
-        let loaded = load.load(&pointer, tree, level)?;
+        let node = load.node_to_change(store, &pointer, tree, level)?;
         let page = store.allocate()?;
 
         store.release(pointer.page, pointer.txn);
-        *child = Child::dirty(page, loaded.to_node());
+        *child = Child::dirty(page, node);
     }
 
     match child {
@@ -621,11 +621,11 @@ fn take_node<L: Load, S: Store>(
 ) -> Result<Node> {
     match mem::replace(child, Child::Clean(Pointer::NULL)) {
         Child::Clean(pointer) => {
-            let loaded = load.load(&pointer, tree, level)?;
+            let node = load.node_to_change(store, &pointer, tree, level)?;
 
             store.release(pointer.page, pointer.txn);
 
-            Ok(loaded.to_node())
+            Ok(node)
         }
         Child::Dirty { page, node } => {
             store.release(page, store.txn());
@@ -821,10 +821,10 @@ pub(crate) fn delete_tree<L: Load, S: Store>(
     while let Some((child, level)) = pending.pop() {
         let node = match child {
             Child::Clean(pointer) => {
-                let loaded = load.load(&pointer, tree, level)?;
+                let node = load.node_to_change(store, &pointer, tree, level)?;
 
                 store.release(pointer.page, pointer.txn);
-                loaded.to_node()
+                node
             }
             Child::Dirty { page, node } => {
                 store.release(page, store.txn());

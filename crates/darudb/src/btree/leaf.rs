@@ -89,11 +89,23 @@ impl Leaf {
         low: usize,
         heads: Heads,
     ) -> Self {
+        Self::from_owned(page.to_vec(), count, size, low, heads)
+    }
+
+    /// [`from_loaded`](Self::from_loaded) with the page itself rather than a
+    /// copy of it.
+    pub(crate) fn from_owned(
+        page: Vec<u8>,
+        count: usize,
+        size: usize,
+        low: usize,
+        heads: Heads,
+    ) -> Self {
         let end = check_offset(page.len());
         let cells = size.saturating_sub(2 * count);
 
         Self {
-            page: page.to_vec(),
+            page,
             count,
             low,
             // Cells that overlap, which only a damaged page has, count as

@@ -30,11 +30,18 @@ struct TestStore {
     free: Vec<u64>,
     fresh: HashSet<u64>,
     retired: Vec<u64>,
+    /// Pages written after this commit are young; 0, as in a window no
+    /// barrier has closed, unless a test says otherwise.
+    young_after: u64,
 }
 
 impl Store for TestStore {
     fn txn(&self) -> u64 {
         self.txn
+    }
+
+    fn young_after(&self) -> u64 {
+        self.young_after
     }
 
     fn allocate(&mut self) -> Result<u64> {
@@ -95,6 +102,7 @@ impl Harness {
                 free: Vec::new(),
                 fresh: HashSet::new(),
                 retired: Vec::new(),
+                young_after: 0,
             },
             root: None,
         }
@@ -639,6 +647,78 @@ fn a_refused_replacement_stores_nothing() {
     assert_eq!(harness.get(&8u32.to_be_bytes()), Some(long));
     harness.commit();
     assert_eq!(harness.check_structure(), 500);
+}
+
+/// A change takes a committed node out of the page cache without a copy
+/// when nothing else holds it, and copies one a reader holds, which stays as
+/// it was, and in the cache.
+#[test]
+fn a_change_takes_a_cached_node_only_when_no_reader_holds_it() {
+    let mut harness = Harness::new(4096);
+
+    for key in 0..20u8 {
+        harness.insert(&[key], &[key; 8]);
+    }
+
+    harness.commit();
+
+    let Some(Child::Clean(root)) = harness.root.clone() else {
+        panic!("a committed root");
+    };
+    let held = harness.loader.load(&root, TREE, None).unwrap();
+    let before = held.to_node();
+
+    assert!(harness.loader.cached(&root));
+    harness.insert(&[100], &[1; 8]);
+    assert_eq!(held.to_node(), before, "the reader's node is unchanged");
+    assert!(
+        harness.loader.cached(&root),
+        "a node a reader holds stays cached"
+    );
+
+    drop(held);
+    harness.commit();
+
+    let Some(Child::Clean(root)) = harness.root.clone() else {
+        panic!("a committed root");
+    };
+
+    // Read once, which caches it, and let go.
+    drop(harness.loader.load(&root, TREE, None).unwrap());
+    assert!(harness.loader.cached(&root));
+    harness.insert(&[101], &[1; 8]);
+    assert!(
+        !harness.loader.cached(&root),
+        "a node no one holds is taken"
+    );
+    assert_eq!(harness.get(&[101]), Some(vec![1; 8]));
+    assert_eq!(harness.get(&[100]), Some(vec![1; 8]));
+    assert_eq!(harness.get(&[5]), Some(vec![5; 8]));
+}
+
+/// A change copies a committed node written before the unsynced window, and
+/// leaves it in the page cache for the readers that go on reading it.
+#[test]
+fn a_change_copies_a_node_older_than_the_window() {
+    let mut harness = Harness::new(4096);
+
+    for key in 0..20u8 {
+        harness.insert(&[key], &[key; 8]);
+    }
+
+    harness.commit();
+
+    let Some(Child::Clean(root)) = harness.root.clone() else {
+        panic!("a committed root");
+    };
+
+    // A barrier made the commit durable: its pages are not young.
+    harness.store.young_after = root.txn;
+
+    drop(harness.loader.load(&root, TREE, None).unwrap());
+    harness.insert(&[100], &[1; 8]);
+    assert!(harness.loader.cached(&root), "an older node stays cached");
+    assert_eq!(harness.get(&[100]), Some(vec![1; 8]));
 }
 
 #[test]

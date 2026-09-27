@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::Load;
-use super::node::LoadedNode;
+use super::node::{LoadedNode, Node};
 use crate::error::{Error, Result};
 use crate::format::{
     CONTENT_OFFSET, Check, OverflowRef, PageHeader, PageKind, Pointer, content_len,
@@ -22,6 +22,12 @@ pub(crate) struct Loader {
 impl Loader {
     pub(crate) fn new(pager: Arc<Pager>, cache: Arc<Cache<LoadedNode>>) -> Self {
         Self { pager, cache }
+    }
+
+    /// Whether the page cache holds the node `pointer` names.
+    #[cfg(test)]
+    pub(crate) fn cached(&self, pointer: &Pointer) -> bool {
+        self.cache.get(pointer.page, &pointer.check).is_some()
     }
 
     /// A damaged-file error naming this loader's file.
@@ -82,6 +88,39 @@ impl Load for Loader {
         self.cache.insert(page, pointer.check, Arc::clone(&loaded));
 
         Ok(loaded)
+    }
+
+    /// Copying a cached page for every node a transaction first changed took
+    /// a tenth of a small deferred commit, and as much of a transaction that
+    /// deletes objects. The cache keeps the node its commit made, which the
+    /// next transaction takes back, and a node a reader holds is copied, and
+    /// put back for the others. A committed page taken is read from the file
+    /// again by a reader of an older commit that still needs it.
+    fn load_to_change(&self, pointer: &Pointer, tree: u64, level: Option<u8>) -> Result<Node> {
+        let page = pointer.page;
+
+        if let Some(loaded) = self.cache.take(page, &pointer.check) {
+            self.check_expected(page, &loaded, pointer, tree, level)?;
+
+            return Ok(match Arc::try_unwrap(loaded) {
+                Ok(loaded) => loaded.into_node(),
+                Err(shared) => {
+                    let node = shared.to_node();
+
+                    self.cache.insert(page, pointer.check, shared);
+                    node
+                }
+            });
+        }
+
+        let bytes = self.pager.read(page, &pointer.check)?;
+        let header = PageHeader::read(&bytes).map_err(|reason| self.corrupted(page, reason))?;
+        let loaded =
+            LoadedNode::read(bytes, &header).map_err(|reason| self.corrupted(page, reason))?;
+
+        self.check_expected(page, &loaded, pointer, tree, level)?;
+
+        Ok(loaded.into_node())
     }
 
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>> {

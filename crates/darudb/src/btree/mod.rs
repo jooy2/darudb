@@ -41,6 +41,34 @@ pub(crate) trait Load {
     /// the tree `tree`, and the `level` its parent expects (`None` for a root).
     fn load(&self, pointer: &Pointer, tree: u64, level: Option<u8>) -> Result<Arc<LoadedNode>>;
 
+    /// [`load`](Self::load) for a write transaction that changes the node,
+    /// or lets it go: the node decoded into one of its own, taken out of the
+    /// page cache without a copy when nothing else holds it there.
+    fn load_to_change(&self, pointer: &Pointer, tree: u64, level: Option<u8>) -> Result<Node>;
+
+    /// The node `pointer` names, decoded for a write transaction to change,
+    /// as `store` has it change a node: taken from the page cache when its
+    /// page is young, and copied otherwise.
+    ///
+    /// A young page is one the next commits of the window write again, and
+    /// taking it saves the copy a small deferred commit made of every node
+    /// it changed. An older page is the state readers go on reading, and a
+    /// transaction that took it and was then dropped would have left the
+    /// cache without it.
+    fn node_to_change<S: Store>(
+        &self,
+        store: &S,
+        pointer: &Pointer,
+        tree: u64,
+        level: Option<u8>,
+    ) -> Result<Node> {
+        if pointer.txn > store.young_after() {
+            self.load_to_change(pointer, tree, level)
+        } else {
+            Ok(self.load(pointer, tree, level)?.to_node())
+        }
+    }
+
     /// Reads a value stored in an overflow run, verified against its
     /// reference.
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>>;
@@ -50,6 +78,10 @@ pub(crate) trait Load {
 pub(crate) trait Store {
     /// The transaction id of the commit being made.
     fn txn(&self) -> u64;
+
+    /// Pages written by a commit after this id are young: written in the
+    /// unsynced window, which the next commits write again.
+    fn young_after(&self) -> u64;
 
     /// A free page for this transaction.
     fn allocate(&mut self) -> Result<u64>;

@@ -607,6 +607,43 @@ impl LoadedNode {
         })
     }
 
+    /// [`to_node`](Self::to_node) for a node no one else holds: a leaf
+    /// takes the page and the heads as they are, and a branch the heads.
+    pub(crate) fn into_node(self) -> Node {
+        let count = self.count();
+        let heads = Heads {
+            prefix: usize::from(self.prefix),
+            heads: self.heads.into_vec(),
+        };
+
+        if self.leaf {
+            return Node::Leaf(Leaf::from_owned(
+                self.page.into_vec(),
+                count,
+                usize::from(self.size),
+                usize::from(self.low),
+                heads,
+            ));
+        }
+
+        let page = &self.page;
+        let key_bytes =
+            usize::from(self.size).saturating_sub(POINTER_LEN + count * branch_key_len(0));
+
+        Node::Branch(Branch {
+            level: self.level,
+            keys: Keys::with_heads(
+                count,
+                key_bytes,
+                |index| branch_key(page, count, index),
+                heads,
+            ),
+            children: (0..=count)
+                .map(|index| Child::Clean(branch_child(page, index)))
+                .collect(),
+        })
+    }
+
     /// Child `index` of a branch.
     pub(crate) fn child(&self, index: usize) -> Pointer {
         branch_child(&self.page, index)

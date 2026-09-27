@@ -8,7 +8,7 @@
 //! The cache counts the bytes its entries hold, as [`Weigh`] reports them,
 //! rather than the entries themselves, since a node keeps more than its page.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -27,6 +27,9 @@ pub(crate) struct Cache<V> {
 #[derive(Debug)]
 struct Inner<V> {
     entries: HashMap<(u64, Check), Arc<V>, BuildHasherDefault<Fold>>,
+    /// The keys in the order they were inserted, oldest first. A key taken
+    /// out stays here until it is evicted in its turn or the order is
+    /// compacted, and one inserted again comes here twice.
     order: VecDeque<(u64, Check)>,
     /// The bytes the entries hold.
     used: usize,
@@ -113,6 +116,18 @@ impl<V: Weigh> Cache<V> {
         self.lock().entries.get(&(page, *check)).cloned()
     }
 
+    /// Takes the copy of page `page` with check `check` out of the cache, if
+    /// there is one, for a caller that means to change it: one that nothing
+    /// else holds is then the caller's to change, with no copy made.
+    pub(crate) fn take(&self, page: u64, check: &Check) -> Option<Arc<V>> {
+        let mut inner = self.lock();
+        let taken = inner.entries.remove(&(page, *check))?;
+
+        inner.used -= taken.weight();
+
+        Some(taken)
+    }
+
     /// Remembers `value` as page `page` with check `check`.
     pub(crate) fn insert(&self, page: u64, check: Check, value: Arc<V>) {
         let mut inner = self.lock();
@@ -122,6 +137,24 @@ impl<V: Weigh> Cache<V> {
         match inner.entries.insert((page, check), value) {
             Some(old) => inner.used -= old.weight(),
             None => inner.order.push_back((page, check)),
+        }
+
+        // Keys taken out pile up in the order of a cache that is not full,
+        // where nothing is evicted: once they are as many as the entries,
+        // they go, in one pass that keeps each key present at its newest
+        // place.
+        if inner.order.len() > 2 * inner.entries.len() + 64 {
+            let Inner { entries, order, .. } = &mut *inner;
+            let mut seen = HashSet::with_capacity(entries.len());
+            let mut kept: Vec<(u64, Check)> = order
+                .iter()
+                .rev()
+                .filter(|key| entries.contains_key(key) && seen.insert(**key))
+                .copied()
+                .collect();
+
+            kept.reverse();
+            *order = kept.into();
         }
 
         while inner.used > self.capacity && inner.entries.len() > self.least {
@@ -186,6 +219,32 @@ mod tests {
         assert!(cache.get(3, &check).is_some());
         assert!(cache.get(4, &check).is_some());
         assert!(cache.get(5, &check).is_some());
+    }
+
+    /// An entry taken out is gone, and its bytes with it; the keys taken out
+    /// do not pile up in the order of a cache that never fills.
+    #[test]
+    fn an_entry_taken_out_is_gone_and_counts_nothing() {
+        let cache = Cache::new(1 << 20, 1);
+        let check = Check::ZERO;
+
+        cache.insert(1, check, Arc::new("abc"));
+
+        assert_eq!(cache.take(1, &check).as_deref(), Some(&"abc"));
+        assert!(cache.take(1, &check).is_none());
+        assert!(cache.get(1, &check).is_none());
+        assert_eq!(cache.used(), 0);
+
+        for round in 0..10_000u64 {
+            cache.insert(round % 7, check, Arc::new("x"));
+            cache.take(round % 7, &check);
+        }
+
+        cache.insert(3, check, Arc::new("kept"));
+
+        // Twice the one entry, the slack, and the key just inserted.
+        assert!(cache.lock().order.len() <= 2 + 64 + 1);
+        assert_eq!(cache.get(3, &check).as_deref(), Some(&"kept"));
     }
 
     #[test]

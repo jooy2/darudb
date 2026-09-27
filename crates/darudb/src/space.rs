@@ -308,6 +308,10 @@ impl Store for Space {
         self.txn
     }
 
+    fn young_after(&self) -> u64 {
+        self.young_after
+    }
+
     fn allocate(&mut self) -> Result<u64> {
         // Still in `fresh`, and taking it changes nothing the trees record.
         if let Some(page) = self.set_aside.pop() {
