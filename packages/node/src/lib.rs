@@ -32,10 +32,10 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use napi::bindgen_prelude::{
-    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, External, Null, ToNapiValue, TypeName,
-    Uint8Array,
+    AsyncTask, BigInt, Buffer, BufferSlice, Either, Either4, External, FromNapiValue, Null,
+    ToNapiValue, TypeName, Uint8Array,
 };
-use napi::{Env, Task};
+use napi::{Env, Task, Unknown, ValueType};
 use napi_derive::napi;
 
 /// A result whose error becomes a JavaScript `Error` with the engine's code.
@@ -44,10 +44,6 @@ use napi_derive::napi;
 /// the name of its return type, and treats any other name as a value to
 /// convert.
 type Result<T> = napi::Result<T, &'static str>;
-
-/// A primary key as JavaScript passes it: a number, a `bigint`, a string,
-/// or bytes.
-type JsKey = Either4<f64, BigInt, String, Uint8Array>;
 
 /// A primary key as JavaScript gets it back: a number, or a `bigint` when it
 /// is beyond what a number holds exactly, a string, or bytes.
@@ -705,7 +701,7 @@ impl NativeTransaction {
         kinds: Buffer,
         collections: Vec<String>,
         #[napi(ts_arg_type = "Array<number | bigint | string | Uint8Array | undefined | null>")]
-        keys: Vec<Option<JsKey>>,
+        keys: Vec<Option<Unknown<'_>>>,
         payloads: Vec<Option<Buffer>>,
     ) -> Result<AsyncTask<Work<Vec<u8>>>> {
         if collections.len() != kinds.len()
@@ -795,7 +791,7 @@ impl NativeTransaction {
         &self,
         env: &'env Env,
         collection: String,
-        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+        #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: Unknown<'_>,
     ) -> Result<Option<BufferSlice<'env>>> {
         let key = key_in(key)?;
 
@@ -844,7 +840,7 @@ enum Op {
 }
 
 impl Op {
-    fn of(kind: u8, collection: String, key: Option<JsKey>, payload: Option<Buffer>) -> Self {
+    fn of(kind: u8, collection: String, key: Option<Unknown<'_>>, payload: Option<Buffer>) -> Self {
         let key = || {
             key.ok_or_else(|| invalid("the operation takes a key"))
                 .and_then(key_in)
@@ -1020,7 +1016,7 @@ pub fn get_record<'env>(
     env: &'env Env,
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
     #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
-    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: Unknown<'_>,
     mut scratch: BufferSlice<'_>,
 ) -> Result<Option<Either<u32, BufferSlice<'env>>>> {
     let key = key_in(key)?;
@@ -1145,7 +1141,7 @@ pub fn end_transaction(
 pub fn delete_object(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
     #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
-    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: JsKey,
+    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: Unknown<'_>,
 ) -> Result<bool> {
     let key = key_in(key)?;
 
@@ -1327,15 +1323,35 @@ fn migration_of(spec: NativeMigration) -> Result<darudb::Migration> {
     Ok(migration)
 }
 
-fn key_in(key: JsKey) -> Result<darudb::Value> {
-    match key {
-        Either4::A(number) if number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_991.0 => {
-            Ok(number_value(number))
+/// A primary key as JavaScript passes it: a number, a `bigint`, a string, or
+/// bytes.
+///
+/// The key is taken as it comes and converted by its type, which one call
+/// tells. An `Either4` makes an error with a message and drops it on every
+/// conversion, before it tries the first type, and that took a fiftieth of
+/// a lookup by key.
+fn key_in(key: Unknown<'_>) -> Result<darudb::Value> {
+    const NOT_A_KEY: &str = "a primary key is a number, a bigint, a string or bytes";
+    let not_a_key = |_: napi::Error| invalid(NOT_A_KEY);
+
+    match key.get_type().map_err(not_a_key)? {
+        ValueType::Number => {
+            let number = f64::from_unknown(key).map_err(not_a_key)?;
+
+            if number.fract() == 0.0 && number.abs() <= 9_007_199_254_740_991.0 {
+                Ok(number_value(number))
+            } else {
+                Err(invalid(format!("{number} is not an integer key")))
+            }
         }
-        Either4::A(number) => Err(invalid(format!("{number} is not an integer key"))),
-        Either4::B(bigint) => bigint_value(&bigint),
-        Either4::C(string) => Ok(darudb::Value::String(string)),
-        Either4::D(bytes) => Ok(darudb::Value::Bytes(bytes.to_vec())),
+        ValueType::BigInt => bigint_value(&BigInt::from_unknown(key).map_err(not_a_key)?),
+        ValueType::String => Ok(darudb::Value::String(
+            String::from_unknown(key).map_err(not_a_key)?,
+        )),
+        ValueType::Object => Ok(darudb::Value::Bytes(
+            Uint8Array::from_unknown(key).map_err(not_a_key)?.to_vec(),
+        )),
+        _ => Err(invalid(NOT_A_KEY)),
     }
 }
 

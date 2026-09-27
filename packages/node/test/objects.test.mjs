@@ -133,6 +133,52 @@ describe('objects', () => {
     );
   });
 
+  it('are read and deleted by a key of every type a key can have', (context) => {
+    const path = tempPath(context);
+    const keyed = schema(1, {
+      blobs: collection({ hash: t.bytes().primaryKey() }),
+      bigs: collection({ n: t.bigint().primaryKey() }),
+      ints: collection({ n: t.int().primaryKey() })
+    });
+    const db = Database.open(path, { schema: keyed });
+
+    context.after(() => db.close());
+    db.write((txn) => {
+      txn
+        .collection('blobs')
+        .insertMany([{ hash: new Uint8Array([1, 2]) }, { hash: new Uint8Array([]) }]);
+      txn.collection('bigs').insertMany([{ n: 2n ** 60n }, { n: -(2n ** 60n) }]);
+      txn.collection('ints').insertMany([{ n: -300 }, { n: 0 }, { n: 2 ** 40 }]);
+    });
+
+    db.write((txn) => {
+      const blobs = txn.collection('blobs');
+      const bigs = txn.collection('bigs');
+      const ints = txn.collection('ints');
+
+      assert.deepEqual(blobs.get(Buffer.from([1, 2])), { hash: new Uint8Array([1, 2]) });
+      assert.deepEqual(blobs.get(new Uint8Array([])), { hash: new Uint8Array([]) });
+      assert.deepEqual(bigs.get(-(2n ** 60n)), { n: -(2n ** 60n) });
+      assert.deepEqual(ints.get(-300), { n: -300 });
+      assert.deepEqual(ints.get(2n ** 40n), { n: 2 ** 40 }, 'a bigint finds the int it equals');
+      assert.equal(ints.get(1), null);
+      assert.equal(blobs.delete(new Uint8Array([1, 2])), true);
+      assert.equal(bigs.delete(2n ** 60n), true);
+      assert.equal(ints.delete(0), true);
+      assert.equal(ints.delete(0), false);
+      assertCode(() => ints.get(0.5), 'INVALID_ARGUMENT');
+    });
+
+    assert.deepEqual(
+      db.read((txn) => [
+        txn.collection('blobs').count(),
+        txn.collection('bigs').count(),
+        txn.collection('ints').count()
+      ]),
+      [1, 1, 2]
+    );
+  });
+
   it('are found by queries built in JavaScript', (context) => {
     const { db } = withData(context);
     const names = (query) =>
