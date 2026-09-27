@@ -605,41 +605,54 @@ const MAX_PARAMETERS: usize = 1 << 16;
 /// Reads the values of a prepared query's parameters as a binding sends
 /// them: a record whose field 0 is how many there are, as an `int`, and field
 /// `n + 1` the value of parameter `n`, a null one left out.
+///
+/// The fields go to their places as they are read: gathering them first made
+/// and freed a vector on every run of a prepared query.
 pub(crate) fn decode_parameters(bytes: &[u8]) -> Result<Vec<Value>> {
-    let mut fields = codec::read(bytes)
-        .map_err(|reason| invalid(format!("the parameters: {reason}")))?
-        .into_iter();
-    let count = match fields.next() {
-        Some((0, Raw::Int(count))) => usize::try_from(count)
-            .ok()
-            .filter(|count| *count <= MAX_PARAMETERS)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "a query takes from 0 to {MAX_PARAMETERS} parameters"
-                ))
-            })?,
-        _ => return Err(invalid("the parameters do not say how many there are")),
-    };
-    let mut values = vec![Value::Null; count];
+    let uncounted = || invalid("the parameters do not say how many there are");
+    let mut values: Option<Vec<Value>> = None;
 
-    // Field ids ascend from 0, so every one left is at least 1.
-    for (id, raw) in fields {
-        let slot = usize::try_from(id - 1)
-            .ok()
-            .and_then(|at| values.get_mut(at))
-            .ok_or_else(|| invalid("the parameters hold more values than they count"))?;
+    codec::read_each(
+        bytes,
+        |id, raw| match &mut values {
+            None => {
+                let count = match (id, raw) {
+                    (0, Raw::Int(count)) => usize::try_from(count)
+                        .ok()
+                        .filter(|count| *count <= MAX_PARAMETERS)
+                        .ok_or_else(|| {
+                            invalid(format!(
+                                "a query takes from 0 to {MAX_PARAMETERS} parameters"
+                            ))
+                        })?,
+                    _ => return Err(uncounted()),
+                };
 
-        *slot = match raw {
-            Raw::Bool(value) => Value::Bool(value),
-            Raw::Int(value) => Value::Int(value),
-            Raw::Float(value) => Value::Float(value),
-            Raw::String(value) => Value::String(value),
-            Raw::Bytes(value) => Value::Bytes(value),
-            _ => return Err(invalid("a parameter's value is not a single value")),
-        };
-    }
+                values = Some(vec![Value::Null; count]);
+                Ok(())
+            }
+            // Field ids ascend from 0, so every one after it is at least 1.
+            Some(values) => {
+                let slot = usize::try_from(id - 1)
+                    .ok()
+                    .and_then(|at| values.get_mut(at))
+                    .ok_or_else(|| invalid("the parameters hold more values than they count"))?;
 
-    Ok(values)
+                *slot = match raw {
+                    Raw::Bool(value) => Value::Bool(value),
+                    Raw::Int(value) => Value::Int(value),
+                    Raw::Float(value) => Value::Float(value),
+                    Raw::String(value) => Value::String(value),
+                    Raw::Bytes(value) => Value::Bytes(value),
+                    _ => return Err(invalid("a parameter's value is not a single value")),
+                };
+                Ok(())
+            }
+        },
+        |reason| invalid(format!("the parameters: {reason}")),
+    )?;
+
+    values.ok_or_else(uncounted)
 }
 
 fn raw_value(raw: Raw) -> Result<Value> {
@@ -685,6 +698,7 @@ mod tests {
             codec::write(&[(0, Raw::Int(1 << 20))]),
             codec::write(&[(0, Raw::Int(1)), (2, Raw::Int(1))]),
             codec::write(&[(0, Raw::Int(1)), (1, Raw::List(Vec::new()))]),
+            codec::write(&[]),
             vec![0xFF],
         ] {
             let error = decode_parameters(&refused).unwrap_err();

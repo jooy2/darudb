@@ -119,6 +119,38 @@ pub(crate) fn read(bytes: &[u8]) -> Result<Vec<(u64, Raw)>, &'static str> {
     Ok(fields)
 }
 
+/// Gives `take` each field of the record `bytes`, which has to be exactly
+/// one record, in ascending order of id, as [`read`] reads them but without
+/// gathering them first, for a caller that puts each in a place of its own.
+/// `take` stops the reading with an error of its own, and `damaged` makes
+/// one of what is wrong with the record.
+pub(crate) fn read_each<E>(
+    bytes: &[u8],
+    mut take: impl FnMut(u64, Raw) -> Result<(), E>,
+    damaged: impl Fn(&'static str) -> E,
+) -> Result<(), E> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2).map_err(&damaged)?;
+    let mut last = None;
+
+    for _ in 0..count {
+        let id = reader.varint().map_err(&damaged)?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err(damaged("a record's field ids are out of order"));
+        }
+
+        last = Some(id);
+        take(id, reader.value(0).map_err(&damaged)?)?;
+    }
+
+    if reader.at != bytes.len() {
+        return Err(damaged("a record has bytes after its last field"));
+    }
+
+    Ok(())
+}
+
 /// The object whose record is `bytes`, under `fields`, read straight into
 /// values: what [`read`] and then [`to_object`] give, without the record's
 /// fields in between, which every object read would allocate and move.
