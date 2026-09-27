@@ -624,10 +624,10 @@ mod tests {
         );
     }
 
-    /// A leaf page whose cells overlap, which the checks of a read let
-    /// through: cell 0 runs from offset 100 to the end, cell 1 lies inside
-    /// its value and runs to the end too, and cell 2 is small, below them.
-    /// Only a damaged or crafted file has one.
+    /// A leaf page whose cells overlap: cell 0 runs from offset 100 to the
+    /// end, cell 1 lies inside its value and runs to the end too, and cell 2
+    /// is small, below them. Only a damaged or crafted file has one, and the
+    /// checks of a read refuse it.
     fn overlapping_page() -> Vec<u8> {
         let end = check_offset(PAGE);
         let mut page = vec![0; PAGE];
@@ -642,7 +642,7 @@ mod tests {
             set_slot(&mut page, index, at);
         }
 
-        check_leaf(&page, 3).unwrap();
+        assert!(check_leaf(&page, 3).is_err());
 
         page
     }
@@ -650,12 +650,13 @@ mod tests {
     /// Removing an entry from a page whose cells overlap leaves bytes for a
     /// compaction to reclaim, though the cells left take more room than the
     /// page has. Writing the page, or an insert that needs those bytes, must
-    /// not panic: a damaged file produces an error, never a panic.
+    /// not panic, should such a page ever reach a write transaction: a
+    /// damaged file produces an error, never a panic.
     #[test]
     fn a_leaf_whose_cells_overlap_is_changed_without_a_panic() {
         let page = overlapping_page();
-        let mut kept = decode_leaf(&page, 3).unwrap();
         let mut leaf = Leaf::from_page(&page, 3);
+        let mut kept = leaf.to_entries().unwrap();
 
         kept.pop();
         leaf.remove(2).unwrap();
@@ -666,7 +667,10 @@ mod tests {
         // space and the removed cell.
         assert!(!inserted.insert(2, b"d", StoredRef::Inline(&[1; 5])));
         assert_eq!(inserted.to_entries().unwrap(), kept);
-        assert_eq!(decode_leaf(&leaf.into_page(), 2).unwrap(), kept);
+        assert_eq!(
+            Leaf::from_page(&leaf.into_page(), 2).to_entries().unwrap(),
+            kept
+        );
     }
 
     #[test]

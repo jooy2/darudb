@@ -244,8 +244,10 @@ pub(crate) fn encode_leaf(entries: &[LeafEntry], page: &mut [u8]) {
 }
 
 /// Checks every offset, length and value kind of a leaf with `count`
-/// entries against the page, and the order of its keys, so that
-/// [`leaf_key`] and [`leaf_value`] can read it in place.
+/// entries against the page, the order of its keys, and that no two of its
+/// cells share a byte, so that [`leaf_key`] and [`leaf_value`] can read it
+/// in place and a write transaction can change a cell without changing
+/// another.
 pub(crate) fn check_leaf(page: &[u8], count: usize) -> Result<(), &'static str> {
     let page_size = page.len();
     let end = check_offset(page_size);
@@ -261,6 +263,11 @@ pub(crate) fn check_leaf(page: &[u8], count: usize) -> Result<(), &'static str> 
     }
 
     let mut previous: Option<&[u8]> = None;
+    // Where the cell before this one starts, for as long as every cell ends
+    // at or below the start of the one before it, as they do in a page
+    // written in slot order: then no two cells share a byte. Cells in any
+    // other order are checked in a map of the page's bytes afterwards.
+    let mut above = Some(end);
 
     for index in 0..count {
         let at = read_u16(page, CONTENT_OFFSET + 2 * index);
@@ -275,21 +282,27 @@ pub(crate) fn check_leaf(page: &[u8], count: usize) -> Result<(), &'static str> 
             return Err("a leaf key is longer than the page allows");
         }
 
-        match page[at + 2] {
+        let cell_end = match page[at + 2] {
             0 => {
-                if at + 5 > end || at + 5 + key_len + read_u16(page, at + 3) > end {
-                    return Err("a leaf entry lies outside the page");
-                }
-            }
-            1 => {
-                if at + 3 + key_len + OVERFLOW_REF_LEN > end {
+                if at + 5 > end {
                     return Err("a leaf entry lies outside the page");
                 }
 
-                OverflowRef::read(&page[at + 3 + key_len..], page_size)?;
+                at + 5 + key_len + read_u16(page, at + 3)
             }
+            1 => at + 3 + key_len + OVERFLOW_REF_LEN,
             _ => return Err("a leaf entry's value is of no known kind"),
+        };
+
+        if cell_end > end {
+            return Err("a leaf entry lies outside the page");
         }
+
+        if page[at + 2] == 1 {
+            OverflowRef::read(&page[at + 3 + key_len..], page_size)?;
+        }
+
+        above = above.filter(|above| cell_end <= *above).map(|_| at);
 
         let key = leaf_key(page, index);
 
@@ -298,6 +311,35 @@ pub(crate) fn check_leaf(page: &[u8], count: usize) -> Result<(), &'static str> 
         }
 
         previous = Some(key);
+    }
+
+    match above {
+        Some(_) => Ok(()),
+        None => check_cells_apart(page, count),
+    }
+}
+
+/// Checks that no two cells of a leaf whose cells lie inside the page share
+/// a byte, marking the bytes of each in a map of the page, one bit a byte.
+fn check_cells_apart(page: &[u8], count: usize) -> Result<(), &'static str> {
+    let mut taken = vec![0u64; page.len().div_ceil(64)];
+
+    for index in 0..count {
+        let (mut at, len) = leaf_cell(page, index);
+        let cell_end = at + len;
+
+        while at < cell_end {
+            let (word, bit) = (at / 64, at % 64);
+            let bits = (cell_end - at).min(64 - bit);
+            let mask = (u64::MAX >> (64 - bits)) << bit;
+
+            if taken[word] & mask != 0 {
+                return Err("two leaf entries share bytes");
+            }
+
+            taken[word] |= mask;
+            at += bits;
+        }
     }
 
     Ok(())
@@ -627,6 +669,56 @@ mod tests {
         encode_leaf(&[inline(b"a", b""), inline(b"a", b"")], &mut page);
 
         assert!(decode_leaf(&page, 2).is_err(), "a key twice");
+    }
+
+    /// A leaf whose cells share bytes is refused, and one whose cells lie
+    /// apart in any order is read. The cells that overlap here read back as
+    /// themselves, so that nothing else about the page is wrong.
+    #[test]
+    fn leaf_cells_that_share_bytes_are_refused() {
+        let end = check_offset(P);
+        // Cells of `len` bytes at the offsets given, written in that order,
+        // with keys in slot order and values of 0xEE ending in `last`.
+        let leaf = |cells: &[(usize, &[u8], usize, u8)], slots: &[usize]| {
+            let mut page = vec![0u8; P];
+
+            for &(at, key, len, last) in cells {
+                let mut value = vec![0xEE; len - 5 - key.len()];
+
+                *value.last_mut().unwrap() = last;
+                write_cell(&mut page, at, key, StoredRef::Inline(&value));
+            }
+
+            for (index, &at) in slots.iter().enumerate() {
+                set_slot(&mut page, index, at);
+            }
+
+            page
+        };
+
+        // Apart, in slot order and out of it.
+        let apart = [(end - 10, &b"a"[..], 10, 0), (end - 30, b"b", 10, 0)];
+
+        assert!(decode_leaf(&leaf(&apart, &[end - 10, end - 30]), 2).is_ok());
+
+        let apart = [(end - 30, &b"a"[..], 10, 0), (end - 10, b"b", 10, 0)];
+
+        assert!(decode_leaf(&leaf(&apart, &[end - 30, end - 10]), 2).is_ok());
+
+        // A cell inside another's value, after it in slot order and before it.
+        let inside = [(end - 40, &b"a"[..], 40, 0), (end - 20, b"b", 18, 0)];
+
+        assert!(decode_leaf(&leaf(&inside, &[end - 40, end - 20]), 2).is_err());
+
+        let inside = [(end - 40, &b"b"[..], 40, 0), (end - 20, b"a", 18, 0)];
+
+        assert!(decode_leaf(&leaf(&inside, &[end - 20, end - 40]), 2).is_err());
+
+        // A cell whose last byte, 1, is the first of the next cell's key
+        // length, which is 1.
+        let touching = [(end - 10, &b"a"[..], 10, 0), (end - 19, b"b", 10, 1)];
+
+        assert!(decode_leaf(&leaf(&touching, &[end - 10, end - 19]), 2).is_err());
     }
 
     #[test]
