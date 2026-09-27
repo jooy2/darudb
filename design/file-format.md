@@ -1,6 +1,6 @@
 # File format
 
-Status: accepted. This document describes file format version 3.
+Status: accepted. This document describes file format version 4.
 
 A DaruDB database is one file, divided into pages of equal size. Page 0 is the header, which says what the file is and where its newest commits are. Every other page is a node of a B+tree or part of an overflow run that holds one large value. This document gives the layout of each. [Commits and recovery](commits-and-recovery.md) says how they change, and [Locking](locking.md) says how several processes share them.
 
@@ -75,7 +75,7 @@ Written once, when the file is created, and never again.
 | Offset | Size | Field                                                                                                |
 | ------ | ---- | ---------------------------------------------------------------------------------------------------- |
 | 0      | 8    | Magic: `89 44 61 72 75 44 42 0A` (`\x89DaruDB\n`)                                                    |
-| 8      | 4    | Format version: 3                                                                                    |
+| 8      | 4    | Format version: 4                                                                                    |
 | 12     | 4    | Page size `P`                                                                                        |
 | 16     | 16   | File id: 16 random bytes, generated when the file is created                                         |
 | 32     | 1    | Cipher: 0 for a plain file, 1 for XChaCha20-Poly1305, 2 for XAES-256-GCM ([Encryption](#encryption)) |
@@ -309,7 +309,7 @@ Anything read from the file is untrusted input. A reader checks everything below
 | Step                                                                               | On failure                         |
 | ---------------------------------------------------------------------------------- | ---------------------------------- |
 | The file holds at least 64 bytes, and they start with the magic                    | `NOT_A_DATABASE`                   |
-| The format version is 3                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
+| The format version is 4                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
 | The static check matches                                                           | `CORRUPTED`                        |
 | The page size is a power of two from 4096 to 65536, and the cipher is known        | `CORRUPTED`                        |
 | The file holds at least one whole page                                             | `CORRUPTED`                        |
@@ -330,6 +330,7 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | ------- | ----------------------------------------------------------------------------------------------------------- |
 | 1       | The skeleton: magic, format version and page size, with page sizes from 512 bytes. Nothing could be stored. |
 | 2       | Commits, trees and encryption.                                                                              |
-| 3       | This document: version 2 with the [record MAC](#the-record-mac) in encrypted files, and XAES-256-GCM pages. |
+| 3       | Version 2 with the [record MAC](#the-record-mac) in encrypted files, and XAES-256-GCM pages.                |
+| 4       | This document: version 3 with ints in [object keys](objects.md#keys) in the fewest bytes that hold them.    |
 
-A build that writes version 3 refuses a version 1 or version 2 file with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and version 2 never left development.
+A build that writes version 4 refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 and 3 never left development.

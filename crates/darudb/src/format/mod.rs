@@ -55,7 +55,7 @@ pub(crate) use system::{
 ///
 /// It is recorded in every file's header. A file with another version is
 /// refused with [`Error::UnsupportedFormatVersion`](crate::Error::UnsupportedFormatVersion).
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// The first eight bytes of every DaruDB file.
 ///

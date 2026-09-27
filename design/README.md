@@ -13,7 +13,7 @@ These documents are for the people and agents who build the engine. The document
 
 ## Status
 
-All three documents were accepted by the maintainer on 2026-09-23, at the end of phase 0 of the roadmap, and `CLAUDE.md` summarises them. They describe file format version 3: version 2, the first that stores data, with a MAC on each commit record of an encrypted file, which the maintainer accepted on 2026-09-24.
+All three documents were accepted by the maintainer on 2026-09-23, at the end of phase 0 of the roadmap, and `CLAUDE.md` summarises them. They describe file format version 4. Version 3 added a MAC on each commit record of an encrypted file to version 2, the first that stores data, and the maintainer accepted it on 2026-09-24; version 4 writes the ints of object keys in the fewest bytes that hold them, and the maintainer accepted it on 2026-09-27.
 
 [Objects and queries](objects.md), the specification of phase 4, was accepted by the maintainer on 2026-09-24. Phase 4 implements it.
 

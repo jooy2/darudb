@@ -14,10 +14,25 @@ use super::value::Value;
 pub(crate) const NULL: u8 = 0x01;
 const FALSE: u8 = 0x02;
 const TRUE: u8 = 0x03;
-const INT: u8 = 0x04;
-const FLOAT: u8 = 0x05;
-const STRING: u8 = 0x06;
-const BYTES: u8 = 0x07;
+/// The tag of zero. An int is written in the fewest big-endian bytes that
+/// hold it, and its tag says how many: `ZERO + n` for a positive int in `n`
+/// bytes and `ZERO - n` for a negative one, from `INT` for the longest
+/// negative ints to `INT_LAST` for the longest positive ones.
+const ZERO: u8 = 0x0C;
+const INT: u8 = ZERO - 8;
+const INT_LAST: u8 = ZERO + 8;
+const FLOAT: u8 = INT_LAST + 1;
+const STRING: u8 = INT_LAST + 2;
+const BYTES: u8 = INT_LAST + 3;
+
+/// The first tag of each scalar type, in the order the types sort, and the
+/// tag after the last: a type's encodings lie from its tag up to, but not
+/// including, the next type's.
+pub(crate) const BOOL_TAGS: (u8, u8) = (FALSE, INT);
+pub(crate) const INT_TAGS: (u8, u8) = (INT, FLOAT);
+pub(crate) const FLOAT_TAGS: (u8, u8) = (FLOAT, STRING);
+pub(crate) const STRING_TAGS: (u8, u8) = (STRING, BYTES);
+pub(crate) const BYTES_TAGS: (u8, u8) = (BYTES, BYTES + 1);
 
 /// The bit that flips the sign of a 64-bit integer's bits.
 const SIGN: u64 = 1 << 63;
@@ -32,7 +47,7 @@ pub(crate) fn encode(value: &Value, out: &mut Vec<u8>) -> Result<(), &'static st
         Value::Null => out.push(NULL),
         Value::Bool(false) => out.push(FALSE),
         Value::Bool(true) => out.push(TRUE),
-        Value::Int(value) => number(INT, u64::from_be_bytes(value.to_be_bytes()) ^ SIGN, out),
+        Value::Int(value) => int(*value, out),
         Value::Float(value) => number(FLOAT, ordered_float(*value), out),
         Value::String(value) => escape(STRING, value.as_bytes(), out),
         Value::Bytes(value) => escape(BYTES, value, out),
@@ -49,7 +64,7 @@ pub(crate) fn encode_field(value: FieldRef<'_>, out: &mut Vec<u8>) -> Result<(),
     match value {
         FieldRef::Bool(false) => out.push(FALSE),
         FieldRef::Bool(true) => out.push(TRUE),
-        FieldRef::Int(value) => number(INT, u64::from_be_bytes(value.to_be_bytes()) ^ SIGN, out),
+        FieldRef::Int(value) => int(value, out),
         FieldRef::Float(value) => number(FLOAT, ordered_float(value), out),
         FieldRef::String(value) => escape(STRING, value, out),
         FieldRef::Bytes(value) => escape(BYTES, value, out),
@@ -82,10 +97,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Value, usize), &'static str> {
         NULL => Ok((Value::Null, 1)),
         FALSE => Ok((Value::Bool(false), 1)),
         TRUE => Ok((Value::Bool(true), 1)),
-        INT => Ok((
-            Value::Int(i64::from_be_bytes((fixed(rest)? ^ SIGN).to_be_bytes())),
-            9,
-        )),
+        INT..=INT_LAST => {
+            let (value, used) = read_int(tag, rest)?;
+
+            Ok((Value::Int(value), 1 + used))
+        }
         FLOAT => Ok((Value::Float(unordered_float(fixed(rest)?)), 9)),
         STRING => {
             let (bytes, used) = unescape(rest)?;
@@ -109,8 +125,21 @@ pub(crate) fn length(bytes: &[u8]) -> Result<usize, &'static str> {
 
     match tag {
         NULL | FALSE | TRUE => Ok(1),
-        INT | FLOAT if rest.len() >= 8 => Ok(9),
-        INT | FLOAT => Err("a key ends inside a number"),
+        // The tag alone says how long an int is, so its bytes are left to
+        // where they are read as an int. A primary key in an index entry
+        // written in more bytes than it needs names no object, which the
+        // query reports as damage.
+        INT..=INT_LAST => {
+            let used = usize::from(tag.abs_diff(ZERO));
+
+            if rest.len() >= used {
+                Ok(1 + used)
+            } else {
+                Err("a key ends inside an int")
+            }
+        }
+        FLOAT if rest.len() >= 8 => Ok(9),
+        FLOAT => Err("a key ends inside a number"),
         STRING | BYTES => escaped_length(rest).map(|used| 1 + used),
         _ => Err("a key has an unknown tag"),
     }
@@ -219,7 +248,6 @@ fn unordered_float(bits: u64) -> f64 {
     f64::from_bits(if bits & SIGN == 0 { !bits } else { bits ^ SIGN })
 }
 
-/// Writes `bytes` with every `0x00` doubled as `0x00 0xFF`, then `0x00 0x00`.
 /// Appends `tag` and `number` as eight big-endian bytes.
 fn number(tag: u8, number: u64, out: &mut Vec<u8>) {
     let mut bytes = [tag; 9];
@@ -228,10 +256,76 @@ fn number(tag: u8, number: u64, out: &mut Vec<u8>) {
     out.extend_from_slice(&bytes);
 }
 
-/// Appends `tag` and `bytes` escaped. The room is reserved first and the
-/// bytes between zeros copied in runs: a key built a byte at a time grew
-/// its buffer again and again, which cost a lookup by a string more than
-/// the lookup's search of a tree.
+/// Appends `value` in the fewest big-endian bytes of its two's complement
+/// that hold it, after the tag that says how many. A negative int takes the
+/// bytes that hold its complement, `-1 - value`, and one at least, so that
+/// `-1` to `-256` take one byte and more negative ints sort before them,
+/// with lower tags.
+///
+/// Eight bytes for every int made the key of an entry in an index on a small
+/// int, with an int primary key, 18 bytes, mostly zeros: a leaf held about
+/// half the entries it holds now, and the heads of a branch's keys, the four
+/// bytes after the prefix they share, were those zeros.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "an int takes at most eight bytes"
+)]
+fn int(value: i64, out: &mut Vec<u8>) {
+    let negative = value < 0;
+    let magnitude = if negative { !value } else { value };
+    // A negative int takes one byte at least, which tells it from zero.
+    let used = (64 - magnitude.leading_zeros() as usize)
+        .div_ceil(8)
+        .max(usize::from(negative));
+    let tag = if negative {
+        ZERO - used as u8
+    } else {
+        ZERO + used as u8
+    };
+    // The bytes kept are moved to the front and all nine appended, then the
+    // rest cut off: a copy of a length known only here was a call to copy
+    // memory, which cost a lookup by an int key more than the rest of
+    // encoding it.
+    let kept = u64::from_be_bytes(value.to_be_bytes())
+        .checked_shl(8 * (8 - used) as u32)
+        .unwrap_or(0);
+    let mut bytes = [tag; 9];
+    let start = out.len();
+
+    bytes[1..].copy_from_slice(&kept.to_be_bytes());
+    out.extend_from_slice(&bytes);
+    out.truncate(start + 1 + used);
+}
+
+/// Reads the bytes of an int whose tag is `tag` at the start of `rest`, as
+/// [`int`] wrote them. Returns the int and how many bytes it took.
+///
+/// An int written in more bytes than it needs is refused, so that every int
+/// has one encoding and two keys of one value are one key.
+fn read_int(tag: u8, rest: &[u8]) -> Result<(i64, usize), &'static str> {
+    let negative = tag < ZERO;
+    let used = usize::from(if negative { ZERO - tag } else { tag - ZERO });
+    let bytes = rest.get(..used).ok_or("a key ends inside an int")?;
+    let mut full = [if negative { 0xFF } else { 0 }; 8];
+
+    full[8 - used..].copy_from_slice(bytes);
+
+    let value = i64::from_be_bytes(full);
+    let magnitude = if negative { !value } else { value };
+    let needed = (64 - magnitude.leading_zeros() as usize).div_ceil(8);
+
+    if (negative != (value < 0)) || needed.max(usize::from(negative)) != used {
+        return Err("a key holds an int in more bytes than it needs");
+    }
+
+    Ok((value, used))
+}
+
+/// Appends `tag` and `bytes` escaped: every `0x00` doubled as `0x00 0xFF`,
+/// then `0x00 0x00`. The room is reserved first and the bytes between zeros
+/// copied in runs: a key built a byte at a time grew its buffer again and
+/// again, which cost a lookup by a string more than the lookup's search of
+/// a tree.
 fn escape(tag: u8, bytes: &[u8], out: &mut Vec<u8>) {
     let mut rest = bytes;
 
@@ -419,30 +513,96 @@ mod tests {
     #[test]
     fn the_documented_layout_is_the_one_written() {
         assert_eq!(encoded(&Value::Null).unwrap(), [0x01]);
+        assert_eq!(encoded(&Value::Int(0)).unwrap(), [0x0C]);
+        assert_eq!(encoded(&Value::Int(42)).unwrap(), [0x0D, 42]);
+        assert_eq!(encoded(&Value::Int(300)).unwrap(), [0x0E, 0x01, 0x2C]);
+        assert_eq!(encoded(&Value::Int(-1)).unwrap(), [0x0B, 0xFF]);
+        assert_eq!(encoded(&Value::Int(-257)).unwrap(), [0x0A, 0xFE, 0xFF]);
         assert_eq!(
-            encoded(&Value::Int(-1)).unwrap(),
-            [0x04, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+            encoded(&Value::Int(i64::MIN)).unwrap(),
+            [0x04, 0x80, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            encoded(&Value::Int(i64::MAX)).unwrap(),
+            [0x14, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
         );
         assert_eq!(
             encoded(&Value::Float(1.0)).unwrap(),
-            [0x05, 0xBF, 0xF0, 0, 0, 0, 0, 0, 0]
+            [0x15, 0xBF, 0xF0, 0, 0, 0, 0, 0, 0]
         );
         assert_eq!(
             encoded(&Value::String("a\0".into())).unwrap(),
-            [0x06, b'a', 0, 0xFF, 0, 0]
+            [0x16, b'a', 0, 0xFF, 0, 0]
         );
+        assert_eq!(encoded(&Value::Bytes(vec![1])).unwrap(), [0x17, 1, 0, 0]);
+    }
+
+    /// An int takes one byte for its tag and the fewest that hold it, on
+    /// either side of every length's bounds.
+    #[test]
+    fn an_int_takes_the_fewest_bytes_that_hold_it() {
+        assert_eq!(encoded(&Value::Int(0)).unwrap().len(), 1);
+
+        for used in 1..=8u32 {
+            let largest = if used == 8 {
+                i64::MAX
+            } else {
+                (1 << (8 * used)) - 1
+            };
+            let smallest = if used == 8 {
+                i64::MIN
+            } else {
+                -(1 << (8 * used))
+            };
+
+            for (value, expected) in [
+                (largest, used),
+                (smallest, used),
+                (largest.checked_add(1).unwrap_or(largest), used.min(7) + 1),
+                (smallest.checked_sub(1).unwrap_or(smallest), used.min(7) + 1),
+                (1 << (8 * (used - 1)), used),
+                (-(1 << (8 * (used - 1))) - 1, used),
+            ] {
+                let bytes = encoded(&Value::Int(value)).unwrap();
+
+                assert_eq!(bytes.len(), 1 + expected as usize, "{value}");
+                assert_eq!(decode(&bytes), Ok((Value::Int(value), bytes.len())));
+            }
+        }
     }
 
     #[test]
     fn damaged_keys_are_refused() {
         for bytes in [
             &[][..],
+            &[0x0E, 1],
             &[0x04, 1, 2],
-            &[0x06, b'a'],
-            &[0x06, 0, 1],
-            &[0x09],
+            &[STRING, b'a'],
+            &[STRING, 0, 1],
+            &[BYTES + 1],
+            &[0x00],
         ] {
             assert!(decode(bytes).is_err(), "{bytes:?}");
+            assert!(length(bytes).is_err(), "{bytes:?}");
+        }
+    }
+
+    /// An int in more bytes than it needs would be a second key for its
+    /// value, and so would one past the range of its length.
+    #[test]
+    fn an_int_in_more_bytes_than_it_needs_is_refused() {
+        for bytes in [
+            &[0x0D, 0][..],
+            &[0x0E, 0, 0xFF],
+            &[0x0A, 0xFF, 0],
+            &[0x14, 0x80, 0, 0, 0, 0, 0, 0, 0],
+            &[0x04, 0x7F, 0, 0, 0, 0, 0, 0, 0],
+        ] {
+            assert_eq!(
+                decode(bytes),
+                Err("a key holds an int in more bytes than it needs"),
+                "{bytes:?}"
+            );
         }
     }
 

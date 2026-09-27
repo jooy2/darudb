@@ -77,17 +77,20 @@ Every tree of the object layer has a name that begins with the byte `0x00`, whic
 
 Keys order as unsigned bytes and nothing else ([File format](file-format.md#key-order)), so the object layer encodes each value so that its bytes order the way the value does. Each encoding is a tag byte followed by the value:
 
-| Tag    | Value  | Bytes after the tag                                                                     |
-| ------ | ------ | --------------------------------------------------------------------------------------- |
-| `0x01` | null   | None                                                                                    |
-| `0x02` | false  | None                                                                                    |
-| `0x03` | true   | None                                                                                    |
-| `0x04` | int    | 8 bytes, big-endian, of the value with its sign bit flipped                             |
-| `0x05` | float  | 8 bytes, big-endian, of the bits, all flipped if the sign bit is set, else the sign bit |
-| `0x06` | string | The bytes, each `0x00` written as `0x00 0xFF`, then `0x00 0x00`                         |
-| `0x07` | bytes  | As for a string                                                                         |
+| Tag              | Value        | Bytes after the tag                                                                     |
+| ---------------- | ------------ | --------------------------------------------------------------------------------------- |
+| `0x01`           | null         | None                                                                                    |
+| `0x02`           | false        | None                                                                                    |
+| `0x03`           | true         | None                                                                                    |
+| `0x04` to `0x0B` | negative int | The last `n` bytes, big-endian, of the value's two's complement, with tag `0x0C - n`    |
+| `0x0C`           | int zero     | None                                                                                    |
+| `0x0D` to `0x14` | positive int | The last `n` bytes, big-endian, of the value, with tag `0x0C + n`                       |
+| `0x15`           | float        | 8 bytes, big-endian, of the bits, all flipped if the sign bit is set, else the sign bit |
+| `0x16`           | string       | The bytes, each `0x00` written as `0x00 0xFF`, then `0x00 0x00`                         |
+| `0x17`           | bytes        | As for a string                                                                         |
 
 - **Null sorts first**, before every value of its field.
+- **An int takes the fewest bytes that hold it**, and its tag says how many: `n` bytes of a positive int, `n` bytes of a negative int's two's complement, where `n` is the fewest that hold `-1 - value` and one at least, so that `-1` is `0x0B 0xFF` and `-257` is `0x0A 0xFE 0xFF`. Longer negative ints have lower tags and sort first, and longer positive ints sort last. An int written in more bytes than it needs is refused as damaged, so every int has one encoding. Eight bytes for every int made the key of an entry in an index on a small int, with an int primary key, 18 bytes, mostly zeros. It takes 5 or 6 this way, and a leaf, which adds 7 bytes to each entry, holds about twice as many.
 - **Floats** are canonicalised before encoding: `-0.0` becomes `0.0` and every NaN becomes the quiet NaN `0x7FF8000000000000`.
 - **Strings and bytes end in `0x00 0x00`**, and a `0x00` inside them becomes `0x00 0xFF`, so an encoding is never a prefix of another's continuation: `"a"` sorts before `"a\0"`, which sorts before `"ab"`. That is what lets encodings be concatenated.
 - **Concatenation orders field by field.** The encoding of `(a, b)` sorts as `a`, then `b`, which is what index entries rely on.

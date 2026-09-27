@@ -585,11 +585,11 @@ fn test<'s>(
 /// including, the next.
 fn type_range(kind: &Kind) -> Range {
     let (first, next) = match kind {
-        Kind::Bool => (0x02, 0x04),
-        Kind::Int => (0x04, 0x05),
-        Kind::Float => (0x05, 0x06),
-        Kind::String => (0x06, 0x07),
-        _ => (0x07, 0x08),
+        Kind::Bool => key::BOOL_TAGS,
+        Kind::Int => key::INT_TAGS,
+        Kind::Float => key::FLOAT_TAGS,
+        Kind::String => key::STRING_TAGS,
+        _ => key::BYTES_TAGS,
     };
 
     (Bound::Included(vec![first]), Bound::Excluded(vec![next]))
