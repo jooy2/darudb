@@ -419,6 +419,17 @@ pub(crate) fn leaf_extent(page: &[u8], count: usize) -> (usize, usize) {
     })
 }
 
+/// Where the lowest cell of a leaf with `count` entries starts, read from
+/// its slots alone: the end of its free space, `check_offset` of the page
+/// when it has no entry.
+pub(crate) fn leaf_low(page: &[u8], count: usize) -> usize {
+    page[CONTENT_OFFSET..CONTENT_OFFSET + 2 * count]
+        .chunks_exact(2)
+        .map(|slot| usize::from(u16::from_le_bytes([slot[0], slot[1]])))
+        .min()
+        .unwrap_or(check_offset(page.len()))
+}
+
 /// Reads the `count` entries of a leaf.
 #[cfg(test)]
 pub(crate) fn decode_leaf(page: &[u8], count: usize) -> Result<Vec<LeafEntry>, &'static str> {

@@ -3,10 +3,11 @@
 //! The page's content is what a leaf page holds on disk (`format::node`): a
 //! slot array after the header, free space, and the entries' cells at the
 //! end, before the check. An entry is inserted by writing its cell below the
-//! lowest one and a slot in the array, and removed by dropping its slot; the
-//! bytes of a removed cell are counted and reclaimed by compacting the page
-//! when an insert needs them, and before the page is written, so that no
-//! removed value stays in a page on disk.
+//! lowest one and a slot in the array, and removed by dropping its slot and
+//! zeroing its cell, so that no removed value stays in a page on disk. The
+//! bytes of removed cells are counted and reclaimed by compacting the page
+//! when an insert needs them; otherwise the page is written with them where
+//! they are.
 //!
 //! A leaf kept as a vector of entries would cost an allocation for every key
 //! and value, a walk over every entry to learn its size, and an encoding at
@@ -18,7 +19,8 @@
 use super::node::Heads;
 use crate::format::{
     CONTENT_OFFSET, LeafEntry, OverflowRef, StoredRef, StoredValue, cell_len, check_offset,
-    encode_leaf, leaf_cell, leaf_entry, leaf_inline, leaf_key, leaf_value, set_slot, write_cell,
+    encode_leaf, leaf_cell, leaf_entry, leaf_inline, leaf_key, leaf_low, leaf_value, set_slot,
+    write_cell,
 };
 
 /// A leaf's page as the commit writes it, and what the node it caches takes
@@ -40,7 +42,8 @@ pub(crate) struct Leaf {
     count: usize,
     /// Where the lowest cell starts; free space ends there.
     low: usize,
-    /// Bytes of cells no slot points to any more, among the others.
+    /// Bytes of cells no slot points to any more, among the others, all of
+    /// them zeros.
     garbage: usize,
     heads: Heads,
 }
@@ -234,8 +237,8 @@ impl Leaf {
     /// A leaf filled in key order has no room left, so replacing a value by
     /// a removal and an insert compacted the whole page every time; a value
     /// that keeps its length, as most replacements do, changes in place. The
-    /// old cell's bytes past the new one's end count as removed, and go when
-    /// the page is compacted.
+    /// old cell's bytes past the new one's end are zeroed and count as
+    /// removed.
     pub(crate) fn overwrite(
         &mut self,
         index: usize,
@@ -255,6 +258,7 @@ impl Leaf {
         };
 
         write_cell(&mut self.page, at, key, value);
+        self.page[at + new_len..at + len].fill(0);
         self.garbage += len - new_len;
 
         Ok(Some(run))
@@ -265,9 +269,9 @@ impl Leaf {
         leaf_cell(&self.page, index).1 + 2
     }
 
-    /// Moves the entries from `at` on into a new leaf, which it returns.
-    /// Each part's heads are worked out again, after the longer prefix its
-    /// keys may share.
+    /// Moves the entries from `at` on into a new leaf, which it returns, and
+    /// zeroes their cells here, as removed ones are. Each part's heads are
+    /// worked out again, after the longer prefix its keys may share.
     pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
         let mut right = Leaf::new(self.page.len());
 
@@ -277,6 +281,7 @@ impl Leaf {
             right.low -= len;
             right.page[right.low..right.low + len].copy_from_slice(&self.page[cell..cell + len]);
             set_slot(&mut right.page, index - at, right.low);
+            self.page[cell..cell + len].fill(0);
             self.garbage += len;
         }
 
@@ -289,15 +294,17 @@ impl Leaf {
         right
     }
 
-    /// Removes entry `index`, and returns the overflow run of its value, if
-    /// it had one, for the caller to give back.
+    /// Removes entry `index`, zeroing its cell, and returns the overflow run
+    /// of its value, if it had one, for the caller to give back.
     pub(crate) fn remove(&mut self, index: usize) -> Result<Option<OverflowRef>, &'static str> {
         let run = match self.value(index)? {
             StoredRef::Inline(_) => None,
             StoredRef::Overflow(reference) => Some(reference),
         };
-        let (_, len) = leaf_cell(&self.page, index);
+        let (at, len) = leaf_cell(&self.page, index);
         let slots_end = CONTENT_OFFSET + 2 * self.count;
+
+        self.page[at..at + len].fill(0);
 
         self.page.copy_within(
             CONTENT_OFFSET + 2 * (index + 1)..slots_end,
@@ -328,8 +335,8 @@ impl Leaf {
             .collect()
     }
 
-    /// The page, compacted if any cell was removed, with its frame zeroed
-    /// for the header and the check to be written.
+    /// The page, with its frame zeroed for the header and the check to be
+    /// written.
     #[cfg(test)]
     pub(crate) fn into_page(self) -> Vec<u8> {
         self.into_parts().page
@@ -337,13 +344,19 @@ impl Leaf {
 
     /// [`into_page`](Self::into_page), with what the node the commit caches
     /// takes from the leaf.
+    ///
+    /// The page is written with the zeroed gaps that removed cells left, and
+    /// compacted only when an insert needs their room, if one ever does:
+    /// compacting every leaf a transaction removed from before writing it
+    /// took a third of a commit that deleted scattered objects. The lowest
+    /// cell may have been one of them, so where the cells start is read again.
     pub(crate) fn into_parts(mut self) -> LeafParts {
-        if self.garbage > 0 {
-            self.compact();
-        }
-
         let end = check_offset(self.page.len());
         let size = self.size();
+
+        if self.garbage > 0 {
+            self.low = leaf_low(&self.page, self.count);
+        }
 
         self.page[..CONTENT_OFFSET].fill(0);
         self.page[end..].fill(0);
@@ -397,10 +410,28 @@ impl Leaf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{Check, check_leaf, decode_leaf};
+    use crate::format::{Check, check_leaf, decode_leaf, leaf_extent};
     use crate::testing::Rng;
 
     const PAGE: usize = 4096;
+
+    /// Checks that every byte of a leaf page's content that no slot and no
+    /// cell of its `count` entries covers is zero.
+    fn assert_zero_outside_cells(page: &[u8], count: usize) {
+        let mut covered = vec![false; page.len()];
+
+        covered[CONTENT_OFFSET..CONTENT_OFFSET + 2 * count].fill(true);
+
+        for index in 0..count {
+            let (at, len) = leaf_cell(page, index);
+
+            covered[at..at + len].fill(true);
+        }
+
+        for at in CONTENT_OFFSET..check_offset(page.len()) {
+            assert!(covered[at] || page[at] == 0, "byte {at} is left over");
+        }
+    }
 
     fn value_of(rng: &mut Rng) -> StoredValue {
         if rng.below(8) == 0 {
@@ -495,6 +526,7 @@ mod tests {
 
                 let size: usize = model.iter().map(LeafEntry::len).sum();
 
+                assert_zero_outside_cells(&leaf.page, leaf.len());
                 leaf.heads
                     .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
                 assert_eq!(leaf.size(), size);
@@ -522,6 +554,7 @@ mod tests {
 
             let written = leaf.clone().into_page();
 
+            assert_zero_outside_cells(&written, model.len());
             check_leaf(&written, model.len()).unwrap();
             assert_eq!(decode_leaf(&written, model.len()).unwrap(), model);
             assert_eq!(
@@ -560,6 +593,8 @@ mod tests {
             let right = leaf.split_off(at);
             let (left_model, right_model) = model.split_at(at);
 
+            assert_zero_outside_cells(&leaf.page, leaf.len());
+            assert_zero_outside_cells(&right.page, right.len());
             leaf.heads
                 .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
             right
@@ -622,6 +657,48 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A leaf that lost an entry is written with its other cells where they
+    /// were and the lost one's bytes zeroed, and compacted when an insert
+    /// needs their room, then or after the page is read again.
+    #[test]
+    fn a_leaf_is_written_with_the_gaps_its_removed_entries_left() {
+        // Four entries of 908 bytes fill all but 392 of a page's 4024.
+        let value = [7; 900];
+        let mut leaf = Leaf::new(PAGE);
+
+        for (index, key) in [b"a", b"b", b"c", b"d"].into_iter().enumerate() {
+            assert!(leaf.insert(index, key, StoredRef::Inline(&value)));
+        }
+
+        leaf.remove(1).unwrap();
+
+        let starts = |page: &[u8]| (0..3).map(|index| leaf_cell(page, index).0).collect();
+        let before: Vec<usize> = starts(&leaf.page);
+        let written = leaf.clone().into_page();
+
+        assert_eq!(starts(&written), before, "no cell moved");
+        assert_zero_outside_cells(&written, 3);
+
+        for mut leaf in [leaf.clone(), Leaf::from_page(&written, 3)] {
+            assert!(leaf.insert(1, b"bb", StoredRef::Inline(&value)));
+            assert_zero_outside_cells(&leaf.page, 4);
+            assert_eq!(
+                decode_leaf(&leaf.into_page(), 4).unwrap()[1],
+                LeafEntry {
+                    key: b"bb".to_vec(),
+                    value: StoredValue::Inline(value.to_vec()),
+                }
+            );
+        }
+
+        // With the lowest cell gone, the free space ends at the next one.
+        leaf.remove(2).unwrap();
+
+        let parts = leaf.into_parts();
+
+        assert_eq!((parts.size, parts.low), leaf_extent(&parts.page, 2));
     }
 
     /// A leaf page whose cells overlap: cell 0 runs from offset 100 to the
