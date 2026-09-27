@@ -53,5 +53,4 @@ Confirmed by reading the code against the specification; no test reproduces them
 - **Unsynced window limits**: how many pages and how much time deferred commits may accumulate before the engine issues a barrier of its own.
 - **iOS App Group containers**: iOS terminates a suspended app that holds a file lock in one, and the open lock is held while a database is open. Whether to offer a mode for such apps that does without it.
 - **Performance goal**: the benchmark workloads, and the durability settings to compare at.
-- **Default page size.** 4096 bytes today, which is a placeholder rather than a measured choice.
 - **Minimum supported Rust version.** `rust-version` is 1.85 today, the first release with the 2024 edition. Whether to hold it there is open.

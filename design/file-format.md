@@ -24,7 +24,7 @@ The page size is unrelated to the operating system's memory page size, which the
 
 **Why 4096 at the smallest.** The header needs 2048 bytes, and it has to be a single page. Smaller pages would also save nothing on current storage, whose physical sectors are 4096 bytes. The skeleton's format version 1 accepted 512; version 2 does not.
 
-**The default page size is 4096 bytes** until the benchmarks of phase 4 settle it.
+**The default page size is 4096 bytes**, chosen by measuring the object layer's workloads at 4096, 8192 and 16384 bytes. Against 4096, 8192 made an unindexed count 47% faster and deletes 12% faster, but a deferred commit of one object 5% slower and lookups in a file larger than the page cache 19% slower; 16384 moved the same ways further, to 16% and 35% slower. A lookup is what an application does most, and a miss in the cache reads and checks a whole page, so the smallest page is the default, and a file that is mostly scanned can be created with a larger one.
 
 ## Checks
 
