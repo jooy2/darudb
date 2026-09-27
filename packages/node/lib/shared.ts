@@ -7,7 +7,14 @@
  */
 
 import native = require('../native.js');
-import { codeError, invalid, decodeSchema, encodeQuery, encodeParameters } from './codec.js';
+import {
+  codeError,
+  invalid,
+  decodeSchema,
+  encodeQuery,
+  encodeParameters,
+  writeParameters
+} from './codec.js';
 import type { CollectionLayout, IntKind, Layout, SchemaLayout } from './codec.js';
 import { Query } from './query.js';
 import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
@@ -144,13 +151,10 @@ function keyOf(key: unknown): Key {
   return key;
 }
 
-/**
- * A query's parameters, checked and encoded as the engine reads them. The
- * buffer is lent, as `encodeParameters` says.
- */
-function parametersOf(parameters: unknown): Buffer {
+/** A query's parameters, checked: an array of single values or nulls. */
+function checkedParameters(parameters: unknown): readonly unknown[] {
   if (parameters === undefined) {
-    return encodeParameters([]);
+    return [];
   }
 
   if (!Array.isArray(parameters)) {
@@ -166,7 +170,23 @@ function parametersOf(parameters: unknown): Buffer {
     }
   }
 
-  return encodeParameters(parameters);
+  return parameters;
+}
+
+/**
+ * A query's parameters, checked and encoded as the engine reads them. The
+ * buffer is lent, as `encodeParameters` says.
+ */
+function parametersOf(parameters: unknown): Buffer {
+  return encodeParameters(checkedParameters(parameters));
+}
+
+/**
+ * A query's parameters, checked and written into `parameterBytes()`, as
+ * `writeParameters` says; returns how many bytes they take.
+ */
+function lendParameters(parameters: unknown): number {
+  return writeParameters(checkedParameters(parameters));
 }
 
 /**
@@ -417,6 +437,7 @@ export {
   nativeMigration,
   keyOf,
   parametersOf,
+  lendParameters,
   irOf,
   prepare,
   preparedOf,

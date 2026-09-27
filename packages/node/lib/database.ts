@@ -22,7 +22,8 @@ import {
   decodeRecord,
   decodeRecords,
   decodeFirst,
-  encodeSchema
+  encodeSchema,
+  parameterBytes
 } from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
 import type { DeclaredSchema } from './schema.js';
@@ -32,7 +33,7 @@ import {
   synchronous,
   nativeMigration,
   keyOf,
-  parametersOf,
+  lendParameters,
   irOf,
   prepare,
   preparedOf,
@@ -143,7 +144,9 @@ class ReadCollection {
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
-      return native.countPrepared(this.#txn, prepared.handle, parametersOf(parameters));
+      const length = lendParameters(parameters);
+
+      return native.countPrepared(this.#txn, prepared.handle, parameterBytes(), length);
     }
 
     return native.count(this.#txn, irOf(name, query, parameters, true, false, true));
@@ -158,10 +161,13 @@ class ReadCollection {
     const prepared = preparedOf(name, query);
 
     if (prepared !== null) {
+      const length = lendParameters(parameters);
+
       return native.findPrepared(
         this.#txn,
         prepared.handle,
-        parametersOf(parameters),
+        parameterBytes(),
+        length,
         first,
         scratch
       );

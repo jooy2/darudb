@@ -292,6 +292,10 @@ describe('objects', () => {
       assert.deepEqual(names(users.find(within, [30, 35, 'Bob'])), ['Alice', 'Bob']);
       assert.equal(users.findOne(byEmail, ['alice@example.com']).name, 'Alice');
       assert.equal(users.count(byEmail, [null]), 2, 'equal to null is a null test');
+      // Parameters longer than the buffer they are written in make it grow.
+      assert.equal(users.findOne(byEmail, [`${'a'.repeat(300)}@example.com`]), null);
+      assert.equal(users.count(adults, [0, 'N'.repeat(300)]), 3);
+      assert.equal(users.findOne(byEmail, ['alice@example.com']).name, 'Alice');
     });
 
     // A prepared query is not tied to a transaction, or to a kind of one.

@@ -1782,13 +1782,13 @@ function writeExpression(writer: Writer, node: FilterNode, depth = 1): void {
 const parameterWriter = new Writer(64);
 
 /**
- * The values of a query's parameters as the engine reads them
- * (`Query::bind_encoded`): a record whose field 0 is how many there are and
- * field `n + 1` the value of parameter `n`, a null one left out, since a
- * record holds no null. The buffer is lent: the next parameters are encoded
- * in it, so the caller hands it to the engine at once.
+ * Writes the values of a query's parameters as the engine reads them
+ * (`Query::bind_encoded`) into a buffer the next parameters are written in,
+ * `parameterBytes()`, and returns how many bytes they take: a record whose
+ * field 0 is how many there are and field `n + 1` the value of parameter
+ * `n`, a null one left out, since a record holds no null.
  */
-function encodeParameters(parameters: readonly unknown[]): Buffer {
+function writeParameters(parameters: readonly unknown[]): number {
   const writer = parameterWriter;
   let present = 0;
 
@@ -1813,7 +1813,28 @@ function encodeParameters(parameters: readonly unknown[]): Buffer {
     }
   }
 
-  return Buffer.from(writer.bytes.buffer, writer.bytes.byteOffset, writer.at);
+  return writer.at;
+}
+
+/**
+ * The buffer `writeParameters` writes in, whole, for a caller that hands it
+ * to the engine at once with the length it returned. A view of the part
+ * written, made for every query, cost more than the rest of encoding one
+ * value.
+ */
+function parameterBytes(): Uint8Array {
+  return parameterWriter.bytes;
+}
+
+/**
+ * The values of a query's parameters as `writeParameters` writes them, in a
+ * buffer that is lent: the next parameters are encoded in it, so the caller
+ * hands it to the engine at once.
+ */
+function encodeParameters(parameters: readonly unknown[]): Buffer {
+  const length = writeParameters(parameters);
+
+  return Buffer.from(parameterWriter.bytes.buffer, parameterWriter.bytes.byteOffset, length);
 }
 
 /** The buffer queries are encoded in, reused: a query is copied out of it. */
@@ -1916,5 +1937,7 @@ export {
   decodeSchema,
   encodeSchema,
   encodeQuery,
-  encodeParameters
+  encodeParameters,
+  writeParameters,
+  parameterBytes
 };

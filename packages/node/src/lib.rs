@@ -1054,8 +1054,10 @@ pub fn count(
     with(txn, |txn| txn.count_ir(&ir))
 }
 
-/// The records a prepared query finds with `parameters`, encoded as
-/// `Query::bind_encoded` reads them, as `find` delivers them.
+/// The records a prepared query finds with the parameters in the first
+/// `length` bytes of `parameters`, encoded as `Query::bind_encoded` reads
+/// them, as `find` delivers them. The buffer is one the JavaScript side
+/// writes every query's parameters in, lent whole.
 #[napi(ts_return_type = "number | Buffer")]
 pub fn find_prepared<'env>(
     env: &'env Env,
@@ -1063,11 +1065,12 @@ pub fn find_prepared<'env>(
     #[napi(ts_arg_type = "ExternalObject<'NativePrepared'>")] prepared: &External<
         Arc<PreparedQuery>,
     >,
-    parameters: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] parameters: BufferSlice<'_>,
+    length: u32,
     first: bool,
     mut scratch: BufferSlice<'_>,
 ) -> Result<Either<u32, BufferSlice<'env>>> {
-    let query = prepared.bound(&parameters, first)?;
+    let query = prepared.bound(lent(&parameters, length)?, first)?;
 
     with(txn, |txn| {
         txn.find_into(env, &prepared.collection, &query, &mut scratch)
@@ -1080,9 +1083,10 @@ pub fn count_prepared(
     #[napi(ts_arg_type = "ExternalObject<'NativePrepared'>")] prepared: &External<
         Arc<PreparedQuery>,
     >,
-    parameters: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] parameters: BufferSlice<'_>,
+    length: u32,
 ) -> Result<f64> {
-    let query = prepared.bound(&parameters, false)?;
+    let query = prepared.bound(lent(&parameters, length)?, false)?;
 
     with(txn, |txn| txn.count(&prepared.collection, &query))
 }
@@ -1146,6 +1150,15 @@ pub fn delete_object(
     let key = key_in(key)?;
 
     with(txn, |txn| txn.delete(collection, key))
+}
+
+/// The first `length` bytes of `bytes`, a buffer the JavaScript side lends
+/// whole with the length of what it wrote there.
+fn lent(bytes: &[u8], length: u32) -> Result<&[u8]> {
+    usize::try_from(length)
+        .ok()
+        .and_then(|length| bytes.get(..length))
+        .ok_or_else(|| invalid("the bytes lent are fewer than their length"))
 }
 
 fn lock(held: &Mutex<Option<Txn>>) -> Result<MutexGuard<'_, Option<Txn>>> {
