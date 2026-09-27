@@ -415,13 +415,25 @@ struct IndexKeys {
     ends: Vec<(usize, usize)>,
 }
 
+/// The bytes [`IndexKeys`] makes room for at once for each index: a tag, a
+/// short value and a primary key. Making room for each entry as it came
+/// reallocated the bytes for every entry after the first, twice for each
+/// object an update replaced.
+const ENTRY_ROOM: usize = 48;
+
 impl IndexKeys {
     /// Room for the entries of a collection with `indexes` indexes, one each.
     fn with_capacity(indexes: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            ends: Vec::with_capacity(indexes),
-        }
+        let mut entries = Self::default();
+
+        entries.reserve(indexes);
+        entries
+    }
+
+    /// Makes room for one more entry in each of `indexes` indexes.
+    fn reserve(&mut self, indexes: usize) {
+        self.bytes.reserve(ENTRY_ROOM * indexes);
+        self.ends.reserve(indexes);
     }
 
     /// Every entry: the position of its index, and its key.
@@ -595,7 +607,7 @@ fn record_entries(
     key: &[u8],
     damage: &mut Option<&'static str>,
 ) -> Result<()> {
-    entries.ends.reserve(collection.indexes.len());
+    entries.reserve(collection.indexes.len());
 
     for (position, index) in collection.indexes.iter().enumerate() {
         stored_entries(entries, position, index, collection, record, key).map_err(|unread| {
