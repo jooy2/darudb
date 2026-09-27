@@ -793,14 +793,37 @@ impl NodeRef<'_> {
 /// Heads order keys that share the prefix, though not strictly: a key orders
 /// before another when its head is lower and after it when its head is
 /// higher, and only a comparison of the keys tells when the heads are equal.
+///
+/// Four bytes are read at once. Copying however many there were, up to four,
+/// was a call to copy memory on every search of every node.
+#[inline(always)]
 fn key_head(key: &[u8], prefix: usize) -> u32 {
     let rest = key.get(prefix..).unwrap_or_default();
-    let mut head = [0u8; 4];
-    let len = rest.len().min(4);
 
-    head[..len].copy_from_slice(&rest[..len]);
+    match rest.first_chunk::<4>() {
+        Some(head) => u32::from_be_bytes(*head),
+        None => rest
+            .iter()
+            .zip((0..4).rev())
+            .fold(0, |head, (&byte, place)| {
+                head | u32::from(byte) << (8 * place)
+            }),
+    }
+}
 
-    u32::from_be_bytes(head)
+/// Whether `key` begins with `shared`. A prefix of up to eight bytes, as
+/// most nodes' are, is compared with the first eight bytes of a key at least
+/// that long as one number, rather than by a call to compare memory on every
+/// search.
+#[inline(always)]
+fn begins_with(key: &[u8], shared: &[u8]) -> bool {
+    match (key.first_chunk::<8>(), shared.len()) {
+        (_, 0) => true,
+        (Some(first), len @ 1..=8) => {
+            u64::from_be_bytes(*first) & (u64::MAX << (8 * (8 - len))) == padded(shared)
+        }
+        _ => key.starts_with(shared),
+    }
 }
 
 /// Key `index` of a leaf page, or of a branch page with `count` keys.
@@ -831,7 +854,7 @@ fn search_heads<'k>(
 ) -> usize {
     // A key that does not begin with the prefix is below every key of the
     // node or above them all.
-    if key.get(..shared.len()) != Some(shared) {
+    if !begins_with(key, shared) {
         return if key < shared { 0 } else { heads.len() };
     }
 
