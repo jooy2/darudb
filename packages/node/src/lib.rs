@@ -38,6 +38,10 @@ use napi::bindgen_prelude::{
 use napi::{Env, Task, Unknown, ValueType};
 use napi_derive::napi;
 
+/// Every allocation of the addon goes through mimalloc; `Cargo.toml` says why.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// A result whose error becomes a JavaScript `Error` with the engine's code.
 ///
 /// It has to be named `Result`: `#[napi]` recognises a fallible function by

@@ -17,6 +17,15 @@ darudb.workspace = true
 # Node-API 6 adds `bigint`, which every supported Node.js has.
 napi = { version = "3.13.0", features = ["napi6"] }
 napi-derive = "3.6.9"
+# The allocator of the addon alone; the engine crate leaves the choice to the
+# program it is built into. The system allocator of macOS zeroes what it
+# frees, and allocating and freeing took about a tenth of a lookup through
+# the package. Version 2, the longer-lived line, measured the same as 3. Its C
+# source is compiled with the addon, so a build needs a C compiler. Local
+# dynamic TLS, because Node.js loads the addon with `dlopen`, and the
+# initial-exec model the crate uses otherwise takes static TLS space that a
+# library loaded late may not find on Linux.
+mimalloc = { version = "0.1.52", default-features = false, features = ["v2", "local_dynamic_tls"] }
 
 [build-dependencies]
 napi-build = "2.5.0"
