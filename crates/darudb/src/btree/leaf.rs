@@ -204,6 +204,12 @@ impl Leaf {
             }
 
             self.compact();
+
+            // Cells that overlap, which only a damaged page has, may leave
+            // no room after all.
+            if len + 2 > self.free() {
+                return false;
+            }
         }
 
         let slots = CONTENT_OFFSET + 2 * index;
@@ -357,14 +363,26 @@ impl Leaf {
 
     /// Rewrites the cells one after another from the end of the page, in slot
     /// order, leaving zeros where removed cells were.
+    ///
+    /// Cells that take more room than the page has, which only a damaged page
+    /// whose cells overlap has, are left where they are, and the bytes of
+    /// removed cells are no longer counted, so that nothing tries again: the
+    /// page stays as readable as it was, removed bytes and all.
     fn compact(&mut self) {
         let mut page = vec![0; self.page.len()];
         let mut cursor = check_offset(page.len());
+        let slots_end = CONTENT_OFFSET + 2 * self.count;
 
         for index in 0..self.count {
             let (at, len) = leaf_cell(&self.page, index);
 
-            cursor -= len;
+            let Some(low) = cursor.checked_sub(len).filter(|low| *low >= slots_end) else {
+                self.garbage = 0;
+
+                return;
+            };
+
+            cursor = low;
             page[cursor..cursor + len].copy_from_slice(&self.page[at..at + len]);
             set_slot(&mut page, index, cursor);
         }
@@ -604,6 +622,51 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A leaf page whose cells overlap, which the checks of a read let
+    /// through: cell 0 runs from offset 100 to the end, cell 1 lies inside
+    /// its value and runs to the end too, and cell 2 is small, below them.
+    /// Only a damaged or crafted file has one.
+    fn overlapping_page() -> Vec<u8> {
+        let end = check_offset(PAGE);
+        let mut page = vec![0; PAGE];
+
+        // Cell 1 lies inside cell 0's value, so it is written after it.
+        for (index, at, key, len) in [
+            (0, 100, b"a", end - 100 - 6),
+            (1, 200, b"b", end - 200 - 6),
+            (2, 70, b"c", 0),
+        ] {
+            write_cell(&mut page, at, key, StoredRef::Inline(&vec![0x5A; len]));
+            set_slot(&mut page, index, at);
+        }
+
+        check_leaf(&page, 3).unwrap();
+
+        page
+    }
+
+    /// Removing an entry from a page whose cells overlap leaves bytes for a
+    /// compaction to reclaim, though the cells left take more room than the
+    /// page has. Writing the page, or an insert that needs those bytes, must
+    /// not panic: a damaged file produces an error, never a panic.
+    #[test]
+    fn a_leaf_whose_cells_overlap_is_changed_without_a_panic() {
+        let page = overlapping_page();
+        let mut kept = decode_leaf(&page, 3).unwrap();
+        let mut leaf = Leaf::from_page(&page, 3);
+
+        kept.pop();
+        leaf.remove(2).unwrap();
+
+        let mut inserted = leaf.clone();
+
+        // Thirteen bytes: more than the free space, fewer than the free
+        // space and the removed cell.
+        assert!(!inserted.insert(2, b"d", StoredRef::Inline(&[1; 5])));
+        assert_eq!(inserted.to_entries().unwrap(), kept);
+        assert_eq!(decode_leaf(&leaf.into_page(), 2).unwrap(), kept);
     }
 
     #[test]
