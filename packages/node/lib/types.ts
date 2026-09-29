@@ -514,6 +514,37 @@ export interface OpenOptions<S = Schema> {
   schema?: S;
   /** How an older schema version becomes this one. */
   migrations?: Migration<S>[];
+  /**
+   * A key of 32 bytes that encrypts a new database, or opens an encrypted
+   * one. Keep it where it cannot be lost, such as the operating system's
+   * keystore: without it, the data cannot be read. A plain database cannot
+   * be opened with a key. The package copies it when `open` is called, so
+   * the caller may wipe its own buffer once the call returns.
+   */
+  key?: Uint8Array;
+  /**
+   * A password that encrypts a new database, or opens an encrypted one,
+   * hashed with Argon2id into the key. Give a `key` or a `password`, not
+   * both. A `Uint8Array` can be wiped once `open` returns; a string stays
+   * in memory until the garbage collector reclaims it.
+   */
+  password?: string | Uint8Array;
+  /**
+   * How much work hashing a password takes when a new database is encrypted
+   * with one or `setPassword` changes it. 19456 KiB, 2 iterations and a
+   * parallelism of 1 by default, which takes tens of milliseconds. A file
+   * records the cost it was made with, so opening it takes that cost
+   * whatever this says.
+   */
+  passwordHashing?: PasswordHashing;
+}
+
+/** What hashing a password costs, as Argon2id counts it. */
+export interface PasswordHashing {
+  /** Memory, in KiB, up to 1 GiB. */
+  memoryKib: number;
+  iterations: number;
+  parallelism: number;
 }
 
 /** Options for `Database.openAsync`, whose migration functions may be asynchronous. */
@@ -549,6 +580,8 @@ export interface Database<S extends Schema<any> = Schema> {
   readonly pageSize: number;
   /** The file format version recorded in the file. */
   readonly formatVersion: number;
+  /** Whether the file is encrypted. */
+  readonly isEncrypted: boolean;
   /** The schema version the file holds, or `null` without a schema. */
   readonly schemaVersion: number | null;
   /**
@@ -612,6 +645,22 @@ export interface Database<S extends Schema<any> = Schema> {
   compact(): CompactReport;
   /** `compact` on the thread pool, after this process's writes on the file. */
   compactAsync(): Promise<CompactReport>;
+  /**
+   * Changes the key of an encrypted database to `key`, 32 bytes. It re-encrypts
+   * no page, and when it returns, the old key or password no longer opens the
+   * file. It commits, so it is refused while an asynchronous write of this
+   * process holds the file. A plain database fails with `INVALID_ARGUMENT`.
+   */
+  setKey(key: Uint8Array): void;
+  /** `setKey` on the thread pool, after this process's writes on the file. */
+  setKeyAsync(key: Uint8Array): Promise<void>;
+  /**
+   * Changes the key of an encrypted database to one derived from `password`,
+   * at the hashing cost the database was opened with; see `setKey`.
+   */
+  setPassword(password: string | Uint8Array): void;
+  /** `setPassword` on the thread pool, after this process's writes on the file. */
+  setPasswordAsync(password: string | Uint8Array): Promise<void>;
   /** Makes every commit durable, deferred ones included. */
   sync(): void;
   /** `sync` on the thread pool, after this process's writes on the file. */
@@ -707,6 +756,10 @@ export interface DatabaseOpener {
 
 /** Options for `Database.salvage`. */
 export interface SalvageOptions {
+  /** The key of an encrypted file, which opens the new file too. */
+  key?: Uint8Array;
+  /** The password of an encrypted file, which opens the new file too. */
+  password?: string | Uint8Array;
   /**
    * How long, in milliseconds, to wait for other processes to close the
    * file before failing with `BUSY`. 5000 by default.

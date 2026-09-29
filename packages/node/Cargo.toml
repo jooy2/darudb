@@ -26,6 +26,10 @@ napi-derive = "3.6.9"
 # initial-exec model the crate uses otherwise takes static TLS space that a
 # library loaded late may not find on Linux.
 mimalloc = { version = "0.1.52", default-features = false, features = ["v2", "local_dynamic_tls"] }
+# Wipes the copies of a key or a password that an asynchronous call keeps
+# until its task runs. Already in the build through the engine; Apache-2.0 OR
+# MIT.
+zeroize.workspace = true
 
 [build-dependencies]
 napi-build = "2.5.0"

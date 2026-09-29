@@ -37,6 +37,7 @@ use napi::bindgen_prelude::{
 };
 use napi::{Env, Task, Unknown, ValueType};
 use napi_derive::napi;
+use zeroize::Zeroizing;
 
 /// Every allocation of the addon goes through mimalloc; `Cargo.toml` says why.
 #[global_allocator]
@@ -101,6 +102,33 @@ pub struct NativeOptions {
     /// The declared schema, as `Schema::decode` reads it.
     pub schema: Option<Buffer>,
     pub migrations: Option<Vec<NativeMigration>>,
+    /// A key of 32 bytes. The JavaScript side passes a buffer of its own
+    /// for it and for a password, which it fills with zeros once this call
+    /// has copied them.
+    pub key: Option<Buffer>,
+    /// A password's bytes.
+    pub password: Option<Buffer>,
+    pub password_hashing: Option<NativePasswordHashing>,
+}
+
+/// What hashing a password costs: Argon2id memory in KiB, iterations and
+/// parallelism.
+#[napi(object)]
+pub struct NativePasswordHashing {
+    pub memory_kib: u32,
+    pub iterations: u32,
+    pub parallelism: u32,
+}
+
+/// What `Database.salvage` passes down.
+#[napi(object)]
+pub struct NativeSalvageOptions {
+    /// How long to wait for other processes to close the file, in
+    /// milliseconds.
+    pub busy_timeout: Option<u32>,
+    /// A key of 32 bytes, as in [`NativeOptions`].
+    pub key: Option<Buffer>,
+    pub password: Option<Buffer>,
 }
 
 /// What the integrity check found, as `Database.check` gives it.
@@ -222,15 +250,14 @@ impl Deliver for darudb::SalvageReport {
 }
 
 /// Rescues what it can of the damaged database at `from` into a new
-/// database at `into`, waiting up to `busy_timeout` milliseconds for other
-/// processes to close it.
+/// database at `into`.
 #[napi]
 pub fn salvage(
     from: String,
     into: String,
-    busy_timeout: Option<u32>,
+    options: NativeSalvageOptions,
 ) -> Result<NativeSalvageReport> {
-    salvage_options(busy_timeout)
+    salvage_options(&options)?
         .salvage(from, into)
         .map_err(to_js_error)?
         .deliver()
@@ -240,23 +267,36 @@ pub fn salvage(
 pub fn salvage_async(
     from: String,
     into: String,
-    busy_timeout: Option<u32>,
-) -> AsyncTask<Work<darudb::SalvageReport>> {
-    Work::task(move || {
-        salvage_options(busy_timeout)
-            .salvage(from, into)
-            .map_err(to_js_error)
-    })
+    options: NativeSalvageOptions,
+) -> Result<AsyncTask<Work<darudb::SalvageReport>>> {
+    let options = salvage_options(&options)?;
+
+    Ok(Work::task(move || {
+        options.salvage(from, into).map_err(to_js_error)
+    }))
 }
 
-fn salvage_options(busy_timeout: Option<u32>) -> darudb::OpenOptions {
+fn salvage_options(salvage: &NativeSalvageOptions) -> Result<darudb::OpenOptions> {
     let mut options = darudb::OpenOptions::new();
 
-    if let Some(milliseconds) = busy_timeout {
+    if let Some(milliseconds) = salvage.busy_timeout {
         options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
     }
 
-    options
+    if let Some(key) = &salvage.key {
+        options.key(key_of(key)?);
+    }
+
+    if let Some(password) = &salvage.password {
+        options.password(&password[..]);
+    }
+
+    Ok(options)
+}
+
+/// A key of 32 bytes, from a buffer that has to be that long.
+fn key_of(bytes: &[u8]) -> Result<[u8; 32]> {
+    <[u8; 32]>::try_from(bytes).map_err(|_| invalid("a key is 32 bytes long"))
 }
 
 /// Work for the thread pool: a function that returns a value or an error.
@@ -391,6 +431,18 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
         open_options.schema(darudb::Schema::decode(schema).map_err(to_js_error)?);
     }
 
+    if let Some(key) = &options.key {
+        open_options.key(key_of(key)?);
+    }
+
+    if let Some(password) = &options.password {
+        open_options.password(&password[..]);
+    }
+
+    if let Some(cost) = &options.password_hashing {
+        open_options.password_hashing(cost.memory_kib, cost.iterations, cost.parallelism);
+    }
+
     for migration in options.migrations.unwrap_or_default() {
         open_options.migration(migration_of(migration)?);
     }
@@ -474,6 +526,52 @@ impl NativeDatabase {
     #[napi(getter)]
     pub fn format_version(&self) -> Result<u32> {
         Ok(self.database()?.format_version())
+    }
+
+    #[napi(getter)]
+    pub fn is_encrypted(&self) -> Result<bool> {
+        Ok(self.database()?.is_encrypted())
+    }
+
+    /// Changes the key of an encrypted database.
+    #[napi]
+    pub fn set_key(&self, key: Buffer) -> Result<()> {
+        let key = Zeroizing::new(key_of(&key)?);
+
+        self.database()?.set_key(*key).map_err(to_js_error)
+    }
+
+    #[napi(ts_return_type = "Promise<null | NativeFailure>")]
+    pub fn set_key_async(&self, key: Buffer) -> Result<AsyncTask<Work<()>>> {
+        let key = Zeroizing::new(key_of(&key)?);
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database.set_key(*key).map_err(to_js_error)
+        }))
+    }
+
+    /// Changes the key of an encrypted database to one derived from a
+    /// password.
+    #[napi]
+    pub fn set_password(&self, password: Buffer) -> Result<()> {
+        self.database()?
+            .set_password(&password[..])
+            .map_err(to_js_error)
+    }
+
+    /// `set_password` on the thread pool, with a copy of the password that
+    /// is wiped when the task ends.
+    #[napi(ts_return_type = "Promise<null | NativeFailure>")]
+    pub fn set_password_async(&self, password: Buffer) -> Result<AsyncTask<Work<()>>> {
+        let password = Zeroizing::new(password.to_vec());
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database
+                .set_password(password.as_slice())
+                .map_err(to_js_error)
+        }))
     }
 
     /// The stored schema's record, or `null` for a database opened without

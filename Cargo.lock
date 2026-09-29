@@ -224,6 +224,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "zeroize",
 ]
 
 [[package]]

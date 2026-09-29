@@ -58,6 +58,7 @@ export type {
   ObjectOf,
   OpenOptions,
   Param,
+  PasswordHashing,
   Prepared,
   QueryConstructor,
   QueryInput,

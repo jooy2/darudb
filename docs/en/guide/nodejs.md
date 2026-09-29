@@ -185,6 +185,29 @@ const db = Database.open('app.darudb', {
 
 `previous` reads an object as the schema before the migration did, with its old names and the values of replaced fields; read an object that way before writing it. If the function throws, the file keeps its old schema and data, and `open` throws the same error.
 
+## Encrypt
+
+A database created with a `key` or a `password` is encrypted, as [Getting started](./getting-started.md#encryption) describes, and opens only with the same one.
+
+```ts
+const db = Database.open('secret.darudb', {
+  schema: app,
+  password: 'correct horse battery staple'
+});
+
+console.log(db.isEncrypted); // true
+db.setPassword('a new password'); // or `await db.setPasswordAsync(...)`
+db.close();
+
+Database.open('secret.darudb', { schema: app }); // throws KEY_REQUIRED
+```
+
+- `key` is a `Uint8Array` of 32 bytes, such as one kept in the operating system's keystore. Give a `key` or a `password`, not both.
+- A `password` is a string or a `Uint8Array`. It is hashed with Argon2id, which takes tens of milliseconds by default; `passwordHashing: { memoryKib, iterations, parallelism }` sets the cost for a new file and for `setPassword`.
+- The package copies the key or the password when `open` or `openAsync` is called, and wipes its copy once the engine has its own. A `Uint8Array` you pass can be wiped with `fill(0)` as soon as the call returns; a string cannot be wiped, and stays in memory until the garbage collector reclaims it.
+- `setKey` and `setPassword` commit, so they follow the rules of a write: their `Async` twins wait their turn after this process's other writes on the file, and the synchronous forms are refused while an asynchronous write holds it.
+- `backup` copies an encrypted file with the same key, and `Database.salvage` takes `key` or `password` in its options.
+
 ## Errors
 
 Every error the package throws is an `Error` whose `code` is one of the engine's codes, listed in [Getting started](./getting-started.md#errors). A transaction or collection used after its function has returned throws `CLOSED`, or in the asynchronous API rejects with it.

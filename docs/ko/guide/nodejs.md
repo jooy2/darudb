@@ -185,6 +185,29 @@ const db = Database.open('app.darudb', {
 
 `previous`는 마이그레이션 전 스키마대로 객체를 읽습니다. 예전 이름과 교체한 필드의 값까지 그대로 나오니, 객체를 쓰기 전에 이렇게 읽어 두세요. 함수가 예외를 던지면 파일은 예전 스키마와 데이터를 그대로 유지하고, `open`은 같은 예외를 던집니다.
 
+## 암호화하기
+
+`key`나 `password`를 주고 만든 데이터베이스는 [시작하기](./getting-started.md#암호화)에서 설명한 대로 암호화되고, 같은 키나 비밀번호로만 열립니다.
+
+```ts
+const db = Database.open('secret.darudb', {
+  schema: app,
+  password: 'correct horse battery staple'
+});
+
+console.log(db.isEncrypted); // true
+db.setPassword('a new password'); // 또는 `await db.setPasswordAsync(...)`
+db.close();
+
+Database.open('secret.darudb', { schema: app }); // KEY_REQUIRED를 던집니다
+```
+
+- `key`는 32바이트 `Uint8Array`입니다. 운영체제 키스토어에 둔 키가 한 예입니다. `key`와 `password` 중 하나만 줍니다.
+- `password`는 문자열이나 `Uint8Array`입니다. Argon2id로 해시하는데 기본값으로 수십 밀리초가 걸립니다. `passwordHashing: { memoryKib, iterations, parallelism }`으로 새 파일과 `setPassword`의 해시 비용을 정합니다.
+- 패키지는 `open`이나 `openAsync`를 호출하는 순간 키나 비밀번호를 복사하고, 엔진이 제 사본을 가져가면 그 복사본을 지웁니다. 넘긴 `Uint8Array`는 호출이 반환되자마자 `fill(0)`으로 지워도 됩니다. 문자열은 지울 수 없어서 가비지 컬렉터가 거둘 때까지 메모리에 남습니다.
+- `setKey`와 `setPassword`는 커밋을 하므로 쓰기의 규칙을 따릅니다. `Async` 짝은 이 프로세스의 다른 쓰기가 끝난 뒤 차례를 기다리고, 동기 버전은 비동기 쓰기가 파일을 쥐고 있는 동안 거부됩니다.
+- `backup`은 암호화한 파일을 같은 키로 복사하고, `Database.salvage`는 옵션에 `key`나 `password`를 받습니다.
+
 ## 오류
 
 패키지가 던지는 모든 오류는 `code`가 엔진의 코드인 `Error`이고, 코드 목록은 [시작하기](./getting-started.md#오류)에 있습니다. 함수가 반환한 뒤에 트랜잭션이나 컬렉션을 쓰면 `CLOSED`가 납니다. 비동기 API에서는 promise가 이 오류로 거부됩니다.

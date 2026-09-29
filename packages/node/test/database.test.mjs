@@ -221,6 +221,159 @@ describe('Database#check', () => {
   });
 });
 
+describe('encryption', () => {
+  const people = schema(1, { people: collection({ name: t.string() }) });
+  // A small hashing cost, so that the tests do not wait for Argon2id.
+  const cheap = { memoryKib: 1024, iterations: 1, parallelism: 1 };
+  const key = Uint8Array.from({ length: 32 }, (_, n) => n);
+  const otherKey = Uint8Array.from({ length: 32 }, (_, n) => 255 - n);
+
+  const filled = (path, options) => {
+    const db = Database.open(path, { schema: people, ...options });
+
+    db.write((txn) => txn.collection('people').insert({ name: 'Ada' }));
+
+    return db;
+  };
+  const names = (db) =>
+    db.read((txn) =>
+      txn
+        .collection('people')
+        .find()
+        .map((p) => p.name)
+    );
+
+  it("opens with its key only, and leaves the caller's buffer as it was", (context) => {
+    const path = join(tempDir(context), 'keyed.darudb');
+    const given = Uint8Array.from(key);
+
+    filled(path, { key: given }).close();
+
+    assert.deepEqual(given, key);
+
+    const db = Database.open(path, { schema: people, key });
+
+    assert.equal(db.isEncrypted, true);
+    assert.deepEqual(names(db), ['Ada']);
+    db.close();
+
+    assertCode(() => Database.open(path, { schema: people }), 'KEY_REQUIRED');
+    assertCode(() => Database.open(path, { schema: people, key: otherKey }), 'WRONG_KEY');
+    assertCode(
+      () => Database.open(path, { schema: people, password: 'a guess', passwordHashing: cheap }),
+      'WRONG_KEY'
+    );
+  });
+
+  it('refuses a key or a password it cannot use', (context) => {
+    const dir = tempDir(context);
+    const plain = Database.open(join(dir, 'plain.darudb'));
+
+    assert.equal(plain.isEncrypted, false);
+    assertCode(() => plain.setKey(key), 'INVALID_ARGUMENT');
+    plain.close();
+
+    assertCode(() => Database.open(join(dir, 'plain.darudb'), { key }), 'INVALID_ARGUMENT');
+    assertCode(
+      () => Database.open(join(dir, 'a.darudb'), { key: key.subarray(1) }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () => Database.open(join(dir, 'b.darudb'), { key: 'not bytes' }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () => Database.open(join(dir, 'c.darudb'), { key, password: 'both' }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(() => Database.open(join(dir, 'd.darudb'), { password: '' }), 'INVALID_ARGUMENT');
+    assertCode(
+      () => Database.open(join(dir, 'f.darudb'), { password: 'p', passwordHashing: null }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () =>
+        Database.open(join(dir, 'e.darudb'), {
+          password: 'p',
+          passwordHashing: { memoryKib: -1, iterations: 1, parallelism: 1 }
+        }),
+      'INVALID_ARGUMENT'
+    );
+  });
+
+  it('changes the key and the password, synchronously and on the thread pool', async (context) => {
+    const path = join(tempDir(context), 'changed.darudb');
+    const db = filled(path, { password: 'first', passwordHashing: cheap });
+    const reopen = (secret) => {
+      const opened = Database.open(path, { schema: people, ...secret });
+      const found = names(opened);
+
+      opened.close();
+
+      return found;
+    };
+
+    db.setPassword('second');
+    await db.setPasswordAsync(new TextEncoder().encode('third'));
+    db.close();
+
+    assertCode(() => reopen({ password: 'second' }), 'WRONG_KEY');
+    assert.deepEqual(reopen({ password: 'third' }), ['Ada']);
+
+    const again = Database.open(path, { schema: people, password: 'third' });
+
+    again.setKey(key);
+    await again.setKeyAsync(otherKey);
+    again.close();
+
+    assertCode(() => reopen({ key }), 'WRONG_KEY');
+    assert.deepEqual(reopen({ key: otherKey }), ['Ada']);
+  });
+
+  it('refuses a key change while an asynchronous write holds the file', async (context) => {
+    const db = filled(join(tempDir(context), 'held.darudb'), { key });
+    let refused;
+
+    await db.writeAsync(async () => {
+      try {
+        db.setKey(otherKey);
+      } catch (error) {
+        refused = error.code;
+      }
+    });
+
+    assert.equal(refused, 'INVALID_ARGUMENT');
+    db.close();
+  });
+
+  it('opens on the thread pool, and backs up and salvages with the same key', async (context) => {
+    const dir = tempDir(context);
+    const path = join(dir, 'app.darudb');
+
+    filled(path, { key }).close();
+
+    const db = await Database.openAsync(path, { schema: people, key });
+
+    await db.backupAsync(join(dir, 'copy.darudb'));
+    await db.closeAsync();
+
+    assertCode(() => Database.salvage(path, join(dir, 'none.darudb')), 'KEY_REQUIRED');
+
+    const report = await Database.salvageAsync(path, join(dir, 'rescued.darudb'), { key });
+
+    assert.equal(report.whole, true);
+
+    for (const name of ['copy.darudb', 'rescued.darudb']) {
+      assertCode(() => Database.open(join(dir, name), { schema: people }), 'KEY_REQUIRED');
+
+      const opened = Database.open(join(dir, name), { schema: people, key });
+
+      assert.deepEqual(names(opened), ['Ada']);
+      opened.close();
+    }
+  });
+});
+
 describe('Database#backup', () => {
   const people = schema(1, {
     people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })

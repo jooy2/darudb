@@ -130,7 +130,7 @@ console.log(`page size: ${db.pageSize} bytes`);
 db.close();
 ```
 
-`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를, `cacheSize`로 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. `schema`를 주면 트랜잭션으로 읽고 쓰고 쿼리로 찾는 객체 컬렉션이 생깁니다. 쓰는 방법은 [Node.js](./nodejs.md)에 있습니다.
+`Database.open`의 두 번째 인자는 옵션 객체입니다. `create: false`를 주면 없는 파일을 만들지 않고, `pageSize`로 새 파일의 페이지 크기를, `cacheSize`로 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. `key`나 `password`를 주면 새 파일을 암호화하거나 암호화한 파일을 엽니다. `schema`를 주면 트랜잭션으로 읽고 쓰고 쿼리로 찾는 객체 컬렉션이 생깁니다. 쓰는 방법은 [Node.js](./nodejs.md)에 있습니다.
 
 ## 오류
 

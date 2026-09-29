@@ -54,6 +54,8 @@ const count = await db.readAsync((txn) => txn.collection('users').count());
 
 Objects and queries cross into the engine as bytes, one buffer per call, so a batch of objects costs one call. Raising the schema's version migrates the file when it opens, with renames, deletions and a JavaScript function of your own; [the guide](https://darudb.cdget.com/guide/nodejs) has the details.
 
+A `key` of 32 bytes or a `password` in the options encrypts a new database, every page of it, and opens an encrypted one: `Database.open('secret.darudb', { schema: app, password })`.
+
 Every error thrown by the package is an `Error` with a stable `code`, the same one in every language DaruDB ships to:
 
 ```js

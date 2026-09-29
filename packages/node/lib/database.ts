@@ -62,13 +62,20 @@ import {
  * `AsyncOpenOptions` in `index.d.ts` declare them. A migration's function
  * gets `M`.
  */
-interface OpenOptions<M> {
+interface OpenOptions<M> extends Secret {
   create?: boolean;
   pageSize?: number;
   busyTimeout?: number;
   cacheSize?: number;
   schema?: DeclaredSchema;
   migrations?: Migration<M>[];
+  passwordHashing?: { memoryKib: number; iterations: number; parallelism: number };
+}
+
+/** What opens an encrypted database: a key of 32 bytes, or a password. */
+interface Secret {
+  key?: Uint8Array;
+  password?: string | Uint8Array;
 }
 
 /** How a write commits, as `write` and `writeAsync` take it. */
@@ -353,7 +360,15 @@ class Migrating {
 
 /** What `open` and `openAsync` pass to the native layer, checked. */
 function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
-  const { create, pageSize, busyTimeout, cacheSize, schema, migrations = [] } = options;
+  const {
+    create,
+    pageSize,
+    busyTimeout,
+    cacheSize,
+    schema,
+    migrations = [],
+    passwordHashing
+  } = options;
 
   if (!Array.isArray(migrations)) {
     throw invalid('`migrations` is an array');
@@ -363,14 +378,33 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     throw invalid('`cacheSize` is a whole number of bytes from 0 up');
   }
 
-  return {
+  if (passwordHashing !== undefined) {
+    const { memoryKib, iterations, parallelism } = passwordHashing ?? {};
+
+    if (![memoryKib, iterations, parallelism].every(isU32)) {
+      throw invalid(
+        '`passwordHashing` has `memoryKib`, `iterations` and `parallelism`, each a whole number from 0 up'
+      );
+    }
+  }
+
+  const passed = {
     create,
     pageSize,
     busyTimeout,
     cacheSize,
     schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
-    migrations: migrations.map(nativeMigration)
+    migrations: migrations.map(nativeMigration),
+    passwordHashing
   };
+
+  // Last, so that nothing above throws with the copies not yet wiped.
+  return { ...passed, ...secretOf(options) };
+}
+
+/** Whether `value` fits an unsigned 32-bit integer. */
+function isU32(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 0xffffffff;
 }
 
 /** The migration functions of `options`, by the version they migrate to. */
@@ -430,7 +464,14 @@ class Database {
    * synchronously.
    */
   static open(path: string, options: OpenOptions<Migrating> = {}): Database {
-    const opening = native.NativeOpening.open(path, nativeOptions(options));
+    const passed = nativeOptions(options);
+    let opening: native.NativeOpening;
+
+    try {
+      opening = native.NativeOpening.open(path, passed);
+    } finally {
+      wipe(passed);
+    }
     let database: native.NativeDatabase;
 
     if (opening.isMigrating) {
@@ -476,7 +517,18 @@ class Database {
     path: string,
     options: OpenOptions<AsyncMigrating> = {}
   ): Promise<Database> {
-    const opening = settle(await native.NativeOpening.openAsync(path, nativeOptions(options)));
+    const passed = nativeOptions(options);
+    let task: ReturnType<typeof native.NativeOpening.openAsync>;
+
+    // The engine copies the secret when the call is made, before the pool
+    // runs it.
+    try {
+      task = native.NativeOpening.openAsync(path, passed);
+    } finally {
+      wipe(passed);
+    }
+
+    const opening = settle(await task);
     let database: native.NativeDatabase;
 
     if (opening.isMigrating) {
@@ -551,6 +603,77 @@ class Database {
   /** The file format version recorded in the file. */
   get formatVersion(): number {
     return this.#database().formatVersion;
+  }
+
+  /** Whether the file is encrypted. */
+  get isEncrypted(): boolean {
+    return this.#database().isEncrypted;
+  }
+
+  /**
+   * Changes the key of an encrypted database to `key`, 32 bytes. It commits,
+   * so it is refused while an asynchronous write of this process holds the
+   * file, as a synchronous write is. When it returns, the old key or
+   * password no longer opens the file.
+   */
+  setKey(key: Uint8Array): void {
+    const database = this.#database();
+    const copy = copyOfKey(key);
+
+    try {
+      holdForSync(this.#file, '`setKey`', () => database.setKey(copy));
+    } finally {
+      copy.fill(0);
+    }
+  }
+
+  /** `setKey` on the thread pool, after this process's writes on the file. */
+  async setKeyAsync(key: Uint8Array): Promise<void> {
+    const database = this.#database();
+    const copy = copyOfKey(key);
+    const release = await turn(this.#file);
+
+    try {
+      const task = database.setKeyAsync(copy);
+
+      copy.fill(0);
+      settle(await task);
+    } finally {
+      copy.fill(0);
+      release();
+    }
+  }
+
+  /**
+   * Changes the key of an encrypted database to one derived from `password`,
+   * at the hashing cost the database was opened with; see `setKey`.
+   */
+  setPassword(password: string | Uint8Array): void {
+    const database = this.#database();
+    const copy = copyOfPassword(password);
+
+    try {
+      holdForSync(this.#file, '`setPassword`', () => database.setPassword(copy));
+    } finally {
+      copy.fill(0);
+    }
+  }
+
+  /** `setPassword` on the thread pool, after this process's writes on the file. */
+  async setPasswordAsync(password: string | Uint8Array): Promise<void> {
+    const database = this.#database();
+    const copy = copyOfPassword(password);
+    const release = await turn(this.#file);
+
+    try {
+      const task = database.setPasswordAsync(copy);
+
+      copy.fill(0);
+      settle(await task);
+    } finally {
+      copy.fill(0);
+      release();
+    }
   }
 
   /** The schema version the file holds, or `null` without a schema. */
@@ -708,7 +831,13 @@ class Database {
    * with `BUSY`. It never replaces a file already at `into`.
    */
   static salvage(from: string, into: string, options: SalvageOptions = {}): SalvageReport {
-    return salvageReportOf(native.salvage(pathOf(from), pathOf(into), options.busyTimeout));
+    const passed = salvageOptionsOf(options);
+
+    try {
+      return salvageReportOf(native.salvage(pathOf(from), pathOf(into), passed));
+    } finally {
+      wipe(passed);
+    }
   }
 
   /** `salvage` on the thread pool. */
@@ -717,9 +846,16 @@ class Database {
     into: string,
     options: SalvageOptions = {}
   ): Promise<SalvageReport> {
-    return salvageReportOf(
-      settle(await native.salvageAsync(pathOf(from), pathOf(into), options.busyTimeout))
-    );
+    const passed = salvageOptionsOf(options);
+    let task: ReturnType<typeof native.salvageAsync>;
+
+    try {
+      task = native.salvageAsync(pathOf(from), pathOf(into), passed);
+    } finally {
+      wipe(passed);
+    }
+
+    return salvageReportOf(settle(await task));
   }
 
   /**
@@ -835,8 +971,59 @@ interface BackupReport {
 }
 
 /** The options `salvage` and `salvageAsync` take. */
-interface SalvageOptions {
+interface SalvageOptions extends Secret {
   busyTimeout?: number;
+}
+
+/** What `salvage` and `salvageAsync` pass to the native layer, checked. */
+function salvageOptionsOf(options: SalvageOptions): native.NativeSalvageOptions {
+  return { busyTimeout: options.busyTimeout, ...secretOf(options) };
+}
+
+/**
+ * The key or password of `options`, each copied into a buffer of the
+ * package's own, which `wipe` fills with zeros once the engine has taken its
+ * copy. The caller's own buffer is left as it is, for the caller to wipe.
+ */
+function secretOf(options: Secret): { key?: Buffer; password?: Buffer } {
+  const { key, password } = options;
+
+  if (key !== undefined && password !== undefined) {
+    throw invalid('give a `key` or a `password`, not both');
+  }
+
+  return {
+    key: key === undefined ? undefined : copyOfKey(key),
+    password: password === undefined ? undefined : copyOfPassword(password)
+  };
+}
+
+/** A copy of `key`, which has to be 32 bytes. */
+function copyOfKey(key: unknown): Buffer {
+  if (!(key instanceof Uint8Array) || key.length !== 32) {
+    throw invalid('a `key` is a Uint8Array of 32 bytes');
+  }
+
+  return Buffer.from(key);
+}
+
+/** A password's bytes, UTF-8 for a string, in a buffer of the package's own. */
+function copyOfPassword(password: unknown): Buffer {
+  if (typeof password === 'string') {
+    return Buffer.from(password, 'utf8');
+  }
+
+  if (password instanceof Uint8Array) {
+    return Buffer.from(password);
+  }
+
+  throw invalid('a `password` is a string or a Uint8Array');
+}
+
+/** Fills the copies `secretOf` made with zeros. */
+function wipe(passed: { key?: Buffer; password?: Buffer }): void {
+  passed.key?.fill(0);
+  passed.password?.fill(0);
 }
 
 /** What a salvage rescued, as `salvage` and `salvageAsync` give it. */

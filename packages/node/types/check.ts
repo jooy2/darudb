@@ -198,6 +198,17 @@ const report: CheckReport = db.check();
 const firstPage: number | null = report.problems[0]?.page ?? null;
 const checkedLater: Promise<CheckReport> = db.checkAsync();
 
+// An encrypted database opens with a key of bytes or a password.
+const keyed = Database.open('secret.darudb', { key: new Uint8Array(32) });
+const encrypted: boolean = keyed.isEncrypted;
+keyed.setPassword('a new password');
+Database.open('secret.darudb', {
+  password: new TextEncoder().encode('bytes'),
+  passwordHashing: { memoryKib: 19456, iterations: 2, parallelism: 1 }
+});
+// @ts-expect-error a key is bytes, not a string.
+Database.open('secret.darudb', { key: 'a string' });
+
 // Salvage belongs to no open database, and may find no commit to start from.
 const salvaged: SalvageReport = Database.salvage('damaged.darudb', 'rescued.darudb');
 const salvagedFrom: number | null = salvaged.commitId;
@@ -220,5 +231,6 @@ export {
   firstPage,
   checkedLater,
   salvagedFrom,
-  salvagedLater
+  salvagedLater,
+  encrypted
 };

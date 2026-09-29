@@ -120,5 +120,5 @@ if (!report.whole) {
 - The report is whole (`is_whole()` in Rust, `whole` in TypeScript) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
 - An object whose record cannot be read, or whose value of a unique index another object has taken, is left out and counted.
 - Salvage needs the file to itself. A file open in any process fails with `BUSY`, and so does opening the file while salvage runs.
-- The new file has the page size of the old one, and in Rust an encrypted file is salvaged with its key or password in the options, which then opens the new file too. Like a backup, salvage never replaces a file already at the path.
+- The new file has the page size of the old one. An encrypted file is salvaged with its key or password in the options, which then opens the new file too. Like a backup, salvage never replaces a file already at the path.
 - It reads the whole file about twice, and keeps the first and last key of every page of entries in memory, so a large file needs memory in proportion.
