@@ -220,3 +220,46 @@ describe('Database#check', () => {
     assert.ok(named > 2, `${named} damaged pages named`);
   });
 });
+
+describe('Database#backup', () => {
+  const people = schema(1, {
+    people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })
+  });
+
+  it('copies the database to a new file, synchronously and on the thread pool', async (context) => {
+    const dir = tempDir(context);
+    const db = Database.open(join(dir, 'app.darudb'), { schema: people });
+
+    db.write((txn) =>
+      txn
+        .collection('people')
+        .insertMany(
+          Array.from({ length: 300 }, (_, n) => ({ name: `p${n}`, email: `${n}@x`, age: n % 9 }))
+        )
+    );
+
+    const report = db.backup(join(dir, 'copy.darudb'));
+    const later = await db.backupAsync(join(dir, 'later.darudb'));
+
+    for (const [name, made] of [
+      ['copy.darudb', report],
+      ['later.darudb', later]
+    ]) {
+      const copy = Database.open(join(dir, name), { schema: people });
+
+      assert.equal(made.bytes, readFileSync(join(dir, name)).length);
+      assert.ok(made.entries > 300, `${made.entries}`);
+      assert.deepEqual(
+        copy.read((txn) => txn.collection('people').find()),
+        db.read((txn) => txn.collection('people').find())
+      );
+      assert.equal(copy.check().ok, true);
+      copy.close();
+    }
+
+    assertCode(() => db.backup(join(dir, 'copy.darudb')), 'INVALID_ARGUMENT');
+    await assert.rejects(db.backupAsync(join(dir, 'copy.darudb')), { code: 'INVALID_ARGUMENT' });
+    assertCode(() => db.backup(''), 'INVALID_ARGUMENT');
+    db.close();
+  });
+});

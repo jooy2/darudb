@@ -715,6 +715,20 @@ class Database {
   }
 
   /**
+   * Writes a copy of the published commit to a new file at `path`, which
+   * the same key or password opens, while other handles and processes may
+   * write. It never replaces a file already at `path`.
+   */
+  backup(path: string): BackupReport {
+    return this.#database().backup(pathOf(path));
+  }
+
+  /** `backup` on the thread pool. */
+  async backupAsync(path: string): Promise<BackupReport> {
+    return settle(await this.#database().backupAsync(pathOf(path)));
+  }
+
+  /**
    * Makes deferred commits durable and closes the database. Closing one that
    * is closed does nothing.
    */
@@ -759,6 +773,23 @@ class Database {
 
     return this.#native;
   }
+}
+
+/** What a backup wrote, as `backup` and `backupAsync` give it. */
+interface BackupReport {
+  commitId: number;
+  trees: number;
+  entries: number;
+  bytes: number;
+}
+
+/** A path a tool writes to, which has to be a string. */
+function pathOf(path: unknown): string {
+  if (typeof path !== 'string' || path.length === 0) {
+    throw invalid('a path is a string that is not empty');
+  }
+
+  return path;
 }
 
 /** What the integrity check found, as `check` and `checkAsync` give it. */

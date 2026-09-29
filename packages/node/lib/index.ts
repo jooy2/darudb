@@ -33,6 +33,7 @@ export type {
   AsyncReadTransaction,
   AsyncWriteCollection,
   AsyncWriteTransaction,
+  BackupReport,
   CheckProblem,
   CheckReport,
   Collection,

@@ -143,6 +143,28 @@ impl Deliver for darudb::CheckReport {
     }
 }
 
+/// What a backup wrote, as `Database.backup` gives it.
+#[napi(object)]
+pub struct NativeBackupReport {
+    pub commit_id: f64,
+    pub trees: f64,
+    pub entries: f64,
+    pub bytes: f64,
+}
+
+impl Deliver for darudb::BackupReport {
+    type Js = NativeBackupReport;
+
+    fn deliver(self) -> Result<NativeBackupReport> {
+        Ok(NativeBackupReport {
+            commit_id: u64_number(self.commit_id),
+            trees: u64_number(self.trees),
+            entries: u64_number(self.entries),
+            bytes: u64_number(self.bytes),
+        })
+    }
+}
+
 /// Work for the thread pool: a function that returns a value or an error.
 pub struct Work<T: Deliver> {
     run: Option<Box<dyn FnOnce() -> Result<T> + Send>>,
@@ -432,6 +454,24 @@ impl NativeDatabase {
         let database = self.database()?.clone();
 
         Ok(Work::task(move || database.check().map_err(to_js_error)))
+    }
+
+    /// A copy of the published commit in a new file at `path`.
+    #[napi]
+    pub fn backup(&self, path: String) -> Result<NativeBackupReport> {
+        self.database()?
+            .backup(path)
+            .map_err(to_js_error)?
+            .deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<NativeBackupReport | NativeFailure>")]
+    pub fn backup_async(&self, path: String) -> Result<AsyncTask<Work<darudb::BackupReport>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database.backup(path).map_err(to_js_error)
+        }))
     }
 
     #[napi(ts_return_type = "Promise<null | NativeFailure>")]

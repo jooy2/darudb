@@ -56,5 +56,9 @@ fn back_up(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+```ts
+const report = await db.backupAsync('backups/app.darudb'); // or `db.backup(path)`
+```
+
 - The copy is written under a temporary name beside the path and takes the path only once it is whole and durable. A backup never replaces a file: when the path is taken, it fails with `INVALID_ARGUMENT`.
 - The backup holds the commit it copies for as long as it runs, as a read transaction does, so the file may grow meanwhile if others write.

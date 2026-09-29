@@ -56,5 +56,9 @@ fn back_up(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+```ts
+const report = await db.backupAsync('backups/app.darudb'); // 또는 `db.backup(path)`
+```
+
 - 사본은 대상 경로 옆에 임시 이름으로 쓰고, 온전하고 디스크에 기록된 뒤에야 대상 경로로 옮깁니다. 백업은 이미 있는 파일을 덮어쓰지 않습니다. 경로에 파일이 있으면 `INVALID_ARGUMENT`로 실패합니다.
 - 백업은 도는 동안 복사하는 커밋을 읽기 트랜잭션처럼 붙잡고 있습니다. 그래서 그동안 다른 쪽이 쓰면 파일이 커질 수 있습니다.

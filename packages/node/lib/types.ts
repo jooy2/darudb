@@ -593,6 +593,16 @@ export interface Database<S extends Schema<any> = Schema> {
   check(): CheckReport;
   /** `check` on the thread pool. */
   checkAsync(): Promise<CheckReport>;
+  /**
+   * Writes a copy of the published commit to a new file at `path`, while
+   * other handles and processes may write. The copy holds no free space,
+   * has the file's page size, and opens with the same key or password. It
+   * never replaces a file: a path that is taken fails with
+   * `INVALID_ARGUMENT`.
+   */
+  backup(path: string): BackupReport;
+  /** `backup` on the thread pool. */
+  backupAsync(path: string): Promise<BackupReport>;
   /** Makes every commit durable, deferred ones included. */
   sync(): void;
   /** `sync` on the thread pool, after this process's writes on the file. */
@@ -620,6 +630,18 @@ export interface CheckReport {
   objectsChecked: number;
   /** Every problem found, in the order found. */
   problems: CheckProblem[];
+}
+
+/** What `Database.backup` wrote. */
+export interface BackupReport {
+  /** The transaction id of the commit copied, the one published when the backup began. */
+  commitId: number;
+  /** The trees copied, the engine's own included. */
+  trees: number;
+  /** The entries copied. */
+  entries: number;
+  /** The size of the new file, in bytes. */
+  bytes: number;
 }
 
 /** One thing the integrity check found wrong. */
