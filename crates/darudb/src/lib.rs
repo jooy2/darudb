@@ -86,7 +86,7 @@ pub use query::{Filter, Query, QueryRequest};
 pub use schema::{
     Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
 };
-pub use tools::{BackupReport, CheckReport, Problem};
+pub use tools::{BackupReport, CheckReport, CompactReport, Problem};
 pub use txn::{Range, ReadTransaction, WriteTransaction};
 
 /// The version of this crate, as written in its `Cargo.toml`.

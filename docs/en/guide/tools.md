@@ -62,3 +62,22 @@ const report = await db.backupAsync('backups/app.darudb'); // or `db.backup(path
 
 - The copy is written under a temporary name beside the path and takes the path only once it is whole and durable. A backup never replaces a file: when the path is taken, it fails with `INVALID_ARGUMENT`.
 - The backup holds the commit it copies for as long as it runs, as a read transaction does, so the file may grow meanwhile if others write.
+
+## Compact a file
+
+A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. It works in place, while other handles and processes keep reading and writing.
+
+```rust
+use darudb::Database;
+
+fn compact(db: &Database) -> Result<(), darudb::Error> {
+    let report = db.compact()?;
+
+    println!("{} bytes, then {}", report.bytes_before, report.bytes_after);
+    Ok(())
+}
+```
+
+- Compaction is made of ordinary write transactions, so it waits for the writer lock like any write, and a crash in the middle leaves the file at one of its commits.
+- A page that a read transaction can still reach cannot move until the transaction ends, so the file shrinks less next to long readers. The next compaction takes the rest.
+- To get a compact copy without touching the file, use a backup instead.

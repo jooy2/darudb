@@ -272,6 +272,11 @@ impl Space {
         self.page_count
     }
 
+    /// How many pages are free.
+    pub(crate) fn free_pages(&self) -> u64 {
+        self.free.values().sum()
+    }
+
     pub(crate) fn changes(&self) -> u64 {
         self.changes
     }

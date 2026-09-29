@@ -7,9 +7,12 @@
 
 mod backup;
 mod check;
+mod compact;
 
 pub use backup::BackupReport;
 pub use check::{CheckReport, Problem};
+pub use compact::CompactReport;
 
 pub(crate) use backup::backup;
 pub(crate) use check::check;
+pub(crate) use compact::compact;

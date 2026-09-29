@@ -30,3 +30,15 @@ The check reports every problem it finds rather than stopping at the first. A pr
 - **Never half a file, never a file replaced.** The copy is written under a temporary name beside the path, closed, and then linked to the path, which fails if anything is there; the temporary name goes either way. A backup to a path that is taken fails with `INVALID_ARGUMENT` before it writes anything, and one that finds the path taken at the end leaves nothing behind. A file system without links gets the copy copied to the path, created only if nothing is there.
 
 What a backup copies is exactly one commit: the read transaction it holds keeps every page of that commit from being reused until it ends, as any read transaction does, so a long backup makes the file grow while others write.
+
+## Compaction
+
+`Database::compact` makes the file smaller in place, while other handles and processes go on reading and writing. It is made of write transactions and nothing else, so the copy-on-write that keeps every commit safe keeps it safe: a process that dies during a compaction leaves the file at one of its commits, and a power cut at a durable one.
+
+1. **Settle.** Two empty sync commits. The first reclaims every retained group that no snapshot and no recovery can reach, and cuts the free pages at the end of the file off its page count; the second does the same for what the first gave up, and its sync cuts the file to the page count.
+1. **Move.** A write transaction counts the pages its commit would use, the page count less the free pages, and sets a threshold that much past the start of the file, plus a sixty-fourth of it and at least four pages, for the nodes on the way to what moves. It then copies every node of every tree whose page lies at or above the threshold, with every node on the way to it, and every overflow run with a page there, and commits. The allocator hands out the lowest free pages first, so the copies land below the threshold wherever there is room, and the pages above it are retained by the commit, as any page a commit stops using is. The catalog, the free tree and the retained tree are moved like any other tree.
+1. **Settle again**, which reclaims the tail the move gave up and cuts it off.
+
+The move and the settling repeat, four rounds at most, while each round moves pages and shrinks the page count: a round that found too little room below the threshold moves what it could, and the next moves the rest.
+
+**What it cannot move.** A page a registered snapshot can still reach is retained until that read transaction ends, in whatever process holds it, so a compaction beside a long reader shrinks the file less. The next compaction, or any commits after the reader ends, reclaims and cuts the rest.

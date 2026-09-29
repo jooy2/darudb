@@ -194,6 +194,20 @@ impl Database {
         crate::tools::backup(self, path.as_ref())
     }
 
+    /// Makes the file smaller in place, and returns what it did; see
+    /// [`CompactReport`](crate::CompactReport).
+    ///
+    /// It moves every page the file's tail holds into free pages below it,
+    /// in write transactions of its own, and the commits after them give the
+    /// tail back to the file system. Other handles and processes may read
+    /// and write meanwhile; a page a read transaction can still reach stays
+    /// until the transaction ends, so a file with long readers shrinks less,
+    /// and the next compaction takes the rest. It waits for the writer lock
+    /// as [`begin_write`](Self::begin_write) does.
+    pub fn compact(&self) -> Result<crate::CompactReport> {
+        crate::tools::compact(self)
+    }
+
     /// Closes this handle, making deferred commits durable first.
     ///
     /// It reports `SYNC_FAILED` if a barrier failed on any handle to this file,

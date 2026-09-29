@@ -13,8 +13,8 @@ use crate::btree::{self, Child, Load};
 use crate::error::{Error, Result};
 use crate::format::object::schema::OpenSchema;
 use crate::format::{
-    CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector, TXN_LIMIT,
-    decode_free_key, decode_free_value, decode_retained_key, decode_runs, max_key_len,
+    CATALOG_TREE, CommitRecord, FREE_TREE, KEY_BLOCK_LEN, RETAINED_TREE, SLOT_COUNT, Selector,
+    TXN_LIMIT, decode_free_key, decode_free_value, decode_retained_key, decode_runs, max_key_len,
     retained_key,
 };
 use crate::instance::{Header, Shared, WriterGuard};
@@ -439,6 +439,82 @@ impl WriteTransaction {
         self.failed |= result.is_err() && !refused;
 
         result
+    }
+
+    /// Moves every page at or above page `threshold` that the commit this
+    /// transaction makes would still use, of every tree, the engine's own and
+    /// the allocator trees included, into the lowest free pages: the nodes,
+    /// every node on the way to one, and every overflow run. The pages given
+    /// up are retained as any page a transaction stops using is, and a later
+    /// commit reclaims them and cuts the file's free tail off. Returns how
+    /// many pages at or above `threshold` it gave up.
+    pub(crate) fn relocate_above(&mut self, threshold: u64) -> Result<u64> {
+        self.check_open()?;
+
+        let result = self.relocate_trees(threshold);
+
+        self.failed |= result.is_err();
+
+        result
+    }
+
+    fn relocate_trees(&mut self, threshold: u64) -> Result<u64> {
+        let loader = self.shared.loader.clone();
+        let mut moved = 0;
+
+        for name in catalog_names(&loader, self.catalog.as_ref())? {
+            let state = open_tree(
+                &loader,
+                self.catalog.as_ref(),
+                &mut self.trees,
+                &mut self.next_tree_id,
+                &name,
+                false,
+            )?;
+            let Some(state) = state else {
+                continue;
+            };
+            let relocated = btree::relocate(
+                &loader,
+                &mut self.space,
+                state.id,
+                &mut state.root,
+                threshold,
+            )?;
+
+            state.changed |= relocated > 0;
+            moved += relocated;
+        }
+
+        moved += btree::relocate(
+            &loader,
+            &mut self.space,
+            CATALOG_TREE,
+            &mut self.catalog,
+            threshold,
+        )?;
+        moved += btree::relocate(
+            &loader,
+            &mut self.space,
+            FREE_TREE,
+            &mut self.free_root,
+            threshold,
+        )?;
+        moved += btree::relocate(
+            &loader,
+            &mut self.space,
+            RETAINED_TREE,
+            &mut self.retained_root,
+            threshold,
+        )?;
+
+        Ok(moved)
+    }
+
+    /// The pages the commit this transaction makes would count, and how many
+    /// of them are free.
+    pub(crate) fn space_summary(&self) -> (u64, u64) {
+        (self.space.page_count(), self.space.free_pages())
     }
 
     /// Stores `value` under `key` in tree `tree` of the engine's when the

@@ -507,7 +507,143 @@ fn take_split<S: Store>(
     Ok(None)
 }
 
+/// Copies every node of the tree under `root` whose page is `threshold` or
+/// above, with every node on the way to one, into pages `store` allocates,
+/// and writes every overflow value with a page at or above it into a run
+/// `store` allocates: what compaction does to empty the file's tail, since
+/// the store hands out its lowest free pages first. Returns how many pages
+/// at or above `threshold` the tree gave up.
+pub(crate) fn relocate<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    threshold: u64,
+) -> Result<u64> {
+    match root.as_mut() {
+        Some(child) => relocate_into(load, store, tree, child, None, threshold),
+        None => Ok(0),
+    }
+}
+
+fn relocate_into<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    child: &mut Child,
+    level: Option<u8>,
+    threshold: u64,
+) -> Result<u64> {
+    let mut moved = 0;
+
+    if let Child::Clean(pointer) = child {
+        let pointer = *pointer;
+
+        if !reaches(load, tree, &pointer, level, threshold)? {
+            return Ok(0);
+        }
+
+        moved += u64::from(pointer.page >= threshold);
+        make_dirty(load, store, child, tree, level)?;
+    }
+
+    let Child::Dirty { node, .. } = child else {
+        return Err(internal("a page stayed clean after being copied"));
+    };
+
+    match node.as_mut() {
+        Node::Leaf(leaf) => {
+            for index in 0..leaf.len() {
+                let reference = match leaf.value(index).map_err(internal)? {
+                    StoredRef::Overflow(reference) if run_reaches(&reference, threshold) => {
+                        reference
+                    }
+                    _ => continue,
+                };
+                let value = load.read_overflow(&reference, tree)?;
+                let key = leaf.key(index).to_vec();
+                let run = store_value(load.page_size(), store, tree, key.len(), &value)?;
+                let stored = run.map_or(StoredRef::Inline(&value), StoredRef::Overflow);
+                let old = leaf
+                    .overwrite(index, &key, stored)
+                    .map_err(internal)?
+                    .ok_or_else(|| internal("a relocated value does not fit where it was"))?;
+
+                moved += (reference.first..reference.first + u64::from(reference.pages))
+                    .filter(|page| *page >= threshold)
+                    .count() as u64;
+                release_run(store, old);
+            }
+        }
+        Node::Branch(branch) => {
+            let child_level = Some(branch.level - 1);
+
+            for index in 0..branch.children.len() {
+                moved += relocate_into(
+                    load,
+                    store,
+                    tree,
+                    &mut branch.children[index],
+                    child_level,
+                    threshold,
+                )?;
+            }
+        }
+    }
+
+    Ok(moved)
+}
+
+/// Whether the committed subtree under `pointer` has a page, or an overflow
+/// run, at or above page `threshold`.
+fn reaches<L: Load>(
+    load: &L,
+    tree: u64,
+    pointer: &Pointer,
+    level: Option<u8>,
+    threshold: u64,
+) -> Result<bool> {
+    if pointer.page >= threshold {
+        return Ok(true);
+    }
+
+    let loaded = load.load(pointer, tree, level)?;
+    let child_level = loaded.level().checked_sub(1);
+    let node = super::NodeRef::Loaded(loaded);
+
+    if node.is_leaf() {
+        for index in 0..node.count() {
+            if let StoredRef::Overflow(reference) = node.value(index)? {
+                if run_reaches(&reference, threshold) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        return Ok(false);
+    }
+
+    let super::NodeRef::Loaded(loaded) = &node else {
+        return Err(internal("a loaded node is not loaded"));
+    };
+
+    for index in 0..=node.count() {
+        if reaches(load, tree, &loaded.child(index), child_level, threshold)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Whether the overflow run `reference` names has a page at or above
+/// `threshold`.
+fn run_reaches(reference: &OverflowRef, threshold: u64) -> bool {
+    reference.first + u64::from(reference.pages) > threshold
+}
+
 /// Removes `key` and its value. Returns whether it was there. Nothing is
+/// copied when it was not./// Removes `key` and its value. Returns whether it was there. Nothing is
 /// copied when it was not.
 pub(crate) fn remove<L: Load, S: Store>(
     load: &L,
