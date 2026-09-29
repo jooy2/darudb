@@ -239,6 +239,82 @@ describe('records', () => {
     assert.equal(output.toString(), '[{"a":7}]');
   });
 
+  it('write, from the code made for a layout, what walking the layout writes', () => {
+    // The same layouts with `encode` set to `null` at every level, which
+    // `writeFields` walks rather than making code for.
+    const walking = (fields) => ({
+      ...fields,
+      encode: null,
+      list: fields.list.map((field) =>
+        field.kind.type === 'object'
+          ? { ...field, kind: { ...field.kind, fields: walking(field.kind.fields) } }
+          : field
+      )
+    });
+    const walked = { ...everything, fields: walking(everything.fields) };
+    const next = random(7);
+    const pick = (values) => values[Math.floor(next() * values.length)];
+    const valid = {
+      bool: () => pick([true, false]),
+      int: () => pick([0, 1, -1, 127, 2 ** 53 - 1, -(2 ** 40), 2n ** 60n, -5n]),
+      float: () => pick([0, -0.5, 1e300, Number.NaN, 3]),
+      string: () => pick(['', 'a', 'héllo', 'x'.repeat(200)]),
+      bytes: () => pick([new Uint8Array(0), new Uint8Array([1, 2, 255])]),
+      link: () => pick(['north', '']),
+      list: () => pick([[], [1, -2], [2 ** 53 - 1]]),
+      object: () => pick([{ inner: 'x' }, {}, { inner: null }])
+    };
+    // Values of the wrong type, or of the right type out of range.
+    const wrong = () =>
+      pick([1.5, '1', 1, 2n ** 64n, 2n ** 62n, true, [1], { inner: 3 }, new Uint16Array(2), 'x']);
+    const outcome = (layout, objects) => {
+      try {
+        return Buffer.from(encodeRecords(layout, objects)).toString('hex');
+      } catch (error) {
+        return `${error.code}: ${error.message}`;
+      }
+    };
+    let refused = 0;
+
+    for (let round = 0; round < 2000; round++) {
+      const object = next() < 0.1 ? Object.create({ inherited: 1, int: 5 }) : {};
+
+      for (const field of everything.fields.list) {
+        const roll = next();
+
+        if (roll < 0.2) {
+          continue;
+        }
+
+        object[field.name] =
+          roll < 0.3 ? pick([null, undefined]) : roll < 0.35 ? wrong() : valid[field.name]();
+      }
+
+      if (next() < 0.05) {
+        object.extra = 1;
+      }
+
+      if (next() < 0.05) {
+        Object.defineProperty(object, 'hidden', { value: 1, enumerable: false });
+      }
+
+      if (next() < 0.05) {
+        Object.defineProperty(object, 'string', { get: () => 'from a getter', enumerable: true });
+      }
+
+      const made = outcome(everything, [object]);
+
+      assert.equal(
+        made,
+        outcome(walked, [object]),
+        JSON.stringify(object, (_, v) => String(v))
+      );
+      refused += made.startsWith('INVALID_ARGUMENT') ? 1 : 0;
+    }
+
+    assert.ok(refused > 50 && refused < 1500, `${refused} refused`);
+  });
+
   it('refuse a value of another type with the field it is in', () => {
     assert.throws(() => encodeRecords(everything, [{ int: 1.5 }]), {
       code: 'INVALID_ARGUMENT',

@@ -106,11 +106,14 @@ export interface FieldLayout {
 /** Makes an object of a layout from its fields' values, in the layout's order. */
 export type Builder = (values: unknown[]) => Record<string, unknown>;
 
+/** Writes the fields of an object of one layout, as `writeFields` does. */
+export type Encoder = (writer: Writer, object: object, where: string) => void;
+
 /**
  * The fields of a collection or an embedded object, as `fieldsOf` makes them
  * ready to read and write: in id order, with the position of each id, the
- * names, whether one is `__proto__`, and the function `builderOf` makes for
- * the layout, `undefined` until it has been made.
+ * names, whether one is `__proto__`, and the functions `builderOf` and
+ * `encoderOf` make for the layout, each `undefined` until it has been made.
  */
 export interface Layout {
   list: FieldLayout[];
@@ -125,6 +128,7 @@ export interface Layout {
   names: Set<string>;
   hasProto: boolean;
   build: Builder | null | undefined;
+  encode: Encoder | null | undefined;
 }
 
 /**
@@ -688,11 +692,24 @@ function writeValue(writer: Writer, kind: Kind, value: unknown, where: string): 
  * by id in ascending order: a record.
  */
 function writeFields(writer: Writer, fields: Layout, object: object, where: string): void {
+  let encode = fields.encode;
+
+  if (encode === undefined) {
+    encode = encoderOf(fields);
+    fields.encode = encode;
+  }
+
+  if (encode !== null) {
+    encode(writer, object, where);
+
+    return;
+  }
+
   // A property the schema does not have is refused, as the engine refuses
   // it, rather than dropped: it is a typo, or a name a migration changed.
   for (const name of Object.keys(object)) {
     if (!fields.names.has(name)) {
-      throw invalid(`\`${where ? `${where}.${name}` : name}\` is not a field`);
+      unknownField(where, name);
     }
   }
 
@@ -812,6 +829,107 @@ function encodeChanges(collection: CollectionLayout, changes: unknown): Uint8Arr
   writeChanges(writer, collection.fields, changes);
 
   return writer.finish();
+}
+
+/** Refuses the property `name` of the object at `where`, which its layout does not have. */
+function unknownField(where: string, name: string): never {
+  throw invalid(`\`${where ? `${where}.${name}` : name}\` is not a field`);
+}
+
+/**
+ * A function that writes the fields of an object of the layout `fields`, as
+ * `writeFields` does, with the layout's names, ids and tags written into its
+ * code; or `null`, where `writeFields` walks the layout instead.
+ *
+ * Walking the layout read each field under a name that changed from one
+ * field to the next, which the JavaScript engine cannot specialise, looked
+ * each of the object's names up in a set, and chose each value's encoding by
+ * its field's type. The generated code reads each field under its own name,
+ * checks the object's names against the layout's in one `switch`, and writes
+ * a scalar where it reads it. A value of another type, and any value but a
+ * scalar, goes to `writeValue`, which writes it or throws the error it
+ * always did. As in `builderOf`, the names reach the code only through
+ * `JSON.stringify`, the ids and tags are numbers, and a layout with a field
+ * named `__proto__`, one with 128 fields or more, and a process that forbids
+ * making code from strings keep to walking the layout.
+ */
+function encoderOf(fields: Layout): Encoder | null {
+  if (fields.hasProto || fields.list.length >= 0x80) {
+    return null;
+  }
+
+  const names = fields.list.map((field) => JSON.stringify(field.name));
+  const body = [
+    "'use strict';",
+    'return function encode(writer, object, where) {',
+    // `for...in` gives the names `Object.keys` gives, and the enumerable
+    // names the object inherits, which are skipped as `Object.keys` skips
+    // them.
+    '  for (const name in object) {',
+    `    switch (name) { ${names.map((name) => `case ${name}:`).join(' ')} break;`,
+    '      default: if (hasOwn(object, name)) unknownField(where, name); }',
+    '  }',
+    // The count of fields, one byte, is filled in once they are written.
+    '  writer.reserve(1);',
+    '  const count = writer.at++;',
+    '  let present = 0;',
+    '  let value;'
+  ];
+
+  fields.list.forEach((field, index) => {
+    const name = names[index];
+    const id = field.id < 0x80 ? `writer.byte(${field.id})` : `writer.varint(${field.id})`;
+    // Anything but the type written here goes to `writeValue`, which writes
+    // it or throws.
+    const other = `writeValue(writer, kinds[${index}], value, where ? where + '.' + ${name} : ${name})`;
+    let write;
+
+    switch (field.kind.type) {
+      case 'string':
+        write = `if (typeof value === 'string') { writer.byte(${STRING}); writer.string(value); } else ${other};`;
+        break;
+      case 'int':
+        write = `if (Number.isSafeInteger(value)) { writer.byte(${INT}); writer.int(value); } else ${other};`;
+        break;
+      case 'float':
+        write = `if (typeof value === 'number') { writer.byte(${FLOAT}); writer.float(value); } else ${other};`;
+        break;
+      case 'bool':
+        write = `if (value === true) writer.byte(${TRUE}); else if (value === false) writer.byte(${FALSE}); else ${other};`;
+        break;
+      case 'bytes':
+        write = `if (value instanceof Uint8Array) { writer.byte(${BYTES}); writer.bytesOf(value); } else ${other};`;
+        break;
+      default:
+        write = `${other};`;
+    }
+
+    body.push(
+      `  value = hasOwn(object, ${name}) ? object[${name}] : undefined;`,
+      `  if (value !== undefined && value !== null) { present++; ${id}; ${write} }`
+    );
+  });
+
+  body.push('  writer.bytes[count] = present;', '};');
+
+  try {
+    // The body below returns the encoder, given what it calls.
+    const make = new Function('hasOwn', 'writeValue', 'kinds', 'unknownField', body.join('\n'));
+
+    return make(
+      Object.hasOwn,
+      writeValue,
+      fields.list.map((field) => field.kind),
+      unknownField
+    ) as Encoder;
+  } catch (error) {
+    // Only a process that forbids it fails to make the function.
+    if (error instanceof EvalError) {
+      return null;
+    }
+
+    throw error;
+  }
 }
 
 /** Property `name` of `object` itself, never one it inherits such as `constructor`. */
@@ -1403,8 +1521,10 @@ function fieldsOf(list: FieldLayout[]): Layout {
     byId,
     names: new Set(list.map((field) => field.name)),
     hasProto: list.some((field) => field.name === '__proto__'),
-    // Made by `builderOf` when the first object of the layout is read.
-    build: undefined
+    // Made by `builderOf` when the first object of the layout is read, and
+    // by `encoderOf` when the first is written.
+    build: undefined,
+    encode: undefined
   };
 }
 
