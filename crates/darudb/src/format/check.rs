@@ -5,7 +5,7 @@
 //! little-endian 128-bit integer. In an encrypted file a page's check is its
 //! authentication tag instead; that arrives with encryption.
 
-use twox_hash::XxHash3_128;
+use twox_hash::xxhash3_128::{RawHasher, SecretBuffer};
 
 /// The size of a check, in bytes.
 pub(crate) const CHECK_LEN: usize = 16;
@@ -20,7 +20,9 @@ impl Check {
 
     /// The XXH3-128 hash of `parts`, concatenated in order.
     pub(crate) fn of(parts: &[&[u8]]) -> Check {
-        let mut hasher = XxHash3_128::new();
+        // The default seed and secret, which `XxHash3_128::new` puts on the
+        // heap: hashing a page took a quarter longer with the allocation.
+        let mut hasher = RawHasher::new(SecretBuffer::default());
 
         for part in parts {
             hasher.write(part);
