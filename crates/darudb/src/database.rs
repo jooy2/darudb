@@ -166,6 +166,20 @@ impl Database {
         })
     }
 
+    /// Checks the published commit completely: every page it reaches
+    /// against the check its parent recorded, the order of every key, every
+    /// tree's count, that every page of the file is used, free or retained
+    /// exactly once, and, in a file with a schema, every object against its
+    /// indexes. It reports every problem it finds rather than stopping at the
+    /// first; see [`CheckReport`](crate::CheckReport).
+    ///
+    /// It reads the commit a read transaction sees, so other handles and
+    /// processes may write while it runs, and it reads the whole file. It
+    /// fails only when it cannot begin: damage is what the report is for.
+    pub fn check(&self) -> Result<crate::CheckReport> {
+        crate::tools::check(self)
+    }
+
     /// Closes this handle, making deferred commits durable first.
     ///
     /// It reports `SYNC_FAILED` if a barrier failed on any handle to this file,
@@ -245,8 +259,8 @@ impl Database {
         Self::with_schema(shared, options)?.complete()
     }
 
-    /// The instance behind this handle, for the engine's own tests.
-    #[cfg(test)]
+    /// The instance behind this handle, for the tools and the engine's own
+    /// tests.
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }

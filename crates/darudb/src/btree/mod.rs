@@ -26,7 +26,7 @@ use crate::format::{Check, OverflowRef, Pointer};
 
 pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
-pub(crate) use node::{Child, LoadedNode, Node};
+pub(crate) use node::{Child, LoadedNode, Node, NodeRef};
 pub(crate) use read::{Range, Seeker, Visit, get, get_with, resolve};
 pub(crate) use write::{
     Change, Inserted, Removed, delete_tree, insert, insert_with, remove, remove_present,

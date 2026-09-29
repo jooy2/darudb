@@ -47,6 +47,11 @@ impl ReadTransaction {
         })
     }
 
+    /// The record of the commit this transaction sees.
+    pub(crate) fn record(&self) -> &CommitRecord {
+        &self.record
+    }
+
     /// The schema of the handle that began the transaction.
     pub(crate) fn schema(&self) -> Option<&Arc<OpenSchema>> {
         self.schema.as_ref()

@@ -55,9 +55,33 @@ fn contents(db: &Database) -> State {
     state
 }
 
+/// Runs the integrity check on the published commit, and returns what is
+/// wrong, if anything. The accounting of [`accounted`], written apart from
+/// the check, runs beside it, and anything it finds that the check misses
+/// fails the test.
+pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
+    let report = db.check().map_err(|error| error.to_string())?;
+    let accounted = accounted(db);
+
+    if let (Err(error), true) = (&accounted, report.is_ok()) {
+        panic!("the integrity check missed what the accounting found: {error}");
+    }
+
+    if report.is_ok() {
+        return Ok(());
+    }
+
+    Err(report
+        .problems
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
 /// Checks that every page of the published commit is reachable exactly once:
 /// live in a tree, free, or retained. Returns what is wrong, if anything.
-pub(crate) fn check_integrity(db: &Database) -> Result<(), String> {
+fn accounted(db: &Database) -> Result<(), String> {
     let shared = db.shared();
     let record = shared
         .header()
@@ -1059,8 +1083,14 @@ fn objects(db: &Database) -> Objects {
 fn check_objects(db: &Database) -> Result<(), String> {
     let read = db.begin_read().map_err(|error| error.to_string())?;
     let schema = read.schema().cloned().ok_or("the database has no schema")?;
+    let indexes = crate::schema::objects::check_indexes(&read, &schema.schema);
 
-    crate::schema::objects::check_indexes(&read, &schema.schema)
+    drop(read);
+    check_integrity(db)?;
+
+    // The integrity check read the same commit, unless another commit came
+    // in between, which these runs never make.
+    indexes.map_err(|error| format!("the integrity check missed it: {error}"))
 }
 
 fn random_item(rng: &mut Rng, page_size: usize) -> crate::Object {

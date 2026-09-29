@@ -60,13 +60,13 @@ The project is written and maintained with coding agents, now and later. Keep th
 | `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
 | `schema/`     | Declared schemas, migrations, and objects written with their indexes in step             | Phase 4          |
 | `query/`      | The query IR, the builder and the query language, choosing an index, running a query     | Phase 4          |
-| `tools/`      | Integrity check, salvage, backup, compact                                                | Planned, phase 6 |
+| `tools/`      | Integrity check, salvage, backup, compact                                                | Phase 6          |
 
 From the bottom up: `format` and `crypto`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
 
 Tests sit beside what they test, plus these places that test the whole engine:
 
-- `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with an integrity check of every page. Half the runs use an encrypted file. Object runs write collections instead and check the indexes against the objects after every cut, and migrations are cut at every step. `DARUDB_CRASH_SEEDS` makes it longer.
+- `src/crash.rs`: the crash suite. Random transactions on the simulated disk of `storage/sim.rs`, cut by power failures and process deaths, then reopened and compared with the history of commits, with the integrity check of `tools/check.rs` and an accounting of every page written apart from it, which fails the run if it finds what the check missed. Half the runs use an encrypted file. Object runs write collections instead and check the indexes against the objects after every cut, and migrations are cut at every step. `DARUDB_CRASH_SEEDS` makes it longer.
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
 - `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. Each commit also writes an object under a unique index the workers contend for, and readers check the indexes against the objects. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
 - The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
@@ -127,7 +127,7 @@ Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 - **Recovery** runs in the first process to open the file. It adopts the newest commit that is either published with the unsynced bit clear or passes checking, where checking reads only the pages written since that commit's durable transaction id.
 - **A failed barrier is not retried.** The commit fails with `SYNC_FAILED`, and the handle is unusable until the file is reopened.
 - **A new database is written to a temporary file and moved into place without replacing anything**, so the path holds either nothing or a complete database.
-- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checks are valid), online backup, and compaction.
+- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checks are valid), online backup, and compaction. [design/tools.md](design/tools.md) specifies them; it is **[Tentative]** until the maintainer reviews it.
 - **Not supported**: network file systems (NFS, SMB). They are detected and refused with `UNSUPPORTED_FILE_SYSTEM`.
 
 ### Several processes **[Decided]**

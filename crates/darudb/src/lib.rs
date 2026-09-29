@@ -71,6 +71,7 @@ mod space;
 mod storage;
 #[cfg(test)]
 mod testing;
+mod tools;
 mod txn;
 
 #[cfg(not(any(unix, windows)))]
@@ -85,6 +86,7 @@ pub use query::{Filter, Query, QueryRequest};
 pub use schema::{
     Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
 };
+pub use tools::{CheckReport, Problem};
 pub use txn::{Range, ReadTransaction, WriteTransaction};
 
 /// The version of this crate, as written in its `Cargo.toml`.
