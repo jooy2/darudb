@@ -107,7 +107,17 @@ fn rescue() -> Result<(), darudb::Error> {
 }
 ```
 
-- The report is whole (`is_whole()`) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
+```ts
+import { Database } from 'darudb';
+
+const report = await Database.salvageAsync('app.darudb', 'rescued.darudb'); // or `Database.salvage`
+
+if (!report.whole) {
+  console.warn(report.entriesRecovered, report.valuesLost, report.objectsDropped);
+}
+```
+
+- The report is whole (`is_whole()` in Rust, `whole` in TypeScript) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
 - An object whose record cannot be read, or whose value of a unique index another object has taken, is left out and counted.
 - Salvage needs the file to itself. A file open in any process fails with `BUSY`, and so does opening the file while salvage runs.
 - The new file has the page size of the old one, and in Rust an encrypted file is salvaged with its key or password in the options, which then opens the new file too. Like a backup, salvage never replaces a file already at the path.

@@ -65,6 +65,8 @@ export type {
   QueryValue,
   ReadCollection,
   ReadTransaction,
+  SalvageOptions,
+  SalvageReport,
   Schema,
   Typed,
   TypeBuilders,

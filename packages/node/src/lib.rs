@@ -185,6 +185,80 @@ impl Deliver for darudb::CompactReport {
     }
 }
 
+/// What a salvage rescued, as `Database.salvage` gives it.
+#[napi(object)]
+pub struct NativeSalvageReport {
+    pub commit_id: Option<f64>,
+    pub pages_scanned: f64,
+    pub pages_damaged: f64,
+    pub pages_unread: f64,
+    pub entries_recovered: f64,
+    pub values_lost: f64,
+    pub objects_dropped: f64,
+    pub trees: f64,
+    pub entries: f64,
+    pub bytes: f64,
+    pub whole: bool,
+}
+
+impl Deliver for darudb::SalvageReport {
+    type Js = NativeSalvageReport;
+
+    fn deliver(self) -> Result<NativeSalvageReport> {
+        Ok(NativeSalvageReport {
+            commit_id: self.commit_id.map(u64_number),
+            pages_scanned: u64_number(self.pages_scanned),
+            pages_damaged: u64_number(self.pages_damaged),
+            pages_unread: u64_number(self.pages_unread),
+            entries_recovered: u64_number(self.entries_recovered),
+            values_lost: u64_number(self.values_lost),
+            objects_dropped: u64_number(self.objects_dropped),
+            trees: u64_number(self.trees),
+            entries: u64_number(self.entries),
+            bytes: u64_number(self.bytes),
+            whole: self.is_whole(),
+        })
+    }
+}
+
+/// Rescues what it can of the damaged database at `from` into a new
+/// database at `into`, waiting up to `busy_timeout` milliseconds for other
+/// processes to close it.
+#[napi]
+pub fn salvage(
+    from: String,
+    into: String,
+    busy_timeout: Option<u32>,
+) -> Result<NativeSalvageReport> {
+    salvage_options(busy_timeout)
+        .salvage(from, into)
+        .map_err(to_js_error)?
+        .deliver()
+}
+
+#[napi(ts_return_type = "Promise<NativeSalvageReport | NativeFailure>")]
+pub fn salvage_async(
+    from: String,
+    into: String,
+    busy_timeout: Option<u32>,
+) -> AsyncTask<Work<darudb::SalvageReport>> {
+    Work::task(move || {
+        salvage_options(busy_timeout)
+            .salvage(from, into)
+            .map_err(to_js_error)
+    })
+}
+
+fn salvage_options(busy_timeout: Option<u32>) -> darudb::OpenOptions {
+    let mut options = darudb::OpenOptions::new();
+
+    if let Some(milliseconds) = busy_timeout {
+        options.busy_timeout(std::time::Duration::from_millis(u64::from(milliseconds)));
+    }
+
+    options
+}
+
 /// Work for the thread pool: a function that returns a value or an error.
 pub struct Work<T: Deliver> {
     run: Option<Box<dyn FnOnce() -> Result<T> + Send>>,

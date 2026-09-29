@@ -107,7 +107,17 @@ fn rescue() -> Result<(), darudb::Error> {
 }
 ```
 
-- 새 파일이 가장 새 커밋을 그대로 담으면 `is_whole()`이 참입니다. 그렇지 않으면 읽지 못한 곳을 옛 버전으로 채운 것입니다. 항목이 옛 값을 가질 수 있고, 잃어버린 페이지에서 지워졌던 항목이 되살아날 수도 있습니다.
+```ts
+import { Database } from 'darudb';
+
+const report = await Database.salvageAsync('app.darudb', 'rescued.darudb'); // 또는 `Database.salvage`
+
+if (!report.whole) {
+  console.warn(report.entriesRecovered, report.valuesLost, report.objectsDropped);
+}
+```
+
+- 새 파일이 가장 새 커밋을 그대로 담으면 Rust의 `is_whole()`과 TypeScript의 `whole`이 참입니다. 그렇지 않으면 읽지 못한 곳을 옛 버전으로 채운 것입니다. 항목이 옛 값을 가질 수 있고, 잃어버린 페이지에서 지워졌던 항목이 되살아날 수도 있습니다.
 - 레코드를 읽을 수 없는 객체와, 고유 인덱스 값을 다른 객체가 이미 차지한 객체는 빼고 그 수를 셉니다.
 - 되살리기는 파일을 혼자 써야 합니다. 어느 프로세스든 파일을 열고 있으면 `BUSY`로 실패하고, 되살리는 동안 파일을 열어도 `BUSY`로 실패합니다.
 - 새 파일의 페이지 크기는 옛 파일과 같습니다. Rust에서는 암호화한 파일을 옵션에 키나 비밀번호를 넣어 되살리고, 그 키나 비밀번호로 새 파일도 열립니다. 백업처럼 경로에 이미 있는 파일은 덮어쓰지 않습니다.

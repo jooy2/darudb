@@ -687,4 +687,69 @@ export interface DatabaseOpener {
     options: AsyncOpenOptions<S> & { schema: S }
   ): Promise<Database<S>>;
   openAsync(path: string, options?: AsyncOpenOptions<never>): Promise<Database>;
+  /**
+   * Rescues what it can of the damaged database at `from` into a new
+   * database at `into`, and reports what it rescued and what it could not.
+   * It reads the file page by page, so it works on a file that does not
+   * open. It starts from the newest commit the file records, takes what
+   * that commit cannot read from older versions of the same pages where the
+   * file still has them, and builds every index again from the objects, so
+   * the new file passes the integrity check.
+   *
+   * It needs the file alone: a file open in this process or another fails
+   * with `BUSY`, and so does opening the file while it runs. It never
+   * replaces a file: a path that is taken fails with `INVALID_ARGUMENT`.
+   */
+  salvage(from: string, into: string, options?: SalvageOptions): SalvageReport;
+  /** `salvage` on the thread pool. */
+  salvageAsync(from: string, into: string, options?: SalvageOptions): Promise<SalvageReport>;
+}
+
+/** Options for `Database.salvage`. */
+export interface SalvageOptions {
+  /**
+   * How long, in milliseconds, to wait for other processes to close the
+   * file before failing with `BUSY`. 5000 by default.
+   */
+  busyTimeout?: number;
+}
+
+/** What `Database.salvage` rescued, and what it could not. */
+export interface SalvageReport {
+  /**
+   * Whether the new file holds exactly the commit salvage started from:
+   * every page of it was read, and no object was dropped.
+   */
+  whole: boolean;
+  /**
+   * The transaction id of the commit salvage started from, or `null` when
+   * no commit record could be used and every tree came from the pages found.
+   */
+  commitId: number | null;
+  /** The pages of the file read, the header page left out. */
+  pagesScanned: number;
+  /** The pages that failed their check, other than pages never written. */
+  pagesDamaged: number;
+  /**
+   * The pages of the commit that could not be read, each value too large
+   * for a page counted as one: what they held was taken from older versions
+   * of the same pages, where the file still had them.
+   */
+  pagesUnread: number;
+  /** The entries taken from those older versions. */
+  entriesRecovered: number;
+  /** The keys left out because no version of their value could be read. */
+  valuesLost: number;
+  /**
+   * The objects left out: those that could not be read, those whose value
+   * of a unique index another object had taken, and every object of a file
+   * whose schema was lost.
+   */
+  objectsDropped: number;
+  /** The trees of the new file, the engine's own included. */
+  trees: number;
+  /** The entries of the new file, the indexes' included. */
+  entries: number;
+  /** The size of the new file, in bytes. */
+  bytes: number;
 }

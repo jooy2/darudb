@@ -5,7 +5,7 @@
  * marked `@ts-expect-error` stays an error. Nothing here runs.
  */
 import { collection, conditions, Database, param, Query, schema, t } from '../dist/index.js';
-import type { CheckReport, Key } from '../dist/index.js';
+import type { CheckReport, Key, SalvageReport } from '../dist/index.js';
 
 const app = schema(1, {
   teams: collection({ name: t.string().primaryKey(), city: t.string().optional() }),
@@ -198,6 +198,13 @@ const report: CheckReport = db.check();
 const firstPage: number | null = report.problems[0]?.page ?? null;
 const checkedLater: Promise<CheckReport> = db.checkAsync();
 
+// Salvage belongs to no open database, and may find no commit to start from.
+const salvaged: SalvageReport = Database.salvage('damaged.darudb', 'rescued.darudb');
+const salvagedFrom: number | null = salvaged.commitId;
+const salvagedLater: Promise<SalvageReport> = Database.salvageAsync('a', 'b', { busyTimeout: 10 });
+// @ts-expect-error salvage takes no schema: the file's own comes with it.
+Database.salvage('damaged.darudb', 'rescued.darudb', { schema: app });
+
 export {
   app,
   age,
@@ -211,5 +218,7 @@ export {
   preparedCount,
   asynchronous,
   firstPage,
-  checkedLater
+  checkedLater,
+  salvagedFrom,
+  salvagedLater
 };

@@ -264,6 +264,103 @@ describe('Database#backup', () => {
   });
 });
 
+describe('Database.salvage', () => {
+  const people = schema(1, {
+    people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })
+  });
+
+  /** A closed database of 300 people, written twice so older pages remain. */
+  const filled = (path) => {
+    const db = Database.open(path, { schema: people });
+
+    for (const round of [0, 1]) {
+      db.write((txn) => {
+        const users = txn.collection('people');
+
+        for (let n = 1; n <= 300; n++) {
+          users.put({ id: n, name: `p${n} ${round}`, email: `${n}@x`, age: n % 9 });
+        }
+      });
+    }
+
+    const found = db.read((txn) => txn.collection('people').find());
+
+    db.close();
+
+    return found;
+  };
+
+  it('rescues a file into a new one, synchronously and on the thread pool', async (context) => {
+    const dir = tempDir(context);
+    const path = join(dir, 'app.darudb');
+    const before = filled(path);
+    const report = Database.salvage(path, join(dir, 'copy.darudb'));
+    const later = await Database.salvageAsync(path, join(dir, 'later.darudb'), {
+      busyTimeout: 100
+    });
+
+    for (const [name, made] of [
+      ['copy.darudb', report],
+      ['later.darudb', later]
+    ]) {
+      const copy = Database.open(join(dir, name), { schema: people });
+
+      assert.equal(made.whole, true);
+      assert.equal(typeof made.commitId, 'number');
+      assert.equal(made.pagesDamaged, 0);
+      assert.equal(made.bytes, readFileSync(join(dir, name)).length);
+      assert.deepEqual(
+        copy.read((txn) => txn.collection('people').find()),
+        before
+      );
+      assert.equal(copy.check().ok, true);
+      copy.close();
+    }
+  });
+
+  it('rescues a damaged file and counts the damage', async (context) => {
+    const dir = tempDir(context);
+    const path = join(dir, 'app.darudb');
+
+    filled(path);
+
+    const bytes = readFileSync(path);
+
+    bytes[4096 + 200] ^= 0xff;
+    writeFileSync(path, bytes);
+
+    const report = Database.salvage(path, join(dir, 'copy.darudb'));
+    const copy = Database.open(join(dir, 'copy.darudb'), { schema: people });
+
+    assert.equal(report.pagesDamaged, 1);
+    assert.equal(copy.check().ok, true);
+    copy.close();
+  });
+
+  it('refuses a file in use and a path that is taken', async (context) => {
+    const dir = tempDir(context);
+    const path = join(dir, 'app.darudb');
+
+    filled(path);
+
+    const db = Database.open(path, { schema: people });
+
+    assertCode(() => Database.salvage(path, join(dir, 'copy.darudb')), 'BUSY');
+    await assert.rejects(Database.salvageAsync(path, join(dir, 'copy.darudb')), {
+      code: 'BUSY'
+    });
+    db.close();
+
+    writeFileSync(join(dir, 'taken.darudb'), 'taken');
+    assertCode(() => Database.salvage(path, join(dir, 'taken.darudb')), 'INVALID_ARGUMENT');
+    assertCode(() => Database.salvage('', join(dir, 'copy.darudb')), 'INVALID_ARGUMENT');
+    assertCode(
+      () => Database.salvage(join(dir, 'none.darudb'), join(dir, 'copy.darudb')),
+      'NOT_FOUND'
+    );
+  });
+});
+
 describe('Database#compact', () => {
   const people = schema(1, {
     people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })

@@ -702,6 +702,27 @@ class Database {
   }
 
   /**
+   * Rescues what it can of the damaged database at `from` into a new
+   * database at `into`, and reports what it rescued and what it could not.
+   * It needs the file alone: a file open in this process or another fails
+   * with `BUSY`. It never replaces a file already at `into`.
+   */
+  static salvage(from: string, into: string, options: SalvageOptions = {}): SalvageReport {
+    return salvageReportOf(native.salvage(pathOf(from), pathOf(into), options.busyTimeout));
+  }
+
+  /** `salvage` on the thread pool. */
+  static async salvageAsync(
+    from: string,
+    into: string,
+    options: SalvageOptions = {}
+  ): Promise<SalvageReport> {
+    return salvageReportOf(
+      settle(await native.salvageAsync(pathOf(from), pathOf(into), options.busyTimeout))
+    );
+  }
+
+  /**
    * Checks the published commit completely, and reports every problem it
    * finds. It reads while other handles and processes write.
    */
@@ -813,7 +834,44 @@ interface BackupReport {
   bytes: number;
 }
 
-/** A path a tool writes to, which has to be a string. */
+/** The options `salvage` and `salvageAsync` take. */
+interface SalvageOptions {
+  busyTimeout?: number;
+}
+
+/** What a salvage rescued, as `salvage` and `salvageAsync` give it. */
+interface SalvageReport {
+  whole: boolean;
+  commitId: number | null;
+  pagesScanned: number;
+  pagesDamaged: number;
+  pagesUnread: number;
+  entriesRecovered: number;
+  valuesLost: number;
+  objectsDropped: number;
+  trees: number;
+  entries: number;
+  bytes: number;
+}
+
+/** The report the native layer gives, with `null` for a commit it has none of. */
+function salvageReportOf(report: native.NativeSalvageReport): SalvageReport {
+  return {
+    whole: report.whole,
+    commitId: report.commitId ?? null,
+    pagesScanned: report.pagesScanned,
+    pagesDamaged: report.pagesDamaged,
+    pagesUnread: report.pagesUnread,
+    entriesRecovered: report.entriesRecovered,
+    valuesLost: report.valuesLost,
+    objectsDropped: report.objectsDropped,
+    trees: report.trees,
+    entries: report.entries,
+    bytes: report.bytes
+  };
+}
+
+/** A path a tool reads or writes, which has to be a string. */
 function pathOf(path: unknown): string {
   if (typeof path !== 'string' || path.length === 0) {
     throw invalid('a path is a string that is not empty');
