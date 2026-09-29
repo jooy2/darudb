@@ -315,6 +315,59 @@ describe('records', () => {
     assert.ok(refused > 50 && refused < 1500, `${refused} refused`);
   });
 
+  it('read, with the code made for a layout, what reading field by field reads', () => {
+    // The same layout with `decode` set to `null`, which `readFields` reads
+    // field by field rather than making code for; and one with a required
+    // field, a default, a `t.bigint()` int and an int of any size.
+    const read = (layout) => ({ ...layout, fields: { ...layout.fields, decode: null } });
+    const typed = layoutOf([
+      { ...field(1, 'name', { type: 'string' }, false) },
+      { ...field(2, 'age', { type: 'int' }, false), default: 18 },
+      field(3, 'big', { type: 'int', big: true }),
+      field(4, 'any', { type: 'int', anyInt: true }),
+      field(6, 'flag', { type: 'bool' })
+    ]);
+    const next = random(11);
+    const outcome = (layout, bytes) => {
+      try {
+        return decodeRecords(layout, bytes);
+      } catch (error) {
+        return `${error.code}: ${error.message}`;
+      }
+    };
+    let damaged = 0;
+
+    for (let round = 0; round < 3000; round++) {
+      const layout = round % 2 === 0 ? everything : typed;
+      const objects =
+        layout === everything
+          ? [sample, { int: 2 ** 53 - 1, string: 'x' }, {}]
+          : [
+              { name: 'a', big: 5n, any: 2n ** 60n, flag: true },
+              { name: 'b', age: 3 }
+            ];
+      const bytes = Buffer.from(encodeRecords(layout, objects));
+
+      // Most records changed a little: a byte, or cut short.
+      if (next() < 0.8 && bytes.length > 0) {
+        const at = Math.floor(next() * bytes.length);
+
+        if (next() < 0.2) {
+          bytes.fill(0, at);
+        } else {
+          bytes[at] = next() < 0.5 ? Math.floor(next() * 12) : Math.floor(next() * 256);
+        }
+      }
+
+      const made = outcome(layout, bytes);
+
+      assert.deepEqual(made, outcome(read(layout), bytes), `${bytes.toString('hex')}`);
+      damaged += typeof made === 'string' ? 1 : 0;
+    }
+
+    assert.ok(damaged > 500 && damaged < 2800, `${damaged} damaged`);
+  });
+
   it('refuse a value of another type with the field it is in', () => {
     assert.throws(() => encodeRecords(everything, [{ int: 1.5 }]), {
       code: 'INVALID_ARGUMENT',

@@ -109,6 +109,9 @@ export type Builder = (values: unknown[]) => Record<string, unknown>;
 /** Writes the fields of an object of one layout, as `writeFields` does. */
 export type Encoder = (writer: Writer, object: object, where: string) => void;
 
+/** Reads a record of one layout, as `readFields` does at the top level. */
+export type Decoder = (reader: Reader, lenient: boolean) => Record<string, unknown>;
+
 /**
  * The fields of a collection or an embedded object, as `fieldsOf` makes them
  * ready to read and write: in id order, with the position of each id, the
@@ -129,6 +132,7 @@ export interface Layout {
   hasProto: boolean;
   build: Builder | null | undefined;
   encode: Encoder | null | undefined;
+  decode: Decoder | null | undefined;
 }
 
 /**
@@ -1241,6 +1245,19 @@ function readFields(
   lenient: boolean,
   depth: number
 ): Record<string, unknown> {
+  if (depth === 0) {
+    let decode = fields.decode;
+
+    if (decode === undefined) {
+      decode = decoderOf(fields);
+      fields.decode = decode;
+    }
+
+    if (decode !== null) {
+      return decode(reader, lenient);
+    }
+  }
+
   const count = reader.count(2);
   const values = new Array<unknown>(fields.list.length);
   let last = -1;
@@ -1343,6 +1360,129 @@ function builderOf(fields: Layout): Builder | null {
   try {
     // The body below takes `values` and returns an object literal.
     return new Function('values', `'use strict';\nreturn { ${entries.join(', ')} };`) as Builder;
+  } catch (error) {
+    // Only a process that forbids it fails to make the function.
+    if (error instanceof EvalError) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+/** Refuses a field of type `type` that holds the tag `tag`, as `readValue` does. */
+function wrongTag(type: string, tag: number): never {
+  throw corrupted(`a field of type ${type} holds the tag ${tag}`);
+}
+
+/** Refuses a record whose field ids are out of order, as `readFields` does. */
+function outOfOrder(): never {
+  throw corrupted('its field ids are out of order');
+}
+
+/** Refuses an int too large for a number in a field that reads one, as `readValue` does. */
+function beyondNumber(value: bigint): never {
+  throw invalid(
+    `an int field holds ${value}, beyond what a number holds exactly; declare it with \`t.bigint()\``
+  );
+}
+
+/**
+ * A function that reads a record of the layout `fields` at the top level, as
+ * `readFields` does, with the layout's ids and names written into its code;
+ * or `null`, where `readFields` reads the record as it always did.
+ *
+ * `readFields` gathered the values in an array, found each field's position
+ * by its id, and chose how to read each value by its field's type, which a
+ * record of five fields went through five times. The generated code reads
+ * each field in the `switch` case of its id, a scalar where it reads the
+ * tag, keeps the values in locals, and makes the object with one literal, as
+ * `builderOf`'s function does. Any other type goes to `readValue`. The names
+ * reach the code only through `JSON.stringify`, and the layouts `builderOf`
+ * leaves alone, and a process that forbids making code from strings, keep to
+ * `readFields`. An embedded object is read by `readFields` too, which keeps
+ * the depth of nesting where it always was.
+ */
+function decoderOf(fields: Layout): Decoder | null {
+  if (fields.hasProto || fields.list.length > MAX_BUILT_FIELDS) {
+    return null;
+  }
+
+  const list = fields.list;
+  const locals = list.map((_, index) => `v${index}`);
+  const body = [
+    "'use strict';",
+    'return function decode(reader, lenient) {',
+    '  const count = reader.count(2);',
+    '  let last = -1;',
+    ...(locals.length > 0 ? [`  let ${locals.join(', ')};`] : []),
+    '  for (let index = 0; index < count; index++) {',
+    '    const id = reader.varint();',
+    "    if (typeof id !== 'number' || id <= last) outOfOrder();",
+    '    last = id;',
+    '    switch (id) {'
+  ];
+
+  list.forEach((field, index) => {
+    const v = locals[index];
+    const kind = field.kind;
+    let read;
+
+    switch (kind.type) {
+      case 'string':
+        read = `const tag = reader.byte(); if (tag === ${STRING}) ${v} = reader.string(); else wrongTag('string', tag);`;
+        break;
+      case 'int': {
+        const value = kind.big
+          ? 'BigInt(value)'
+          : kind.anyInt
+            ? 'value'
+            : "(typeof value === 'bigint' ? beyondNumber(value) : value)";
+
+        read = `const tag = reader.byte(); if (tag === ${INT}) { const value = reader.int(); ${v} = ${value}; } else wrongTag('int', tag);`;
+        break;
+      }
+      case 'float':
+        read = `const tag = reader.byte(); if (tag === ${FLOAT}) ${v} = reader.float(); else wrongTag('float', tag);`;
+        break;
+      case 'bool':
+        read = `const tag = reader.byte(); if (tag === ${FALSE} || tag === ${TRUE}) ${v} = tag === ${TRUE}; else wrongTag('bool', tag);`;
+        break;
+      case 'bytes':
+        read = `const tag = reader.byte(); if (tag === ${BYTES}) ${v} = reader.bytesValue(); else wrongTag('bytes', tag);`;
+        break;
+      default:
+        read = `${v} = readValue(reader, list[${index}].kind, 0);`;
+    }
+
+    body.push(`      case ${field.id}: { ${read} break; }`);
+  });
+
+  body.push('      default: skipValue(reader, 0);', '    }', '  }');
+  list.forEach((_, index) => {
+    body.push(
+      `  if (${locals[index]} === undefined) ${locals[index]} = missing(list[${index}], lenient);`
+    );
+  });
+  body.push(
+    `  return { ${list.map((field, index) => `${JSON.stringify(field.name)}: ${locals[index]}`).join(', ')} };`,
+    '};'
+  );
+
+  try {
+    // The body below returns the decoder, given what it calls.
+    const make = new Function(
+      'list',
+      'readValue',
+      'skipValue',
+      'missing',
+      'wrongTag',
+      'outOfOrder',
+      'beyondNumber',
+      body.join('\n')
+    );
+
+    return make(list, readValue, skipValue, missing, wrongTag, outOfOrder, beyondNumber) as Decoder;
   } catch (error) {
     // Only a process that forbids it fails to make the function.
     if (error instanceof EvalError) {
@@ -1540,7 +1680,8 @@ function fieldsOf(list: FieldLayout[]): Layout {
     // Made by `builderOf` when the first object of the layout is read, and
     // by `encoderOf` when the first is written.
     build: undefined,
-    encode: undefined
+    encode: undefined,
+    decode: undefined
   };
 }
 
