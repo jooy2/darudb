@@ -1,0 +1,12 @@
+{
+  "name": "darudb-electron-test",
+  "private": true,
+  "description": "Runs the package in Electron's main process. A test of its own folder, since Electron is a large install the package's other tests do not need.",
+  "main": "main.mjs",
+  "scripts": {
+    "test": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}

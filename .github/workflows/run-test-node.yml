@@ -79,3 +79,33 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+
+  electron:
+    runs-on: ubuntu-latest
+    name: Test in Electron's main process
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        name: Setup Node.js
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            packages/node/package-lock.json
+            packages/node/electron/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - name: Build the addon
+        run: npm run build
+      # npm may skip install scripts, and Electron's unpacks its binary.
+      - name: Install Electron
+        working-directory: ./packages/node/electron
+        run: |
+          npm ci
+          node node_modules/electron/install.js
+      # The runner has no display, and after `npm ci` Chromium's sandbox
+      # helper lacks the permissions it needs; the test shows no web content.
+      - name: Test
+        working-directory: ./packages/node/electron
+        run: xvfb-run -a npx electron --no-sandbox .

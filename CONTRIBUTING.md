@@ -94,6 +94,15 @@ npm run bench        # optional: the object workloads, after a release build
 
 `npm test` compiles `lib/` into `dist/` first, but it loads the addon that `npm run build` left in the folder, so build first after every change to Rust code, in the engine as well as in the binding. `npm run build:ts` compiles `lib/` alone.
 
+The package also runs in Electron's main process, which has a test of its own in `packages/node/electron`, since Electron is a large install the other tests do not need. It loads the package's `dist/` and the addon beside it, so build first:
+
+```bash
+cd packages/node/electron
+npm ci
+node node_modules/electron/install.js   # when npm skipped the install script that unpacks Electron
+npm test
+```
+
 For the documentation site:
 
 ```bash

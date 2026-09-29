@@ -208,6 +208,14 @@ Database.open('secret.darudb', { schema: app }); // throws KEY_REQUIRED
 - `setKey` and `setPassword` commit, so they follow the rules of a write: their `Async` twins wait their turn after this process's other writes on the file, and the synchronous forms are refused while an asynchronous write holds it.
 - `backup` copies an encrypted file with the same key, and `Database.salvage` takes `key` or `password` in its options.
 
+## Use it in Electron
+
+The package runs in Electron's main process as it does in Node.js, with the same addon, since Node-API stays the same across Node.js and Electron versions. Its tests run it in Electron 44.
+
+- Open the database in the main process, or in a utility process of your own (`utilityProcess`), and give the renderers what they need through IPC. A renderer is sandboxed by default and cannot load a native addon.
+- Several processes can have the file open at once, two instances of the app included. Each opens it with a handle of its own, and the engine coordinates them through the operating system's file locks: one writes at a time, and a writer that waits longer than the busy timeout fails with `BUSY`. Within one process, opening the file again gives another handle to the same database.
+- A packaged app should keep the addon outside the `asar` archive, from which Electron can load a native addon only by copying it out first. electron-builder leaves it outside by itself, and Electron Forge does with its auto-unpack-natives plugin.
+
 ## Errors
 
 Every error the package throws is an `Error` whose `code` is one of the engine's codes, listed in [Getting started](./getting-started.md#errors). A transaction or collection used after its function has returned throws `CLOSED`, or in the asynchronous API rejects with it.

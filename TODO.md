@@ -48,7 +48,6 @@ Confirmed by reading the code against the specification; no test reproduces them
 
 The first release waits for the maintainer, who chose this work for the time until then on 2026-09-29.
 
-- **Electron's main process**: a test that loads the package there, and a page on several Electron processes using one file.
 - **The three known gaps** above: the unsynced window of a process that died, the no-replace rename, and file identity on Windows.
 - **The barrier after another process's commit**, under the open questions: an investigation, with measurements, before any change to the protocol.
 
