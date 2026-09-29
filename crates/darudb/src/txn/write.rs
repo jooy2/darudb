@@ -1163,11 +1163,13 @@ fn open_tree<'t>(
 /// The slot holds neither the published commit nor the durable commit, nor
 /// the commit that `last_barrier`, the selector a power cut can bring back,
 /// names with its unsynced bit clear: recovery would trust that record
-/// without checking it. When no slot qualifies, or `last_barrier` is unknown,
-/// the commit issues a barrier first, which makes the published commit's
-/// selector the one a power cut brings back. Of two candidates, one holding a
-/// record newer than the published commit, which a writer that died before
-/// publishing left behind, goes first; otherwise the older.
+/// without checking it. When `last_barrier` is unknown, the newest record
+/// older than the durable commit stands in for that commit; see
+/// [`possibly_trusted`]. When no slot qualifies, the commit issues a barrier
+/// first, which makes the published commit's selector the one a power cut
+/// brings back. Of two candidates, one holding a record newer than the
+/// published commit, which a writer that died before publishing left behind,
+/// goes first; otherwise the older.
 fn choose_slot(
     header: &Header,
     base: &CommitRecord,
@@ -1189,13 +1191,38 @@ fn choose_slot(
     let trusted = match last_barrier {
         Some(selector) if selector.unsynced => None,
         Some(selector) => Some(selector.slot),
-        None => return (candidates[0], true),
+        None => possibly_trusted(header, durable),
     };
 
     match candidates.iter().find(|slot| Some(**slot) != trusted) {
         Some(slot) => (*slot, false),
         None => (candidates[0], true),
     }
+}
+
+/// The slot a power cut may make recovery trust, besides those of the
+/// published and durable commits, for a writer that does not know the last
+/// selector written before the last barrier: after opening the file, or
+/// after another process has committed.
+///
+/// Every selector with the unsynced bit clear is written right after a
+/// barrier, by a sync commit, by the end of an unsynced window or by
+/// recovery, and names a commit that is durable from then on, so no record
+/// newer than the durable commit was ever named by one. Of the older ones,
+/// only the base of the durable commit can be: the selector written before
+/// the barrier of the sync commit that made it durable. That writer and every
+/// one after it kept the base's slot, as they kept whichever slot they knew a
+/// power cut would bring back, or issued a barrier, after which the selector
+/// before the last barrier names the published commit of that time. So the
+/// base is still in its slot, and it is the newest record older than the
+/// durable commit: a record a dead writer left between them would have been
+/// the durable commit's writer's first choice of slot.
+fn possibly_trusted(header: &Header, durable: &CommitRecord) -> Option<usize> {
+    (0..SLOT_COUNT)
+        .filter_map(|slot| header.records[slot].map(|record| (slot, record.txn)))
+        .filter(|(_, txn)| *txn < durable.txn)
+        .max_by_key(|(_, txn)| *txn)
+        .map(|(slot, _)| slot)
 }
 
 /// The free runs of the free tree rooted at `root`.

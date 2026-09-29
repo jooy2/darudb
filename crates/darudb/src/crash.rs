@@ -481,6 +481,210 @@ fn power_cuts_and_process_kills_never_lose_a_returned_commit() {
     }
 }
 
+/// Two instances of one file, as two processes have it open, writing in
+/// turns of random length and cut by power failures, which end both. The
+/// writer that takes over after the other has committed does not know which
+/// selector a power cut would bring back, so choosing the slot for its record
+/// has to rely on what the header shows (`design/commits-and-recovery.md`,
+/// "Choosing the slot"). Most commits are deferred, so that the durable commit
+/// lags behind the published one, and odd seeds encrypt the file.
+fn run_two(seed: u64, steps: usize) {
+    let mut rng = Rng::new(seed);
+    let mut options = OpenOptions::new();
+
+    options.max_unsynced_time(Duration::MAX);
+
+    if seed % 3 == 1 {
+        options.max_unsynced_pages(24);
+    }
+
+    if seed % 2 == 1 {
+        options.key([u8::try_from(seed % 251).unwrap(); 32]);
+    }
+
+    let page_size = 4096;
+    let mut disk = Arc::new(SimDisk::default());
+    let mut instances = [
+        Database::create_io(disk.clone(), page_size, &options).unwrap(),
+        Database::open_io_beside(disk.clone(), &options).unwrap(),
+    ];
+    let mut model = State::new();
+    let mut history = vec![State::new()];
+    let mut writer = 0;
+
+    for step in 0..steps {
+        if rng.below(3) == 0 {
+            writer = 1 - writer;
+        }
+
+        let db = &instances[writer];
+        let crash = rng.below(8) == 0;
+        let action = match rng.below(12) {
+            0 => Action::Sync,
+            1..=8 => Action::CommitDeferred,
+            _ => Action::Commit,
+        };
+
+        if crash {
+            disk.stop_after(rng.index(60));
+        }
+
+        let (result, attempted, committing) = match action {
+            Action::Sync => (db.sync(), model.clone(), false),
+            _ => random_transaction(
+                &mut rng,
+                db,
+                &model,
+                page_size as usize,
+                action == Action::CommitDeferred,
+            ),
+        };
+
+        if !crash {
+            result.unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+            match action {
+                Action::Sync => history = vec![model.clone()],
+                Action::Commit if committing => history = vec![attempted.clone()],
+                Action::CommitDeferred if committing => history.push(attempted.clone()),
+                _ => {}
+            }
+
+            if committing {
+                model = attempted;
+            }
+
+            continue;
+        }
+
+        let finished = result.is_ok();
+        let image = disk.power_cut(&mut rng);
+
+        drop(instances);
+        disk = Arc::new(SimDisk::from_image(image));
+        instances = [
+            Database::open_io(disk.clone(), &options).unwrap_or_else(|error| {
+                panic!("seed {seed} step {step}: reopening failed: {error}")
+            }),
+            Database::open_io_beside(disk.clone(), &options).unwrap(),
+        ];
+
+        let found = contents(&instances[0]);
+
+        check_integrity(&instances[0])
+            .unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+        let latest = if finished && committing {
+            &attempted
+        } else {
+            &model
+        };
+        let barrier_returned =
+            finished && (action == Action::Sync || (action == Action::Commit && committing));
+        let allowed = found == *latest
+            || (committing && !finished && found == attempted)
+            || (!barrier_returned && history.contains(&found));
+
+        assert!(
+            allowed,
+            "seed {seed} step {step}: {action:?} by instance {writer} {} with a power cut, and \
+             the file holds none of the states it may ({} against the last)",
+            if finished {
+                "returned"
+            } else {
+                "was cut short"
+            },
+            difference(latest, &found)
+        );
+
+        model = found.clone();
+        history = vec![found];
+    }
+}
+
+/// A writer taking over from another process knows the header, not which
+/// selector a power cut would bring back. Here the first instance takes its
+/// turn with sync commits, and ends it with a deferred one or not; the second
+/// takes over with a deferred commit; and then power is cut 1000 ways. A
+/// power cut that loses every selector written since the last barrier brings
+/// back one that recovery trusts without checking its record, so that record
+/// must not be the new one. The random runs above reach this order about once
+/// in a thousand seeds, so it is built here on purpose.
+#[test]
+fn a_writer_taking_over_never_writes_over_a_record_a_power_cut_would_trust() {
+    for (encrypted, deferred_last) in [(false, true), (false, false), (true, true), (true, false)] {
+        let mut options = OpenOptions::new();
+
+        options.max_unsynced_time(Duration::MAX);
+
+        if encrypted {
+            options.key([9; 32]);
+        }
+
+        let disk = Arc::new(SimDisk::default());
+        let first = Database::create_io(disk.clone(), 4096, &options).unwrap();
+        let second = Database::open_io_beside(disk.clone(), &options).unwrap();
+        // Every commit gives all 40 keys its own value, so a state is one
+        // value everywhere.
+        let write = |db: &Database, value: &str, deferred: bool| {
+            let mut txn = db.begin_write().unwrap();
+
+            for key in 0..40u32 {
+                txn.insert("t", &key.to_be_bytes(), value.as_bytes())
+                    .unwrap();
+            }
+
+            if deferred {
+                txn.commit_deferred().unwrap();
+            } else {
+                txn.commit().unwrap();
+            }
+        };
+
+        write(&first, "one", false);
+        write(&first, "two", false);
+
+        if deferred_last {
+            write(&first, "three", true);
+        }
+
+        write(&second, "four", true);
+
+        for cut in 0..1000 {
+            let image = disk.power_cut(&mut Rng::new(cut));
+            let db = Database::open_io(Arc::new(SimDisk::from_image(image)), &options)
+                .unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+
+            check_integrity(&db).unwrap_or_else(|error| panic!("cut {cut}: {error}"));
+
+            let found = contents(&db);
+            let values: std::collections::BTreeSet<&[u8]> =
+                found["t"].values().map(Vec::as_slice).collect();
+
+            assert_eq!(found["t"].len(), 40, "cut {cut}");
+            assert!(
+                values.len() == 1
+                    && [&b"two"[..], b"three", b"four"].contains(values.first().unwrap()),
+                "cut {cut}: {values:?}"
+            );
+        }
+    }
+}
+
+/// Runs the two-writer runs with a quarter of `DARUDB_CRASH_SEEDS`, 100 by
+/// default.
+#[test]
+fn two_writers_taking_turns_survive_power_cuts() {
+    let seeds = std::env::var("DARUDB_CRASH_SEEDS")
+        .ok()
+        .and_then(|seeds| seeds.parse::<u64>().ok())
+        .map_or(100, |seeds| seeds / 4);
+
+    for seed in 0..seeds {
+        run_two(seed, 80);
+    }
+}
+
 #[test]
 fn a_failed_barrier_makes_the_database_unusable_until_reopened() {
     let disk = Arc::new(SimDisk::default());

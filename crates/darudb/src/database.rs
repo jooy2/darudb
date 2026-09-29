@@ -268,6 +268,25 @@ impl Database {
         Self::with_schema(shared, options)?.complete()
     }
 
+    /// Opens a database whose file is `io` as a process does that finds
+    /// another process has the file open: no recovery, and the header read
+    /// again at its first write. Two handles opened this way and with
+    /// [`open_io`](Self::open_io) on one simulated disk are two processes'
+    /// instances, for the crash tests of writers that take turns.
+    #[cfg(test)]
+    pub(crate) fn open_io_beside(io: Arc<dyn FileIo>, options: &OpenOptions) -> Result<Self> {
+        let shared = open_io(
+            io,
+            Locks::none(),
+            Access::Shared,
+            Path::new("simulated.darudb"),
+            options,
+            None,
+        )?;
+
+        Self::with_schema(shared, options)?.complete()
+    }
+
     /// Writes a new database onto the empty `io` and opens it.
     #[cfg(test)]
     pub(crate) fn create_io(
