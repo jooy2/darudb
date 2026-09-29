@@ -324,6 +324,45 @@ fn a_process_that_opens_a_file_another_has_open_does_not_recover_it() {
     assert_eq!(other.ask("get k"), "deferred");
 }
 
+/// A process that dies with deferred commits leaves its window open, and
+/// nothing ends it while no other process looks. A process that reads the
+/// file finds the published commit unsynced and ends the window once its own
+/// time limit has passed with that commit still published.
+#[test]
+fn a_window_a_dead_process_left_open_is_ended_by_a_reader() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for name in ["plain.darudb", "encrypted.darudb"] {
+        let path = dir.path().join(name);
+        let mut options = options_for(&path);
+
+        options.max_unsynced_time(Duration::from_millis(100));
+
+        let db = options.open(&path).unwrap();
+        let mut other = helper(&path);
+
+        // The helper's own time limit is an hour: its window stays open.
+        assert_eq!(other.ask("defer k deferred"), "done");
+        other.kill();
+        assert!(selector(&db).unsynced);
+
+        thread::sleep(Duration::from_millis(300));
+        assert!(selector(&db).unsynced, "nothing ends it before a read");
+
+        assert_eq!(
+            db.begin_read().unwrap().get("t", b"k").unwrap(),
+            Some(b"deferred".to_vec())
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while selector(&db).unsynced {
+            assert!(Instant::now() < deadline, "{name}: the window stayed open");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
 #[test]
 fn a_snapshot_in_another_process_keeps_every_page_it_reaches() {
     let dir = tempfile::tempdir().unwrap();

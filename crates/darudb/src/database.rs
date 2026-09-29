@@ -688,7 +688,15 @@ fn open_io(
         // lock. Until then the instance knows no header, and no selector a
         // power cut would bring back.
         Access::Shared => {
-            shared.read_published()?;
+            let (bytes, _, record) = shared.read_published()?;
+            let shared = Arc::new(shared);
+
+            // Another process may have died with a window open.
+            if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| selector.unsynced) {
+                shared.notice_unsynced(record.txn);
+            }
+
+            return Ok(shared);
         }
     }
 

@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
@@ -66,7 +66,18 @@ struct Window {
 #[derive(Debug, Default)]
 struct Unsynced {
     window: Option<Window>,
+    /// A commit another process published without a barrier, while this
+    /// process has no window of its own: a window that process may have died
+    /// with. The thread ends it when it is still unsynced a time limit later.
+    foreign: Option<Foreign>,
     flusher: Option<Thread>,
+}
+
+/// An unsynced commit of another process, and when this one first saw it.
+#[derive(Debug)]
+struct Foreign {
+    txn: u64,
+    seen: Instant,
 }
 
 /// What the read transactions that see one commit have found out about it,
@@ -125,6 +136,9 @@ pub(crate) struct Shared {
     /// written a selector with no barrier after it.
     last_barrier: Mutex<Option<Selector>>,
     unsynced: Mutex<Unsynced>,
+    /// The last unsynced commit this process noticed, so that the reads that
+    /// find the same one skip the lock of `unsynced`.
+    noticed: AtomicU64,
     /// The free runs of the commit with the given transaction id, which the
     /// last write transaction left for the next, so that it need not read the
     /// free tree again.
@@ -198,6 +212,7 @@ impl Shared {
             header: Mutex::new(header),
             last_barrier: Mutex::new(None),
             unsynced: Mutex::new(Unsynced::default()),
+            noticed: AtomicU64::new(0),
             free_runs: Mutex::new(None),
             young: Mutex::new(None),
             learned: Mutex::new(None),
@@ -340,7 +355,7 @@ impl Shared {
     /// process holds the snapshot's lock already, for another read transaction
     /// or kept after one, the lock was held throughout the read, and the
     /// reader joins it with neither a lock call nor a second read.
-    pub(crate) fn begin_snapshot(&self) -> Result<CommitRecord> {
+    pub(crate) fn begin_snapshot(self: &Arc<Self>) -> Result<CommitRecord> {
         self.check_owner()?;
         self.check_usable()?;
 
@@ -349,6 +364,10 @@ impl Shared {
         loop {
             let mut registry = self.locks.registry();
             let (bytes, slot, record) = self.read_published()?;
+
+            if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| selector.unsynced) {
+                self.notice_unsynced(record.txn);
+            }
 
             if registry.join(record.txn) {
                 return Ok(record);
@@ -714,18 +733,54 @@ impl Shared {
         });
 
         window.pages.extend(pages);
+        // Whatever another process left unsynced is this window's now.
+        unsynced.foreign = None;
+        self.start_flusher(&mut unsynced);
+    }
 
-        if unsynced.flusher.is_none() && self.window_due(&unsynced).is_some() {
-            let shared = Arc::downgrade(self);
-            let spawned = thread::Builder::new()
-                .name("darudb-sync".to_owned())
-                .spawn(move || flush_when_due(&shared));
+    /// Notes that the published commit `txn` was found unsynced, by a read
+    /// or when the file was opened. With no window of this process open, it
+    /// is another process's, which ends it within its own time limit if it
+    /// is alive; the thread ends it if that commit is still published and
+    /// unsynced once this process's time limit has passed.
+    pub(crate) fn notice_unsynced(self: &Arc<Self>, txn: u64) {
+        // Every read finds the same commit until the next one: a load, which
+        // writes nothing the other readers' caches would have to fetch again.
+        if self.noticed.load(Ordering::Relaxed) == txn {
+            return;
+        }
 
-            // Without the thread, the next deferred commit after the time is
-            // up still ends the window; nothing else is lost.
-            if let Ok(handle) = spawned {
-                unsynced.flusher = Some(handle.thread().clone());
-            }
+        let mut unsynced = lock(&self.unsynced);
+
+        self.noticed.store(txn, Ordering::Relaxed);
+
+        if unsynced.window.is_some() {
+            return;
+        }
+
+        unsynced.foreign = Some(Foreign {
+            txn,
+            seen: Instant::now(),
+        });
+        self.start_flusher(&mut unsynced);
+    }
+
+    /// Starts the thread that ends the window when it is due, unless it runs
+    /// already or nothing is due.
+    fn start_flusher(self: &Arc<Self>, unsynced: &mut Unsynced) {
+        if unsynced.flusher.is_some() || self.window_due(unsynced).is_none() {
+            return;
+        }
+
+        let shared = Arc::downgrade(self);
+        let spawned = thread::Builder::new()
+            .name("darudb-sync".to_owned())
+            .spawn(move || flush_when_due(&shared));
+
+        // Without the thread, the next deferred commit after the time is up
+        // still ends this process's window; nothing else is lost.
+        if let Ok(handle) = spawned {
+            unsynced.flusher = Some(handle.thread().clone());
         }
     }
 
@@ -734,19 +789,48 @@ impl Shared {
         let mut unsynced = lock(&self.unsynced);
 
         unsynced.window = None;
+        unsynced.foreign = None;
 
         if let Some(flusher) = &unsynced.flusher {
             flusher.unpark();
         }
     }
 
-    /// When the open window, if any, has to end. `None` also for a time limit
-    /// too long to reach.
+    /// When the open window, if any, has to end, or the watch of another
+    /// process's window, when this process has none. `None` also for a time
+    /// limit too long to reach.
     fn window_due(&self, unsynced: &Unsynced) -> Option<Instant> {
-        unsynced
-            .window
-            .as_ref()
-            .and_then(|window| window.opened.checked_add(self.settings.max_unsynced_time))
+        let opened = match (&unsynced.window, &unsynced.foreign) {
+            (Some(window), _) => window.opened,
+            (None, Some(foreign)) => foreign.seen,
+            (None, None) => return None,
+        };
+
+        opened.checked_add(self.settings.max_unsynced_time)
+    }
+
+    /// Ends the window of commit `txn`, which another process published
+    /// without a barrier and left unsynced for this process's time limit: it
+    /// may have died with it. The caller holds the writer lock. A commit
+    /// published since is watched afresh instead, since its process was alive
+    /// to make it.
+    fn end_foreign_window(&self, txn: u64) -> Result<()> {
+        let header = self.refresh_header()?;
+        let published = header.published()?.txn;
+
+        if header.selector.unsynced && published == txn {
+            return self.sync_published();
+        }
+
+        let mut unsynced = lock(&self.unsynced);
+
+        unsynced.foreign =
+            (header.selector.unsynced && unsynced.window.is_none()).then(|| Foreign {
+                txn: published,
+                seen: Instant::now(),
+            });
+
+        Ok(())
     }
 
     /// Makes the published commit durable if it is not: a barrier, then the
@@ -853,11 +937,18 @@ fn flush_when_due(shared: &Weak<Shared>) {
         let Some(instance) = shared.upgrade() else {
             return;
         };
-        let due = {
+        let (due, foreign) = {
             let mut unsynced = lock(&instance.unsynced);
 
             match instance.window_due(&unsynced) {
-                Some(due) => due,
+                Some(due) => (
+                    due,
+                    unsynced
+                        .foreign
+                        .as_ref()
+                        .filter(|_| unsynced.window.is_none())
+                        .map(|foreign| foreign.txn),
+                ),
                 None => {
                     unsynced.flusher = None;
 
@@ -875,7 +966,10 @@ fn flush_when_due(shared: &Weak<Shared>) {
         }
 
         let ended = match instance.acquire_writer_within(FLUSH_WAIT) {
-            Ok(_writer) => instance.sync_published(),
+            Ok(_writer) => match foreign {
+                Some(txn) => instance.end_foreign_window(txn),
+                None => instance.sync_published(),
+            },
             // A writer is still running. Its own commit may end the window;
             // otherwise the next round tries again.
             Err(Error::Busy { .. }) => Ok(()),

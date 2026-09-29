@@ -82,7 +82,7 @@ Step 4 is what makes them end at all. A tree that gives a page back and needs on
 A commit is made in one of two ways:
 
 - **Sync**, the default: durable when the call returns. It costs one barrier.
-- **Deferred**: published at once, without a barrier. It becomes durable at the next barrier: the next sync commit, a call to `sync`, closing the database, or the engine's own limits on the unsynced window.
+- **Deferred**: published at once, without a barrier. It becomes durable at the next barrier: the next sync commit, a call to `sync`, closing the database, the engine's own limits on the unsynced window, or another process that finds the window left open.
 
 A power cut can undo deferred commits, but only from the newest backwards, never leaving a gap, and it never damages the file. A process that crashes loses nothing, because the operating system still holds everything the process wrote.
 
@@ -156,6 +156,7 @@ A barrier, followed by writing the selector with the unsynced bit clear, makes t
 - A call to `sync`, and closing the database, which calls it. The last handle to the file going away in a process does the same, without a way to report a failure.
 - The page limit. A deferred commit that would take the window past it is made a sync commit instead.
 - The time limit. While a window is open, a thread of the engine's waits for the time to run out and then does what `sync` does, after any write transaction that is running. A deferred commit made after the time is up is made a sync commit too, in case that thread could not run.
+- Another process's watch. The time limit is kept by the process that opened the window, so a process that dies with one open leaves it open. A process with no window of its own that finds the published commit unsynced, when a read transaction begins or when it opens the file, notes that commit, and the same thread checks again once this process's time limit has passed. If that commit is still the published one and still unsynced, the process that made it has not ended its window, having died or having a longer limit, and this one ends it as `sync` does. It checks under the writer lock, so a commit published meanwhile is watched afresh instead: its process was alive to make it. A process that only holds the file open, and neither reads nor opens it, does not notice.
 
 Only the writer writes the selector, so `sync` and the engine's thread take the writer lock first.
 
