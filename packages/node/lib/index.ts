@@ -33,6 +33,8 @@ export type {
   AsyncReadTransaction,
   AsyncWriteCollection,
   AsyncWriteTransaction,
+  CheckProblem,
+  CheckReport,
   Collection,
   Comparison,
   Condition,

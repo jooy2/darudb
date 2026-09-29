@@ -27,6 +27,16 @@ fn check(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+```ts
+const report = db.check(); // 또는 `await db.checkAsync()`
+
+if (!report.ok) {
+  for (const { page, tree, message } of report.problems) {
+    console.error(page, tree, message);
+  }
+}
+```
+
 - 문제마다 그 문제가 있는 페이지와, 문제를 찾은 트리나 컬렉션이 적혀 있습니다.
 - 검사는 파일 전체를 읽으므로 모든 객체를 읽는 것과 비슷하게 걸립니다. 메모리는 페이지마다 1비트만 쓰고, 객체 수에 따라 늘지 않습니다.
 - 읽을 수 없는 페이지가 있으면 그 아래 페이지는 읽지 못합니다. 이런 페이지는 하나씩 누수로 보고하지 않고 문제 하나로 묶어 셉니다.

@@ -5,7 +5,7 @@
  * marked `@ts-expect-error` stays an error. Nothing here runs.
  */
 import { collection, conditions, Database, param, Query, schema, t } from '../dist/index.js';
-import type { Key } from '../dist/index.js';
+import type { CheckReport, Key } from '../dist/index.js';
 
 const app = schema(1, {
   teams: collection({ name: t.string().primaryKey(), city: t.string().optional() }),
@@ -193,6 +193,11 @@ async function asynchronous() {
   return [found[0].visits, total, oneAge, prepared[0]?.age] as const;
 }
 
+// The integrity check reports rather than throws.
+const report: CheckReport = db.check();
+const firstPage: number | null = report.problems[0]?.page ?? null;
+const checkedLater: Promise<CheckReport> = db.checkAsync();
+
 export {
   app,
   age,
@@ -204,5 +209,7 @@ export {
   embeddedId,
   version,
   preparedCount,
-  asynchronous
+  asynchronous,
+  firstPage,
+  checkedLater
 };

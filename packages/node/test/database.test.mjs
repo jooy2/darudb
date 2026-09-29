@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { Database, engineVersion, FORMAT_VERSION } from '../dist/index.js';
+import { collection, Database, engineVersion, FORMAT_VERSION, schema, t } from '../dist/index.js';
 
 /**
  * A directory of the test's own, removed when the test ends, so tests never
@@ -139,5 +139,84 @@ describe('Database#close', () => {
     db.close();
 
     assert.doesNotThrow(() => db.close());
+  });
+});
+
+describe('Database#check', () => {
+  const people = schema(1, {
+    people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })
+  });
+
+  it('finds nothing wrong with a whole file, synchronously and on the thread pool', async (context) => {
+    const db = Database.open(join(tempDir(context), 'app.darudb'), { schema: people });
+
+    db.write((txn) =>
+      txn
+        .collection('people')
+        .insertMany(
+          Array.from({ length: 200 }, (_, n) => ({ name: `p${n}`, email: `${n}@x`, age: n % 9 }))
+        )
+    );
+
+    const report = db.check();
+
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.problems, []);
+    assert.equal(report.objectsChecked, 200);
+    assert.ok(report.pagesChecked > 3);
+    assert.deepEqual(await db.checkAsync(), report);
+    db.close();
+    assertCode(() => db.check(), 'CLOSED');
+  });
+
+  it('names a damaged page, and reports rather than throws', (context) => {
+    const dir = tempDir(context);
+    const path = join(dir, 'app.darudb');
+    const db = Database.open(path, { schema: people });
+
+    db.write((txn) =>
+      txn
+        .collection('people')
+        .insertMany(
+          Array.from({ length: 200 }, (_, n) => ({ name: `p${n}`, email: `${n}@x`, age: n % 9 }))
+        )
+    );
+
+    const pageSize = db.pageSize;
+
+    db.close();
+
+    const image = readFileSync(path);
+    let named = 0;
+
+    for (let page = 1; page < image.length / pageSize; page++) {
+      const damaged = Buffer.from(image);
+      const copy = join(dir, `damaged-${page}.darudb`);
+
+      damaged[page * pageSize + 2000] ^= 0x55;
+      writeFileSync(copy, damaged);
+
+      let opened;
+
+      try {
+        opened = Database.open(copy, { schema: people });
+      } catch (error) {
+        // Damage to what opening reads stops it opening.
+        assert.equal(error.code, 'CORRUPTED');
+
+        continue;
+      }
+
+      const report = opened.check();
+
+      opened.close();
+
+      if (report.problems.some((problem) => problem.page === page)) {
+        assert.equal(report.ok, false);
+        named++;
+      }
+    }
+
+    assert.ok(named > 2, `${named} damaged pages named`);
   });
 });

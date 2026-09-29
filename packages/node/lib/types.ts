@@ -583,6 +583,16 @@ export interface Database<S extends Schema<any> = Schema> {
     fn: (txn: AsyncWriteTransaction<S>) => R,
     options?: WriteOptions
   ): Promise<Awaited<R>>;
+  /**
+   * Checks the published commit completely: every page against its check,
+   * the order of every key, every count, that every page is used, free or
+   * retained exactly once, and every object against its indexes. It
+   * reports every problem it finds rather than throwing, and reads while
+   * other handles and processes write.
+   */
+  check(): CheckReport;
+  /** `check` on the thread pool. */
+  checkAsync(): Promise<CheckReport>;
   /** Makes every commit durable, deferred ones included. */
   sync(): void;
   /** `sync` on the thread pool, after this process's writes on the file. */
@@ -594,6 +604,32 @@ export interface Database<S extends Schema<any> = Schema> {
    * database refuses new work at once.
    */
   closeAsync(): Promise<void>;
+}
+
+/** What `Database.check` found: the commit it checked and every problem. */
+export interface CheckReport {
+  /** Whether the check found nothing wrong. */
+  ok: boolean;
+  /** The transaction id of the commit checked, the one published when it began. */
+  commitId: number;
+  /** The pages that commit counts, the header page included. */
+  pageCount: number;
+  /** The pages read and verified. */
+  pagesChecked: number;
+  /** The objects read and checked against their indexes. */
+  objectsChecked: number;
+  /** Every problem found, in the order found. */
+  problems: CheckProblem[];
+}
+
+/** One thing the integrity check found wrong. */
+export interface CheckProblem {
+  /** The page the problem is in, when it is in one page. */
+  page: number | null;
+  /** The tree or the collection it was found in, when it was found in one. */
+  tree: string | null;
+  /** What is wrong. */
+  message: string;
 }
 
 /** How `Database` opens a database: it has no constructor. */

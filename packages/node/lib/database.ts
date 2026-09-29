@@ -702,6 +702,19 @@ class Database {
   }
 
   /**
+   * Checks the published commit completely, and reports every problem it
+   * finds. It reads while other handles and processes write.
+   */
+  check(): CheckReport {
+    return reportOf(this.#database().check());
+  }
+
+  /** `check` on the thread pool, which never waits for a writer. */
+  async checkAsync(): Promise<CheckReport> {
+    return reportOf(settle(await this.#database().checkAsync()));
+  }
+
+  /**
    * Makes deferred commits durable and closes the database. Closing one that
    * is closed does nothing.
    */
@@ -746,6 +759,32 @@ class Database {
 
     return this.#native;
   }
+}
+
+/** What the integrity check found, as `check` and `checkAsync` give it. */
+interface CheckReport {
+  ok: boolean;
+  commitId: number;
+  pageCount: number;
+  pagesChecked: number;
+  objectsChecked: number;
+  problems: { page: number | null; tree: string | null; message: string }[];
+}
+
+/** The report the native layer gives, with `ok` and nulls where it has nothing. */
+function reportOf(report: native.NativeCheckReport): CheckReport {
+  return {
+    ok: report.problems.length === 0,
+    commitId: report.commitId,
+    pageCount: report.pageCount,
+    pagesChecked: report.pagesChecked,
+    objectsChecked: report.objectsChecked,
+    problems: report.problems.map((problem) => ({
+      page: problem.page ?? null,
+      tree: problem.tree ?? null,
+      message: problem.message
+    }))
+  };
 }
 
 /** Whether a write's options ask for a deferred commit. */

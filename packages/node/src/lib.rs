@@ -103,6 +103,46 @@ pub struct NativeOptions {
     pub migrations: Option<Vec<NativeMigration>>,
 }
 
+/// What the integrity check found, as `Database.check` gives it.
+#[napi(object)]
+pub struct NativeCheckReport {
+    pub commit_id: f64,
+    pub page_count: f64,
+    pub pages_checked: f64,
+    pub objects_checked: f64,
+    pub problems: Vec<NativeProblem>,
+}
+
+/// One problem the integrity check found.
+#[napi(object)]
+pub struct NativeProblem {
+    pub page: Option<f64>,
+    pub tree: Option<String>,
+    pub message: String,
+}
+
+impl Deliver for darudb::CheckReport {
+    type Js = NativeCheckReport;
+
+    fn deliver(self) -> Result<NativeCheckReport> {
+        Ok(NativeCheckReport {
+            commit_id: u64_number(self.commit_id),
+            page_count: u64_number(self.page_count),
+            pages_checked: u64_number(self.pages_checked),
+            objects_checked: u64_number(self.objects_checked),
+            problems: self
+                .problems
+                .into_iter()
+                .map(|problem| NativeProblem {
+                    page: problem.page.map(u64_number),
+                    tree: problem.tree,
+                    message: problem.message,
+                })
+                .collect(),
+        })
+    }
+}
+
 /// Work for the thread pool: a function that returns a value or an error.
 pub struct Work<T: Deliver> {
     run: Option<Box<dyn FnOnce() -> Result<T> + Send>>,
@@ -379,6 +419,19 @@ impl NativeDatabase {
     #[napi]
     pub fn sync(&self) -> Result<()> {
         self.database()?.sync().map_err(to_js_error)
+    }
+
+    /// The integrity check of the published commit.
+    #[napi]
+    pub fn check(&self) -> Result<NativeCheckReport> {
+        self.database()?.check().map_err(to_js_error)?.deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<NativeCheckReport | NativeFailure>")]
+    pub fn check_async(&self) -> Result<AsyncTask<Work<darudb::CheckReport>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || database.check().map_err(to_js_error)))
     }
 
     #[napi(ts_return_type = "Promise<null | NativeFailure>")]

@@ -27,6 +27,16 @@ fn check(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+```ts
+const report = db.check(); // or `await db.checkAsync()`
+
+if (!report.ok) {
+  for (const { page, tree, message } of report.problems) {
+    console.error(page, tree, message);
+  }
+}
+```
+
 - A problem names the page it is in, where it is in one, and the tree or collection it was found in.
 - The check reads the whole file, so it takes about as long as reading every object. It keeps one bit for each page in memory, and nothing that grows with the number of objects.
 - A page that cannot be read hides the pages below it. The check counts those in one problem rather than reporting each as leaked.
