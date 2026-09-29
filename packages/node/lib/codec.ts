@@ -963,19 +963,27 @@ const LENT_RECORDS = 16;
 const LENT_BYTES = 64 * 1024;
 
 /**
- * `encodeRecords` for a synchronous write, which hands the records to the
- * engine at once: a view of a buffer kept for the purpose, which lasts until
- * the next records are lent, rather than a buffer of their own. A few
- * records, as a `put` or an `insert` writes, cost the allocation and the
- * copy of a buffer of their own several times what encoding them does. A
- * large batch gets a buffer of its own all the same, and so do the records
- * a getter writes while an object of the batch is being encoded.
+ * The buffer the records or the changes `lendRecords` or `lendChanges` last
+ * wrote begin at, to hand to the engine with the length they returned.
  */
-function lendRecords(collection: CollectionLayout, objects: readonly unknown[]): Buffer {
-  if (recordsLent || objects.length > LENT_RECORDS) {
-    const bytes = encodeRecords(collection, objects);
+let lentBytes: Uint8Array = recordWriter.bytes;
 
-    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
+/**
+ * `encodeRecords` for a synchronous write, which hands the records to the
+ * engine at once: written at the start of a buffer kept for the purpose,
+ * which `lentBytes` then names and which lasts until the next records are
+ * lent, rather than into a buffer of their own. Returns their length. A few
+ * records, as a `put` or an `insert` writes, cost the allocation and the
+ * copy of a buffer of their own several times what encoding them does, and
+ * a view of the kept buffer, made for each write, cost a twentieth of an
+ * insert. A large batch gets a buffer of its own all the same, and so do the
+ * records a getter writes while an object of the batch is being encoded.
+ */
+function lendRecords(collection: CollectionLayout, objects: readonly unknown[]): number {
+  if (recordsLent || objects.length > LENT_RECORDS) {
+    lentBytes = encodeRecords(collection, objects);
+
+    return lentBytes.length;
   }
 
   recordsLent = true;
@@ -987,8 +995,9 @@ function lendRecords(collection: CollectionLayout, objects: readonly unknown[]):
 
     recordWriter.at = 0;
     writeRecords(recordWriter, collection, objects);
+    lentBytes = recordWriter.bytes;
 
-    return Buffer.from(recordWriter.bytes.buffer, recordWriter.bytes.byteOffset, recordWriter.at);
+    return recordWriter.at;
   } finally {
     recordsLent = false;
   }
@@ -997,13 +1006,14 @@ function lendRecords(collection: CollectionLayout, objects: readonly unknown[]):
 /**
  * `encodeChanges` for a synchronous update, in the buffer `lendRecords`
  * reuses, for the same reason: an update writes a few fields, and a buffer
- * of their own cost more than encoding them.
+ * of their own cost more than encoding them. Returns their length, and
+ * `lentBytes` names the buffer.
  */
-function lendChanges(collection: CollectionLayout, changes: unknown): Buffer {
+function lendChanges(collection: CollectionLayout, changes: unknown): number {
   if (recordsLent) {
-    const bytes = encodeChanges(collection, changes);
+    lentBytes = encodeChanges(collection, changes);
 
-    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
+    return lentBytes.length;
   }
 
   checkChanges(collection, changes);
@@ -1016,11 +1026,17 @@ function lendChanges(collection: CollectionLayout, changes: unknown): Buffer {
 
     recordWriter.at = 0;
     writeChanges(recordWriter, collection.fields, changes);
+    lentBytes = recordWriter.bytes;
 
-    return Buffer.from(recordWriter.bytes.buffer, recordWriter.bytes.byteOffset, recordWriter.at);
+    return recordWriter.at;
   } finally {
     recordsLent = false;
   }
+}
+
+/** The buffer `lendRecords` or `lendChanges` last wrote in. */
+function recordBytes(): Uint8Array {
+  return lentBytes;
 }
 
 /** Writes the records of `objects` into `writer`, each after its length. */
@@ -2157,6 +2173,7 @@ export {
   lendRecords,
   encodeChanges,
   lendChanges,
+  recordBytes,
   decodeRecord,
   decodeRecords,
   decodeFirst,

@@ -1112,14 +1112,21 @@ pub fn count_prepared(
     with(txn, |txn| txn.count(&prepared.collection, &query))
 }
 
+/// Writes the records in the first `length` bytes of `records`, each after
+/// its length, and returns their keys. `lendRecords` in `lib/codec.ts` lends
+/// the buffer it keeps for them whole, with the length it wrote, since a
+/// view made of it for every write cost a twentieth of an `insert`.
 #[napi(ts_return_type = "Array<number | bigint | string | Buffer>")]
 pub fn write_records(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
     #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
-    records: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] records: BufferSlice<'_>,
+    length: u32,
     replace: bool,
 ) -> Result<Vec<JsKeyOut>> {
-    with(txn, |txn| txn.write_records(collection, &records, replace))?.deliver()
+    let records = lent(&records, length)?;
+
+    with(txn, |txn| txn.write_records(collection, records, replace))?.deliver()
 }
 
 /// Writes the record of one object, as `writeRecords` writes a batch, and
@@ -1129,10 +1136,12 @@ pub fn write_records(
 pub fn write_record(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
     #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
-    records: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] records: BufferSlice<'_>,
+    length: u32,
     replace: bool,
 ) -> Result<JsKeyOut> {
-    let Keys(keys) = with(txn, |txn| txn.write_records(collection, &records, replace))?;
+    let records = lent(&records, length)?;
+    let Keys(keys) = with(txn, |txn| txn.write_records(collection, records, replace))?;
     let [key] = <[darudb::Value; 1]>::try_from(keys)
         .map_err(|_| invalid("`writeRecord` takes exactly one record"))?;
 
@@ -1173,19 +1182,21 @@ pub fn delete_object(
     with(txn, |txn| txn.delete(collection, key))
 }
 
-/// Sets the fields of the object whose key is `key` that the record `changes`
-/// holds, as `lendChanges` in `lib/codec.ts` writes it, and says whether
-/// there was one.
+/// Sets the fields of the object whose key is `key` that the record in the
+/// first `length` bytes of `changes` holds, as `lendChanges` in
+/// `lib/codec.ts` lends it, and says whether there was one.
 #[napi]
 pub fn update_record(
     #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
     #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
     #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: Unknown<'_>,
-    changes: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] changes: BufferSlice<'_>,
+    length: u32,
 ) -> Result<bool> {
     let key = key_in(key)?;
+    let changes = lent(&changes, length)?;
 
-    with(txn, |txn| txn.update(collection, key, &changes))
+    with(txn, |txn| txn.update(collection, key, changes))
 }
 
 /// The first `length` bytes of `bytes`, a buffer the JavaScript side lends

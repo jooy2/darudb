@@ -20,6 +20,7 @@ import {
   invalid,
   lendRecords,
   lendChanges,
+  recordBytes,
   decodeRecord,
   decodeRecords,
   decodeFirst,
@@ -226,7 +227,9 @@ class WriteCollection extends ReadCollection {
   update(key: unknown, changes: unknown): boolean {
     const layout = this[LAYOUT];
 
-    return native.updateRecord(this[TXN], nameOf(layout), keyOf(key), lendChanges(layout, changes));
+    const length = lendChanges(layout, changes);
+
+    return native.updateRecord(this[TXN], nameOf(layout), keyOf(key), recordBytes(), length);
   }
 
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
@@ -235,9 +238,9 @@ class WriteCollection extends ReadCollection {
   }
 
   #writeOne(object: unknown, replace: boolean) {
-    const records = lendRecords(this[LAYOUT], [object]);
+    const length = lendRecords(this[LAYOUT], [object]);
 
-    return native.writeRecord(this[TXN], nameOf(this[LAYOUT]), records, replace);
+    return native.writeRecord(this[TXN], nameOf(this[LAYOUT]), recordBytes(), length, replace);
   }
 
   #write(objects: unknown, replace: boolean) {
@@ -249,9 +252,9 @@ class WriteCollection extends ReadCollection {
       return [];
     }
 
-    const records = lendRecords(this[LAYOUT], objects);
+    const length = lendRecords(this[LAYOUT], objects);
 
-    return native.writeRecords(this[TXN], nameOf(this[LAYOUT]), records, replace);
+    return native.writeRecords(this[TXN], nameOf(this[LAYOUT]), recordBytes(), length, replace);
   }
 }
 
