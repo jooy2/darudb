@@ -30,6 +30,7 @@
     "lint:fix": "eslint . --report-unused-disable-directives --fix",
     "format": "prettier .",
     "format:fix": "prettier . --write",
+    "notices": "node scripts/notices.mjs",
     "prepublishOnly": "tsc && napi prepublish -t npm",
     "version": "napi version"
   },

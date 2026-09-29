@@ -40,7 +40,6 @@ Confirmed by reading the code against the specification; no test reproduces them
 
 - **The unsynced window is counted per process.** The page and time limits bound each process's own deferred commits. When a process with deferred commits dies, nothing ends its window until another process syncs or makes a sync commit, and the windows of several processes add up.
 - **No no-replace rename.** On a file system without links, `storage/create.rs` goes straight to creating the file in place under the recovery and open locks, where `design/commits-and-recovery.md` would first try `renameat2`, `renamex_np` or `MoveFileExW`.
-- **The prebuilt Node.js addon carries no third-party notices.** It links the engine's dependencies, `napi` and `mimalloc` with its C source, all under MIT or MIT-compatible licences, and MIT asks that the notice go with every copy, the binary included. No file lists them yet; the release workflow of phase 5 is where one would be made, from `cargo metadata`.
 - **Windows identifies a file by its canonical path**, not by its volume serial number and file index as `design/locking.md` asks. Two hard links to one database are two instances there, and their locks keep them apart as two processes' locks would.
 
 ## Open questions

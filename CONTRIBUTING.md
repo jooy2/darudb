@@ -120,6 +120,8 @@ A pull request that adds a runtime dependency to the engine or to a binding shou
 
 Development dependencies are held to a much looser standard, because they never reach a consumer.
 
+The prebuilt Node.js addon links these crates, the binding's own and what they bring, so each platform package ships their notices in `THIRD_PARTY_NOTICES.txt`, which `packages/node/scripts/notices.mjs` writes from `cargo metadata` and the licence files each crate ships. `npm run notices -- --print` in `packages/node` shows them. A new dependency that ships no licence file needs its text in `packages/node/scripts/licenses`, or the release stops.
+
 ## How to contribute (Pull Requests)
 
 ### Write the code you want to change

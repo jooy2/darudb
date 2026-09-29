@@ -23,3 +23,4 @@
 - `db.backup(path)` and `db.backupAsync(path)`, a copy of the published commit in a new file, which the same key or password opens and which never replaces a file already at the path.
 - `db.compact()` and `db.compactAsync()`, which make the file smaller in place. Like a write, `compactAsync` waits its turn after this process's other writes on the file, and `compact` is refused while one of them holds it.
 - `Database.salvage(from, into)` and `Database.salvageAsync(from, into)`, which rescue what they can of a damaged file into a new one, and report what they rescued and what they could not. They work on a file that does not open, need it alone, so a file in use fails with `BUSY`, and never replace a file already at `into`.
+- Every platform package ships `LICENSE` and `THIRD_PARTY_NOTICES.txt`, the licences of the Rust crates and of the C source linked into its addon.
