@@ -53,6 +53,7 @@ db.write((txn) => {
     { name: 'Bob', tags: ['new'] }
   ]);
   users.put({ id: 2, name: 'Robert', age: 18 });
+  users.update(1, { age: 32, email: null });
   users.delete(3);
 });
 
@@ -60,6 +61,7 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 ```
 
 - `insert` and `insertMany` return the keys. `put` and `putMany` insert or replace. `delete` says whether there was an object.
+- `update` sets the fields it is given, keeps the rest, and says whether there was an object. `null` makes an optional field null and gives a field with a default its default, and a field left `undefined` stays as it is. An embedded object or a list is replaced whole, and changing the primary key fails with `INVALID_ARGUMENT`. Only the changed fields cross into the engine, so it costs less than reading the object and putting it back.
 - A batch crosses into the engine as one buffer in one call, which is much cheaper than one call per object.
 - `insert` fails with `DUPLICATE_KEY` when the key or a unique value is taken. A value of the wrong type, or a property the schema does not have, fails with `INVALID_ARGUMENT`. A refused write changes nothing, and the rest of the function can go on.
 - Transactions are synchronous. A function that returns a promise is refused, and its transaction is aborted. Write transactions do not nest: `db.write` inside another's function fails at once, where it would otherwise wait for itself. A write waits for another process's writer for up to five seconds, or the `busyTimeout` option in milliseconds.

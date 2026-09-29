@@ -15,6 +15,8 @@ import type { ExternalObject } from '../native.js';
 import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
 import type { FilterNode, QueryParts } from './query.js';
 
+/** Null, in the changes of an update alone: the field becomes null. */
+const NULL = 0x01;
 const FALSE = 0x02;
 const TRUE = 0x03;
 const INT = 0x04;
@@ -739,6 +741,79 @@ function writeFields(writer: Writer, fields: Layout, object: object, where: stri
   }
 }
 
+/**
+ * Writes `changes`, the changes of an update of an object whose fields are
+ * `fields`, as a record of the fields it names, by id in ascending order: a
+ * field set to `null` holds `NULL`, and one set to `undefined` is left out,
+ * to stay as it is.
+ */
+function writeChanges(writer: Writer, fields: Layout, changes: object): void {
+  for (const name of Object.keys(changes)) {
+    if (!fields.names.has(name)) {
+      throw invalid(`\`${name}\` is not a field`);
+    }
+  }
+
+  let present = 0;
+  const count = writer.at;
+
+  // The count is filled in once the fields are written, as `writeFields`
+  // fills in a record's, in the bytes a varint of the most fields takes.
+  const room = fields.list.length < 0x80 ? 1 : 5;
+
+  writer.reserve(room);
+  writer.at += room;
+
+  for (const field of fields.list) {
+    const value = own(changes, field.name);
+
+    if (value === undefined) {
+      continue;
+    }
+
+    present++;
+    writer.varint(field.id);
+
+    if (value === null) {
+      writer.byte(NULL);
+    } else {
+      writeValue(writer, field.kind, value, field.name);
+    }
+  }
+
+  if (room === 1) {
+    writer.bytes[count] = present;
+
+    return;
+  }
+
+  // A varint longer than it has to be, which the engine reads all the same.
+  for (let index = 0; index < 4; index++) {
+    writer.bytes[count + index] = (present % 0x80) | 0x80;
+    present = Math.floor(present / 0x80);
+  }
+
+  writer.bytes[count + 4] = present;
+}
+
+/** Refuses `changes` for an update of an object of `collection` unless it is an object. */
+function checkChanges(collection: CollectionLayout, changes: unknown): asserts changes is object {
+  if (typeof changes !== 'object' || changes === null || Array.isArray(changes)) {
+    throw invalid(`the changes to an object of \`${collection.name}\` are ${describe(changes)}`);
+  }
+}
+
+/** The record of `changes`, for an update of an object of `collection`, in a buffer of its own. */
+function encodeChanges(collection: CollectionLayout, changes: unknown): Uint8Array {
+  checkChanges(collection, changes);
+
+  const writer = new Writer(64);
+
+  writeChanges(writer, collection.fields, changes);
+
+  return writer.finish();
+}
+
 /** Property `name` of `object` itself, never one it inherits such as `constructor`. */
 function own(object: object, name: string): unknown {
   // Any object's properties can be read by name.
@@ -794,6 +869,35 @@ function lendRecords(collection: CollectionLayout, objects: readonly unknown[]):
 
     recordWriter.at = 0;
     writeRecords(recordWriter, collection, objects);
+
+    return Buffer.from(recordWriter.bytes.buffer, recordWriter.bytes.byteOffset, recordWriter.at);
+  } finally {
+    recordsLent = false;
+  }
+}
+
+/**
+ * `encodeChanges` for a synchronous update, in the buffer `lendRecords`
+ * reuses, for the same reason: an update writes a few fields, and a buffer
+ * of their own cost more than encoding them.
+ */
+function lendChanges(collection: CollectionLayout, changes: unknown): Buffer {
+  if (recordsLent) {
+    const bytes = encodeChanges(collection, changes);
+
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length);
+  }
+
+  checkChanges(collection, changes);
+  recordsLent = true;
+
+  try {
+    if (recordWriter.bytes.length > LENT_BYTES) {
+      recordWriter.bytes = new Uint8Array(1024);
+    }
+
+    recordWriter.at = 0;
+    writeChanges(recordWriter, collection.fields, changes);
 
     return Buffer.from(recordWriter.bytes.buffer, recordWriter.bytes.byteOffset, recordWriter.at);
   } finally {
@@ -1931,6 +2035,8 @@ export {
   invalid,
   encodeRecords,
   lendRecords,
+  encodeChanges,
+  lendChanges,
   decodeRecord,
   decodeRecords,
   decodeFirst,

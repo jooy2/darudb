@@ -19,6 +19,7 @@ import {
   codeError,
   invalid,
   lendRecords,
+  lendChanges,
   decodeRecord,
   decodeRecords,
   decodeFirst,
@@ -215,6 +216,17 @@ class WriteCollection extends ReadCollection {
   /** Inserts or replaces `objects`; see `insertMany`. */
   putMany(objects: unknown) {
     return this.#write(objects, true);
+  }
+
+  /**
+   * Sets the fields `changes` has in the object whose primary key is `key`,
+   * and says whether there was one. The rest of the object stays as it is,
+   * and the engine changes it where it lies.
+   */
+  update(key: unknown, changes: unknown): boolean {
+    const layout = this[LAYOUT];
+
+    return native.updateRecord(this[TXN], nameOf(layout), keyOf(key), lendChanges(layout, changes));
   }
 
   /** Deletes the object whose primary key is `key`, and says whether there was one. */

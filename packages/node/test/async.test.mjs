@@ -114,11 +114,13 @@ describe('asynchronous transactions', () => {
         await users.put({ id: 2, name: 'Robert', age: 18 }),
         await users.delete(3),
         await users.delete(3),
-        await users.insert({ name: 'Dave' })
+        await users.insert({ name: 'Dave' }),
+        await users.update(1, { age: 32, email: null }),
+        await users.update(9, { age: 1 })
       ];
     });
 
-    assert.deepEqual(written, [2, true, false, 4]);
+    assert.deepEqual(written, [2, true, false, 4, true, false]);
     assert.deepEqual(
       db.read((txn) =>
         txn
@@ -127,6 +129,17 @@ describe('asynchronous transactions', () => {
           .map((user) => user.name)
       ),
       ['Alice', 'Robert', 'Dave']
+    );
+    assert.deepEqual(
+      db.read((txn) => txn.collection('users').get(1)),
+      {
+        id: 1,
+        name: 'Alice',
+        email: null,
+        age: 32,
+        avatar: new Uint8Array([1, 2]),
+        big: null
+      }
     );
   });
 
@@ -307,6 +320,9 @@ describe('asynchronous transactions', () => {
         'INVALID_QUERY'
       );
       await assertRejects(users.insertMany('not an array'), 'INVALID_ARGUMENT');
+      await assertRejects(users.update(2, { email: 'alice@example.com' }), 'DUPLICATE_KEY');
+      await assertRejects(users.update(2, { id: 3 }), 'INVALID_ARGUMENT');
+      await assertRejects(users.update(2, 'not an object'), 'INVALID_ARGUMENT');
       await users.insert({ name: 'Dave' });
     });
     await db.readAsync(async (txn) => {

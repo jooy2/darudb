@@ -55,7 +55,26 @@ db.write((txn) => {
   // @ts-expect-error a collection with a primary key has no `id`.
   teams.insert({ name: 'south', id: 2 });
 
-  return key;
+  // An update names any fields, and null where a put takes null.
+  const updated: boolean = users.update(1, { age: 18, email: null, address: { city: 'Busan' } });
+
+  const alice = users.get(1);
+
+  // An object as it was read, spread, is a set of changes too.
+  if (alice !== null) {
+    users.update(key, { ...alice, age: alice.age + 1 });
+  }
+
+  users.update(1, { age: null, visits: 3n });
+  teams.update('north', { city: null });
+  // @ts-expect-error `name` is required and has no default, so it is never null.
+  users.update(1, { name: null });
+  // @ts-expect-error `age` is an int.
+  users.update(1, { age: 'old' });
+  // @ts-expect-error the collection has no such field.
+  users.update(1, { nickname: 'Al' });
+
+  return updated && key;
 });
 
 const adults = db.read((txn) =>

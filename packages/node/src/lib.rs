@@ -605,6 +605,15 @@ impl Txn {
         Ok(Keys(keys))
     }
 
+    /// Sets the fields of the object whose key is `key` that the record
+    /// `changes` holds, and says whether there was one.
+    fn update(&mut self, collection: &str, key: darudb::Value, changes: &[u8]) -> Result<bool> {
+        self.writing()?
+            .collection(collection)
+            .and_then(|mut collection| collection.update_record(key, changes))
+            .map_err(to_js_error)
+    }
+
     fn delete(&mut self, collection: &str, key: darudb::Value) -> Result<bool> {
         self.writing()?
             .collection(collection)
@@ -828,6 +837,7 @@ const OP_PUT: u8 = 5;
 const OP_DELETE: u8 = 6;
 const OP_PREVIOUS_RECORD: u8 = 7;
 const OP_PREVIOUS_KEYS: u8 = 8;
+const OP_UPDATE: u8 = 9;
 
 /// One operation of a batch, with what it takes checked and copied, so that
 /// it can move to a pool thread.
@@ -837,6 +847,7 @@ enum Op {
     Count(Vec<u8>),
     Write(String, Vec<u8>, bool),
     Delete(String, darudb::Value),
+    Update(String, darudb::Value, Vec<u8>),
     PreviousRecord(String, darudb::Value),
     PreviousKeys(String),
     /// An operation refused before it runs, with the error it fails with.
@@ -862,6 +873,9 @@ impl Op {
                 payload().map(|records| Op::Write(collection, records, kind == OP_PUT))
             }
             OP_DELETE => key().map(|key| Op::Delete(collection, key)),
+            OP_UPDATE => {
+                key().and_then(|key| payload().map(|changes| Op::Update(collection, key, changes)))
+            }
             OP_PREVIOUS_RECORD => key().map(|key| Op::PreviousRecord(collection, key)),
             OP_PREVIOUS_KEYS => Ok(Op::PreviousKeys(collection)),
             _ => Err(invalid(format!("{kind} is not an operation"))),
@@ -879,6 +893,9 @@ impl Op {
                 Outcome::Keys(txn.write_records(&collection, &records, replace)?.0)
             }
             Op::Delete(collection, key) => Outcome::Bool(txn.delete(&collection, key)?),
+            Op::Update(collection, key, changes) => {
+                Outcome::Bool(txn.update(&collection, key, &changes)?)
+            }
             Op::PreviousRecord(collection, key) => {
                 Outcome::Record(txn.previous_record(&collection, key)?)
             }
@@ -1154,6 +1171,21 @@ pub fn delete_object(
     let key = key_in(key)?;
 
     with(txn, |txn| txn.delete(collection, key))
+}
+
+/// Sets the fields of the object whose key is `key` that the record `changes`
+/// holds, as `lendChanges` in `lib/codec.ts` writes it, and says whether
+/// there was one.
+#[napi]
+pub fn update_record(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    #[napi(ts_arg_type = "ExternalObject<'CollectionName'>")] collection: &External<String>,
+    #[napi(ts_arg_type = "number | bigint | string | Uint8Array")] key: Unknown<'_>,
+    changes: BufferSlice<'_>,
+) -> Result<bool> {
+    let key = key_in(key)?;
+
+    with(txn, |txn| txn.update(collection, key, &changes))
 }
 
 /// The first `length` bytes of `bytes`, a buffer the JavaScript side lends

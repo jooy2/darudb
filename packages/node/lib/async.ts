@@ -23,7 +23,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { NativeFailure, NativeTransaction } from '../native.js';
-import { Reader, codeError, invalid, encodeRecords, decodeRecord, decodeRecords } from './codec.js';
+import {
+  Reader,
+  codeError,
+  invalid,
+  encodeRecords,
+  encodeChanges,
+  decodeRecord,
+  decodeRecords
+} from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
 import { toBuffer, keyOf, irOf, collectionOf } from './shared.js';
 import type { Key, QueryInput } from './shared.js';
@@ -209,6 +217,7 @@ const PUT = 5;
 const DELETE = 6;
 const PREVIOUS_RECORD = 7;
 const PREVIOUS_KEYS = 8;
+const UPDATE = 9;
 
 // How `src/lib.rs` tags each result of a batch, and each key among them.
 const TAG_BYTES = 0;
@@ -535,6 +544,17 @@ class AsyncWriteCollection extends AsyncReadCollection {
   /** Inserts or replaces `objects`; see `insertMany`. */
   async putMany(objects: unknown): Promise<Key[]> {
     return this.#write(objects, true);
+  }
+
+  /**
+   * Sets the fields `changes` has in the object whose primary key is `key`,
+   * and resolves to whether there was one.
+   */
+  async update(key: unknown, changes: unknown): Promise<boolean> {
+    const bytes = toBuffer(encodeChanges(this[LAYOUT], changes));
+
+    // An update resolves to whether there was an object.
+    return this[SERIAL].call(UPDATE, this[LAYOUT].name, keyOf(key), bytes) as Promise<boolean>;
   }
 
   /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */

@@ -53,6 +53,7 @@ db.write((txn) => {
     { name: 'Bob', tags: ['new'] }
   ]);
   users.put({ id: 2, name: 'Robert', age: 18 });
+  users.update(1, { age: 32, email: null });
   users.delete(3);
 });
 
@@ -60,6 +61,7 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 ```
 
 - `insert`와 `insertMany`는 키를 돌려줍니다. `put`과 `putMany`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
+- `update`는 받은 필드만 바꾸고 나머지는 그대로 두며, 객체가 있었는지 돌려줍니다. `null`을 주면 선택 필드는 null이 되고 기본값이 있는 필드는 기본값이 됩니다. `undefined`인 필드는 바뀌지 않습니다. 내장 객체와 리스트는 통째로 바뀌고, 기본 키를 바꾸려 하면 `INVALID_ARGUMENT`로 실패합니다. 바뀐 필드만 엔진으로 넘어가므로 객체를 읽어 `put`하는 것보다 쌉니다.
 - 여러 객체를 한 번에 넘기면 버퍼 하나에 담아 엔진을 한 번만 부릅니다. 객체마다 부르는 것보다 훨씬 쌉니다.
 - `insert`는 키나 고유 값이 이미 있으면 `DUPLICATE_KEY`로 실패합니다. 값의 타입이 틀리거나 스키마에 없는 속성이 있으면 `INVALID_ARGUMENT`로 실패합니다. 거부된 쓰기는 아무것도 바꾸지 않으므로 함수는 이어서 진행해도 됩니다.
 - 트랜잭션은 동기입니다. promise를 돌려주는 함수는 거부하고, 그 트랜잭션은 취소합니다. 쓰기 트랜잭션은 겹칠 수 없습니다. 다른 쓰기 함수 안에서 `db.write`를 부르면 자기 자신을 기다리는 대신 곧바로 실패합니다. 다른 프로세스가 쓰고 있으면 5초, 또는 `busyTimeout` 옵션에 준 밀리초만큼 기다립니다.

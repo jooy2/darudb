@@ -346,6 +346,15 @@ export interface WriteCollection<O, I> extends ReadCollection<O> {
   /** Inserts `object`, or replaces the object with its key. */
   put(object: I): Key;
   putMany(objects: readonly I[]): Key[];
+  /**
+   * Sets the fields `changes` has in the object whose primary key is `key`,
+   * and says whether there was one; the rest of the object stays as it is.
+   * `null` makes an optional field null and gives a field with a default
+   * its default, and a field left `undefined` stays as it is. An embedded
+   * object or a list is replaced whole. It is refused as `put` is, and for
+   * a primary key other than `key`.
+   */
+  update(key: Key, changes: Partial<I>): boolean;
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: Key): boolean;
 }
@@ -397,6 +406,11 @@ export interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
   /** Inserts `object`, or replaces the object with its key. */
   put(object: I): Promise<Key>;
   putMany(objects: readonly I[]): Promise<Key[]>;
+  /**
+   * Sets the fields `changes` has in the object whose primary key is `key`,
+   * and resolves to whether there was one; see `WriteCollection.update`.
+   */
+  update(key: Key, changes: Partial<I>): Promise<boolean>;
   /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */
   delete(key: Key): Promise<boolean>;
 }

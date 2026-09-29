@@ -365,6 +365,93 @@ describe('objects', () => {
     });
   });
 
+  it('change only the fields an update names', (context) => {
+    const { db } = withData(context);
+
+    db.write((txn) => {
+      const users = txn.collection('users');
+      const teams = txn.collection('teams');
+
+      assert.equal(users.update(1, { age: 32, email: null, score: undefined }), true);
+      assert.equal(users.update(2, { age: null, address: { city: 'Busan' } }), true);
+      assert.equal(users.update(3, { tags: ['green'], big: 5n }), true);
+      assert.equal(users.update(99, { age: 1 }), false);
+      assert.equal(users.update(1, { id: 1 }), true, 'the key it already has');
+      // A collection whose fields all hold scalars, changed where it lies.
+      assert.equal(teams.update('south', { city: 'Busan' }), true);
+      assert.equal(teams.update('north', { name: 'north', city: null }), true);
+      assert.equal(teams.update('west', { city: 'Incheon' }), false);
+      // A getter that writes while the changes are being encoded.
+      assert.equal(
+        teams.update('south', {
+          get city() {
+            teams.put({ name: 'inside', city: 'written by a getter' });
+
+            return 'Daegu';
+          }
+        }),
+        true
+      );
+    });
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+      const teams = txn.collection('teams');
+
+      assert.deepEqual(users.get(1), {
+        id: 1,
+        name: 'Alice',
+        email: null,
+        age: 32,
+        score: 1.5,
+        tags: ['red', 'blue'],
+        team: 'north',
+        address: { city: 'Seoul', zip: null },
+        avatar: new Uint8Array([1, 2, 3]),
+        big: null
+      });
+      assert.equal(users.get(2).age, 0, 'null gives a field with a default its default');
+      assert.deepEqual(users.get(2).address, { city: 'Busan', zip: null });
+      assert.deepEqual(users.get(3).tags, ['green']);
+      assert.equal(users.get(3).big, 5n);
+      assert.deepEqual(
+        users.find((q) => q.where('tags', '==', 'green')).map((user) => user.id),
+        [3]
+      );
+      assert.equal(
+        users.count((q) => q.where('age', '==', 31)),
+        0
+      );
+      assert.deepEqual(teams.get('south'), { name: 'south', city: 'Daegu' });
+      assert.deepEqual(teams.get('north'), { name: 'north', city: null });
+      assert.deepEqual(teams.get('inside'), { name: 'inside', city: 'written by a getter' });
+    });
+
+    db.write((txn) => {
+      const users = txn.collection('users');
+      const teams = txn.collection('teams');
+      const before = users.get(1);
+
+      assertCode(() => users.update(1, { email: 'x', name: 3 }), 'INVALID_ARGUMENT');
+      assertCode(() => users.update(1, { nickname: 'Al' }), 'INVALID_ARGUMENT');
+      assertCode(() => users.update(1, { name: null }), 'INVALID_ARGUMENT');
+      assertCode(() => users.update(1, { id: 2 }), 'INVALID_ARGUMENT');
+      assertCode(() => users.update(1, null), 'INVALID_ARGUMENT');
+      assertCode(() => users.update(1.5, { age: 1 }), 'INVALID_ARGUMENT');
+      assertCode(() => teams.update('north', { name: 'east' }), 'INVALID_ARGUMENT');
+      assertCode(() => teams.update('north', { city: 3 }), 'INVALID_ARGUMENT');
+      users.update(2, { email: 'bob@example.com' });
+      assertCode(() => users.update(1, { email: 'bob@example.com' }), 'DUPLICATE_KEY');
+      assert.deepEqual(users.get(1), before, 'a refused update changes nothing');
+    });
+
+    assert.equal(
+      db.read((txn) => txn.collection('users').get(2)).email,
+      'bob@example.com',
+      'a refused update leaves the transaction able to commit'
+    );
+  });
+
   it('keep each text prepared on its own collection', (context) => {
     const { db } = withData(context);
 
