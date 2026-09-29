@@ -19,6 +19,8 @@ The five requirements, in the order the maintainer ranked them. **[Decided]**
 1. **Compatibility.** Runs on many operating systems, from old releases to the latest. The file format is versioned, and every format version and every schema version comes with a migration from the one before.
 1. **Developer convenience.** Queries are easy to write, and so is a schema.
 
+**How performance is judged** (decided 2026-09-29): with the workloads of `examples/object_bench.rs`, at both durability levels, sync commits against settings that synchronize every commit and deferred commits against relaxed settings, in Rust and through the Node.js package. The goal is reached when most workloads are ahead, and every one that is not has its cause written down: what makes it slower, and whether it can be fixed or is the cost of a design decision. The comparison harness and its results stay outside the repository, since the repository names no other product.
+
 The project is written and maintained with coding agents, now and later. Keep the structure easy to pick up cold: one responsibility per module, a doc comment at the top of each module saying what it owns and which invariants it keeps, tests next to the behaviour they check, and no coupling that a reader of one file cannot see.
 
 ## Rules that hold everywhere
@@ -78,7 +80,7 @@ Tests sit beside what they test, plus these places that test the whole engine:
 
 - **Targets**
   - Rust: the crate is a public API, not only the engine behind the bindings.
-  - Node.js: servers and desktop applications.
+  - Node.js: servers and desktop applications, in Electron's main process too (decided 2026-09-29). Other JavaScript runtimes are not targets.
   - Dart: Flutter apps, and Dart servers and command-line tools.
 - **Out of scope**
   - Browsers and websites (WASM, IndexedDB, OPFS and the like).
@@ -122,12 +124,12 @@ Specified in [design/commits-and-recovery.md](design/commits-and-recovery.md).
 
 - **Five platform assumptions and no others**: a one-byte write is atomic, a write changes only the bytes it names, a successful sync makes earlier writes durable, byte-range locks work and die with their owner, and the file system is local. [design/README.md](design/README.md#what-the-engine-assumes-of-the-platform) states them exactly.
 - **A sync commit costs one barrier.** The barrier is the commit point; flipping the selector afterwards publishes a commit that is already durable, so readers never see one that a power cut could undo.
-- **Deferred commits** are published without a barrier and become durable at the next one: the next sync commit, `Database::sync`, closing the database, or the window's limits on pages and time. The page limit counts each page the window wrote once, however often it was written (decided 2026-09-26), since deferred commits reuse the window's pages. A power cut undoes them only from the newest backwards; a process crash loses none.
+- **Deferred commits** are published without a barrier and become durable at the next one: the next sync commit, `Database::sync`, closing the database, or the window's limits on pages and time. The page limit counts each page the window wrote once, however often it was written (decided 2026-09-26), since deferred commits reuse the window's pages. The limits are 16,384 pages and one second by default (decided 2026-09-29), and `OpenOptions` changes them. A power cut undoes them only from the newest backwards; a process crash loses none.
 - **Three records protected at every commit**: the published one, the durable one, and the one a power cut would make recovery trust without checking. When no slot is left, the commit issues a barrier first.
 - **Recovery** runs in the first process to open the file. It adopts the newest commit that is either published with the unsynced bit clear or passes checking, where checking reads only the pages written since that commit's durable transaction id.
 - **A failed barrier is not retried.** The commit fails with `SYNC_FAILED`, and the handle is unusable until the file is reopened.
 - **A new database is written to a temporary file and moved into place without replacing anything**, so the path holds either nothing or a complete database.
-- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checks are valid), online backup, and compaction. [design/tools.md](design/tools.md) specifies them; it is **[Tentative]** until the maintainer reviews it.
+- **Tools to ship with the library**: an integrity check, salvage (build a new file from the pages whose checks are valid), online backup, and compaction. [design/tools.md](design/tools.md) specifies them, and the maintainer accepted it on 2026-09-29, with salvage starting from the newest commit record and filling only what it cannot read from older pages.
 - **Not supported**: network file systems (NFS, SMB). They are detected and refused with `UNSUPPORTED_FILE_SYSTEM`.
 
 ### Several processes **[Decided]**
@@ -140,7 +142,7 @@ Specified in [design/locking.md](design/locking.md).
 - **Readers take no header lock**: they read the header, register their snapshot, and read it again.
 - **The writer reclaims pages** only from groups that no registered snapshot and no possible recovery can still reach.
 - **The page cache is keyed by page number and check**, so a stale entry never matches and nothing has to be invalidated when another process commits.
-- **Concurrency model**: one writing process at a time and any number of readers. Waiting for the writer lock past the busy timeout fails with `BUSY`.
+- **Concurrency model**: one writing process at a time and any number of readers. Waiting for the writer lock past the busy timeout, 5 seconds by default (decided 2026-09-29), fails with `BUSY`.
 - **Writers take turns.** A writer that has waited 50 milliseconds claims the turn lock, and every other writer lets it go first, so a process that commits in a tight loop cannot keep the others out. The wait is long enough that the lock seldom passes back and forth, since each pass costs the next commit a barrier.
 - **iOS**: the system terminates a suspended app that holds a file lock in an App Group container, and the open lock is held while a database is open.
 - **Test this area harder than any other.** Concurrent reads and writes from several processes, with processes killed at random, are the phase 3 exit criterion.
@@ -149,12 +151,13 @@ Specified in [design/locking.md](design/locking.md).
 
 Specified in [design/file-format.md](design/file-format.md#encryption).
 
-- **Page-level AEAD with XAES-256-GCM or XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer. A new file gets XAES-256-GCM on a processor with AES instructions and XChaCha20-Poly1305 elsewhere (`crypto/page.rs`, `preferred_cipher`), because each is several times faster than the other on the processors it suits. The key block is always wrapped with XChaCha20-Poly1305.
+- **Page-level AEAD with XAES-256-GCM or XChaCha20-Poly1305** and a random 24-byte nonce per page write. The tag is the page's check, stored in the page and in its parent's pointer. A new file gets XAES-256-GCM on a processor with AES instructions and XChaCha20-Poly1305 elsewhere (`crypto/page.rs`, `preferred_cipher`), because each is several times faster than the other on the processors it suits. The caller does not choose (decided 2026-09-29): either cipher opens a file on any processor, only more slowly on one it does not suit. The key block is always wrapped with XChaCha20-Poly1305.
 - **A data key wrapped by a key-encryption key**, stored in every commit record. Every commit copies the key block of the commit before it. Changing a password is a sync commit that rewraps the key, followed by empty sync commits until no slot holds the old key block.
 - **A password becomes a key through Argon2id**, with its parameters stored in the key block: 19 MiB, 2 iterations and 1 lane by default, which fits a mobile app extension's memory. Unauthenticated modes such as CBC are not used at all.
 - **Commit records are authenticated too.** Page 0 is plain, so each record of an encrypted file carries a keyed BLAKE2b MAC under a key derived from the data key, and recovery refuses a record whose MAC fails. Without it, anyone who can write the file could assemble a record from existing pages. Any code that reads a record from disk, such as a process that finds another process's commit in phase 3, has to check the MAC.
 - **The pager encrypts and decrypts.** `storage/pager.rs` seals every page it writes and opens every page it reads, so the layers above see plaintext and never know which kind of file they are in. The commit's tree pages are sealed in `btree/finish.rs` through the pager, since a parent records its children's tags.
 - **Rust API**: `OpenOptions::key`, `OpenOptions::password`, `OpenOptions::password_hashing`, `Database::set_key`, `Database::set_password`, `Database::is_encrypted`, and the errors `KEY_REQUIRED` and `WRONG_KEY`. Another handle to a file already open in the process has to present the key too.
+- **The bindings take a key or a password as the Rust API does** (decided 2026-09-29 for Node.js): options to open with either, and calls to change them.
 - **Operating-system keystores** (Keychain, Android Keystore, DPAPI) are worth offering as helpers in the bindings.
 - **Encryption and multi-process access do not conflict here**, because there is no shared memory and no mmap.
 - **The header stays plain**, so page size, transaction ids and file size are visible; everything inside a page is not.
@@ -197,8 +200,8 @@ The rest of this section is **[Tentative]**.
 ### Bindings and distribution **[Tentative]**
 
 - **Node.js**: napi-rs. Node-API is ABI-stable, so a binary does not need rebuilding per Node.js version. Prebuilt binaries ship as per-platform optional npm packages.
-- **Dart**: `dart:ffi` with Dart build hooks (native assets), official from Dart 3.10 and Flutter 3.38. The Rust code is built with `native_toolchain_rust` or a similar package. The hook's imports belong in `dependencies`, not `dev_dependencies`, or the hook does not compile in consumer apps.
-- **Toolchain**: the Rust version is pinned in `rust-toolchain.toml` for reproducible builds, which `native_toolchain_rust` requires. `rust-version` in the workspace `Cargo.toml` is a separate promise: the oldest compiler a crate consumer may use.
+- **Dart**: `dart:ffi` with Dart build hooks (native assets), official from Dart 3.10 and Flutter 3.38, which are therefore the package's minimum versions (decided 2026-09-29). The Rust code is built with `native_toolchain_rust` or a similar package. The hook's imports belong in `dependencies`, not `dev_dependencies`, or the hook does not compile in consumer apps.
+- **Toolchain**: the Rust version is pinned in `rust-toolchain.toml` for reproducible builds, which `native_toolchain_rust` requires. `rust-version` in the workspace `Cargo.toml` is a separate promise: the oldest compiler a crate consumer may use. It stays at 1.85, the first release with the 2024 edition, and rises only when a feature needs it, with a changelog entry (decided 2026-09-29).
 
 ### Platform baseline (reference)
 
@@ -211,6 +214,7 @@ The rest of this section is **[Tentative]**.
 | Android | —                                                                           | API 21 (from Flutter 3.22) |
 
 - Rust is not the bottleneck: Flutter's own minimums are higher.
+- Windows 7 and 8 are not supported (decided 2026-09-29): their Rust targets are Tier 3, which would mean building and checking the standard library ourselves.
 - Android needs 16 KB page support, including 16 KB alignment of the native `.so` files.
 
 ## Designs this project rejects
@@ -227,7 +231,7 @@ Each of these was tried elsewhere and caused the problems this project exists to
 
 ## Things that surprise
 
-- **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
+- **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. From the first release on, opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back, which then upgrades it with an explicit call (decided 2026-09-29). The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed objects are the object layer in `schema/`, built on top. Its trees have names that begin with a NUL character, which `tree_names` leaves out and the kernel's public calls refuse; the engine reaches them through the `*_in` methods of the transactions.
 - **A bound prepared query still holds its parameters.** `Query::bind` keeps the values beside the prepared query's IR, which the two share through an `Arc`, rather than copying the IR with the values in place, so `Query::ir` of a bound query has `Expr::Prepared` in it. The planner reads each value from `Query::parameters` where the IR names a parameter; `bound_ir` makes the IR with the values in place, only for equality and for encoding.
 - **Each handle keeps the schema it was opened with.** Handles to one file share an instance, but the schema lives on `Database`, and every transaction gets its handle's. Reaching a collection compares the stored schema's record with the handle's, which is how a handle notices another handle's or another process's migration (`SCHEMA_MISMATCH`).

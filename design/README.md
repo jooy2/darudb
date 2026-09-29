@@ -18,7 +18,7 @@ All three documents were accepted by the maintainer on 2026-09-23, at the end of
 
 [Objects and queries](objects.md), the specification of phase 4, was accepted by the maintainer on 2026-09-24. Phase 4 implements it.
 
-[Tools](tools.md), the specification of phase 6, is written with the tools, on the maintainer's go-ahead of 2026-09-29 to build them; the maintainer has not reviewed it yet. It changes nothing on disk.
+[Tools](tools.md), the specification of phase 6, was written with the tools and accepted by the maintainer on 2026-09-29. It changes nothing on disk.
 
 Phases 1 and 2 implement them for a single process: the file format, sync and deferred commits, recovery, and encryption. Phase 3 implements the lock protocol, on the same format: the open, writer and snapshot locks, several processes on one file, and refusing network file systems. `crates/darudb/src/processes.rs` holds the tests that [Locking](locking.md#what-the-phase-3-tests-must-show) asks for.
 
