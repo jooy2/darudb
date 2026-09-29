@@ -6,10 +6,13 @@
 //! either empty or holding a complete file, and two processes creating the
 //! same database at once cannot both succeed.
 //!
-//! A file system without links gets the file created empty in place, and the
-//! caller writes the first page into it with [`fill`] while holding the open
-//! lock exclusively, so that no other process reads it half-written. A crash
-//! in between leaves an empty file, which is refused as not a database.
+//! A file system without links, such as FAT, gets the temporary file renamed
+//! to the real name with the platform's rename that never replaces a file,
+//! which keeps the same promises. One without that either gets the file
+//! created empty in place, and the caller writes the first page into it with
+//! [`fill`] while holding the open lock exclusively, so that no other process
+//! reads it half-written. A crash in between leaves an empty file, which is
+//! refused as not a database.
 
 use std::fs;
 use std::io;
@@ -37,26 +40,28 @@ pub(crate) fn create_file(path: &Path, contents: &[u8]) -> io::Result<Option<Cre
 
     write_synced(&temporary, contents)?;
 
-    let linked = fs::hard_link(&temporary, path);
+    let placed = place(&temporary, path);
 
-    // The temporary name has done its job whether or not the link worked. A
-    // leftover one is harmless: nothing ever reads it.
+    // The temporary name has done its job whether or not it took the path,
+    // and after a rename it is gone already. A leftover one is harmless:
+    // nothing ever reads it.
     let _ = fs::remove_file(&temporary);
 
-    match linked {
-        Ok(()) => {
+    match placed {
+        Ok(true) => {
             sync_parent_dir(path)?;
 
             DbFile::open(path).map(|file| Some(Created::Whole(file)))
         }
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
-        // A file system without links, such as FAT. Create the file in place
+        // Neither links nor a no-replace rename. Create the file in place
         // instead, for the caller to fill.
-        Err(_) => match DbFile::create_new(path) {
+        Ok(false) => match DbFile::create_new(path) {
             Ok(file) => Ok(Some(Created::Empty(file))),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
             Err(error) => Err(error),
         },
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -84,27 +89,66 @@ pub(crate) fn create_beside(path: &Path, contents: &[u8]) -> io::Result<(PathBuf
 
 /// Gives the file at `temporary` the name `path`, unless something is there
 /// already, which fails with [`io::ErrorKind::AlreadyExists`] and leaves it
-/// alone. The temporary name goes either way. A file system without links
-/// gets a copy under the new name, made only if nothing is there.
+/// alone. The temporary name goes either way. A file system with neither
+/// links nor a no-replace rename gets a copy under the new name, made only if
+/// nothing is there.
 pub(crate) fn move_into_place(temporary: &Path, path: &Path) -> io::Result<()> {
-    let linked = match fs::hard_link(temporary, path) {
-        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
-            let target = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path);
-
-            target.and_then(|mut target| {
+    let moved = match place(temporary, path) {
+        Ok(true) => Ok(()),
+        Ok(false) => fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut target| {
                 io::copy(&mut fs::File::open(temporary)?, &mut target)?;
                 target.sync_all()
-            })
-        }
-        linked => linked,
+            }),
+        Err(error) => Err(error),
     };
     let _ = fs::remove_file(temporary);
 
-    linked?;
+    moved?;
     sync_parent_dir(path)
+}
+
+/// Gives the file at `temporary` the name `path` without replacing anything
+/// there: through a link, which leaves the temporary name for the caller to
+/// remove, or where the file system has no links, a rename that never
+/// replaces a file. A taken path fails with [`io::ErrorKind::AlreadyExists`].
+/// Returns whether the file took the name: `false` when the file system has
+/// neither.
+fn place(temporary: &Path, path: &Path) -> io::Result<bool> {
+    match link(temporary, path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+        Err(_) => match rename(temporary, path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(error),
+            Err(_) => Ok(false),
+        },
+    }
+}
+
+/// [`fs::hard_link`], which the tests can make fail as on a file system
+/// without links.
+fn link(original: &Path, link: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if crate::testing::NO_LINKS.get() {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+
+    fs::hard_link(original, link)
+}
+
+/// [`rename_no_replace`](crate::sys::fs::rename_no_replace), which the tests
+/// can take away too.
+fn rename(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if crate::testing::NO_RENAME.get() {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+
+    crate::sys::fs::rename_no_replace(from, to)
 }
 
 /// Writes `contents` to a new file at `path` and syncs it.
@@ -153,6 +197,74 @@ mod tests {
 
         assert!(create_file(&path, b"page zero").unwrap().is_none());
         assert_eq!(fs::read(&path).unwrap(), b"someone else's");
+    }
+
+    /// Every way a file takes its name, as the file systems that have links,
+    /// only a no-replace rename, or neither, give it.
+    #[test]
+    fn a_file_takes_its_name_without_links_and_without_a_rename() {
+        use crate::testing::{NO_LINKS, NO_RENAME};
+
+        for (links, rename) in [(true, true), (false, true), (false, false)] {
+            // A platform without the rename is covered by the last case.
+            if !links
+                && rename
+                && cfg!(not(any(
+                    target_os = "linux",
+                    target_os = "android",
+                    target_vendor = "apple",
+                    windows
+                )))
+            {
+                continue;
+            }
+
+            NO_LINKS.set(!links);
+            NO_RENAME.set(!rename);
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("app.darudb");
+            let created = create_file(&path, b"page zero").unwrap().unwrap();
+
+            match (created, links || rename) {
+                (Created::Whole(_), true) => assert_eq!(fs::read(&path).unwrap(), b"page zero"),
+                (Created::Empty(file), false) => fill(&file, &path, b"page zero").unwrap(),
+                (_, named) => panic!("links {links}, rename {rename}: named {named}"),
+            }
+
+            assert!(create_file(&path, b"another").unwrap().is_none());
+            assert_eq!(fs::read(&path).unwrap(), b"page zero");
+
+            // The tools' way: a file written beside the path, then moved.
+            let target = dir.path().join("copy.darudb");
+            let (temporary, _) = create_beside(&target, b"a copy").unwrap();
+
+            move_into_place(&temporary, &target).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), b"a copy");
+
+            let (temporary, _) = create_beside(&target, b"no copy").unwrap();
+
+            assert_eq!(
+                move_into_place(&temporary, &target).unwrap_err().kind(),
+                io::ErrorKind::AlreadyExists
+            );
+            assert_eq!(fs::read(&target).unwrap(), b"a copy");
+
+            let mut names: Vec<_> = fs::read_dir(dir.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+
+            names.sort();
+            assert_eq!(
+                names,
+                ["app.darudb", "copy.darudb"],
+                "links {links}, rename {rename}"
+            );
+        }
+
+        NO_LINKS.set(false);
+        NO_RENAME.set(false);
     }
 
     #[test]

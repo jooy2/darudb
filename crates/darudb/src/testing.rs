@@ -260,6 +260,17 @@ fn pause_at(slot: &std::sync::Mutex<Option<Pause>>, path: &std::path::Path) {
     }
 }
 
+thread_local! {
+    /// Set, `storage/create.rs` behaves in this thread as on a file system
+    /// without links, such as FAT, so that the tests reach its fallbacks on
+    /// the file system they run on.
+    pub(crate) static NO_LINKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// Set with [`NO_LINKS`], the file system has no rename that never
+    /// replaces a file either.
+    pub(crate) static NO_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Whether [`pause_in_recovery`] pauses. A helper sets it before it opens a
 /// database.
 pub(crate) static PAUSE_IN_RECOVERY: std::sync::atomic::AtomicBool =
