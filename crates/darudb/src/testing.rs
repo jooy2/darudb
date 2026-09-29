@@ -227,8 +227,24 @@ pub(crate) type Pause = (
 /// Where a reader of the file at `path` stops if [`PAUSE_BEFORE_REGISTERING`]
 /// names that file. Only test builds call it.
 pub(crate) fn pause_before_registering(path: &std::path::Path) {
+    pause_at(&PAUSE_BEFORE_REGISTERING, path);
+}
+
+/// Set, a pause for the next salvage of the file it names, once the salvage
+/// holds the file: it says so on the first channel, and waits for the
+/// second. The test of opening a file under salvage sets it.
+pub(crate) static PAUSE_IN_SALVAGE: std::sync::Mutex<Option<Pause>> = std::sync::Mutex::new(None);
+
+/// Where a salvage of the file at `path` stops if [`PAUSE_IN_SALVAGE`] names
+/// that file. Only test builds call it.
+pub(crate) fn pause_in_salvage(path: &std::path::Path) {
+    pause_at(&PAUSE_IN_SALVAGE, path);
+}
+
+/// Stops at `slot`'s pause if it names the file at `path`, taking it.
+fn pause_at(slot: &std::sync::Mutex<Option<Pause>>, path: &std::path::Path) {
     let pause = {
-        let mut pause = PAUSE_BEFORE_REGISTERING
+        let mut pause = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 

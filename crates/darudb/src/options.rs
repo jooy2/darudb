@@ -256,6 +256,33 @@ impl OpenOptions {
         Database::opening(path.as_ref(), self)
     }
 
+    /// Rescues what it can of the damaged database at `from` into a new
+    /// database at `into`, and returns what it rescued and what it could
+    /// not; see [`SalvageReport`](crate::SalvageReport).
+    ///
+    /// It reads the file page by page rather than opening it, so it works on
+    /// a file that does not open. Of these options it uses the key or
+    /// password, for an encrypted file, and the busy timeout. It starts from
+    /// the newest commit the file records, and takes what that commit cannot
+    /// read from older versions of the same pages where the file still has
+    /// them. The new file gets every index
+    /// built again from its objects, so it passes the integrity check, and it
+    /// has the file's page size, cipher and key.
+    ///
+    /// It needs the file alone: a file open in this process or another fails
+    /// with [`Error::Busy`](crate::Error::Busy). Like a backup, the new file
+    /// is durable when this returns, and never replaces a file already at
+    /// `into`, which fails with [`Error::InvalidArgument`](crate::Error::InvalidArgument).
+    pub fn salvage(
+        &self,
+        from: impl AsRef<Path>,
+        into: impl AsRef<Path>,
+    ) -> Result<crate::SalvageReport> {
+        self.validate()?;
+
+        crate::tools::salvage(from.as_ref(), into.as_ref(), self)
+    }
+
     pub(crate) fn creates(&self) -> bool {
         self.create
     }

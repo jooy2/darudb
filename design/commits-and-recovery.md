@@ -227,7 +227,7 @@ The integrity check, a tool of phase 6, verifies the published commit completely
 
 It reports every problem it finds rather than stopping at the first.
 
-Salvage, also phase 6, rebuilds what it can from a file the check rejects. The format prepares for it: a plain page's check covers its own page number, an encrypted page authenticates itself with the key, and every page header names the page's kind, level, tree and commit. A salvage tool can therefore scan every page, keep those that verify, choose the newest version of each part of each tree, and write the result into a new file. The algorithm is designed with the tool.
+Salvage, also phase 6, rebuilds what it can from a file the check rejects. The format prepares for it: a plain page's check covers its own page number, an encrypted page authenticates itself with the key, and every page header names the page's kind, level, tree and commit. A salvage tool can therefore scan every page, keep those that verify, choose the newest version of each part of each tree, and write the result into a new file. [Tools](tools.md#salvage) specifies the algorithm.
 
 ## Errors
 

@@ -82,7 +82,7 @@ impl Pager {
 
     /// Verifies page `page` against the check stored in it, decrypting it in
     /// an encrypted file, and returns that check if the page is intact.
-    fn open(&self, page: u64, bytes: &mut [u8]) -> Option<Check> {
+    pub(crate) fn open(&self, page: u64, bytes: &mut [u8]) -> Option<Check> {
         match &self.cipher {
             None => {
                 let check = stored_check(bytes);
@@ -155,6 +155,18 @@ impl Pager {
         }
 
         Ok((bytes, checks))
+    }
+
+    /// Reads `count` consecutive pages from `first` on, in one call, as they
+    /// are in the file: not verified, and still encrypted in an encrypted
+    /// file. Salvage reads a damaged file this way, and verifies each page
+    /// on its own with [`open`](Self::open).
+    pub(crate) fn read_run_unverified(&self, first: u64, count: usize) -> Result<Vec<u8>> {
+        let mut bytes = vec![0u8; count * self.page_size];
+
+        self.read_into(first, &mut bytes)?;
+
+        Ok(bytes)
     }
 
     fn read_unverified(&self, page: u64) -> Result<Vec<u8>> {

@@ -2,7 +2,7 @@
 
 The tools that ship with the library, for a file that has to be checked, copied, made smaller or rescued: the integrity check, backup, compaction and salvage. [Commits and recovery](commits-and-recovery.md#checking-and-salvaging) says what the integrity check verifies and what the format gives salvage to work with; this document says how each tool works and what it promises.
 
-Every tool reads the commit a read transaction sees, or writes a new file of its own, so none of them stops other handles and processes from reading and writing the file while it runs.
+The integrity check, backup and compaction read the commit a read transaction sees, or write transactions of their own, so none of them stops other handles and processes from reading and writing the file while it runs. Salvage is for a file nothing can use, and needs it alone.
 
 ## The integrity check
 
@@ -42,3 +42,25 @@ What a backup copies is exactly one commit: the read transaction it holds keeps 
 The move and the settling repeat, four rounds at most, while each round moves pages and shrinks the page count: a round that found too little room below the threshold moves what it could, and the next moves the rest.
 
 **What it cannot move.** A page a registered snapshot can still reach is retained until that read transaction ends, in whatever process holds it, so a compaction beside a long reader shrinks the file less. The next compaction, or any commits after the reader ends, reclaims and cuts the rest.
+
+## Salvage
+
+`OpenOptions::salvage` reads a file that does not open, or that the integrity check rejects, and writes what it can rescue into a new database at another path. It reads the file page by page rather than opening it as a database, so neither a damaged header nor a damaged tree stops it. Of the options, it uses the key or password of an encrypted file and the busy timeout.
+
+**It needs the file alone.** It takes the open lock exclusively, which fails with `BUSY` while another process has the file open, and a handle this process has open makes it fail with `BUSY` at once. While it runs, an entry in the process's registry of open files holds the file, and opening it in this process fails with `BUSY`: a handle of its own would take locks that its close releases, salvage's included. Opening fails rather than waits, since the wait would hold the registry, and every other file the process opens, for as long as salvage runs.
+
+It works in these steps:
+
+1. **The header.** The static fields give the page size, the file id and the cipher. An encrypted file needs them whole, and a commit record whose key block the key or password unwraps, as opening does. A plain file whose static fields fail their check has its page size found instead, as the one at which the most of its first pages verify, and the new file gets a new file id.
+1. **The scan.** Every page from 1 to the end of the file is read and verified against the check stored in it. A plain page's check covers its page number and an encrypted page's tag authenticates it under the key, so a page that verifies is one the engine wrote at that place. Of each leaf that verifies, the scan keeps the page, its check, its tree, the commit that wrote it, and its first and last key. A page that fails is counted as damaged, unless it is all zeros, which a page the file grew past without writing is.
+1. **The commit.** Salvage starts from the newest commit record that passes its check and, in an encrypted file, its MAC. A record that fails is a commit that never happened, and its pages are no version of anything. Where the newest commit's pages are damaged, the older pages that fill them are what an older record would give, and the newest commit keeps everything else.
+1. **The walk.** The catalog of that commit, and every tree it names, are walked from their roots as the integrity check walks them, and every entry read goes into the new file. A page that cannot be read leaves a gap: the keys between the separators on its path, which it and the pages below it held, and the commit its pointer names, which no page below it is newer than. A value whose overflow run cannot be read leaves a gap of its one key.
+1. **Filling the gaps.** A leaf is one commit's version of the keys from its first to its last: in that commit, the keys in that span were exactly the leaf's. For each gap, the leaves the scan found for its tree, written by the gap's commit or an older one, whose span meets the gap, are read newest first. A key of the gap that no newer leaf's span covers is taken from the leaf; one that a newer span covers is not, since the newer version says whether the key still existed. A key whose value cannot be read in one version is taken from the newest older version that has it. What no leaf covers is lost.
+1. **Without a record.** When no commit record can be used, the whole catalog is a gap, filled from every catalog leaf the scan found, and each tree it names is walked from the root its descriptor names. An encrypted file keeps its key block in the records, so it cannot be salvaged without one.
+1. **The objects.** The new file gets the stored schema and every collection's records, but no index. Salvage then drops every record that does not decode under its collection's fields or is not stored under its own key, builds every index again from the records in key order, dropping an object whose entry in a unique index an earlier object has taken, and moves each auto-increment counter past the largest key. Without a stored schema nothing can read the objects, so the object layer's trees are left out.
+
+The new file is written as a backup is: the page size, file id, cipher and key block of the file salvaged, commits of 32 MiB at most, a temporary name beside the path, and a move to the path that never replaces a file.
+
+**What it promises.** The new file opens and passes the integrity check. When the report counts no pages unread and no objects dropped, it holds exactly the commit salvage started from. Otherwise it holds that commit where it could be read and older versions where it could not: a key that a lost newer page had removed may come back with an older value, and a key that no surviving page covers is gone. A tree whose catalog entry is lost in every version is lost with it. In a file where a commit was cut off before its record was written and its transaction id was then used again, a gap may be filled from that commit's pages, since nothing on a page tells the two commits apart.
+
+**What it costs.** It reads every page of the file twice, once in the scan and once in the walk, and each leaf that fills a gap once more. It keeps the first and last key of every leaf the scan finds in memory, so what it needs grows with the file, unlike the other tools.

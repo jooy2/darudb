@@ -73,7 +73,9 @@ pub enum Error {
     Closed,
     /// The database stayed busy for longer than the busy timeout allows:
     /// another write transaction held it, in this process or another, or
-    /// another process was recovering it.
+    /// another process was recovering it. Salvage needs the file alone, so
+    /// it fails with this when the file is open, and opening a file that
+    /// salvage is reading fails with it too.
     Busy {
         /// The database's path.
         path: PathBuf,
@@ -203,7 +205,7 @@ impl fmt::Display for Error {
             Error::Closed => f.write_str("the database has been closed"),
             Error::Busy { path } => write!(
                 f,
-                "`{}` stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it",
+                "`{}` stayed busy for longer than the busy timeout: another write transaction held it, another process was recovering it, or salvage needed it alone",
                 path.display()
             ),
             Error::SyncFailed { path, source } => {

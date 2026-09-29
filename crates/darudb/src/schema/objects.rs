@@ -30,14 +30,20 @@ pub(crate) const META: &str = "\0meta";
 /// The key of the stored schema in [`META`].
 pub(crate) const SCHEMA_KEY: &[u8] = b"schema";
 
+/// What the name of every tree of a collection's objects begins with.
+pub(crate) const RECORDS_PREFIX: &str = "\0rec/";
+
+/// What the name of every tree of an index begins with.
+pub(crate) const INDEX_PREFIX: &str = "\0idx/";
+
 /// The tree of collection `id`'s objects.
 pub(crate) fn records(id: u64) -> IdName {
-    IdName::new("\0rec/", id)
+    IdName::new(RECORDS_PREFIX, id)
 }
 
 /// The tree of index `id`.
 pub(crate) fn index_tree(id: u64) -> IdName {
-    IdName::new("\0idx/", id)
+    IdName::new(INDEX_PREFIX, id)
 }
 
 /// A name made of a prefix and an id, kept inline: the name of a tree of the

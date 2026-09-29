@@ -11,16 +11,10 @@ use std::fs;
 use std::ops::Bound;
 use std::path::Path;
 
+use super::{COMMIT_BYTES, taken, write_new};
 use crate::database::Database;
-use crate::error::{Error, Result};
-use crate::storage::move_into_place;
+use crate::error::Result;
 use crate::txn::ReadTransaction;
-
-/// How many bytes of keys and values a write transaction of the copy holds
-/// before it commits and a new one begins: the pages it changes stay in
-/// memory until then. The tests copy with less, so that a copy of a few
-/// thousand entries commits several times.
-const COMMIT_BYTES: usize = if cfg!(test) { 64 << 10 } else { 32 << 20 };
 
 /// What a backup wrote.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -44,30 +38,14 @@ pub(crate) fn backup(db: &Database, path: &Path) -> Result<BackupReport> {
     let record = *read.record();
 
     if fs::symlink_metadata(path).is_ok() {
-        return Err(taken(path));
+        return Err(taken(path, "a backup"));
     }
 
-    let (temporary, copy) = db.create_copy_beside(path, record.key_block)?;
-    let copied = fill(&read, &copy);
-    let closed = copied.and_then(|report| copy.close().map(|()| report));
-    let mut report = match closed {
-        Ok(report) => report,
-        Err(error) => {
-            let _ = fs::remove_file(&temporary);
-
-            return Err(error);
-        }
-    };
+    let copy = db.create_copy_beside(path, record.key_block)?;
+    let (mut report, bytes) = write_new(path, "a backup", copy, |copy| fill(&read, copy))?;
 
     report.commit_id = record.txn;
-    report.bytes = fs::metadata(&temporary)
-        .map_err(|source| io_error(&temporary, source))?
-        .len();
-
-    move_into_place(&temporary, path).map_err(|source| match source.kind() {
-        std::io::ErrorKind::AlreadyExists => taken(path),
-        _ => io_error(path, source),
-    })?;
+    report.bytes = bytes;
 
     Ok(report)
 }
@@ -114,22 +92,6 @@ fn fill(read: &ReadTransaction, copy: &Database) -> Result<BackupReport> {
     txn.commit()?;
 
     Ok(report)
-}
-
-fn taken(path: &Path) -> Error {
-    Error::InvalidArgument {
-        message: format!(
-            "`{}` exists already, and a backup never replaces a file",
-            path.display()
-        ),
-    }
-}
-
-fn io_error(path: &Path, source: std::io::Error) -> Error {
-    Error::Io {
-        path: path.to_path_buf(),
-        source,
-    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ order: 5
 
 # Tools
 
-DaruDB ships with tools for a file that has to be checked or rescued. Each one works while other handles and processes keep reading and writing the file.
+DaruDB ships with tools for a file that has to be checked, copied, made smaller or rescued. The check, backup and compaction work while other handles and processes keep reading and writing the file; salvage is for a file nothing can use, and needs it alone.
 
 ## Check a file
 
@@ -85,3 +85,30 @@ const report = await db.compactAsync(); // or `db.compact()`
 - Compaction is made of ordinary write transactions, so it waits for the writer lock like any write, and a crash in the middle leaves the file at one of its commits.
 - A page that a read transaction can still reach cannot move until the transaction ends, so the file shrinks less next to long readers. The next compaction takes the rest.
 - To get a compact copy without touching the file, use a backup instead.
+
+## Salvage a damaged file
+
+When a file does not open, or the check finds damage, salvage rescues what it can into a new file. It reads the old file page by page instead of opening it, starts from the newest commit the file records, and where that commit's pages cannot be read, takes the same keys from older versions of those pages that are still in the file. It then builds every index again from the objects, so the new file passes the check.
+
+```rust
+use darudb::OpenOptions;
+
+fn rescue() -> Result<(), darudb::Error> {
+    let report = OpenOptions::new().salvage("app.darudb", "rescued.darudb")?;
+
+    if !report.is_whole() {
+        eprintln!(
+            "{} entries from older pages, {} values lost, {} objects dropped",
+            report.entries_recovered, report.values_lost, report.objects_dropped
+        );
+    }
+
+    Ok(())
+}
+```
+
+- The report is whole (`is_whole()`) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
+- An object whose record cannot be read, or whose value of a unique index another object has taken, is left out and counted.
+- Salvage needs the file to itself. A file open in any process fails with `BUSY`, and so does opening the file while salvage runs.
+- The new file has the page size of the old one, and in Rust an encrypted file is salvaged with its key or password in the options, which then opens the new file too. Like a backup, salvage never replaces a file already at the path.
+- It reads the whole file about twice, and keeps the first and last key of every page of entries in memory, so a large file needs memory in proportion.

@@ -1,7 +1,7 @@
 //! The public handle to one open database file: [`Database`].
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use zeroize::Zeroizing;
@@ -13,7 +13,7 @@ use crate::format::{
     Cipher, CommitRecord, HEADER_LEN, HeaderError, KeyBlock, SELECTOR_OFFSET, SLOT_COUNT,
     STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
-use crate::instance::{Entry, FileKey, Shared, find, registry};
+use crate::instance::{Entry, FileKey, Hold, Shared, find, held_by_tool, registry};
 use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
 use crate::schema::{self, Migrating, Opened, Pending};
@@ -296,39 +296,13 @@ impl Database {
         &self,
         path: &Path,
         key_block: [u8; crate::format::KEY_BLOCK_LEN],
-    ) -> Result<(std::path::PathBuf, Database)> {
-        let header = self.shared.static_header;
-        let mut first = CommitRecord::first();
-        let data_key = self
-            .shared
-            .data_key
-            .as_ref()
-            .map(|key| DataKey::from_bytes(*key.bytes()));
-
-        if let Some(data_key) = &data_key {
-            first.key_block = key_block;
-            first.mac = RecordAuth::new(data_key).mac(&header.file_id, 0, &first.authenticated());
-        }
-
-        let (temporary, file) = storage::create_beside(path, &first_page(&header, &first))
-            .map_err(|source| io_error(path, source))?;
-        let file = Arc::new(file);
-        let locks = Locks::on(Arc::clone(&file));
-        let options = OpenOptions::new();
-
-        locks
-            .open_alone(options.settings().busy_timeout)
-            .map_err(|error| lock_error(&temporary, error))?;
-
-        let shared = open_io(file, locks, Access::Alone, &temporary, &options, data_key)?;
-
-        Ok((
-            temporary,
-            Database {
-                shared,
-                schema: None,
-            },
-        ))
+    ) -> Result<(PathBuf, Database)> {
+        create_beside(
+            path,
+            self.shared.static_header,
+            key_block,
+            self.shared.data_key.as_ref(),
+        )
     }
 
     /// The instance behind this handle, for the tools and the engine's own
@@ -442,7 +416,18 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
 
     instances.retain(|_, entry| entry.holds());
 
-    if let Some(shared) = FileKey::of(path).and_then(|key| find(&instances, &key)) {
+    let key = FileKey::of(path);
+
+    if key
+        .as_ref()
+        .is_some_and(|key| held_by_tool(&instances, key))
+    {
+        return Err(Error::Busy {
+            path: path.to_path_buf(),
+        });
+    }
+
+    if let Some(shared) = key.and_then(|key| find(&instances, &key)) {
         shared.admit(options.secret())?;
 
         return Ok(shared);
@@ -517,6 +502,104 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
     Ok(shared)
 }
 
+/// A new database in a file beside `path` that no other process knows of,
+/// with the static fields `header`, and in an encrypted file `data_key`
+/// wrapped as `key_block`, which the file's secret unwraps. Returns its
+/// temporary name too. See [`Database::create_copy_beside`].
+pub(crate) fn create_beside(
+    path: &Path,
+    header: StaticHeader,
+    key_block: [u8; crate::format::KEY_BLOCK_LEN],
+    data_key: Option<&DataKey>,
+) -> Result<(PathBuf, Database)> {
+    let mut first = CommitRecord::first();
+    let data_key = data_key.map(|key| DataKey::from_bytes(*key.bytes()));
+
+    if let Some(data_key) = &data_key {
+        first.key_block = key_block;
+        first.mac = RecordAuth::new(data_key).mac(&header.file_id, 0, &first.authenticated());
+    }
+
+    let (temporary, file) = storage::create_beside(path, &first_page(&header, &first))
+        .map_err(|source| io_error(path, source))?;
+    let file = Arc::new(file);
+    let locks = Locks::on(Arc::clone(&file));
+    let options = OpenOptions::new();
+
+    locks
+        .open_alone(options.settings().busy_timeout)
+        .map_err(|error| lock_error(&temporary, error))?;
+
+    let shared = open_io(file, locks, Access::Alone, &temporary, &options, data_key)?;
+
+    Ok((
+        temporary,
+        Database {
+            shared,
+            schema: None,
+        },
+    ))
+}
+
+/// A file a tool reads without opening it as a database, held so that
+/// nothing opens it meanwhile. The open lock, taken alone, keeps other
+/// processes out. The registry keeps this process's threads out, since
+/// closing a handle of their own would release the tool's locks: opening
+/// the file fails with [`Error::Busy`] until the tool lets go.
+pub(crate) struct Held {
+    pub(crate) file: Arc<DbFile>,
+    _locks: Locks,
+    /// Goes last, once the file is closed, and lets this process open it
+    /// again.
+    _hold: Arc<Hold>,
+}
+
+/// Holds the file at `path` alone, waiting up to `timeout` for other
+/// processes to let go of it. A file this process has open fails with
+/// [`Error::Busy`] at once.
+pub(crate) fn hold_alone(path: &Path, timeout: std::time::Duration) -> Result<Held> {
+    let busy = || Error::Busy {
+        path: path.to_path_buf(),
+    };
+    let mut instances = registry();
+
+    instances.retain(|_, entry| entry.holds());
+
+    if FileKey::of(path)
+        .is_some_and(|key| held_by_tool(&instances, &key) || find(&instances, &key).is_some())
+    {
+        return Err(busy());
+    }
+
+    let file = Arc::new(open_file(path)?);
+    let key = FileKey::of_file(&file, path).map_err(|source| io_error(path, source))?;
+
+    if let Some(shared) = find(&instances, &key) {
+        // The path led to a file this process has open after all: it was
+        // moved there after the lookup above. Closing the new handle would
+        // release the instance's locks, so the instance keeps it.
+        shared.keep_handle(file);
+
+        return Err(busy());
+    }
+
+    let locks = Locks::on(Arc::clone(&file));
+
+    locks
+        .open_alone(timeout)
+        .map_err(|error| lock_error(path, error))?;
+
+    let hold = Arc::new(Hold);
+
+    instances.insert(key, Entry::held(&hold));
+
+    Ok(Held {
+        file,
+        _locks: locks,
+        _hold: hold,
+    })
+}
+
 /// Reads the static fields of the file, unlocks an encrypted one, and builds
 /// the shared instance. `data_key` is the key of a file this process has just
 /// created, which need not be unwrapped again.
@@ -563,7 +646,7 @@ fn open_io(
         }
         (Cipher::Plain, _) => None,
         (_, Some(data_key)) => Some(data_key),
-        (_, None) => Some(unlock(path, &static_header, &bytes, options)?),
+        (_, None) => Some(unlock(path, &static_header, &bytes, options)?.0),
     };
     let pager = Arc::new(Pager::new(
         io,
@@ -613,15 +696,16 @@ fn open_io(
 }
 
 /// The data key of an encrypted file, from the key block of the first record
-/// that `options`' secret unwraps, newest first. The records of a file share
-/// one data key, and an older record may still hold a key block from before
-/// the key was changed.
-fn unlock(
+/// that `options`' secret unwraps, newest first, and that key block. The
+/// records of a file share one data key, and an older record may still hold
+/// a key block from before the key was changed. `bytes` is the start of the
+/// file, [`HEADER_LEN`] bytes of it.
+pub(crate) fn unlock(
     path: &Path,
     header: &StaticHeader,
     bytes: &[u8],
     options: &OpenOptions,
-) -> Result<DataKey> {
+) -> Result<(DataKey, [u8; crate::format::KEY_BLOCK_LEN])> {
     let Some(secret) = options.secret() else {
         return Err(Error::KeyRequired {
             path: path.to_path_buf(),
@@ -639,6 +723,15 @@ fn unlock(
 
     records.sort_by_key(|record| std::cmp::Reverse(record.txn));
 
+    // Without a record there is no key block, and nothing to say the key is
+    // wrong.
+    if records.is_empty() {
+        return Err(Error::Corrupted {
+            path: path.to_path_buf(),
+            reason: "no commit record can be read, so no key block either".to_owned(),
+        });
+    }
+
     for record in records {
         let block = match KeyBlock::decode(&record.key_block) {
             Ok(Some(block)) => block,
@@ -655,7 +748,7 @@ fn unlock(
         };
 
         match unlocker.unlock(&block, &header.file_id) {
-            Ok(Some(data_key)) => return Ok(data_key),
+            Ok(Some(data_key)) => return Ok((data_key, record.key_block)),
             Ok(None) => {}
             Err(reason) => damage = Some(reason),
         }
@@ -771,7 +864,7 @@ fn first_page(header: &StaticHeader, first: &CommitRecord) -> Vec<u8> {
 }
 
 /// Opens the file already at `path`.
-fn open_file(path: &Path) -> Result<DbFile> {
+pub(crate) fn open_file(path: &Path) -> Result<DbFile> {
     DbFile::open(path).map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => Error::NotFound {
             path: path.to_path_buf(),
@@ -803,7 +896,7 @@ fn io_error(path: &Path, source: io::Error) -> Error {
     }
 }
 
-fn header_error(path: &Path, error: HeaderError) -> Error {
+pub(crate) fn header_error(path: &Path, error: HeaderError) -> Error {
     let path = path.to_path_buf();
 
     match error {

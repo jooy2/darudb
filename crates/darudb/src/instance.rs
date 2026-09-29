@@ -1102,6 +1102,8 @@ impl FileKey {
 pub(crate) struct Entry {
     instance: Weak<Shared>,
     hold: Weak<Hold>,
+    /// Set when a tool holds the file rather than an instance.
+    tool: bool,
 }
 
 impl Entry {
@@ -1109,6 +1111,18 @@ impl Entry {
         Self {
             instance: Arc::downgrade(shared),
             hold: Arc::downgrade(&shared.hold),
+            tool: false,
+        }
+    }
+
+    /// The entry of a file a tool holds without an instance, as salvage
+    /// does, until `hold` goes. Opening the file meanwhile fails with `BUSY`
+    /// (see [`held_by_tool`]).
+    pub(crate) fn held(hold: &Arc<Hold>) -> Self {
+        Self {
+            instance: Weak::new(),
+            hold: Arc::downgrade(hold),
+            tool: true,
         }
     }
 
@@ -1130,6 +1144,16 @@ pub(crate) static REGISTRY: LazyLock<Mutex<HashMap<FileKey, Entry>>> =
 /// two threads opening one file end up with one instance.
 pub(crate) fn registry() -> MutexGuard<'static, HashMap<FileKey, Entry>> {
     lock(&REGISTRY)
+}
+
+/// Whether a tool holds the file `key` names, as salvage does while it
+/// reads it. Opening the file fails with `BUSY` then, rather than waiting as
+/// it waits for an instance that is closing: the wait holds the registry, and
+/// a tool may hold a file for minutes.
+pub(crate) fn held_by_tool(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> bool {
+    instances
+        .get(key)
+        .is_some_and(|entry| entry.tool && entry.holds())
 }
 
 /// The instance of the file `key` names, if this process has it open. One a
