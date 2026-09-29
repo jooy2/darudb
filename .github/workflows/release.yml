@@ -32,28 +32,46 @@ jobs:
   version:
     runs-on: ubuntu-latest
     name: Check the version
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      changelog: ${{ steps.package.outputs.changelog }}
+      tag: ${{ steps.package.outputs.tag }}
+      title: ${{ steps.package.outputs.title }}
 
     steps:
       - uses: actions/checkout@v5
-      # A release renames the changelog's `vNext` section to the version and
-      # its date. Publishing without that would ship an entry-less release.
-      - name: Check that the changelog names the version
-        if: inputs.publish
+        with:
+          persist-credentials: false
+      - name: Read the package's version
+        id: package
         env:
           PACKAGE: ${{ inputs.package }}
         run: |
           if [ "$PACKAGE" = npm ]; then
             version=$(node -p "require('./packages/node/package.json').version")
-            changelog=packages/node/CHANGELOG.md
+            echo "changelog=packages/node/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "tag=node-v$version" >> "$GITHUB_OUTPUT"
+            echo "title=darudb $version for Node.js" >> "$GITHUB_OUTPUT"
           else
-            version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "darudb") | .version')
-            changelog=crates/darudb/CHANGELOG.md
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/darudb/Cargo.toml | head -n 1)
+            echo "changelog=crates/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "tag=darudb-v$version" >> "$GITHUB_OUTPUT"
+            echo "title=darudb $version for Rust" >> "$GITHUB_OUTPUT"
           fi
 
-          heading=$(grep -m 1 '^## ' "$changelog")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # A release renames the changelog's `vNext` section to the version and
+      # its date. Publishing without that would ship an entry-less release.
+      - name: Check that the changelog names the version
+        if: inputs.publish
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          CHANGELOG: ${{ steps.package.outputs.changelog }}
+        run: |
+          heading=$(grep -m 1 '^## ' "$CHANGELOG")
 
-          if ! printf '%s\n' "$heading" | grep -Eq "^## v${version//./\\.} \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"; then
-            echo "::error::$changelog opens with \"$heading\", not the release of $version and its date"
+          if ! printf '%s\n' "$heading" | grep -Eq "^## v${VERSION//./\\.} \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"; then
+            echo "::error::$CHANGELOG opens with \"$heading\", not the release of $VERSION and its date"
             exit 1
           fi
 
@@ -65,6 +83,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test -p darudb
@@ -112,6 +132,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -165,6 +187,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - name: Build in a FreeBSD machine
         uses: cross-platform-actions/action@v1.6.0
         with:
@@ -205,6 +229,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -246,3 +272,33 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
+
+  # Its own job, so that the jobs that install and build third-party code
+  # never hold a token that can write to the repository.
+  github-release:
+    if: inputs.publish && !cancelled() && !failure()
+    needs: [version, crate, npm]
+    runs-on: ubuntu-latest
+    name: Tag and release on GitHub
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # The release notes are the changelog's section for the version.
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          CHANGELOG: ${{ needs.version.outputs.changelog }}
+          TAG: ${{ needs.version.outputs.tag }}
+          TITLE: ${{ needs.version.outputs.title }}
+        run: |
+          awk -v heading="## v$VERSION " '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' "$CHANGELOG" > notes.md
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md

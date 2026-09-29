@@ -131,7 +131,7 @@ The crate and the npm package version independently, and each is released on its
 1. Commit that as `[core] chore: release v<version>` or `[node] chore: release v<version>`, and push it.
 1. Run the workflow on that commit without **publish**, and read what it lists.
 1. Run it again with **publish**. The crate needs the repository secret `CARGO_REGISTRY_TOKEN`, and the npm package `NPM_TOKEN`, which has to be allowed to publish `darudb` and every `darudb-<platform>` package. npm publishes the platform packages first, then `darudb` with them as optional dependencies, each with a provenance statement.
-1. Tag the commit `darudb-v<version>` for the crate or `node-v<version>` for the npm package, and push the tag. Publishing creates no tag and no GitHub release by itself.
+1. Once it has published, the workflow tags the commit `darudb-v<version>` for the crate or `node-v<version>` for the npm package, and makes a GitHub release whose notes are the changelog's section for the version. A separate job does that, the only one that may write to the repository.
 
 The Node.js addon has the engine compiled in, so a fix to the engine reaches Node.js only with a release of the npm package.
 
