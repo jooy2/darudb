@@ -236,6 +236,16 @@ impl Object {
         }
     }
 
+    /// Sets every field `changes` has to its value there.
+    pub(crate) fn absorb(&mut self, changes: Object) {
+        for (name, value) in changes.fields {
+            match self.find(name.as_str()) {
+                Ok(at) => self.fields[at].1 = value,
+                Err(at) => self.fields.insert(at, (name, value)),
+            }
+        }
+    }
+
     /// The value of field `name`, if the object has the field.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.find(name).ok().map(|at| &self.fields[at].1)

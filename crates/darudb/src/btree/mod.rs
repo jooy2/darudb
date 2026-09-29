@@ -29,7 +29,8 @@ pub(crate) use load::Loader;
 pub(crate) use node::{Child, LoadedNode, Node};
 pub(crate) use read::{Range, Seeker, Visit, get, get_with, resolve};
 pub(crate) use write::{
-    Inserted, Removed, delete_tree, insert, insert_with, remove, remove_present, remove_with,
+    Change, Inserted, Removed, delete_tree, insert, insert_with, remove, remove_present,
+    remove_with, update_with,
 };
 
 /// Where committed nodes and overflow values come from.

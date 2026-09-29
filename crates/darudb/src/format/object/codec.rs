@@ -9,6 +9,10 @@
 use super::schema::{FieldDef, Fields, Kind};
 use super::value::{Name, Object, Value};
 
+/// Null, in the changes a binding sends for an update alone: the field becomes
+/// null. A record the file holds leaves a null field out instead, and every
+/// other reader refuses the tag.
+const NULL: u8 = 0x01;
 const FALSE: u8 = 0x02;
 const TRUE: u8 = 0x03;
 const INT: u8 = 0x04;
@@ -49,6 +53,26 @@ pub(crate) fn write(fields: &[(u64, Raw)]) -> Vec<u8> {
     let mut out = Vec::new();
 
     write_fields(fields, &mut out);
+
+    out
+}
+
+/// The bytes of a record of changes for an update, whose fields are `fields`,
+/// by id in ascending order, `None` for a field made null.
+#[cfg(test)]
+pub(crate) fn write_changes(fields: &[(u64, Option<Raw>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+
+    write_varint(fields.len() as u64, &mut out);
+
+    for (id, value) in fields {
+        write_varint(*id, &mut out);
+
+        match value {
+            Some(value) => write_value(value, &mut out),
+            None => out.push(NULL),
+        }
+    }
 
     out
 }
@@ -501,6 +525,15 @@ impl<'a> Reader<'a> {
         Ok(&bytes[self.at - len..self.at])
     }
 
+    /// Whether the value next is [`NULL`], which it steps over if so.
+    fn null(&mut self) -> bool {
+        let null = self.bytes.get(self.at) == Some(&NULL);
+
+        self.at += usize::from(null);
+
+        null
+    }
+
     fn varint(&mut self) -> Result<u64, &'static str> {
         let mut value = 0u64;
 
@@ -827,6 +860,9 @@ pub(crate) type KeyKinds<'a> = &'a dyn Fn(u64) -> Option<Kind>;
 /// The error says what is wrong, for the caller to report as an invalid
 /// argument. A name that is not a field is reported before anything else
 /// wrong with the object.
+// Inlined by hand, as `btree::write::store_value` is, and for the same
+// reason.
+#[inline(always)]
 pub(crate) fn record_of_slots(
     object: &Object,
     slots: &Slots<'_>,
@@ -871,6 +907,9 @@ pub(crate) struct Slots<'o> {
 impl<'o> Slots<'o> {
     /// The values of `object` for `fields`, in the order `order` worked out
     /// from them.
+    // Inlined by hand, as `btree::write::store_value` is, and for the same
+    // reason.
+    #[inline(always)]
     pub(crate) fn of(object: &'o Object, fields: &Fields, order: &NameOrder) -> Self {
         let mut values = vec![None; fields.list.len()];
         let mut known = 0;
@@ -1108,6 +1147,17 @@ pub(crate) fn to_object(raw: Vec<(u64, Raw)>, fields: &Fields) -> Result<Object,
 /// thing wrong is refused for the first found, which may not be the one
 /// reading it whole first would name.
 pub(crate) fn partial_object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'static str> {
+    partial_object(bytes, fields, false)
+}
+
+/// The changes the record `bytes` from outside the engine holds for an
+/// update, as [`partial_object_of`] reads a record, except that a field may
+/// hold [`NULL`], which reads as [`Value::Null`].
+pub(crate) fn changes_object_of(bytes: &[u8], fields: &Fields) -> Result<Object, &'static str> {
+    partial_object(bytes, fields, true)
+}
+
+fn partial_object(bytes: &[u8], fields: &Fields, nulls: bool) -> Result<Object, &'static str> {
     let mut reader = Reader { bytes, at: 0 };
     let count = reader.count(2)?;
     let mut object = Vec::with_capacity(count.min(RESERVE));
@@ -1127,11 +1177,13 @@ pub(crate) fn partial_object_of(bytes: &[u8], fields: &Fields) -> Result<Object,
         let field = fields
             .by_id(id)
             .ok_or("a record holds a field id its collection does not have")?;
+        let value = if nulls && reader.null() {
+            Value::Null
+        } else {
+            reader.value_as(&field.kind, 0)?
+        };
 
-        object.push((
-            Name::from(field.name.as_str()),
-            reader.value_as(&field.kind, 0)?,
-        ));
+        object.push((Name::from(field.name.as_str()), value));
     }
 
     if reader.at != bytes.len() {
@@ -1185,6 +1237,88 @@ pub(crate) fn flat_fields<'a>(
             .ok_or("a record holds a field id its collection does not have")?;
 
         present.push((position, reader.scalar_as(&fields.list[position].kind)?));
+    }
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
+    }
+
+    Ok(present)
+}
+
+/// The changes the record `bytes` from outside the engine holds for an
+/// update of an object under `fields`, which [`is_flat`] accepts: each as the
+/// position of its field and its new value, `None` for [`NULL`]. The record
+/// is checked as [`flat_fields`] checks it.
+pub(crate) fn flat_changes<'a>(
+    bytes: &'a [u8],
+    fields: &Fields,
+) -> Result<Vec<(usize, Option<FieldRef<'a>>)>, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2)?;
+    let mut changes = Vec::with_capacity(count.min(fields.list.len()));
+    let mut last = None;
+
+    for _ in 0..count {
+        let id = reader.varint()?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err("a record's field ids are out of order");
+        }
+
+        last = Some(id);
+
+        let position = fields
+            .list
+            .iter()
+            .position(|field| field.id == id)
+            .ok_or("a record holds a field id its collection does not have")?;
+        let value = if reader.null() {
+            None
+        } else {
+            Some(reader.scalar_as(&fields.list[position].kind)?)
+        };
+
+        changes.push((position, value));
+    }
+
+    if reader.at != bytes.len() {
+        return Err("a record has bytes after its last field");
+    }
+
+    Ok(changes)
+}
+
+/// The fields the record `bytes` from the file holds, under `fields`, which
+/// [`is_flat`] accepts: each as the position of its field and its value,
+/// borrowed from the record, as [`flat_fields`] gives a binding's. A field id
+/// `fields` does not have belongs to a field that was removed, and is
+/// stepped over; a value that does not fit its field makes the record
+/// damaged, as it does for [`object_of`].
+pub(crate) fn stored_flat_fields<'a>(
+    bytes: &'a [u8],
+    fields: &Fields,
+) -> Result<Vec<(usize, FieldRef<'a>)>, &'static str> {
+    let mut reader = Reader { bytes, at: 0 };
+    let count = reader.count(2)?;
+    let mut present = Vec::with_capacity(fields.list.len());
+    let mut last = None;
+
+    for _ in 0..count {
+        let id = reader.varint()?;
+
+        if last.is_some_and(|last| last >= id) {
+            return Err("a record's field ids are out of order");
+        }
+
+        last = Some(id);
+
+        match fields.list.iter().position(|field| field.id == id) {
+            Some(position) => {
+                present.push((position, reader.scalar_as(&fields.list[position].kind)?));
+            }
+            None => reader.skip(0)?,
+        }
     }
 
     if reader.at != bytes.len() {
@@ -1822,5 +1956,69 @@ mod tests {
         }
 
         assert!(read(&nested).is_err(), "nesting past the limit");
+    }
+
+    /// Null reads in a record of changes, as `None` or as a null value,
+    /// and nowhere else: a record to be written, or stored, that holds it is
+    /// refused.
+    #[test]
+    fn null_is_a_change_and_no_record_holds_it() {
+        let fields = fields();
+        let changes = write_changes(&[
+            (2, Some(Raw::String("Ann".to_owned()))),
+            (3, None),
+            (5, None),
+        ]);
+
+        assert_eq!(
+            flat_changes(&changes, &fields).unwrap(),
+            vec![(1, Some(FieldRef::String(b"Ann"))), (2, None), (4, None)]
+        );
+
+        let object = changes_object_of(&changes, &fields).unwrap();
+
+        assert_eq!(object.get("name"), Some(&Value::String("Ann".to_owned())));
+        assert_eq!(object.get("email"), Some(&Value::Null));
+        assert_eq!(object.get("score"), Some(&Value::Null));
+        assert_eq!(object.len(), 3);
+
+        assert!(flat_fields(&changes, &fields).is_err());
+        assert!(partial_object_of(&changes, &fields).is_err());
+        assert!(stored_flat_fields(&changes, &fields).is_err());
+        assert!(object_of(&changes, &fields).is_err());
+        assert!(find_field(&changes, 3).is_err());
+
+        // A null in place of a value inside a list or an embedded object is
+        // not a change of a field, and is refused there too.
+        let inside = [1, 6, LIST, 1, NULL];
+
+        assert!(changes_object_of(&inside, &fields).is_err());
+    }
+
+    /// A record stored under an older schema is read by the fields the
+    /// schema has now: an id it no longer has is stepped over, whatever its
+    /// value, and a value of another type than its field is damage.
+    #[test]
+    fn a_stored_record_is_read_by_the_fields_it_still_has() {
+        let fields = Fields {
+            list: vec![
+                field(1, "id", Kind::Int, false),
+                field(3, "name", Kind::String, false),
+            ],
+            next_id: 4,
+        };
+        let record = write(&[
+            (1, Raw::Int(7)),
+            (2, Raw::List(vec![Raw::String("gone".to_owned())])),
+            (3, Raw::String("Ann".to_owned())),
+            (9, Raw::Float(0.5)),
+        ]);
+
+        assert_eq!(
+            stored_flat_fields(&record, &fields).unwrap(),
+            vec![(0, FieldRef::Int(7)), (1, FieldRef::String(b"Ann"))]
+        );
+        assert!(stored_flat_fields(&write(&[(1, Raw::String("7".to_owned()))]), &fields).is_err());
+        assert!(stored_flat_fields(&record[..record.len() - 1], &fields).is_err());
     }
 }

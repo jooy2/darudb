@@ -4,10 +4,10 @@
 //!
 //! Every write checks everything that can refuse it, the object's types, its
 //! key, the unique indexes and the lengths of every key it adds, before it
-//! changes an index. A put stores its record before the unique indexes are
-//! checked, and stores the record it replaced again if one refuses it. A
-//! refused write leaves the transaction holding what it held and able to
-//! commit.
+//! changes an index. A put or an update stores its record before the unique
+//! indexes are checked, and stores the record it replaced again if one
+//! refuses it. A refused write leaves the transaction holding what it held
+//! and able to commit.
 
 use std::collections::BTreeSet;
 use std::ops::Bound;
@@ -249,6 +249,41 @@ pub(crate) fn position(schema: &StoredSchema, name: &str) -> Result<usize> {
         .ok_or_else(|| Error::InvalidArgument {
             message: format!("the schema has no collection called `{name}`"),
         })
+}
+
+/// Refuses the object of `collection` whose record is `record` and whose
+/// index entries are `entries` if the record is 4 GiB long or more, or an
+/// entry is longer than `max_key_len`, as [`CollectionWriter::store`] does
+/// for an insert or a put. The entries of the object it replaces passed when
+/// they were written.
+fn check_lengths(
+    collection: &CollectionDef,
+    max_key_len: usize,
+    record: &[u8],
+    entries: &IndexKeys,
+) -> Result<()> {
+    if u32::try_from(record.len()).is_err() {
+        return Err(Error::InvalidArgument {
+            message: format!("an object of `{}` is 4 GiB long or more", collection.name),
+        });
+    }
+
+    if entries.iter().any(|(_, entry)| entry.len() > max_key_len) {
+        return Err(too_long(collection, max_key_len));
+    }
+
+    Ok(())
+}
+
+/// The error for an object of `collection` with a key or an index entry
+/// longer than `max_key_len`.
+fn too_long(collection: &CollectionDef, max_key_len: usize) -> Error {
+    Error::InvalidArgument {
+        message: format!(
+            "an object of `{}` has a key or an indexed value too long for the file's keys, which are at most {max_key_len} bytes",
+            collection.name
+        ),
+    }
 }
 
 /// The key encoding of `key`, once it is known to be a key of `collection`.
@@ -642,6 +677,9 @@ fn released<T>(
 
 /// Whether the object whose entries are `entries` holds a unique value that
 /// the object it replaces, whose entries are `old`, did not.
+// Inlined by hand, as `btree::write::store_value` is, and for the same
+// reason.
+#[inline(always)]
 fn adds_unique(collection: &CollectionDef, entries: &IndexKeys, old: &IndexKeys) -> bool {
     entries.iter().any(|(position, entry)| {
         collection.indexes[position].unique && !old.contains(position, entry)
@@ -724,6 +762,54 @@ fn scalar_entry(
     })?;
 
     Ok(true)
+}
+
+/// The position in `collection`'s list of the field whose id is `id`.
+fn field_position(collection: &CollectionDef, id: u64) -> Result<usize> {
+    collection
+        .fields
+        .list
+        .iter()
+        .position(|field| field.id == id)
+        .ok_or_else(|| internal("an index is on a field its collection does not have"))
+}
+
+/// Adds the entries of `index`, at `index_position`, for the object of a
+/// collection whose fields all hold scalars and whose values an update made
+/// `present`, each read as its field's already: the indexed field's value
+/// where `present` holds it, or else the value the object is stored with, as
+/// [`object_entries`] finds it in the object. `stored_key` is the position
+/// of the key field and the key.
+///
+/// [`CollectionWriter::write_record`] does the same for a binding's record,
+/// and keeps its own copy: calling this from there made puts through a
+/// binding 2% slower, measured on separately built binaries.
+fn present_entries(
+    entries: &mut IndexKeys,
+    (index_position, index): (usize, &IndexDef),
+    collection: &CollectionDef,
+    present: &[(usize, FieldRef<'_>)],
+    (key_position, key_value): (usize, &Value),
+    key: &[u8],
+) -> Result<()> {
+    let position = field_position(collection, index.field)?;
+    let field = &collection.fields.list[position];
+    let found = present.iter().find(|(at, _)| *at == position);
+
+    if let Some((_, found)) = found {
+        if scalar_entry(entries, index_position, index, *found, &field.kind, key)? {
+            return Ok(());
+        }
+    }
+
+    let value = match found {
+        Some((_, found)) => codec::field_value(*found, &field.kind).map_err(internal)?,
+        None if position == key_position => key_value.clone(),
+        None if !field.optional => field.default.clone().unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+
+    value_entries(entries, index_position, index, &value, key)
 }
 
 /// About how many bytes the entry `value` gives `index` for the object whose
@@ -896,6 +982,179 @@ enum Previous {
     Record(Vec<u8>),
 }
 
+/// What an update learns while its visitor has the record stored, for
+/// [`CollectionWriter::finish_update`].
+#[derive(Default)]
+struct Update {
+    /// The entries the object has in the indexes the update may change, and
+    /// those it had, when it changes the record.
+    entries: Option<(IndexKeys, IndexKeys)>,
+    /// The record stored, when a unique value the object did not hold may
+    /// refuse the new one after it is stored, and it has to go back.
+    previous: Option<Vec<u8>>,
+    /// What is wrong with the record stored, if it is damaged.
+    damage: Option<&'static str>,
+}
+
+impl Update {
+    /// Keeps what an update that replaces the record `stored` needs after
+    /// the visitor: the entries, and the record if it may have to go back.
+    fn made(
+        &mut self,
+        collection: &CollectionDef,
+        stored: &[u8],
+        entries: IndexKeys,
+        old: IndexKeys,
+    ) {
+        if adds_unique(collection, &entries, &old) {
+            self.previous = Some(stored.to_vec());
+        }
+
+        self.entries = Some((entries, old));
+    }
+}
+
+/// The record of `object` of `collection`, whose fields are in `order` by
+/// name and whose key encodes as `key`, and its entries in every index, as
+/// [`CollectionWriter::write`] makes them for an object with its key.
+fn object_written(
+    schema: &OpenSchema,
+    collection: &CollectionDef,
+    order: &codec::NameOrder,
+    object: &Object,
+    key: &[u8],
+) -> Result<(Vec<u8>, IndexKeys)> {
+    let slots = codec::Slots::of(object, &collection.fields, order);
+    let record = codec::record_of_slots(object, &slots, &collection.fields, &|id| {
+        schema.schema.key_kind(id)
+    })
+    .map_err(|message| Error::InvalidArgument {
+        message: format!("an object of `{}`: {message}", collection.name),
+    })?;
+    let mut entries = IndexKeys::with_capacity(collection.indexes.len());
+
+    for (index_position, index) in collection.indexes.iter().enumerate() {
+        let position = field_position(collection, index.field)?;
+        let field = &collection.fields.list[position];
+
+        found_entries(
+            &mut entries,
+            index_position,
+            index,
+            field,
+            slots.get(position),
+            key,
+        )?;
+    }
+
+    Ok((record, entries))
+}
+
+/// What an update of an object of a collection whose fields all hold scalars
+/// writes: the new record, and the entries of the indexes on the fields it
+/// changes, before and after.
+struct Changed {
+    record: Vec<u8>,
+    entries: IndexKeys,
+    old: IndexKeys,
+}
+
+/// What the update `changes`, which [`codec::flat_changes`] read, makes of
+/// the object of `collection` whose record is `stored` and whose key encodes
+/// as `key`; `stored_key` is the position of the key field and the key.
+/// `None` when the record stays as it is. What is wrong with a damaged
+/// record is told apart, for the caller to make the error for once the tree
+/// it reads the record from is free.
+fn changed(
+    collection: &CollectionDef,
+    stored: &[u8],
+    changes: &[(usize, Option<FieldRef<'_>>)],
+    stored_key: (usize, &Value),
+    key: &[u8],
+) -> Result<Option<Changed>, Unread> {
+    let fields = &collection.fields;
+    let mut present = codec::stored_flat_fields(stored, fields).map_err(Unread::Damaged)?;
+
+    // Every record holds the required fields without a default, and one
+    // that lacks one is damaged, as reading the object finds it.
+    if fields.list.iter().enumerate().any(|(position, field)| {
+        !field.optional && field.default.is_none() && !present.iter().any(|(at, _)| *at == position)
+    }) {
+        return Err(Unread::Damaged("a record lacks a required field"));
+    }
+
+    for &(position, value) in changes {
+        let at = present.iter().position(|(at, _)| *at == position);
+
+        match (at, value) {
+            (Some(at), Some(value)) => present[at].1 = value,
+            (Some(at), None) => {
+                present.swap_remove(at);
+            }
+            (None, Some(value)) => present.push((position, value)),
+            (None, None) => {}
+        }
+    }
+
+    // Only a change can leave out a required field now: one made null.
+    let record =
+        codec::flat_record(&present, fields, None).map_err(|message| Error::InvalidArgument {
+            message: format!("an object of `{}`: {message}", collection.name),
+        })?;
+
+    if record == stored {
+        return Ok(None);
+    }
+
+    let mut entries = IndexKeys::default();
+    let mut old = IndexKeys::default();
+
+    for (index_position, index) in collection.indexes.iter().enumerate() {
+        let position = field_position(collection, index.field)?;
+
+        if !changes.iter().any(|(at, _)| *at == position) {
+            continue;
+        }
+
+        stored_entries(&mut old, index_position, index, collection, stored, key)?;
+        present_entries(
+            &mut entries,
+            (index_position, index),
+            collection,
+            &present,
+            stored_key,
+            key,
+        )?;
+    }
+
+    Ok(Some(Changed {
+        record,
+        entries,
+        old,
+    }))
+}
+
+/// Whether `found` is the primary key `key`.
+fn is_key(found: FieldRef<'_>, key: &Value) -> bool {
+    match (found, key) {
+        (FieldRef::Int(found), Value::Int(key)) => found == *key,
+        (FieldRef::String(found), Value::String(key)) => found == key.as_bytes(),
+        (FieldRef::Bytes(found), Value::Bytes(key)) => found == key.as_slice(),
+        _ => false,
+    }
+}
+
+/// The error for an update of an object of `collection` that changes its
+/// primary key.
+fn changes_key(collection: &CollectionDef) -> Error {
+    Error::InvalidArgument {
+        message: format!(
+            "an update of an object of `{}` cannot change its primary key; delete the object and insert it again",
+            collection.name
+        ),
+    }
+}
+
 /// A collection of a write transaction: its objects, with the transaction's
 /// changes, and the calls that change them.
 #[derive(Debug)]
@@ -1021,6 +1280,182 @@ impl<'a> CollectionWriter<'a> {
     /// [`insert_record`](Self::insert_record) and [`put`](Self::put).
     pub fn put_record(&mut self, record: &[u8]) -> Result<Value> {
         self.write_record(record, true)
+    }
+
+    /// Sets the fields `changes` has in the object whose primary key is
+    /// `key`, and returns whether there was one; nothing is written when
+    /// there is none. The object becomes what [`put`](Self::put) would write
+    /// for the object stored with those fields set: a field set to
+    /// [`Value::Null`] becomes null, or its default if it is required and has
+    /// one, and an embedded object or a list is replaced whole.
+    ///
+    /// It fails as `put` does, leaving the transaction as it was: with
+    /// [`Error::DuplicateKey`] for a value of a unique field that another
+    /// object holds, and with [`Error::InvalidArgument`] for a field the
+    /// collection does not have, a value of another type, or a primary key
+    /// other than `key`.
+    pub fn update(&mut self, key: impl Into<Value>, changes: Object) -> Result<bool> {
+        let schema = Arc::clone(&self.schema);
+        let collection = &schema.schema.collections[self.position];
+        let order = schema
+            .order(self.position)
+            .ok_or_else(|| internal("a collection has no order of its fields"))?;
+        let key_value = key.into();
+
+        if let Some(field) = collection.key_field() {
+            if changes
+                .get(&field.name)
+                .is_some_and(|value| *value != key_value)
+            {
+                return Err(changes_key(collection));
+            }
+        }
+
+        let key = key_bytes(collection, &key_value)?;
+        let max_key_len = self.txn.max_key_len();
+        let mut changes = Some(changes);
+        let mut update = Update::default();
+        let found = self
+            .txn
+            .update_in_with(&records(collection.id), &key, &mut |stored| {
+                let mut object = codec::object_in_order(stored, &collection.fields, order)
+                    .map_err(|reason| {
+                        update.damage = Some(reason);
+
+                        internal(reason)
+                    })?;
+
+                object.absorb(changes.take().unwrap_or_default());
+
+                let (record, entries) = object_written(&schema, collection, order, &object, &key)?;
+
+                if record == stored {
+                    return Ok(None);
+                }
+
+                check_lengths(collection, max_key_len, &record, &entries)?;
+
+                let mut old = IndexKeys::with_capacity(collection.indexes.len());
+
+                record_entries(&mut old, collection, stored, &key, &mut update.damage)?;
+                update.made(collection, stored, entries, old);
+
+                Ok(Some(record))
+            });
+
+        self.finish_update(collection, &key, found, update)
+    }
+
+    /// Ends an update whose record [`update_in_with`] replaced, which found
+    /// `found`: checks the unique values it adds, putting the record back if
+    /// one is taken, and changes the entries of the indexes.
+    ///
+    /// [`update_in_with`]: WriteTransaction::update_in_with
+    fn finish_update(
+        &mut self,
+        collection: &CollectionDef,
+        key: &[u8],
+        found: Result<bool>,
+        update: Update,
+    ) -> Result<bool> {
+        let found = released(&*self.txn, collection, found, update.damage)?;
+        let Some((entries, old)) = update.entries else {
+            // No object, or one the changes leave as it was.
+            return Ok(found);
+        };
+
+        if let Err(error) = self.check_unique(collection, key, &entries, &old) {
+            let previous = update.previous.map_or(Previous::Object, Previous::Record);
+
+            self.put_back(collection, key, previous)?;
+
+            return Err(error);
+        }
+
+        // Nothing below can refuse the change.
+        self.replace_entries(collection, key, &entries, &old)?;
+
+        Ok(true)
+    }
+
+    /// Sets the fields of the object whose primary key is `key` that the
+    /// record `changes` holds, as a language binding sends them: by id, as
+    /// [`insert_record`](Self::insert_record) takes a record, a field to be
+    /// made null holding the tag `0x01` (`design/objects.md`, "Records").
+    /// See [`update`](Self::update).
+    ///
+    /// In a collection whose fields all hold scalars, the record stored is
+    /// changed where it lies, and only the indexes on the fields changed are
+    /// read: decoding the object and writing it whole again cost as much as
+    /// the rest of the update. Any other collection's goes through objects.
+    pub fn update_record(&mut self, key: impl Into<Value>, changes: &[u8]) -> Result<bool> {
+        let schema = Arc::clone(&self.schema);
+        let collection = &schema.schema.collections[self.position];
+        let key_value = key.into();
+        let refused = |reason: &str| Error::InvalidArgument {
+            message: format!(
+                "the changes to an object of `{}`: {reason}",
+                collection.name
+            ),
+        };
+
+        if !codec::is_flat(&collection.fields) {
+            let changes = codec::changes_object_of(changes, &collection.fields).map_err(refused)?;
+
+            return self.update(key_value, changes);
+        }
+
+        let key = key_bytes(collection, &key_value)?;
+        let changes = codec::flat_changes(changes, &collection.fields).map_err(refused)?;
+        let key_position = field_position(collection, collection.key)?;
+
+        if changes.iter().any(|&(position, value)| {
+            position == key_position && !value.is_some_and(|value| is_key(value, &key_value))
+        }) {
+            return Err(changes_key(collection));
+        }
+
+        // The record stored is read where it lies for the new record and
+        // the entries of the indexes on the fields that change, and replaced
+        // on the same way down. As for a put, a unique index checked after
+        // that may refuse a value the object did not hold, and the record
+        // replaced is kept aside then, to go back.
+        let max_key_len = self.txn.max_key_len();
+        let mut update = Update::default();
+        let found = self
+            .txn
+            .update_in_with(&records(collection.id), &key, &mut |stored| {
+                let changed = changed(
+                    collection,
+                    stored,
+                    &changes,
+                    (key_position, &key_value),
+                    &key,
+                )
+                .map_err(|unread| match unread {
+                    Unread::Damaged(reason) => {
+                        update.damage = Some(reason);
+
+                        internal(reason)
+                    }
+                    Unread::Failed(error) => error,
+                })?;
+                let Some(Changed {
+                    record,
+                    entries,
+                    old,
+                }) = changed
+                else {
+                    return Ok(None);
+                };
+
+                check_lengths(collection, max_key_len, &record, &entries)?;
+                update.made(collection, stored, entries, old);
+
+                Ok(Some(record))
+            });
+
+        self.finish_update(collection, &key, found, update)
     }
 
     /// Writes the object whose record a binding sent. In a collection whose
@@ -1335,6 +1770,38 @@ impl<'a> CollectionWriter<'a> {
         Ok(key_value)
     }
 
+    /// Takes out the entries `old` of the object whose key is `key` that its
+    /// new entries `entries` lack, and adds those it did not have, as
+    /// [`store`](Self::store) does for a put. `store` keeps its own copy of
+    /// this and of [`check_lengths`]: calling them from there made inserts
+    /// through a binding 2% slower, measured on separately built binaries.
+    fn replace_entries(
+        &mut self,
+        collection: &CollectionDef,
+        key: &[u8],
+        entries: &IndexKeys,
+        old: &IndexKeys,
+    ) -> Result<()> {
+        for (position, entry) in old.iter() {
+            if !entries.contains(position, entry) {
+                let tree = index_tree(collection.indexes[position].id);
+
+                self.txn.remove_present_in(&tree, entry)?;
+            }
+        }
+
+        for (position, entry) in entries.iter() {
+            if !old.contains(position, entry) {
+                let index = &collection.indexes[position];
+
+                self.txn
+                    .insert_in(&index_tree(index.id), entry, entry_value(index, key))?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Stores `record` under `key`, replacing the object stored there, if
     /// any, whose entries it adds to `old`. The object whose entries are
     /// `entries` may be refused after this, for a unique value it did not
@@ -1411,6 +1878,9 @@ impl<'a> CollectionWriter<'a> {
     /// Refuses the object whose key is `key` and whose entries are `entries`
     /// if another object holds one of the unique values it adds: the values
     /// the object it replaces, whose entries are `old`, did not hold.
+    // Inlined by hand, as `btree::write::store_value` is, and for the same
+    // reason.
+    #[inline(always)]
     fn check_unique(
         &self,
         collection: &CollectionDef,

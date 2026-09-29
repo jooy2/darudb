@@ -121,6 +121,7 @@ value   = tag payload
 
 - **Reading a record.** A field absent from a record, which only a record written before the field existed can be, holds its default, or null if it has none. A field id the schema no longer has belongs to a field that was removed, and is skipped. A record read from the file is untrusted input: a varint that runs out, a length past the end, a tag that does not match the field's type, or ids out of order make it `CORRUPTED`.
 - **Writing a record.** The engine checks a record it is given against the schema, types, required fields and all, before it stores it, and refuses one that does not fit with `INVALID_ARGUMENT`. A record from a binding is checked like any other.
+- **Changes.** The fields a binding sends for an update are a record of the fields it changes, in which a field may also hold the tag `0x01` with no payload: the field becomes null. No other record holds that tag, and every other reader refuses it, so a null never reaches the file.
 - **Why this format.** It is compact for the common case, small integers and short strings, and cheap to write in any language, which is what makes it the format bindings exchange with the engine. Field ids rather than names keep it short and make renaming free.
 
 ### The stored schema
@@ -174,15 +175,17 @@ A write transaction offers these for a collection:
 
 - **Insert** an object: fails with `DUPLICATE_KEY` if its key is taken.
 - **Put** an object: inserts it, or replaces the object with its key.
+- **Update** the object with a key: sets the fields it is given and keeps the rest, and returns whether there was an object. The object becomes what a put of the stored object with those fields set would write: null makes an optional field null and a required one its default, and an embedded object or a list is replaced whole. An update refuses a change of the primary key with `INVALID_ARGUMENT`, and inserts nothing when there is no object.
 - **Delete** the object with a key: returns whether there was one.
 
 Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Every check that can refuse a write, the object against the schema, its key, the unique indexes and the length of every key it adds, happens before any index changes, so a refused write leaves the transaction holding what it held and able to commit. The record is where the order differs:
 
 - An insert learns whether its key is taken by storing the record, after every other check.
 - A put stores the record first, reading the object it replaces on the way down for that object's entries, so that it goes down the collection's tree once rather than twice. If a unique index then refuses a value the replaced object did not hold, the put stores the replaced record again, or takes out the new one if it replaced nothing. A record the put replaces is kept aside only when it may have to go back.
+- An update goes down the collection's tree once too: the new record is made from the stored one where it lies, and replaces it there. Its unique values are checked after that, as a put's are, and the stored record goes back if one is refused. In a collection whose fields all hold scalars, only the indexes on the fields it changes are read. An update that leaves the record as it was changes nothing.
 - A delete takes the record out, reading it on the way for its entries, and then the entries. A key that is not there copies no page.
 
-A refused put, like an insert whose key is taken, may leave the pages on the way to its key copied, which the commit writes. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
+A refused put or update, like an insert whose key is taken, may leave the pages on the way to its key copied, which the commit writes. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
 
 ## Queries
 

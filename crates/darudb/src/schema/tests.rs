@@ -5,6 +5,7 @@ use std::ops::Bound;
 
 use super::objects::{Source, check_indexes, index_tree, records};
 use super::{Collection, Schema, Type};
+use crate::format::object::codec::Raw;
 use crate::format::object::schema::Kind;
 use crate::format::object::{Object, Value};
 use crate::testing::Rng;
@@ -88,6 +89,7 @@ fn random_writes_keep_every_index_in_step_with_the_objects() {
         let db = options.open(&path).unwrap();
         let mut rng = Rng::new(seed);
         let mut refused = 0;
+        let mut updates = 0;
 
         for round in 0..30 {
             let mut txn = db.begin_write().unwrap();
@@ -95,12 +97,54 @@ fn random_writes_keep_every_index_in_step_with_the_objects() {
 
             for _ in 0..40 {
                 let mut players = txn.collection("players").unwrap();
-                let result = match rng.below(10) {
+                let result = match rng.below(12) {
                     0..=4 => players.insert(player(&mut rng)).map(drop),
                     5..=7 => players.put(player(&mut rng)).map(drop),
-                    _ => players
+                    8..=9 => players
                         .delete(1 + i64::try_from(rng.below(40)).unwrap())
                         .map(drop),
+                    _ => {
+                        let key = 1 + i64::try_from(rng.below(40)).unwrap();
+                        let mut changes = player(&mut rng);
+
+                        changes.remove("id");
+
+                        for field in ["score", "handle", "tags", "team", "friends"] {
+                            if rng.below(6) == 0 {
+                                changes.set(field, Value::Null);
+                            }
+                        }
+
+                        let before = players.get(key).unwrap();
+                        let updated = players.update(key, changes.clone());
+                        let after = players.get(key).unwrap();
+
+                        // What the object is after an update is what it was
+                        // with the changes set, as a put would write it, and
+                        // a refused update leaves it as it was.
+                        match (&updated, before) {
+                            (Ok(true), Some(mut expected)) => {
+                                for (field, value) in changes.fields() {
+                                    let value = match (field, value) {
+                                        ("score", Value::Null) => Value::Int(0),
+                                        (_, value) => value.clone(),
+                                    };
+
+                                    expected.set(field, value);
+                                }
+
+                                assert_eq!(after, Some(expected), "seed {seed}");
+                                updates += 1;
+                            }
+                            (Ok(false), None) => assert_eq!(after, None, "seed {seed}"),
+                            (Err(_), before) => assert_eq!(after, before, "seed {seed}"),
+                            (updated, before) => {
+                                panic!("seed {seed}: {updated:?} for {before:?}")
+                            }
+                        }
+
+                        updated.map(drop)
+                    }
                 };
 
                 match result {
@@ -132,6 +176,10 @@ fn random_writes_keep_every_index_in_step_with_the_objects() {
             "seed {seed}: the unique index never refused a value"
         );
         assert!(read.collection("players").unwrap().len().unwrap() > 0);
+        assert!(
+            updates > 20,
+            "seed {seed}: only {updates} updates changed an object"
+        );
     }
 }
 
@@ -354,7 +402,7 @@ fn flat_schema() -> Schema {
 /// the wrong type, an id the collection does not have, the key, or bytes
 /// cut or changed.
 fn random_record(rng: &mut Rng, fields: &[(u64, &str)]) -> Vec<u8> {
-    use crate::format::object::codec::{self, Raw};
+    use crate::format::object::codec;
 
     let mut raw = Vec::new();
 
@@ -522,6 +570,263 @@ fn a_binding_s_records_are_written_as_the_objects_they_hold_would_be() {
     }
 }
 
+/// Changes as a binding might send them for an update of an object whose
+/// fields are `fields`, by id and kind: a few fields at random, now and then
+/// made null, of the wrong type, an id the collection does not have, or
+/// bytes cut or changed. The key field, the first, is left to the caller.
+fn random_changes(rng: &mut Rng, fields: &[(u64, &str)]) -> Vec<(u64, Option<Raw>)> {
+    let mut changes = Vec::new();
+
+    for (id, kind) in &fields[1..] {
+        if rng.below(3) != 0 {
+            continue;
+        }
+
+        if rng.below(5) == 0 {
+            changes.push((*id, None));
+
+            continue;
+        }
+
+        let kind = if rng.below(30) == 0 {
+            ["string", "int", "float", "bool", "bytes"][rng.index(5)]
+        } else {
+            kind
+        };
+        let value = match kind {
+            "string" => {
+                Raw::String(["ace", "bee", "cat", "", "a\0b", "é"][rng.index(6)].to_owned())
+            }
+            "int" => Raw::Int(i64::try_from(rng.below(8)).unwrap() - 2),
+            "float" => Raw::Float([0.5, -1.0, 1e300][rng.index(3)]),
+            "bool" => Raw::Bool(rng.below(2) == 0),
+            _ => {
+                let len = rng.index(4);
+
+                Raw::Bytes(rng.bytes(len))
+            }
+        };
+
+        changes.push((*id, Some(value)));
+    }
+
+    if rng.below(30) == 0 {
+        changes.push((90 + rng.below(3), Some(Raw::Int(1))));
+    }
+
+    changes
+}
+
+/// An update of a record where it lies, as a binding's changes take it,
+/// writes what reading the object, setting the fields changed and putting
+/// it writes, and fails where that fails, with the same code: the same
+/// records, byte for byte, and the same index entries.
+#[test]
+fn an_update_writes_what_a_put_of_the_changed_object_writes() {
+    use crate::format::object::codec;
+
+    let key_of = |position: usize, rng: &mut Rng| {
+        if position == 0 {
+            Value::Int(1 + i64::try_from(rng.below(30)).unwrap())
+        } else {
+            Value::String(["ace", "bee", "cat", "dot"][rng.index(4)].to_owned())
+        }
+    };
+
+    for seed in 0..6 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(flat_schema());
+
+        let through_records = options.open(dir.path().join("records.darudb")).unwrap();
+        let through_objects = options.open(dir.path().join("objects.darudb")).unwrap();
+        let mut rng = Rng::new(100 + seed);
+        let mut changed = 0;
+        let mut missing = 0;
+
+        for _ in 0..20 {
+            let mut left = through_records.begin_write().unwrap();
+            let mut right = through_objects.begin_write().unwrap();
+            let open = left.schema().cloned().unwrap();
+
+            for _ in 0..30 {
+                let position = rng.index(2);
+                let definition = &open.schema.collections[position];
+                let name = definition.name.clone();
+                let kinds: Vec<(u64, &str)> = definition
+                    .fields
+                    .list
+                    .iter()
+                    .map(|field| {
+                        let kind = match field.kind {
+                            Kind::String => "string",
+                            Kind::Int => "int",
+                            Kind::Float => "float",
+                            Kind::Bool => "bool",
+                            _ => "bytes",
+                        };
+
+                        (field.id, kind)
+                    })
+                    .collect();
+                // The key field comes first in both collections' lists.
+                assert_eq!(definition.fields.list[0].id, definition.key);
+
+                // Objects to change, put the same way on both sides.
+                if rng.below(3) == 0 {
+                    let mut record =
+                        codec::read(&random_record(&mut rng, &kinds)).unwrap_or_default();
+
+                    record.retain(|(id, _)| *id != definition.key);
+                    record.insert(
+                        0,
+                        (
+                            definition.key,
+                            match key_of(position, &mut rng) {
+                                Value::Int(key) => Raw::Int(key),
+                                Value::String(key) => Raw::String(key),
+                                _ => unreachable!(),
+                            },
+                        ),
+                    );
+
+                    let record = codec::write(&record);
+                    let fast = left.collection(&name).unwrap().put_record(&record);
+                    let slow = right.collection(&name).unwrap().put_record(&record);
+
+                    assert_eq!(fast.is_ok(), slow.is_ok(), "seed {seed}");
+
+                    continue;
+                }
+
+                let key = key_of(position, &mut rng);
+                let mut changes = random_changes(&mut rng, &kinds);
+
+                // Now and then the key itself, as it is or another.
+                if rng.below(10) == 0 {
+                    let given = if rng.below(2) == 0 {
+                        key.clone()
+                    } else {
+                        key_of(position, &mut rng)
+                    };
+
+                    changes.insert(
+                        0,
+                        (
+                            definition.key,
+                            Some(match given {
+                                Value::Int(key) => Raw::Int(key),
+                                Value::String(key) => Raw::String(key),
+                                _ => unreachable!(),
+                            }),
+                        ),
+                    );
+                }
+
+                let mut bytes = codec::write_changes(&changes);
+
+                match rng.below(40) {
+                    0 => bytes.truncate(rng.index(bytes.len())),
+                    1 => {
+                        let at = rng.index(bytes.len());
+
+                        bytes[at] = u8::try_from(rng.below(256)).unwrap();
+                    }
+                    _ => {}
+                }
+
+                let fast = left
+                    .collection(&name)
+                    .unwrap()
+                    .update_record(key.clone(), &bytes);
+                // The model: read the object, set the fields, put it.
+                let slow = match codec::changes_object_of(&bytes, &definition.fields) {
+                    Err(reason) => Err(crate::Error::InvalidArgument {
+                        message: reason.to_owned(),
+                    }),
+                    Ok(changes)
+                        if changes
+                            .get(&definition.fields.list[0].name)
+                            .is_some_and(|given| *given != key) =>
+                    {
+                        Err(crate::Error::InvalidArgument {
+                            message: "changes the key".to_owned(),
+                        })
+                    }
+                    Ok(changes) => {
+                        let mut collection = right.collection(&name).unwrap();
+
+                        match collection.get(key.clone()).unwrap() {
+                            None => Ok(false),
+                            Some(mut object) => {
+                                for (field, value) in changes.fields() {
+                                    object.set(field, value.clone());
+                                }
+
+                                collection.put(object).map(|_| true)
+                            }
+                        }
+                    }
+                };
+
+                match (&fast, &slow) {
+                    (Ok(fast), Ok(slow)) => {
+                        assert_eq!(fast, slow, "seed {seed}: {changes:?}");
+
+                        if *fast {
+                            changed += 1;
+                        } else {
+                            missing += 1;
+                        }
+                    }
+                    (Err(fast), Err(slow)) => {
+                        assert_eq!(fast.code(), slow.code(), "seed {seed}: {fast} and {slow}");
+                    }
+                    _ => panic!(
+                        "seed {seed}: {changes:?} to {key:?} gave {fast:?} one way and {slow:?} the other"
+                    ),
+                }
+            }
+
+            for collection in &open.schema.collections {
+                let trees = std::iter::once(records(collection.id))
+                    .chain(collection.indexes.iter().map(|index| index_tree(index.id)));
+
+                for tree in trees {
+                    let entries = |txn: &crate::WriteTransaction| {
+                        txn.range_in::<Vec<u8>>(
+                            &tree,
+                            &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+                            false,
+                        )
+                        .unwrap()
+                        .collect::<crate::Result<Vec<_>>>()
+                        .unwrap()
+                    };
+
+                    assert_eq!(
+                        entries(&left),
+                        entries(&right),
+                        "seed {seed}: tree {:?}",
+                        &*tree
+                    );
+                }
+            }
+
+            check_indexes(&left as &dyn Source, &open.schema)
+                .unwrap_or_else(|reason| panic!("seed {seed}: {reason}"));
+            left.commit().unwrap();
+            right.commit().unwrap();
+        }
+
+        assert!(
+            changed > 100 && missing > 10,
+            "seed {seed}: {changed} objects changed, {missing} missing"
+        );
+    }
+}
+
 /// Deleting an object whose record is damaged fails with `CORRUPTED`, takes
 /// nothing out, and leaves the transaction able to commit: the record is
 /// read on its way out of the tree, and the removal stops there.
@@ -559,6 +864,71 @@ fn deleting_a_damaged_object_takes_nothing_out() {
     );
     assert!(txn.collection("players").unwrap().delete(1).unwrap());
     txn.commit().unwrap();
+}
+
+/// Updating an object whose record is damaged, or lacks a required field as
+/// only a damaged record can, fails with `CORRUPTED`, changes nothing, and
+/// leaves the transaction able to commit.
+#[test]
+fn updating_a_damaged_object_changes_nothing() {
+    use crate::format::object::codec;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = OpenOptions::new();
+
+    options.schema(flat_schema());
+
+    let db = options.open(dir.path().join("objects.darudb")).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let people = &open.schema.collections[0];
+    let key = |id: i64| crate::format::object::key::encoded(&Value::Int(id)).unwrap();
+
+    txn.collection("people")
+        .unwrap()
+        .insert(Object::new().with("name", "Ann"))
+        .unwrap();
+    // A record that ends inside its count of fields, and one without `name`.
+    txn.insert_in(&records(people.id), &key(2), &[0x80])
+        .unwrap();
+    txn.insert_in(
+        &records(people.id),
+        &key(3),
+        &codec::write(&[(1, Raw::Int(3)), (4, Raw::Int(40))]),
+    )
+    .unwrap();
+
+    let name = codec::write_changes(&[(2, Some(Raw::String("Bo".to_owned())))]);
+    let age = codec::write_changes(&[(4, Some(Raw::Int(41)))]);
+
+    for (id, changes) in [(2, &age), (3, &age), (3, &name)] {
+        let mut collection = txn.collection("people").unwrap();
+        let before = collection.get_record(id).unwrap();
+        let error = collection.update_record(id, changes).unwrap_err();
+
+        assert_eq!(error.code(), "CORRUPTED", "{id}");
+        assert_eq!(collection.get_record(id).unwrap(), before, "{id}");
+    }
+
+    assert!(
+        txn.collection("people")
+            .unwrap()
+            .update_record(1, &age)
+            .unwrap()
+    );
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+
+    assert_eq!(
+        read.collection("people")
+            .unwrap()
+            .get(1)
+            .unwrap()
+            .unwrap()
+            .get("age"),
+        Some(&Value::Int(41))
+    );
 }
 
 /// A put refused after the transaction copied its way down the collection's

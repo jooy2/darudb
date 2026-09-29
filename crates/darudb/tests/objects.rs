@@ -489,6 +489,143 @@ fn a_unique_index_allows_any_number_of_nulls_and_frees_a_value_it_no_longer_hold
     txn.commit().unwrap();
 }
 
+/// An update sets the fields it names and keeps the rest, and the object is
+/// what a put of it would have written: null makes an optional field null
+/// and a required one its default, an embedded object or a list is replaced
+/// whole, and the indexes follow. A refused update changes nothing.
+#[test]
+fn an_update_changes_only_the_fields_it_names() {
+    let dir = TestDir::new();
+    let schema = v1().collection(
+        Collection::new("places")
+            .primary_key("code", Type::String)
+            .field("name", Type::String)
+            .optional(
+                "address",
+                Type::object(
+                    darudb::Embedded::new()
+                        .field("city", Type::String)
+                        .with_default("floor", Type::Int, 1),
+                ),
+            )
+            .optional("tags", Type::list(Type::String))
+            .index("tags"),
+    );
+    let db = open(&dir, schema, &[]).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+
+    users
+        .insert(user("Alice").with("email", "a@example.com").with("age", 30))
+        .unwrap();
+    users
+        .insert(user("Bob").with("email", "b@example.com"))
+        .unwrap();
+
+    assert!(
+        users
+            .update(1, Object::new().with("age", 31).with("email", Value::Null))
+            .unwrap()
+    );
+    assert_eq!(
+        users.get(1).unwrap(),
+        Some(
+            user("Alice")
+                .with("id", 1)
+                .with("email", Value::Null)
+                .with("age", 31)
+        )
+    );
+    assert!(
+        users
+            .update(2, Object::new().with("age", Value::Null))
+            .unwrap()
+    );
+    assert_eq!(
+        users.get(2).unwrap().unwrap().get("age"),
+        Some(&Value::Int(0))
+    );
+    assert!(!users.update(9, Object::new().with("age", 1)).unwrap());
+    assert!(users.update(1, Object::new().with("id", 1)).unwrap());
+
+    // Refused: another object's unique value, the key, a field the
+    // collection does not have, a value of another type, and a required
+    // field without a default made null.
+    for changes in [
+        Object::new().with("email", "b@example.com").with("age", 50),
+        Object::new().with("id", 5),
+        Object::new().with("nickname", "Al"),
+        Object::new().with("age", "old"),
+        Object::new().with("name", Value::Null),
+    ] {
+        let before = users.get(1).unwrap();
+
+        assert_ne!(code(users.update(1, changes.clone())), "OK", "{changes:?}");
+        assert_eq!(users.get(1).unwrap(), before, "{changes:?}");
+    }
+
+    // The email Alice gave up is free, and the index finds her age.
+    users
+        .insert(user("Carol").with("email", "a@example.com"))
+        .unwrap();
+    drop(users);
+
+    let mut places = txn.collection("places").unwrap();
+    let address = |city: &str| Object::new().with("city", city);
+
+    places
+        .insert(
+            Object::new()
+                .with("code", "hq")
+                .with("name", "Head office")
+                .with("address", address("Seoul").with("floor", 9))
+                .with("tags", vec![Value::from("main"), Value::from("big")]),
+        )
+        .unwrap();
+    assert!(
+        places
+            .update(
+                "hq",
+                Object::new()
+                    .with("address", address("Busan"))
+                    .with("tags", vec![Value::from("south")])
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        places.get("hq").unwrap(),
+        Some(
+            Object::new()
+                .with("code", "hq")
+                .with("name", "Head office")
+                .with("address", address("Busan").with("floor", 1))
+                .with("tags", vec![Value::from("south")])
+        )
+    );
+    assert_eq!(
+        code(places.update("hq", Object::new().with("code", "hr"))),
+        "INVALID_ARGUMENT"
+    );
+    drop(places);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let count = |collection: &str, filter: darudb::Filter| {
+        read.collection(collection)
+            .unwrap()
+            .count(&darudb::Query::new().filter(filter))
+            .unwrap()
+    };
+
+    assert_eq!(count("users", darudb::Filter::eq("age", 31)), 1);
+    assert_eq!(
+        count("users", darudb::Filter::eq("email", "a@example.com")),
+        1
+    );
+    assert_eq!(count("places", darudb::Filter::eq("tags", "south")), 1);
+    assert_eq!(count("places", darudb::Filter::eq("tags", "main")), 0);
+}
+
 #[test]
 fn the_schema_is_checked_every_time_the_file_opens() {
     let dir = TestDir::new();

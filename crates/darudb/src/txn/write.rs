@@ -314,6 +314,9 @@ impl WriteTransaction {
     /// tree holds what it held, though the pages on the way to the key may
     /// have been copied. It saves the search a look-up before an insert
     /// would repeat.
+    // Inlined by hand, as `btree::write::store_value` is, and for the same
+    // reason.
+    #[inline(always)]
     pub(crate) fn insert_new_in(&mut self, tree: &str, key: &[u8], value: &[u8]) -> Result<bool> {
         self.check_open()?;
         self.store_later(tree)?;
@@ -361,6 +364,81 @@ impl WriteTransaction {
         self.failed |= result.is_err() && !refused;
 
         result.map(|new| !new)
+    }
+
+    /// Replaces the value under `key` in tree `tree` of the engine's with
+    /// what `change` makes of it, for a caller whose new value depends on the
+    /// old: the key is gone down to once, rather than once to read the value
+    /// and once to replace it. `change` keeps the value by returning `None`.
+    /// Returns whether there was a value. An error `change` returns stores
+    /// nothing and leaves the transaction able to commit, though the pages on
+    /// the way to the key may have been copied, as they may be when the key
+    /// is not there or the value is kept.
+    pub(crate) fn update_in_with(
+        &mut self,
+        tree: &str,
+        key: &[u8],
+        change: &mut btree::Change<'_>,
+    ) -> Result<bool> {
+        self.check_open()?;
+
+        // A value waiting to be stored is the key's, and any in the tree an
+        // older one.
+        if let Some(old) = self
+            .later
+            .get(tree)
+            .and_then(|waiting| waiting.get(key))
+            .cloned()
+        {
+            if let Some(value) = change(&old)? {
+                check_value(&value)?;
+                self.insert_in(tree, key, &value)?;
+            }
+
+            return Ok(true);
+        }
+
+        let loader = &self.shared.loader;
+
+        check_key(key, loader.page_size())?;
+
+        let Some(state) = open_tree(
+            loader,
+            self.catalog.as_ref(),
+            &mut self.trees,
+            &mut self.next_tree_id,
+            tree,
+            false,
+        )?
+        else {
+            return Ok(false);
+        };
+        let mut refused = false;
+        let result = btree::update_with(
+            loader,
+            &mut self.space,
+            state.id,
+            &mut state.root,
+            key,
+            &mut |old| {
+                let value = change(old).and_then(|value| {
+                    value.as_deref().map_or(Ok(()), check_value)?;
+
+                    Ok(value)
+                });
+
+                refused = value.is_err();
+
+                value
+            },
+        );
+
+        // The nodes on the way are copied whatever the change did: the
+        // copies are the tree now, and the commit has to write them.
+        state.changed = true;
+        self.failed |= result.is_err() && !refused;
+
+        result
     }
 
     /// Stores `value` under `key` in tree `tree` of the engine's when the

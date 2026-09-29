@@ -310,6 +310,203 @@ fn insert_into<L: Load, S: Store>(
     }
 }
 
+/// What an update makes of the value under its key: a new value, or `None`
+/// to keep the one there.
+pub(crate) type Change<'v> = dyn FnMut(&[u8]) -> Result<Option<Vec<u8>>> + 'v;
+
+/// What an update found under its key.
+enum Updated {
+    /// Nothing.
+    Missing,
+    /// A value, which the change kept.
+    Kept,
+    /// A value, which the change replaced, with the overflow run it had, if
+    /// any, for the caller to give back.
+    Replaced(Option<OverflowRef>),
+}
+
+/// Replaces the value under `key` with what `change` makes of it, going down
+/// to the key once, for a caller whose new value depends on the old: reading
+/// the value first and then replacing it went down twice. Returns whether
+/// the key was there. The nodes on the way to it are copied whether it is
+/// there or not, and whether `change` keeps the value or not; an error
+/// `change` returns stores nothing.
+pub(crate) fn update_with<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    root: &mut Option<Child>,
+    key: &[u8],
+    change: &mut Change<'_>,
+) -> Result<bool> {
+    let Some(child) = root.as_mut() else {
+        return Ok(false);
+    };
+    let (updated, split) = update_into(load, store, tree, child, None, key, change)?;
+
+    grow_root(store, child, split)?;
+
+    Ok(match updated {
+        Updated::Missing => false,
+        Updated::Kept => true,
+        Updated::Replaced(run) => {
+            release_run(store, run);
+
+            true
+        }
+    })
+}
+
+fn update_into<L: Load, S: Store>(
+    load: &L,
+    store: &mut S,
+    tree: u64,
+    child: &mut Child,
+    level: Option<u8>,
+    key: &[u8],
+    change: &mut Change<'_>,
+) -> Result<(Updated, Split)> {
+    let page_size = load.page_size();
+    let capacity = content_len(page_size);
+    let node = make_dirty(load, store, child, tree, level)?;
+
+    match node {
+        Node::Leaf(leaf) => {
+            let Ok(index) = leaf.search(key) else {
+                return Ok((Updated::Missing, None));
+            };
+            let changed = match leaf.value(index).map_err(internal)? {
+                StoredRef::Inline(old) => change(old)?,
+                StoredRef::Overflow(reference) => change(&load.read_overflow(&reference, tree)?)?,
+            };
+            let Some(value) = changed else {
+                return Ok((Updated::Kept, None));
+            };
+            let run = store_value(page_size, store, tree, key.len(), &value)?;
+            let stored = run.map_or(StoredRef::Inline(&value), StoredRef::Overflow);
+            let (replaced, split) = replace_in_leaf(store, leaf, index, key, stored, capacity)?;
+
+            Ok((Updated::Replaced(replaced), split))
+        }
+        Node::Branch(branch) => {
+            let index = branch.keys.child_index(key);
+            let (updated, split) = update_into(
+                load,
+                store,
+                tree,
+                &mut branch.children[index],
+                Some(branch.level - 1),
+                key,
+                change,
+            )?;
+
+            Ok((updated, take_split(store, branch, index, split, capacity)?))
+        }
+    }
+}
+
+/// Puts a new root above `root` when the root split in two, as
+/// [`insert_one`] does.
+fn grow_root<S: Store>(store: &mut S, root: &mut Child, split: Split) -> Result<()> {
+    let Some((separator, right)) = split else {
+        return Ok(());
+    };
+    let level = dirty_node(root)?.level() + 1;
+    let left = mem::replace(root, Child::Clean(Pointer::NULL));
+    let page = store.allocate()?;
+
+    *root = Child::dirty(
+        page,
+        Node::Branch(Branch {
+            level,
+            keys: Keys::of([separator.as_slice()]),
+            children: vec![left, right],
+        }),
+    );
+
+    Ok(())
+}
+
+/// Replaces the value of entry `index` of `leaf`, whose key is `key`, with
+/// `value`: in place where it fits, or else by taking the entry out and
+/// putting it back, splitting the leaf when it does not fit. Returns the
+/// overflow run the old value had, if any, and the split.
+///
+/// This is what [`insert_into`] does with a key it finds, and it keeps its
+/// own copy: calling a function shared with it from there moved the code of
+/// the insert path and made inserts 1.5% and deletes 4% slower, measured on
+/// separately built binaries, with no other change.
+fn replace_in_leaf<S: Store>(
+    store: &mut S,
+    leaf: &mut Leaf,
+    index: usize,
+    key: &[u8],
+    value: StoredRef<'_>,
+    capacity: usize,
+) -> Result<(Option<OverflowRef>, Split)> {
+    if let Some(replaced) = leaf.overwrite(index, key, value).map_err(internal)? {
+        return Ok((replaced, None));
+    }
+
+    let replaced = leaf.remove(index).map_err(internal)?;
+
+    if leaf.insert(index, key, value) {
+        return Ok((replaced, None));
+    }
+
+    // The page is full: its entries and the new one are shared out between
+    // it and a new leaf, as evenly as their sizes allow.
+    let mut sizes: Vec<usize> = (0..leaf.len()).map(|at| leaf.entry_size(at)).collect();
+
+    sizes.insert(index, cell_len(key.len(), value) + 2);
+
+    let middle =
+        split_point(&sizes, capacity).ok_or_else(|| internal("a leaf that cannot be split"))?;
+    let fits = if middle <= index {
+        let mut right = leaf.split_off(middle);
+        let fits = right.insert(index - middle, key, value);
+
+        (fits, right)
+    } else {
+        let right = leaf.split_off(middle - 1);
+
+        (leaf.insert(index, key, value), right)
+    };
+    let (true, right) = fits else {
+        return Err(internal("a split leaf's entry does not fit"));
+    };
+    let separator = right.key(0).to_vec();
+    let page = store.allocate()?;
+
+    Ok((
+        replaced,
+        Some((separator, Child::dirty(page, Node::Leaf(right)))),
+    ))
+}
+
+/// Takes the split of child `index` of `branch` into the branch, and returns
+/// the branch's own split if it no longer fits, as [`insert_into`] does.
+fn take_split<S: Store>(
+    store: &mut S,
+    branch: &mut Branch,
+    index: usize,
+    split: Split,
+    capacity: usize,
+) -> Result<Split> {
+    let Some((separator, right)) = split else {
+        return Ok(None);
+    };
+
+    branch.keys.insert(index, &separator);
+    branch.children.insert(index + 1, right);
+
+    if branch.keys.branch_len() > capacity {
+        return Ok(Some(split_branch(store, branch, capacity)?));
+    }
+
+    Ok(None)
+}
+
 /// Removes `key` and its value. Returns whether it was there. Nothing is
 /// copied when it was not.
 pub(crate) fn remove<L: Load, S: Store>(
@@ -746,6 +943,10 @@ fn split_branch<S: Store>(
 
 /// Keeps a small value in the leaf, and writes a large one to an overflow
 /// run, whose reference it returns.
+// Inlined by hand, as the functions an insert calls that an update calls
+// too are: with a second caller the compiler stopped inlining them into the
+// insert path, and inserts through the Node.js package took 1.9% longer.
+#[inline(always)]
 fn store_value<S: Store>(
     page_size: usize,
     store: &mut S,

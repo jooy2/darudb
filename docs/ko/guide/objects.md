@@ -64,6 +64,8 @@ fn write(db: &Database) -> Result<(), darudb::Error> {
 
     // `put` replaces the object with the same key.
     users.put(Object::new().with("id", alice.clone()).with("name", "Alice").with("age", 31))?;
+    // `update` sets the fields it is given and keeps the rest.
+    users.update(alice.clone(), Object::new().with("age", 32).with("email", Value::Null))?;
 
     let mut posts = txn.collection("posts")?;
     posts.insert(
@@ -94,6 +96,7 @@ fn read(db: &Database) -> Result<(), darudb::Error> {
 ```
 
 - `insert`는 키가 이미 있거나, 고유 인덱스에 같은 값이 이미 있으면 `DUPLICATE_KEY`로 실패합니다. `put`은 없으면 넣고 있으면 바꿉니다. `delete`는 키를 받아 지우고, 지운 객체가 있었는지 돌려줍니다.
+- `update`는 키와 바꿀 필드를 받고, 객체가 있었는지 돌려줍니다. 객체가 없으면 아무것도 넣지 않습니다. 바뀐 객체는 저장된 객체에 그 필드를 넣어 `put`한 것과 같습니다. null을 주면 선택 필드는 null이 되고 기본값이 있는 필드는 기본값이 되며, 내장 객체와 리스트는 통째로 바뀝니다. 기본 키를 바꾸려 하면 `INVALID_ARGUMENT`로 실패합니다. 엔진이 레코드를 그 자리에서 고치므로 객체를 읽어 `put`하는 것보다 쌉니다.
 - 값의 타입이 틀렸거나 필수 필드가 빠져 스키마에 맞지 않는 객체는 `INVALID_ARGUMENT`로 실패합니다.
 - 거부된 쓰기는 아무것도 바꾸지 않으므로, 트랜잭션은 계속 쓰다가 커밋해도 됩니다.
 - 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 값입니다. 스키마의 필드가 모두 들어 있고, 빠진 필드에는 기본값이나 null이 들어갑니다.

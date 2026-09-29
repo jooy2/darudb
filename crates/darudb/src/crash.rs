@@ -1117,7 +1117,7 @@ fn random_object_transaction(
             Ok(items) => items,
             Err(error) => return (Err(error), model.clone(), false),
         };
-        let result = match rng.below(4) {
+        let result = match rng.below(5) {
             0 => {
                 let id = 1 + i64::try_from(rng.below(40)).unwrap();
 
@@ -1126,6 +1126,15 @@ fn random_object_transaction(
                 })
             }
             1 => items.put(random_item(rng, page_size)).map(drop),
+            2 => {
+                let id = 1 + i64::try_from(rng.below(40)).unwrap();
+                let mut changes = random_item(rng, page_size);
+
+                changes.remove("id");
+                items.update(id, changes).map(|existed| {
+                    assert_eq!(existed, next.contains_key(&id));
+                })
+            }
             _ => items.insert(random_item(rng, page_size)).map(drop),
         };
 

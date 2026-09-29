@@ -64,6 +64,8 @@ fn write(db: &Database) -> Result<(), darudb::Error> {
 
     // `put` replaces the object with the same key.
     users.put(Object::new().with("id", alice.clone()).with("name", "Alice").with("age", 31))?;
+    // `update` sets the fields it is given and keeps the rest.
+    users.update(alice.clone(), Object::new().with("age", 32).with("email", Value::Null))?;
 
     let mut posts = txn.collection("posts")?;
     posts.insert(
@@ -94,6 +96,7 @@ fn read(db: &Database) -> Result<(), darudb::Error> {
 ```
 
 - `insert` fails with `DUPLICATE_KEY` if the key is taken, or if a unique index finds one of the object's values taken. `put` inserts or replaces. `delete` takes a key and returns whether there was an object.
+- `update` takes a key and the fields to change, and returns whether there was an object; it inserts nothing when there is none. The object becomes what `put` would write for it with those fields set: null makes an optional field null and gives a field with a default its default, and an embedded object or a list is replaced whole. Changing the primary key fails with `INVALID_ARGUMENT`. It costs less than reading the object and putting it back, since the engine changes the record where it lies.
 - An object that does not fit the schema, with a value of the wrong type or without a required field, fails with `INVALID_ARGUMENT`.
 - A refused write changes nothing, and the transaction can go on and commit.
 - Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.

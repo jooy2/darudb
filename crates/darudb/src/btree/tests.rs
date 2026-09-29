@@ -223,6 +223,38 @@ impl Harness {
         seen
     }
 
+    /// Changes the value under `key` through [`update_with`] to `value`, or
+    /// keeps it with `None`, or refuses it with `refuse`, and returns whether
+    /// there was one and the value it gave the change.
+    fn update(&mut self, key: &[u8], value: Option<&[u8]>, refuse: bool) -> Option<Vec<u8>> {
+        let mut visited = None;
+        let result = super::update_with(
+            &self.loader,
+            &mut self.store,
+            TREE,
+            &mut self.root,
+            key,
+            &mut |old| {
+                visited = Some(old.to_vec());
+
+                if refuse {
+                    return Err(crate::error::Error::InvalidArgument {
+                        message: "refused".to_owned(),
+                    });
+                }
+
+                Ok(value.map(<[u8]>::to_vec))
+            },
+        );
+
+        match result {
+            Ok(found) => assert_eq!(found, visited.is_some()),
+            Err(_) => assert!(refuse && visited.is_some()),
+        }
+
+        visited
+    }
+
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         get(&self.loader, TREE, self.root.as_ref(), key).unwrap()
     }
@@ -451,8 +483,24 @@ fn random_changes_match_a_model() {
                     let value = value_of(&mut rng, page_size);
 
                     // Some inserts read the value they replace, and some of
-                    // those are refused when there is one.
-                    match rng.below(4) {
+                    // those are refused when there is one. Some updates
+                    // replace the value, some keep it, and some are refused.
+                    match rng.below(6) {
+                        4 => {
+                            let visited = harness.update(&key, Some(&value), false);
+
+                            assert_eq!(visited.as_ref(), model.get(&key), "seed {seed}");
+
+                            if visited.is_some() {
+                                model.insert(key, value);
+                            }
+                        }
+                        5 => {
+                            let refuse = rng.below(2) == 0;
+                            let visited = harness.update(&key, None, refuse);
+
+                            assert_eq!(visited.as_ref(), model.get(&key), "seed {seed}");
+                        }
                         0 => {
                             let visited = harness.insert_with(&key, &value);
 
@@ -647,6 +695,61 @@ fn a_refused_replacement_stores_nothing() {
     assert_eq!(harness.get(&8u32.to_be_bytes()), Some(long));
     harness.commit();
     assert_eq!(harness.check_structure(), 500);
+}
+
+/// Updates that grow values past a leaf, shrink them back into one, and
+/// split leaves give back every page the values they replace had: once the
+/// tree is emptied, every page ever handed out is free again.
+#[test]
+fn an_update_gives_back_what_the_value_it_replaces_took() {
+    let mut rng = Rng::new(98);
+    let mut harness = Harness::new(4096);
+    let mut model = BTreeMap::new();
+    let size = |rng: &mut Rng| match rng.below(6) {
+        0 => 5000 + rng.index(9000),
+        1 => 0,
+        _ => rng.index(600),
+    };
+
+    for index in 0..1000u32 {
+        let len = size(&mut rng);
+        let value = rng.bytes(len);
+
+        harness.insert(&index.to_be_bytes(), &value);
+        model.insert(index.to_be_bytes().to_vec(), value);
+    }
+
+    harness.commit();
+
+    for round in 0..6 {
+        for _ in 0..400 {
+            let key = u32::try_from(rng.below(1100)).unwrap().to_be_bytes();
+            let len = size(&mut rng);
+            let value = rng.bytes(len);
+            let visited = harness.update(&key, Some(&value), false);
+
+            assert_eq!(visited.as_ref(), model.get(&key[..]), "round {round}");
+
+            if visited.is_some() {
+                model.insert(key.to_vec(), value);
+            }
+        }
+
+        harness.commit();
+        assert_eq!(harness.check_structure(), model.len(), "round {round}");
+    }
+
+    for (key, value) in &model {
+        assert_eq!(harness.get(key).as_ref(), Some(value));
+        assert!(harness.remove(key));
+    }
+
+    harness.commit();
+
+    let free: HashSet<u64> = harness.store.free.iter().copied().collect();
+
+    assert_eq!(free.len(), harness.store.free.len(), "a page freed twice");
+    assert_eq!(free, (1..harness.store.next).collect());
 }
 
 /// A change takes a committed node out of the page cache without a copy
