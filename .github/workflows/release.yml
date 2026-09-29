@@ -1,0 +1,248 @@
+name: release
+
+# Builds one package for release and, only when asked, publishes it. Without
+# `publish`, it builds and tests everything that would be published, checks
+# what each package would contain, and publishes nothing: that is the dry run
+# to make before every release. CONTRIBUTING.md has the whole procedure.
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: The package to release
+        type: choice
+        options:
+          - npm
+          - crate
+      publish:
+        description: Publish it. Off, the run publishes nothing.
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    name: Check the version
+
+    steps:
+      - uses: actions/checkout@v5
+      # A release renames the changelog's `vNext` section to the version and
+      # its date. Publishing without that would ship an entry-less release.
+      - name: Check that the changelog names the version
+        if: inputs.publish
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          if [ "$PACKAGE" = npm ]; then
+            version=$(node -p "require('./packages/node/package.json').version")
+            changelog=packages/node/CHANGELOG.md
+          else
+            version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "darudb") | .version')
+            changelog=crates/darudb/CHANGELOG.md
+          fi
+
+          heading=$(grep -m 1 '^## ' "$changelog")
+
+          if ! printf '%s\n' "$heading" | grep -Eq "^## v${version//./\\.} \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$"; then
+            echo "::error::$changelog opens with \"$heading\", not the release of $version and its date"
+            exit 1
+          fi
+
+  crate:
+    if: inputs.package == 'crate'
+    needs: version
+    runs-on: ubuntu-latest
+    name: Package the crate
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test -p darudb
+      # Builds the crate from the files it would publish, as a consumer would.
+      - name: Package
+        run: cargo publish -p darudb --dry-run
+      - name: Publish
+        if: inputs.publish
+        run: cargo publish -p darudb
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build:
+    if: inputs.package == 'npm'
+    needs: version
+    runs-on: ${{ matrix.host }}
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every target in `napi.targets` of packages/node/package.json but
+        # FreeBSD, which builds below. `test` runs the package's tests on the
+        # addon built, where the runner can run it.
+        include:
+          - { host: macos-latest, target: x86_64-apple-darwin }
+          - { host: macos-latest, target: aarch64-apple-darwin, test: true }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, test: true }
+          - { host: windows-latest, target: i686-pc-windows-msvc }
+          - { host: windows-latest, target: aarch64-pc-windows-msvc }
+          # napi-rs's cross toolchain builds against glibc 2.17, so the addon
+          # loads on old Linux systems too.
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, flags: --use-napi-cross, test: true }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: --use-napi-cross }
+          - { host: ubuntu-latest, target: armv7-unknown-linux-gnueabihf, flags: --use-napi-cross }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-musl, flags: -x }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-musl, flags: -x }
+          # The runner's Android NDK, which the napi CLI finds by itself.
+          - { host: ubuntu-latest, target: aarch64-linux-android }
+          - { host: ubuntu-latest, target: armv7-linux-androideabi }
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./packages/node
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/node/package-lock.json
+      # The first `cargo` command installs the toolchain `rust-toolchain.toml`
+      # pins, and the target is added to that toolchain.
+      - name: Add the target
+        run: |
+          cargo --version
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # The musl targets link through Zig, with its C compiler for mimalloc.
+      - uses: mlugg/setup-zig@v2
+        if: contains(matrix.target, 'musl')
+        with:
+          version: 0.15.2
+      - uses: taiki-e/install-action@v2
+        if: contains(matrix.target, 'musl')
+        with:
+          tool: cargo-zigbuild
+      - run: npm ci
+      - name: Build
+        run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts
+      - name: Test
+        if: matrix.test
+        run: npm test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.target }}
+          path: packages/node/darudb.*.node
+          if-no-files-found: error
+      # The loader and its declarations are the same for every target, and
+      # the package ships one copy.
+      - uses: actions/upload-artifact@v7
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: loader
+          path: |
+            packages/node/native.js
+            packages/node/native.d.ts
+          if-no-files-found: error
+
+  build-freebsd:
+    if: inputs.package == 'npm'
+    needs: version
+    runs-on: ubuntu-latest
+    name: Build x86_64-unknown-freebsd
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build in a FreeBSD machine
+        uses: cross-platform-actions/action@v1.6.0
+        with:
+          operating_system: freebsd
+          version: '15.0'
+          memory: 8G
+          cpu_count: 3
+          shell: bash
+          run: |
+            sudo pkg install -y -f curl node npm
+            curl https://sh.rustup.rs -sSf --output rustup.sh
+            sh rustup.sh -y --profile minimal --default-toolchain none
+            source "$HOME/.cargo/env"
+            cd packages/node
+            cargo --version
+            npm ci
+            npx napi build --platform --release --target x86_64-unknown-freebsd --js native.js --dts native.d.ts
+            rm -rf node_modules ../../target
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bindings-x86_64-unknown-freebsd
+          path: packages/node/darudb.*.node
+          if-no-files-found: error
+
+  npm:
+    if: inputs.package == 'npm'
+    needs: [build, build-freebsd]
+    runs-on: ubuntu-latest
+    name: Package for npm
+    permissions:
+      contents: read
+      # npm's provenance statement, which ties each package to this run.
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: ./packages/node
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/node/package-lock.json
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bindings-*
+          path: packages/node/artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: loader
+          path: packages/node
+      # One package per platform, each with its addon, this package's
+      # licence and the notices of the crates linked into the addon.
+      - name: Make the platform packages
+        run: |
+          npx napi create-npm-dirs
+          npx napi artifacts
+          node scripts/notices.mjs
+      - name: Build the JavaScript
+        run: npm run build:ts
+      # Fails if any platform package lacks its addon.
+      - name: Check every package is complete
+        run: npx napi pre-publish -t npm --no-gh-release --dry-run
+      - name: List what each package would contain
+        run: |
+          for dir in npm/*/; do
+            (cd "$dir" && npm pack --dry-run)
+          done
+          npm pack --dry-run
+      # `prepublishOnly` publishes every platform package first and adds them
+      # to this one's optional dependencies.
+      - name: Publish
+        if: inputs.publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'

@@ -122,6 +122,19 @@ Development dependencies are held to a much looser standard, because they never 
 
 The prebuilt Node.js addon links these crates, the binding's own and what they bring, so each platform package ships their notices in `THIRD_PARTY_NOTICES.txt`, which `packages/node/scripts/notices.mjs` writes from `cargo metadata` and the licence files each crate ships. `npm run notices -- --print` in `packages/node` shows them. A new dependency that ships no licence file needs its text in `packages/node/scripts/licenses`, or the release stops.
 
+## Releasing a package
+
+The crate and the npm package version independently, and each is released on its own by the `release` workflow, which is started by hand from the Actions tab. Without **publish**, it publishes nothing: it builds and tests what would be published, for every platform the npm package ships to, and lists what each package would contain. Make that run before every release.
+
+1. Raise the version. For the crate, `version` in `crates/darudb/Cargo.toml` and the `darudb` entry of `[workspace.dependencies]` in the root `Cargo.toml`. For the npm package, `npm version <version> --no-git-tag-version` in `packages/node`; the platform packages take the version when the workflow makes them.
+1. Rename the changelog's `## vNext (<year>--)` section to `## v<version> (<date>)`, and take the note that the package is not published out of its README. The workflow refuses to publish until the changelog names the version.
+1. Commit that as `[core] chore: release v<version>` or `[node] chore: release v<version>`, and push it.
+1. Run the workflow on that commit without **publish**, and read what it lists.
+1. Run it again with **publish**. The crate needs the repository secret `CARGO_REGISTRY_TOKEN`, and the npm package `NPM_TOKEN`, which has to be allowed to publish `darudb` and every `darudb-<platform>` package. npm publishes the platform packages first, then `darudb` with them as optional dependencies, each with a provenance statement.
+1. Tag the commit `darudb-v<version>` for the crate or `node-v<version>` for the npm package, and push the tag. Publishing creates no tag and no GitHub release by itself.
+
+The Node.js addon has the engine compiled in, so a fix to the engine reaches Node.js only with a release of the npm package.
+
 ## How to contribute (Pull Requests)
 
 ### Write the code you want to change
