@@ -1,8 +1,9 @@
-//! Files: a rename that never replaces what is at the new name.
+//! Files: a rename that never replaces what is at the new name, and on
+//! Windows what identifies a file.
 //!
-//! The standard library's rename replaces a file at the new name. On
-//! Unix-like systems the call goes through `rustix`, which makes it without
-//! `unsafe` code here.
+//! The standard library's rename replaces a file at the new name, and its
+//! file identity on Windows is not stable yet. On Unix-like systems both calls
+//! go through `rustix`, which makes them without `unsafe` code here.
 
 use std::io;
 use std::path::Path;
@@ -15,6 +16,30 @@ use std::path::Path;
 /// [`io::ErrorKind::Unsupported`].
 pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     platform::rename_no_replace(from, to)
+}
+
+/// What identifies the open file `file` on Windows: its volume's serial
+/// number and its file index, the same through every path to it.
+#[cfg(windows)]
+pub(crate) fn identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
+    platform::identity(file)
+}
+
+/// What identifies the file at `path` on Windows; see [`identity`]. It opens
+/// a handle that reads nothing but the file's attributes, which is harmless
+/// beside the handle of a database: on Windows a lock belongs to its handle,
+/// so closing this one releases none.
+#[cfg(windows)]
+pub(crate) fn identity_at(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .open(path)?;
+
+    identity(&file)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
@@ -40,11 +65,15 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
+    use std::fs::File;
     use std::io;
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
     use std::path::Path;
 
-    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
 
     /// Without `MOVEFILE_REPLACE_EXISTING`, a file at `to` fails the move with
     /// `ERROR_ALREADY_EXISTS`, which the standard library reads as
@@ -63,6 +92,22 @@ mod platform {
         }
 
         Ok(())
+    }
+
+    pub(super) fn identity(file: &File) -> io::Result<(u64, u64)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the handle is the open file's, valid for the call, and the
+        // call fills `info`, which lives past it.
+        let found = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+
+        if found == 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok((
+            u64::from(info.dwVolumeSerialNumber),
+            (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        ))
     }
 
     /// `path` as a wide string ending in a zero.
@@ -117,5 +162,23 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read(&to).unwrap(), b"moving");
         assert_eq!(fs::read(&from).unwrap(), b"second");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn two_paths_to_one_file_have_one_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file");
+        let link = dir.path().join("link");
+
+        fs::write(&path, b"one").unwrap();
+        fs::write(dir.path().join("other"), b"two").unwrap();
+        fs::hard_link(&path, &link).unwrap();
+
+        let found = identity_at(&path).unwrap();
+
+        assert_eq!(identity_at(&link).unwrap(), found);
+        assert_eq!(identity(&fs::File::open(&path).unwrap()).unwrap(), found);
+        assert_ne!(identity_at(&dir.path().join("other")).unwrap(), found);
     }
 }

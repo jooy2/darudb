@@ -8,7 +8,6 @@
 //! every lock the process holds on it (`design/locking.md`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
@@ -1135,48 +1134,40 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// What identifies a file: the same file reached through another path, a
-/// link or a different spelling, has the same key.
+/// link or a different spelling, has the same key. Device and inode on
+/// Unix-like systems, and volume serial number and file index on Windows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct FileKey(Identity);
-
-#[cfg(unix)]
-type Identity = (u64, u64);
-
-#[cfg(windows)]
-type Identity = PathBuf;
+pub(crate) struct FileKey((u64, u64));
 
 impl FileKey {
-    /// The key of the file at `path`, if something is there. Nothing is
-    /// opened to find it.
+    /// The key of the file at `path`, if something is there. On Unix-like
+    /// systems nothing is opened to find it, since closing a second handle of
+    /// a file this process has open would release its locks. Windows has to
+    /// open a handle, which is harmless there: a lock belongs to its handle.
     pub(crate) fn of(path: &Path) -> Option<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
 
-            let metadata = fs::metadata(path).ok()?;
+            let metadata = std::fs::metadata(path).ok()?;
 
             Some(Self((metadata.dev(), metadata.ino())))
         }
 
-        // The volume serial number and file index that would identify a file
-        // on Windows are not available from the standard library yet, so the
-        // canonical path stands in for them. Two hard links to one database
-        // are therefore two instances on Windows, which is safe there: a lock
-        // belongs to a handle, so the two instances take turns through their
-        // locks as two processes would.
         #[cfg(windows)]
         {
-            fs::canonicalize(path).ok().map(Self)
+            crate::sys::fs::identity_at(path).ok().map(Self)
         }
     }
 
     /// The key of the open file `file`, which `path` led to.
     pub(crate) fn of_file(file: &DbFile, path: &Path) -> std::io::Result<Self> {
+        let _ = path;
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
 
-            let _ = path;
             let metadata = file.as_file().metadata()?;
 
             Ok(Self((metadata.dev(), metadata.ino())))
@@ -1184,9 +1175,7 @@ impl FileKey {
 
         #[cfg(windows)]
         {
-            let _ = file;
-
-            fs::canonicalize(path).map(Self)
+            crate::sys::fs::identity(file.as_file()).map(Self)
         }
     }
 }

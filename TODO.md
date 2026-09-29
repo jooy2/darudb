@@ -41,13 +41,11 @@ Phase 6 is done, and the maintainer accepted [design/tools.md](design/tools.md) 
 Confirmed by reading the code against the specification; no test reproduces them yet.
 
 - **The unsynced window is counted per process.** The page and time limits bound each process's own deferred commits, so the windows of several processes add up. A window whose process died is ended by a process that reads the file or opens it; one that only holds the file open does not notice.
-- **Windows identifies a file by its canonical path**, not by its volume serial number and file index as `design/locking.md` asks. Two hard links to one database are two instances there, and their locks keep them apart as two processes' locks would.
 
 ## Queued while the release waits
 
 The first release waits for the maintainer, who chose this work for the time until then on 2026-09-29.
 
-- **A known gap** above: file identity on Windows.
 - **The barrier after another process's commit**, under the open questions: an investigation, with measurements, before any change to the protocol.
 
 ## Open questions

@@ -1,6 +1,6 @@
 //! The operating system's calls that the standard library does not offer:
 //! byte-range locks in [`lock`], and in [`fs`] a rename that never replaces a
-//! file.
+//! file and, on Windows, what identifies a file.
 //!
 //! This is the one module of the engine allowed `unsafe` code, for those
 //! calls and nothing else. Every `unsafe` block is one call into the C
