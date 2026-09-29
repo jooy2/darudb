@@ -9,10 +9,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::sys::{is_network_name, is_network_type};
 use super::{LockError, Locks, last_unreached, on_network_file_system};
 use crate::format::{SELECTOR_OFFSET, Selector};
 use crate::storage::DbFile;
+use crate::sys::lock::{is_network_name, is_network_type};
 use crate::testing::{HELPER_PATH, Helper, wait_to_be_told};
 use crate::{Database, OpenOptions};
 
@@ -175,7 +175,7 @@ fn helper_running_commands() {
                 Ok(thread.join().unwrap().to_string())
             }
             #[cfg(unix)]
-            ["fork", marker] => match super::sys::fork().unwrap() {
+            ["fork", marker] => match crate::sys::lock::fork().unwrap() {
                 None => forked_child(path.as_ref(), &mut handle, &mut snapshot, Path::new(marker)),
                 Some(forked) => {
                     child = Some(forked);
@@ -186,7 +186,7 @@ fn helper_running_commands() {
             #[cfg(unix)]
             ["reap"] => Ok(format!(
                 "child {}",
-                super::sys::wait_for(child.take().unwrap()).unwrap()
+                crate::sys::lock::wait_for(child.take().unwrap()).unwrap()
             )),
             _ => panic!("an unknown command: {line}"),
         };
@@ -213,7 +213,7 @@ fn forked_child(
     inherited_read: &mut Option<crate::ReadTransaction>,
     marker: &Path,
 ) -> ! {
-    let exit = super::sys::exit_now;
+    let exit = crate::sys::lock::exit_now;
     let Some(db) = inherited.as_ref() else {
         exit(10);
     };

@@ -3,20 +3,17 @@
 //! Also the question those locks depend on: whether a file is on a network
 //! file system, where they do not work.
 //!
-//! This is the one module of the engine allowed `unsafe` code. The standard
-//! library locks only whole files, and the crates that wrap byte-range locks
-//! either lock whole files too or limit offsets to 32 bits, which the lock
-//! bytes at 2^62 do not fit. Every `unsafe` block here is one call into the C
-//! library or the Windows API, or the zeroing of a C struct for one, and its
-//! `SAFETY` comment says why that is sound. No pointer outlives the call it is
-//! passed to.
+//! The standard library locks only whole files, and the crates that wrap
+//! byte-range locks either lock whole files too or limit offsets to 32 bits,
+//! which the lock bytes at 2^62 do not fit. Every `unsafe` block here is one
+//! call into the C library or the Windows API, or the zeroing of a C struct
+//! for one, and its `SAFETY` comment says why that is sound. No pointer
+//! outlives the call it is passed to.
 //!
 //! Nothing here waits. A lock is granted at once or refused, and the callers
 //! poll, which is what gives every wait a timeout on every platform. It also
 //! keeps a waiting thread out of the Windows API, where a call that blocks on a
 //! synchronous handle holds up every other call on that handle.
-
-#![allow(unsafe_code)]
 
 use std::fs::File;
 use std::io;
@@ -24,7 +21,7 @@ use std::path::Path;
 
 /// What a lock admits alongside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Mode {
+pub(crate) enum Mode {
     /// Other shared locks on the same bytes.
     Shared,
     /// No other lock on the same bytes.
@@ -38,7 +35,7 @@ pub(super) enum Mode {
 /// conflicts with its own locks on Unix-like systems, where taking a lock over
 /// one it holds converts it in place. A file system without byte-range locks
 /// fails with [`io::ErrorKind::Unsupported`].
-pub(super) fn try_lock(file: &File, start: u64, len: u64, mode: Mode) -> io::Result<bool> {
+pub(crate) fn try_lock(file: &File, start: u64, len: u64, mode: Mode) -> io::Result<bool> {
     platform::try_lock(file, start, len, mode)
 }
 
@@ -50,14 +47,14 @@ pub(super) fn try_lock(file: &File, start: u64, len: u64, mode: Mode) -> io::Res
 /// so the answer comes from taking an exclusive lock without waiting and
 /// releasing it at once if it was granted; a reader asking for a lock in the
 /// range meanwhile waits an instant.
-pub(super) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
+pub(crate) fn is_locked(file: &File, start: u64, len: u64) -> io::Result<bool> {
     platform::is_locked(file, start, len)
 }
 
 /// Releases the lock on the `len` bytes from `start`. On Windows the range has
 /// to be exactly one that was locked, and a range locked twice, shared and
 /// exclusive, loses the exclusive lock first.
-pub(super) fn unlock(file: &File, start: u64, len: u64) -> io::Result<()> {
+pub(crate) fn unlock(file: &File, start: u64, len: u64) -> io::Result<()> {
     platform::unlock(file, start, len)
 }
 
@@ -70,14 +67,14 @@ pub(super) fn unlock(file: &File, start: u64, len: u64) -> io::Result<()> {
 /// remote. The answer is a best effort: a network file system these do not
 /// recognise is still not supported, and a question the system fails to
 /// answer counts as a local file system.
-pub(super) fn is_remote(file: Option<&File>, path: &Path) -> bool {
+pub(crate) fn is_remote(file: Option<&File>, path: &Path) -> bool {
     platform::is_remote(file, path).unwrap_or(false)
 }
 
 /// Forks this process, for the tests of what a forked child inherits. Returns
 /// the child's process id in the parent, and `None` in the child.
 #[cfg(all(test, unix))]
-pub(super) fn fork() -> io::Result<Option<libc::pid_t>> {
+pub(crate) fn fork() -> io::Result<Option<libc::pid_t>> {
     // SAFETY: only a helper process of the tests calls it, while its other
     // threads are idle, and the child only uses the database and then ends
     // with `exit_now`, without running the parent's destructors.
@@ -90,7 +87,7 @@ pub(super) fn fork() -> io::Result<Option<libc::pid_t>> {
 
 /// Waits for the forked process `child` and returns its exit code.
 #[cfg(all(test, unix))]
-pub(super) fn wait_for(child: libc::pid_t) -> io::Result<i32> {
+pub(crate) fn wait_for(child: libc::pid_t) -> io::Result<i32> {
     let mut status = 0;
 
     loop {
@@ -116,7 +113,7 @@ pub(super) fn wait_for(child: libc::pid_t) -> io::Result<i32> {
 /// Ends a forked child at once, with `code`, running none of the destructors
 /// it inherited from its parent.
 #[cfg(all(test, unix))]
-pub(super) fn exit_now(code: i32) -> ! {
+pub(crate) fn exit_now(code: i32) -> ! {
     // SAFETY: `_exit` takes any exit code and never returns.
     unsafe { libc::_exit(code) }
 }
@@ -340,7 +337,7 @@ mod platform {
 /// FUSE is left alone; a FUSE file system whose locks do not work, such as
 /// shared storage on some Android devices, fails the lock call instead.
 #[cfg(any(target_os = "linux", target_os = "android", test))]
-pub(super) fn is_network_type(kind: impl Into<i128>) -> bool {
+pub(crate) fn is_network_type(kind: impl Into<i128>) -> bool {
     const NETWORK: [u32; 8] = [
         0x0000_6969, // NFS
         0x0000_517B, // SMB
@@ -359,7 +356,7 @@ pub(super) fn is_network_type(kind: impl Into<i128>) -> bool {
 
 /// Whether a file system name, as macOS and iOS report it, is a network one.
 #[cfg(any(target_vendor = "apple", test))]
-pub(super) fn is_network_name(name: &[u8]) -> bool {
+pub(crate) fn is_network_name(name: &[u8]) -> bool {
     [b"nfs".as_slice(), b"smbfs", b"afpfs", b"webdav"].contains(&name)
 }
 

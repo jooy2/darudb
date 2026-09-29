@@ -35,8 +35,6 @@
 //! its open lock goes with it, and the next one in finds the file unopened and
 //! recovers it.
 
-mod sys;
-
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -44,7 +42,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sys::Mode;
+use crate::sys::lock::{self as sys, Mode};
 
 use crate::format::TXN_LIMIT;
 use crate::storage::DbFile;

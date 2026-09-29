@@ -69,6 +69,7 @@ mod query;
 mod schema;
 mod space;
 mod storage;
+mod sys;
 #[cfg(test)]
 mod testing;
 mod tools;

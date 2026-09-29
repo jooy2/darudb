@@ -59,9 +59,9 @@ windows-sys.workspace = true
 tempfile.workspace = true
 
 [lints.rust]
-# The engine is safe Rust, with one exception: `lock/sys.rs` calls the
-# operating system's byte-range locks, which the standard library does not
-# offer, and allows `unsafe` for itself alone. Any other module that uses it
+# The engine is safe Rust, with one exception: `sys/` makes the operating
+# system's calls that the standard library does not offer, such as byte-range
+# locks, and allows `unsafe` for itself alone. Any other module that uses it
 # fails to build. `deny` rather than `forbid` is what lets that one module opt
 # out.
 unsafe_code = "deny"
