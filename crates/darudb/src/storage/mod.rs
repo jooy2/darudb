@@ -35,6 +35,15 @@ pub(crate) trait FileIo: Send + Sync + Debug {
     /// Writes all of `buf` at `offset`, extending the file if needed.
     fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<()>;
 
+    /// Writes `bufs` one after another from `offset` on, as [`write_at`]
+    /// writes them joined into one buffer, which is what this does unless
+    /// the file can take them where they lie.
+    ///
+    /// [`write_at`]: FileIo::write_at
+    fn write_vectored_at(&self, bufs: &[&[u8]], offset: u64) -> io::Result<()> {
+        self.write_at(&bufs.concat(), offset)
+    }
+
     /// A barrier: when it returns successfully, every earlier write is
     /// durable.
     fn sync(&self) -> io::Result<()>;

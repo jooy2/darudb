@@ -208,6 +208,22 @@ impl Pager {
             .map_err(|source| self.io_error(source))
     }
 
+    /// Writes consecutive pages from `first` on, each already sealed with its
+    /// check and each where it lies, in one call.
+    pub(crate) fn write_sealed_pages(&self, first: u64, pages: &[&[u8]]) -> Result<()> {
+        debug_assert!(pages.iter().all(|page| page.len() == self.page_size));
+        debug_assert!(
+            self.cipher.is_some()
+                || (first..)
+                    .zip(pages)
+                    .all(|(page, content)| page_check(page, content) == stored_check(content))
+        );
+
+        self.io
+            .write_vectored_at(pages, self.offset(first)?)
+            .map_err(|source| self.io_error(source))
+    }
+
     /// Writes `bytes` at `offset` of page 0, for the selector and the slots.
     pub(crate) fn write_header(&self, bytes: &[u8], offset: usize) -> Result<()> {
         self.io

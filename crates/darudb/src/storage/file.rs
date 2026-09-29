@@ -59,6 +59,12 @@ impl DbFile {
         platform::write_all_at(&self.file, buf, offset)
     }
 
+    /// Writes all of `bufs`, one after another, to the file, starting at
+    /// `offset`.
+    pub(crate) fn write_all_vectored_at(&self, bufs: &[&[u8]], offset: u64) -> io::Result<()> {
+        platform::write_all_vectored_at(&self.file, bufs, offset)
+    }
+
     /// Waits until everything written to the file, and its metadata, is on
     /// the storage device.
     ///
@@ -82,6 +88,10 @@ impl super::FileIo for DbFile {
 
     fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<()> {
         self.write_all_at(buf, offset)
+    }
+
+    fn write_vectored_at(&self, bufs: &[&[u8]], offset: u64) -> io::Result<()> {
+        self.write_all_vectored_at(bufs, offset)
     }
 
     fn sync(&self) -> io::Result<()> {
@@ -135,6 +145,44 @@ mod platform {
 
     pub(super) fn write_all_at(file: &File, buf: &[u8], offset: u64) -> io::Result<()> {
         file.write_all_at(buf, offset)
+    }
+
+    /// `pwritev`, called again for what a call leaves unwritten. Joining the
+    /// buffers and writing them with one `pwrite` took about a tenth of a
+    /// commit of many pages, in the copy. Where the system lacks the call,
+    /// as macOS did before version 11, the rest is joined and written so.
+    pub(super) fn write_all_vectored_at(
+        file: &File,
+        bufs: &[&[u8]],
+        mut offset: u64,
+    ) -> io::Result<()> {
+        let mut slices: Vec<io::IoSlice<'_>> =
+            bufs.iter().map(|buf| io::IoSlice::new(buf)).collect();
+        let mut left = &mut slices[..];
+
+        while !left.is_empty() {
+            match rustix::io::pwritev(file, left, offset) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "the file accepted no more bytes",
+                    ));
+                }
+                Ok(written) => {
+                    offset += written as u64;
+                    io::IoSlice::advance_slices(&mut left, written);
+                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(rustix::io::Errno::NOSYS) => {
+                    let rest: Vec<&[u8]> = left.iter().map(|slice| &**slice).collect();
+
+                    return file.write_all_at(&rest.concat(), offset);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -190,5 +238,60 @@ mod platform {
         }
 
         Ok(())
+    }
+
+    /// Windows writes a gathered set of buffers only to a file opened
+    /// without buffering, so the buffers are joined and written as one.
+    pub(super) fn write_all_vectored_at(
+        file: &File,
+        bufs: &[&[u8]],
+        offset: u64,
+    ) -> io::Result<()> {
+        write_all_at(file, &bufs.concat(), offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbFile;
+    use crate::testing::Rng;
+
+    /// Buffers written where they lie land one after another as they would
+    /// joined, whatever their sizes and however many there are, past the
+    /// end of the file too, and a later write changes only the bytes it
+    /// names.
+    #[test]
+    fn buffers_written_where_they_lie_land_as_they_would_joined() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = DbFile::create_new(&dir.path().join("vectored")).unwrap();
+        let mut rng = Rng::new(3);
+        let mut expected = Vec::new();
+
+        for round in 0..200 {
+            let count = rng.index(2000);
+            let bufs: Vec<Vec<u8>> = (0..count)
+                .map(|_| {
+                    let len = [0, 1, 4096, rng.index(9000)][rng.index(4)];
+
+                    rng.bytes(len)
+                })
+                .collect();
+            let joined = bufs.concat();
+            let offset = rng.index(expected.len() + 5000);
+            let slices: Vec<&[u8]> = bufs.iter().map(Vec::as_slice).collect();
+
+            file.write_all_vectored_at(&slices, offset as u64).unwrap();
+
+            if expected.len() < offset + joined.len() {
+                expected.resize(offset + joined.len(), 0);
+            }
+
+            expected[offset..offset + joined.len()].copy_from_slice(&joined);
+
+            let mut read = vec![0; expected.len()];
+
+            file.read_exact_at(&mut read, 0).unwrap();
+            assert!(read == expected, "round {round}");
+        }
     }
 }

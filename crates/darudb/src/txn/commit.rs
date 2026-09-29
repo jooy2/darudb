@@ -269,7 +269,7 @@ fn write_and_publish(
             _ => {
                 let bytes: Vec<&[u8]> = run.iter().map(FinishedPage::bytes).collect();
 
-                pager.write_sealed_run(run[0].page, &bytes.concat())?;
+                pager.write_sealed_pages(run[0].page, &bytes)?;
             }
         }
     }

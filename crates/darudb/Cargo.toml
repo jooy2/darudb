@@ -40,6 +40,14 @@ blake2.workspace = true
 # apart. MIT OR Apache-2.0, with no dependencies, and already in the build
 # through `getrandom`.
 libc.workspace = true
+# `pwritev`, a positional write of several buffers, which the standard
+# library offers only on nightly: a commit writes each run of consecutive
+# pages from where the pages lie rather than copying them into one buffer
+# first. Safe, so no module of ours needs `unsafe` for it, and it finds the
+# call at run time on macOS, where it arrived in version 11. Apache-2.0 WITH
+# LLVM-exception OR Apache-2.0 OR MIT; it brings `bitflags`, and on Linux
+# `linux-raw-sys`, both MIT OR Apache-2.0.
+rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # `LockFileEx` and `UnlockFileEx`, the byte-range locks of Windows, and
