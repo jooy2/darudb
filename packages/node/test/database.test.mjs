@@ -263,3 +263,64 @@ describe('Database#backup', () => {
     db.close();
   });
 });
+
+describe('Database#compact', () => {
+  const people = schema(1, {
+    people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })
+  });
+
+  it('makes a sparse file smaller and keeps every object, both ways', async (context) => {
+    const dir = tempDir(context);
+
+    for (const asynchronous of [false, true]) {
+      const path = join(dir, `sparse-${asynchronous}.darudb`);
+      const db = Database.open(path, { schema: people });
+
+      db.write((txn) =>
+        txn
+          .collection('people')
+          .insertMany(
+            Array.from({ length: 3000 }, (_, n) => ({ name: `p${n}`, email: `${n}@x`, age: n % 9 }))
+          )
+      );
+      db.write((txn) => {
+        const users = txn.collection('people');
+
+        for (let id = 1; id <= 3000; id++) {
+          if (id % 10 !== 0) {
+            users.delete(id);
+          }
+        }
+      });
+
+      const before = db.read((txn) => txn.collection('people').find());
+      const report = asynchronous ? await db.compactAsync() : db.compact();
+
+      assert.ok(report.pagesMoved > 0);
+      assert.ok(report.bytesAfter < report.bytesBefore, JSON.stringify(report));
+      assert.equal(report.bytesAfter, readFileSync(path).length);
+      assert.deepEqual(
+        db.read((txn) => txn.collection('people').find()),
+        before
+      );
+      assert.equal(db.check().ok, true);
+      db.close();
+    }
+  });
+
+  it('is refused while an asynchronous write holds the file', async (context) => {
+    const db = Database.open(join(tempDir(context), 'app.darudb'), { schema: people });
+    let refused;
+
+    await db.writeAsync(async () => {
+      try {
+        db.compact();
+      } catch (error) {
+        refused = error.code;
+      }
+    });
+
+    assert.equal(refused, 'INVALID_ARGUMENT');
+    db.close();
+  });
+});

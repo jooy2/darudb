@@ -729,6 +729,29 @@ class Database {
   }
 
   /**
+   * Makes the file smaller in place, in write transactions of its own, so
+   * it is refused while an asynchronous write of this process holds the
+   * file, as a synchronous write is.
+   */
+  compact(): CompactReport {
+    const database = this.#database();
+
+    return holdForSync(this.#file, '`compact`', () => database.compact());
+  }
+
+  /** `compact` on the thread pool, after this process's writes on the file. */
+  async compactAsync(): Promise<CompactReport> {
+    const database = this.#database();
+    const release = await turn(this.#file);
+
+    try {
+      return settle(await database.compactAsync());
+    } finally {
+      release();
+    }
+  }
+
+  /**
    * Makes deferred commits durable and closes the database. Closing one that
    * is closed does nothing.
    */
@@ -773,6 +796,13 @@ class Database {
 
     return this.#native;
   }
+}
+
+/** What a compaction did, as `compact` and `compactAsync` give it. */
+interface CompactReport {
+  bytesBefore: number;
+  bytesAfter: number;
+  pagesMoved: number;
 }
 
 /** What a backup wrote, as `backup` and `backupAsync` give it. */

@@ -603,6 +603,15 @@ export interface Database<S extends Schema<any> = Schema> {
   backup(path: string): BackupReport;
   /** `backup` on the thread pool. */
   backupAsync(path: string): Promise<BackupReport>;
+  /**
+   * Makes the file smaller in place: its end moves into free pages nearer
+   * its start and goes back to the file system. It writes, so it waits for
+   * the writer lock, and it is refused while an asynchronous write of this
+   * process holds the file.
+   */
+  compact(): CompactReport;
+  /** `compact` on the thread pool, after this process's writes on the file. */
+  compactAsync(): Promise<CompactReport>;
   /** Makes every commit durable, deferred ones included. */
   sync(): void;
   /** `sync` on the thread pool, after this process's writes on the file. */
@@ -630,6 +639,16 @@ export interface CheckReport {
   objectsChecked: number;
   /** Every problem found, in the order found. */
   problems: CheckProblem[];
+}
+
+/** What `Database.compact` did. */
+export interface CompactReport {
+  /** The size of the file before, in bytes. */
+  bytesBefore: number;
+  /** The size of the file after, in bytes. */
+  bytesAfter: number;
+  /** The pages moved out of the file's end. */
+  pagesMoved: number;
 }
 
 /** What `Database.backup` wrote. */

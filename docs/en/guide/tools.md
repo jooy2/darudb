@@ -78,6 +78,10 @@ fn compact(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+```ts
+const report = await db.compactAsync(); // or `db.compact()`
+```
+
 - Compaction is made of ordinary write transactions, so it waits for the writer lock like any write, and a crash in the middle leaves the file at one of its commits.
 - A page that a read transaction can still reach cannot move until the transaction ends, so the file shrinks less next to long readers. The next compaction takes the rest.
 - To get a compact copy without touching the file, use a backup instead.

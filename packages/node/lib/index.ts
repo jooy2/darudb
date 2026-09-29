@@ -37,6 +37,7 @@ export type {
   CheckProblem,
   CheckReport,
   Collection,
+  CompactReport,
   Comparison,
   Condition,
   Conditions,

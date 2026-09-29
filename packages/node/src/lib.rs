@@ -165,6 +165,26 @@ impl Deliver for darudb::BackupReport {
     }
 }
 
+/// What a compaction did, as `Database.compact` gives it.
+#[napi(object)]
+pub struct NativeCompactReport {
+    pub bytes_before: f64,
+    pub bytes_after: f64,
+    pub pages_moved: f64,
+}
+
+impl Deliver for darudb::CompactReport {
+    type Js = NativeCompactReport;
+
+    fn deliver(self) -> Result<NativeCompactReport> {
+        Ok(NativeCompactReport {
+            bytes_before: u64_number(self.bytes_before),
+            bytes_after: u64_number(self.bytes_after),
+            pages_moved: u64_number(self.pages_moved),
+        })
+    }
+}
+
 /// Work for the thread pool: a function that returns a value or an error.
 pub struct Work<T: Deliver> {
     run: Option<Box<dyn FnOnce() -> Result<T> + Send>>,
@@ -454,6 +474,19 @@ impl NativeDatabase {
         let database = self.database()?.clone();
 
         Ok(Work::task(move || database.check().map_err(to_js_error)))
+    }
+
+    /// The file made smaller in place.
+    #[napi]
+    pub fn compact(&self) -> Result<NativeCompactReport> {
+        self.database()?.compact().map_err(to_js_error)?.deliver()
+    }
+
+    #[napi(ts_return_type = "Promise<NativeCompactReport | NativeFailure>")]
+    pub fn compact_async(&self) -> Result<AsyncTask<Work<darudb::CompactReport>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || database.compact().map_err(to_js_error)))
     }
 
     /// A copy of the published commit in a new file at `path`.
