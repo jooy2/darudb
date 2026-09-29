@@ -19,3 +19,14 @@ It reads, in this order:
 The check reports every problem it finds rather than stopping at the first. A problem names the page it is in, where it is in one, and the tree or collection, where it was found in one. A page that cannot be read is a problem, and the pages below it are not read; the pages the check could not reach are then counted in one problem rather than reported as leaked, since some of them lie below the damage. The check fails only when it cannot begin, as when the database is closed; damage is what its report is for.
 
 **What it costs.** It reads every page the commit reaches, and every record twice over for a file with indexes: once in its collection and once for each index entry it gives, looked up by key. It keeps one bit for every page of the file, and nothing that grows with the number of objects, so a file of any size can be checked in bounded memory.
+
+## Backup
+
+`Database::backup` writes a copy of the commit a new read transaction sees, the published one when it begins, into a new file at a path it is given, while other handles and processes go on reading and writing.
+
+- **A logical copy.** Every entry of every tree the catalog names, the engine's own included, is inserted in key order into a new database, so the copy holds no free or retained pages, its leaves are full, and it is as small as its data allows. Tree ids and page numbers are the copy's own; names, keys and values are the commit's.
+- **The same header, the same key.** The copy has the file's page size, file id and cipher. In an encrypted file, its first commit record holds the key block of the commit copied, with a record MAC made under the data key for the copy, so the key or password that opens the file opens the copy. Like a copied file, the copy shares the file id: nothing identifies a file by it but the key block and the record MACs.
+- **Bounded memory.** The copy commits, deferred, whenever a write transaction holds 32 MiB of keys and values, since the pages a transaction changes stay in memory until it commits, and its last commit is a sync commit.
+- **Never half a file, never a file replaced.** The copy is written under a temporary name beside the path, closed, and then linked to the path, which fails if anything is there; the temporary name goes either way. A backup to a path that is taken fails with `INVALID_ARGUMENT` before it writes anything, and one that finds the path taken at the end leaves nothing behind. A file system without links gets the copy copied to the path, created only if nothing is there.
+
+What a backup copies is exactly one commit: the read transaction it holds keeps every page of that commit from being reused until it ends, as any read transaction does, so a long backup makes the file grow while others write.

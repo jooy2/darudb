@@ -68,6 +68,45 @@ pub(crate) fn fill(file: &DbFile, path: &Path, contents: &[u8]) -> io::Result<()
     sync_parent_dir(path)
 }
 
+/// Writes `contents` to a new file beside `path`, under a name no other
+/// process will pick, syncs it, and returns its name and the open file, for
+/// a caller that fills the file before it moves it to `path` with
+/// [`move_into_place`].
+pub(crate) fn create_beside(path: &Path, contents: &[u8]) -> io::Result<(PathBuf, DbFile)> {
+    let temporary = temporary_path(path)?;
+
+    write_synced(&temporary, contents)?;
+
+    let file = DbFile::open(&temporary)?;
+
+    Ok((temporary, file))
+}
+
+/// Gives the file at `temporary` the name `path`, unless something is there
+/// already, which fails with [`io::ErrorKind::AlreadyExists`] and leaves it
+/// alone. The temporary name goes either way. A file system without links
+/// gets a copy under the new name, made only if nothing is there.
+pub(crate) fn move_into_place(temporary: &Path, path: &Path) -> io::Result<()> {
+    let linked = match fs::hard_link(temporary, path) {
+        Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
+            let target = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path);
+
+            target.and_then(|mut target| {
+                io::copy(&mut fs::File::open(temporary)?, &mut target)?;
+                target.sync_all()
+            })
+        }
+        linked => linked,
+    };
+    let _ = fs::remove_file(temporary);
+
+    linked?;
+    sync_parent_dir(path)
+}
+
 /// Writes `contents` to a new file at `path` and syncs it.
 fn write_synced(path: &Path, contents: &[u8]) -> io::Result<()> {
     let file = DbFile::create_new(path)?;

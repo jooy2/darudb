@@ -180,6 +180,20 @@ impl Database {
         crate::tools::check(self)
     }
 
+    /// Writes a copy of the published commit to a new file at `path`, and
+    /// returns what it copied; see [`BackupReport`](crate::BackupReport).
+    ///
+    /// Other handles and processes may read and write meanwhile: the copy
+    /// holds the commit that was published when it began. The new file has
+    /// this file's page size, and in an encrypted file its cipher and key, so
+    /// the same key or password opens it. It holds no free space, and is
+    /// durable when this returns. It stays under a temporary name beside
+    /// `path` until then, and never replaces a file already at `path`, which
+    /// fails with [`Error::InvalidArgument`] instead.
+    pub fn backup(&self, path: impl AsRef<Path>) -> Result<crate::BackupReport> {
+        crate::tools::backup(self, path.as_ref())
+    }
+
     /// Closes this handle, making deferred commits durable first.
     ///
     /// It reports `SYNC_FAILED` if a barrier failed on any handle to this file,
@@ -257,6 +271,50 @@ impl Database {
         let shared = open_io(io, Locks::none(), Access::Alone, path, options, data_key)?;
 
         Self::with_schema(shared, options)?.complete()
+    }
+
+    /// A new database in a file beside `path` that no other process knows
+    /// of, with this database's page size, file id and cipher, and in an
+    /// encrypted file its data key under `key_block`, which one of its
+    /// records holds: the same key or password opens both. The tools write
+    /// into it and then move it to `path`. Returns its temporary name too.
+    pub(crate) fn create_copy_beside(
+        &self,
+        path: &Path,
+        key_block: [u8; crate::format::KEY_BLOCK_LEN],
+    ) -> Result<(std::path::PathBuf, Database)> {
+        let header = self.shared.static_header;
+        let mut first = CommitRecord::first();
+        let data_key = self
+            .shared
+            .data_key
+            .as_ref()
+            .map(|key| DataKey::from_bytes(*key.bytes()));
+
+        if let Some(data_key) = &data_key {
+            first.key_block = key_block;
+            first.mac = RecordAuth::new(data_key).mac(&header.file_id, 0, &first.authenticated());
+        }
+
+        let (temporary, file) = storage::create_beside(path, &first_page(&header, &first))
+            .map_err(|source| io_error(path, source))?;
+        let file = Arc::new(file);
+        let locks = Locks::on(Arc::clone(&file));
+        let options = OpenOptions::new();
+
+        locks
+            .open_alone(options.settings().busy_timeout)
+            .map_err(|error| lock_error(&temporary, error))?;
+
+        let shared = open_io(file, locks, Access::Alone, &temporary, &options, data_key)?;
+
+        Ok((
+            temporary,
+            Database {
+                shared,
+                schema: None,
+            },
+        ))
     }
 
     /// The instance behind this handle, for the tools and the engine's own

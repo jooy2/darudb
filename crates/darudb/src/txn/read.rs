@@ -222,6 +222,14 @@ impl ReadTransaction {
             .map_or(0, |descriptor| descriptor.entries))
     }
 
+    /// The names of every tree, the engine's own included, in byte order.
+    pub(crate) fn tree_names_in(&self) -> Result<Vec<String>> {
+        catalog_names(
+            &self.shared.loader,
+            root_child(self.record.catalog).as_ref(),
+        )
+    }
+
     /// The names of every tree, in byte order. The engine's own trees, which
     /// hold the objects of collections, are not among them.
     pub fn tree_names(&self) -> Result<Vec<String>> {

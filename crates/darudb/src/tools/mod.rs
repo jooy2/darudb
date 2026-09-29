@@ -5,8 +5,11 @@
 //! writes, so none of them stops other handles and processes from using the
 //! file while it runs.
 
+mod backup;
 mod check;
 
+pub use backup::BackupReport;
 pub use check::{CheckReport, Problem};
 
+pub(crate) use backup::backup;
 pub(crate) use check::check;
