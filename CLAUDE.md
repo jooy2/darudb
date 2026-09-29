@@ -144,7 +144,7 @@ Specified in [design/locking.md](design/locking.md).
 - **The writer reclaims pages** only from groups that no registered snapshot and no possible recovery can still reach.
 - **The page cache is keyed by page number and check**, so a stale entry never matches and nothing has to be invalidated when another process commits.
 - **Concurrency model**: one writing process at a time and any number of readers. Waiting for the writer lock past the busy timeout, 5 seconds by default (decided 2026-09-29), fails with `BUSY`.
-- **Writers take turns.** A writer that has waited 50 milliseconds claims the turn lock, and every other writer lets it go first, so a process that commits in a tight loop cannot keep the others out. The wait is long enough that the lock seldom passes back and forth, since each pass used to cost the next commit a barrier; now it costs one only when the other process's window holds a single commit.
+- **Writers take turns.** A writer that has waited 20 milliseconds claims the turn lock, and every other writer lets it go first, so a process that commits in a tight loop cannot keep the others out. The wait trades the latency of a writer that commits now and then beside a busy one against the throughput of processes that commit in tight loops, which lose a little on every pass of the lock (decided 2026-09-29, from 50).
 - **iOS**: the system terminates a suspended app that holds a file lock in an App Group container, and the open lock is held while a database is open.
 - **Test this area harder than any other.** Concurrent reads and writes from several processes, with processes killed at random, are the phase 3 exit criterion.
 

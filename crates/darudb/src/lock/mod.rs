@@ -63,16 +63,18 @@ const TURN_BYTE: u64 = OPEN_BYTE + 3;
 
 /// How long a writer waits for the writer lock before it claims the turn.
 /// Most waits are far shorter; this one is reached when a writer that commits
-/// again and again keeps taking the lock back first.
+/// again and again keeps taking the lock back first, and it is about how long
+/// a writer that commits now and then waits beside one that commits all the
+/// time.
 ///
-/// Each time the writer lock passes to another process, the next commit
-/// issues a barrier before its record, since it cannot know which selector a
-/// power cut would bring back. A shorter wait would pass the lock back and
-/// forth more often and pay that barrier each time: at 5 milliseconds, two
-/// processes committing in tight loops made a twentieth of the commits they
-/// made without a turn. At 50, the turn bounds the longest wait and costs
-/// little throughput.
-const TURN_AFTER: Duration = Duration::from_millis(50);
+/// Every pass of the writer lock between processes costs the processes that
+/// commit in tight loops some throughput, so a shorter wait costs them more:
+/// against 50 milliseconds, two such processes made 7% fewer deferred commits
+/// at 20, and 16% fewer at 10; four made 16% and 30% fewer. A writer that
+/// commits every 10 milliseconds beside a busy one waited 22 milliseconds at
+/// the 99th percentile at 20, against 51 at 50. See `design/locking.md`, "Why
+/// 20 milliseconds".
+const TURN_AFTER: Duration = Duration::from_millis(20);
 
 /// The longest pause between two attempts at the writer lock. Shorter than
 /// [`LAST_PAUSE`], so that writers claiming the turn try as often as one
