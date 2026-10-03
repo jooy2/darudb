@@ -8,6 +8,8 @@ on:
     paths:
       - crates/**
       - packages/*/src/**
+      - packages/*/Cargo.toml
+      - packages/*/build.rs
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
