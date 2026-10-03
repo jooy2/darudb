@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/darudb", "crates/darudb-derive", "packages/node"]
+members = ["crates/darudb", "crates/darudb-derive", "packages/dart/darudb/native", "packages/node"]
 
 # What every crate in the repository shares. The version is not here: each
 # package versions on its own, so each manifest carries its own number.

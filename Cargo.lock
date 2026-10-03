@@ -217,6 +217,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "darudb-dart"
+version = "0.1.0"
+dependencies = [
+ "darudb",
+ "zeroize",
+]
+
+[[package]]
 name = "darudb-derive"
 version = "0.1.0"
 dependencies = [

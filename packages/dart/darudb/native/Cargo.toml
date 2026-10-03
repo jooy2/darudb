@@ -1,0 +1,33 @@
+[package]
+name = "darudb-dart"
+version = "0.1.0"
+description = "The native half of the Dart binding of DaruDB: the engine behind a C interface that `dart:ffi` calls. Shipped inside the Dart package `darudb`, never to crates.io."
+publish = false
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+# The Dart build hooks link a static library on iOS and load a dynamic one
+# elsewhere, and require a crate to offer both.
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+darudb.workspace = true
+# Wipes the copies of a key or a password the library makes. Already in the
+# build through the engine; Apache-2.0 OR MIT.
+zeroize.workspace = true
+
+[lints.rust]
+# The C interface is `unsafe` by nature: Dart hands over pointers. Each
+# `unsafe` block says why it is sound and does one thing, as in the engine.
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
