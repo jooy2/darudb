@@ -698,9 +698,21 @@ final class Database implements Finalizable {
     }
   }
 
+  /// The files with a synchronous write transaction under way in this
+  /// isolate, whose function is running.
+  static final Set<String> _writing = {};
+
   /// Refuses a synchronous call that would wait for this isolate's own
-  /// asynchronous write, which needs the isolate's event loop to finish.
+  /// write: the function of a synchronous one that is running, or an
+  /// asynchronous one, which needs the isolate's event loop to finish.
   void _refuseWhileWritingAsync(String call) {
+    if (_writing.contains(_file)) {
+      throw invalidArgument(
+        'write transactions do not nest: inside a write function, a `$call` '
+        'on the same file would wait for the function itself',
+      );
+    }
+
     if (_turns.isHeld(_file)) {
       throw invalidArgument(
         'a synchronous `$call` waits for the writer, which is an '
@@ -769,8 +781,16 @@ final class Database implements Finalizable {
 
     final txn = WriteTransaction._(_io.transaction.value, this);
 
+    _writing.add(_file);
+
     try {
-      final result = _settled(fn(txn));
+      final R result;
+
+      try {
+        result = _settled(fn(txn));
+      } finally {
+        _writing.remove(_file);
+      }
 
       _check(
         darudb_commit(txn._live(), durability == Durability.deferred ? 1 : 0),
@@ -834,39 +854,56 @@ final class Database implements Finalizable {
     }
   });
 
-  /// [setKey] on a thread of the native library.
+  /// [setKey] on a thread of the native library, after this isolate's
+  /// asynchronous writes on the file: changing the key commits.
   Future<void> setKeyAsync(Uint8List key) {
-    final loaded = _io.load(key);
+    final copy = Uint8List.fromList(key);
 
-    try {
-      return _call(
-        (id, callback) =>
-            darudb_set_key_async(_live(), loaded, key.length, id, callback),
-      ).then((_) {});
-    } finally {
-      _io.wipe(key.length);
-    }
+    return _turns.inTurn(_file, () async {
+      final loaded = _io.load(copy);
+      final Future<_Reply> done;
+
+      try {
+        done = _call(
+          (id, callback) =>
+              darudb_set_key_async(_live(), loaded, copy.length, id, callback),
+        );
+      } finally {
+        _io.wipe(copy.length);
+        copy.fillRange(0, copy.length, 0);
+      }
+
+      await done;
+    });
   }
 
-  /// [setPassword] on a thread of the native library.
+  /// [setPassword] on a thread of the native library, after this
+  /// isolate's asynchronous writes on the file: changing the password
+  /// commits.
   Future<void> setPasswordAsync(String password) {
     final bytes = utf8.encode(password);
-    final loaded = _io.load(bytes);
 
-    try {
-      return _call(
-        (id, callback) => darudb_set_password_async(
-          _live(),
-          loaded,
-          bytes.length,
-          id,
-          callback,
-        ),
-      ).then((_) {});
-    } finally {
-      _io.wipe(bytes.length);
-      bytes.fillRange(0, bytes.length, 0);
-    }
+    return _turns.inTurn(_file, () async {
+      final loaded = _io.load(bytes);
+      final Future<_Reply> done;
+
+      try {
+        done = _call(
+          (id, callback) => darudb_set_password_async(
+            _live(),
+            loaded,
+            bytes.length,
+            id,
+            callback,
+          ),
+        );
+      } finally {
+        _io.wipe(bytes.length);
+        bytes.fillRange(0, bytes.length, 0);
+      }
+
+      await done;
+    });
   }
 
   /// Checks the published commit completely: every page against its check,
@@ -1069,6 +1106,8 @@ final class Database implements Finalizable {
   /// Changes the key of an encrypted database to [key], 32 bytes. No page
   /// is encrypted again.
   void setKey(Uint8List key) {
+    _refuseWhileWritingAsync('setKey');
+
     final loaded = _io.load(key);
 
     try {
@@ -1080,6 +1119,8 @@ final class Database implements Finalizable {
 
   /// Changes the password of an encrypted database to [password].
   void setPassword(String password) {
+    _refuseWhileWritingAsync('setPassword');
+
     final bytes = utf8.encode(password);
     final loaded = _io.load(bytes);
 
@@ -1160,7 +1201,11 @@ base class ReadTransaction {
 
   Pointer<NativeTransaction> _live() {
     if (_handle == nullptr) {
-      throw invalidArgument('the transaction has ended');
+      throw const DaruException(
+        'CLOSED',
+        'the transaction has ended: a transaction and its collections are '
+            'used inside its function',
+      );
     }
 
     return _handle;

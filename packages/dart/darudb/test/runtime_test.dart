@@ -183,6 +183,34 @@ void main() {
     });
   });
 
+  test('a transaction used after its function fails with CLOSED', () {
+    late ReadCollection<User, UserQuery, int> kept;
+
+    db.read((txn) => kept = txn.collection(userSchema));
+    expect(
+      () => kept.count(),
+      throwsA(isA<DaruException>().having((e) => e.code, 'code', 'CLOSED')),
+    );
+  });
+
+  test('a write inside a write on the same file fails at once', () {
+    expect(
+      () => db.write((txn) => db.write((inner) => 1)),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'INVALID_ARGUMENT'),
+      ),
+    );
+    expect(
+      () => db.write((txn) => db.sync()),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'INVALID_ARGUMENT'),
+      ),
+    );
+    // The refused calls left the file usable.
+    db.write((txn) => txn.collection(userSchema).insert(const User(name: 'a')));
+    expect(db.read((txn) => txn.collection(userSchema).count()), 1);
+  });
+
   test('a closed database refuses calls with CLOSED', () {
     db.close();
     expect(
