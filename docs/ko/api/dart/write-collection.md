@@ -79,7 +79,7 @@ bool update(K key, List<Change> Function(Q q) changes);
 기본 키가 `key`인 객체에서 `changes`가 준 필드만 바꾸고, 객체가 있었는지 돌려줍니다. 객체가 없으면 아무것도 쓰지 않습니다. 함수는 쿼리 빌더를 받아, 필드의 `set`으로 만든 [Change](./fields.md#change)를 필드마다 돌려줍니다. 나머지 필드는 그대로입니다.
 
 - `set(null)`을 주면 선택 필드는 null이 되고, 기본값이 있는 필드는 기본값이 됩니다. 기본값 없는 필수 필드는 null로 만들 수 없습니다.
-- 목록은 통째로 바꿉니다. 내장 객체 필드에는 `set`이 없으므로, 내장 객체는 객체 전체를 `put`해서 바꿉니다.
+- 목록과 내장 객체는 통째로 바꿉니다. `q.address.set(const Address(city: 'Seoul'))`처럼 씁니다.
 - `set`은 객체 자신의 필드만 가리킵니다. 내장 객체나 링크를 거쳐 닿는 필드면 `INVALID_ARGUMENT`로 실패합니다.
 
 ```dart

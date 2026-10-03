@@ -26,7 +26,7 @@ The query builder `darudb_generator` writes has a getter for each field of the c
 | `List<String>` | `StringListField` |
 | Any other `List` | `ListField<E>`, where `E` is the element type, and `Object` for a list of links |
 | `Link<User>` | `UserLink`, a `LinkField` with `User`'s fields |
-| An `@Embedded()` class `Address` | `AddressFields`, an `EmbeddedField` with `Address`'s fields |
+| An `@Embedded()` class `Address` | `AddressFields`, an `EmbeddedField<Address>` with `Address`'s fields |
 
 A field of an embedded object or of a linked object is reached through the field that holds it: `q.address.city`, or `q.team.city` to test the linked object. A link to an object that is not there reads as null. [Queries](../../guide/queries.md) explains what each condition means for lists and for null.
 
@@ -227,6 +227,18 @@ Change set(List<E>? values);
 ```
 
 The change that replaces the list with `values`, or makes it null.
+
+## Methods of embedded object fields
+
+An `EmbeddedField<E>` holds an embedded object of the class `E`, and its subclass has that class's fields, which a condition reads through it.
+
+### set
+
+```dart
+Change set(E? value);
+```
+
+The change that replaces the embedded object whole with `value`, or makes it null. Null gives a required field with a default its default. The object is written with its fields where the file keeps them, so a class whose fields are declared in another order than the file's still writes each to its own.
 
 ## Methods of link fields
 

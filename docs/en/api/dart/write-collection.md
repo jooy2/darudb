@@ -79,7 +79,7 @@ bool update(K key, List<Change> Function(Q q) changes);
 Sets the fields that `changes` gives in the object whose primary key is `key`, and returns whether there was one; when there is none, nothing is written. The function receives the query builder and returns a [Change](./fields.md#change) for each field, made by the field's `set`. The rest of the object stays as it is.
 
 - `set(null)` makes an optional field null, and gives a field with a default its default. A required field without a default cannot be set to null.
-- A list is replaced whole. An embedded object's field has no `set`, so an embedded object is changed by putting the whole object.
+- A list or an embedded object is replaced whole: `q.address.set(const Address(city: 'Seoul'))`.
 - `set` names a field of the object itself: one reached through an embedded object or a link fails with `INVALID_ARGUMENT`.
 
 ```dart

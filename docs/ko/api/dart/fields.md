@@ -26,7 +26,7 @@ abstract base class Field {
 | `List<String>` | `StringListField` |
 | 그 밖의 `List` | `ListField<E>`. `E`는 원소 타입이고, 링크 목록이면 `Object`입니다 |
 | `Link<User>` | `User`의 필드가 있는 `LinkField`인 `UserLink` |
-| `@Embedded()` 클래스 `Address` | `Address`의 필드가 있는 `EmbeddedField`인 `AddressFields` |
+| `@Embedded()` 클래스 `Address` | `Address`의 필드가 있는 `EmbeddedField<Address>`인 `AddressFields` |
 
 내장 객체나 링크가 가리키는 객체의 필드는 그것을 담은 필드를 거쳐 닿습니다. `q.address.city`처럼 쓰고, `q.team.city`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다. 목록과 null에 건 조건의 뜻은 [쿼리](../../guide/queries.md)에서 설명합니다.
 
@@ -227,6 +227,18 @@ Change set(List<E>? values);
 ```
 
 목록을 `values`로 바꾸거나 null로 만드는 변경입니다.
+
+## 내장 객체 필드의 메서드
+
+`EmbeddedField<E>`는 클래스 `E`의 내장 객체를 담는 필드이고, 하위 클래스에는 그 클래스의 필드가 있어서 조건이 그것을 거쳐 읽을 수 있습니다.
+
+### set
+
+```dart
+Change set(E? value);
+```
+
+내장 객체를 `value`로 통째로 바꾸거나 null로 만드는 변경입니다. 기본값이 있는 필수 필드에 null을 주면 기본값이 됩니다. 객체의 필드는 파일이 기록해 둔 자리에 쓰므로, 클래스가 파일과 다른 순서로 필드를 선언해도 필드마다 제자리에 들어갑니다.
 
 ## 링크 필드의 메서드
 
