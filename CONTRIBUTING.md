@@ -25,12 +25,13 @@ When creating an issue, keep the following in mind:
 
 The repository holds one database engine, written in Rust, the bindings that ship it to each language, and one documentation site shared by all of them:
 
-| Path            | What it is                                       | How it is run                                                          |
-| --------------- | ------------------------------------------------ | ---------------------------------------------------------------------- |
-| `crates/darudb` | The engine and the Rust API, the crate `darudb`  | `cargo test -p darudb` from the repository root                        |
-| `packages/node` | The Node.js binding, the npm package `darudb`    | `cd packages/node && npm install`, then `npm run build` and `npm test` |
-| `docs`          | The documentation site, shared by every language | `cd docs && npm install`, then `npm run dev`                           |
-| `design`        | The engine's specifications, in English only     | Read before changing the file format, commits, recovery or locking     |
+| Path                   | What it is                                                  | How it is run                                                          |
+| ---------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `crates/darudb`        | The engine and the Rust API, the crate `darudb`             | `cargo test -p darudb` from the repository root                        |
+| `crates/darudb-derive` | `#[derive(Object)]` and `#[derive(Embedded)]` for the crate | `cargo test -p darudb -p darudb-derive` from the repository root       |
+| `packages/node`        | The Node.js binding, the npm package `darudb`               | `cd packages/node && npm install`, then `npm run build` and `npm test` |
+| `docs`                 | The documentation site, shared by every language            | `cd docs && npm install`, then `npm run dev`                           |
+| `design`               | The engine's specifications, in English only                | Read before changing the file format, commits, recovery or locking     |
 
 The repository root holds the Cargo workspace (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`) and nothing for JavaScript. There is no root `package.json` and no npm workspace: each JavaScript folder is entered and installed on its own.
 
@@ -135,11 +136,11 @@ The prebuilt Node.js addon links these crates, the binding's own and what they b
 
 The crate and the npm package version independently, and each is released on its own by the `release` workflow, which is started by hand from the Actions tab. Without **publish**, it publishes nothing: it builds and tests what would be published, for every platform the npm package ships to, and lists what each package would contain. Make that run before every release.
 
-1. Raise the version. For the crate, `version` in `crates/darudb/Cargo.toml` and the `darudb` entry of `[workspace.dependencies]` in the root `Cargo.toml`. For the npm package, `npm version <version> --no-git-tag-version` in `packages/node`; the platform packages take the version when the workflow makes them.
-1. Rename the changelog's `## vNext (<year>--)` section to `## v<version> (<date>)`, and take the note that the package is not published out of its README. The workflow refuses to publish until the changelog names the version.
+1. Raise the version. For the crate, `version` in `crates/darudb/Cargo.toml` and `crates/darudb-derive/Cargo.toml`, and the `darudb` and `darudb-derive` entries of `[workspace.dependencies]` in the root `Cargo.toml`: the two crates release together, at one version, since the code the macros generate calls the engine's crate, which depends on exactly that version of them. For the npm package, `npm version <version> --no-git-tag-version` in `packages/node`; the platform packages take the version when the workflow makes them.
+1. Rename the changelog's `## vNext (<year>--)` section, in both crates' changelogs for the crate, to `## v<version> (<date>)`, and take the note that the package is not published out of its README. The workflow refuses to publish until the changelog names the version.
 1. Commit that as `[core] chore: release v<version>` or `[node] chore: release v<version>`, and push it.
 1. Run the workflow on that commit without **publish**, and read what it lists.
-1. Run it again with **publish**. The crate needs the repository secret `CARGO_REGISTRY_TOKEN`, and the npm package `NPM_TOKEN`, which has to be allowed to publish `darudb` and every `darudb-<platform>` package. npm publishes the platform packages first, then `darudb` with them as optional dependencies, each with a provenance statement.
+1. Run it again with **publish**. The crate needs the repository secret `CARGO_REGISTRY_TOKEN`, and the npm package `NPM_TOKEN`, which has to be allowed to publish `darudb` and every `darudb-<platform>` package. npm publishes the platform packages first, then `darudb` with them as optional dependencies, each with a provenance statement. Cargo publishes `darudb-derive` first, then `darudb`.
 1. Once it has published, the workflow tags the commit `darudb-v<version>` for the crate or `node-v<version>` for the npm package, and makes a GitHub release whose notes are the changelog's section for the version. A separate job does that, the only one that may write to the repository.
 
 The Node.js addon has the engine compiled in, so a fix to the engine reaches Node.js only with a release of the npm package.
@@ -168,7 +169,7 @@ There are no strict rules for commit messages, but follow these where you can:
 
 The scope names the part of the repository that changed, since one repository holds several codebases:
 
-- `[core]`: `crates/darudb`, the engine and the Rust API
+- `[core]`: `crates/darudb` and `crates/darudb-derive`, the engine, the Rust API and its derive macros
 - `[node]`: `packages/node`, the Node.js binding
 - `[docs]`: `docs`, the documentation site
 - `[common]`: anything shared by all of them, such as the repository files, the Cargo workspace or CI
