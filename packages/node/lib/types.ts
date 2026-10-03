@@ -567,9 +567,10 @@ export interface WriteOptions {
  * An open database. There is no constructor: use `Database.open` or
  * `Database.openAsync`.
  *
- * Every method has an asynchronous twin whose name ends in `Async`, which
- * does the engine's work on the thread pool and resolves a promise, so the
- * event loop never waits for the disk or for another process's writer.
+ * Every method that uses the file has an asynchronous twin whose name ends
+ * in `Async`, which does the engine's work on the thread pool and resolves a
+ * promise, so the event loop never waits for the disk or for another
+ * process's writer. `prepare` has none: it only parses a query.
  */
 export interface Database<S extends Schema<any> = Schema> {
   /** The path the database was opened at. Still readable after `close`. */

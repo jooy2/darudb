@@ -7,12 +7,12 @@
 //!
 //! `npm run build` generates `native.js` and `native.d.ts` from the
 //! `#[napi]` items here. They are the package's internals, not its API: the
-//! JavaScript in `lib/` wraps them in the API a user sees, declared by hand in
-//! `index.d.ts`. Objects cross as records and queries as IR, the byte formats
-//! of `design/objects.md`, which `lib/codec.js` writes and reads, so that a
-//! batch of objects costs one call and one buffer rather than a call per
-//! field. A prepared query is parsed once into a [`NativePrepared`], which
-//! the synchronous methods run with its parameters' values.
+//! TypeScript in `lib/` wraps them in the API a user sees, declared by hand in
+//! `lib/types.ts`. Objects cross as records and queries as IR, the byte
+//! formats of `design/objects.md`, which `lib/codec.ts` writes and reads, so
+//! that a batch of objects costs one call and one buffer rather than a call
+//! per field. A prepared query is parsed once into a [`NativePrepared`],
+//! which the synchronous methods run with its parameters' values.
 //!
 //! Every operation of a transaction has a synchronous method, and the
 //! asynchronous API runs them in batches through `run_async`, on the libuv
