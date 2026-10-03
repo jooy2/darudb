@@ -25,7 +25,7 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 ## Rules that hold everywhere
 
-- **Never name another database product in this repository.** Not in code, comments, documentation, commit messages, tests or benchmark names. DaruDB goes its own way, and its designs are described on their own terms. **[Decided]**
+- **Never name another database product in this repository.** Not in code, comments, documentation, commit messages, tests or benchmark names. DaruDB goes its own way, and its designs are described on their own terms. **[Decided]** The one exception is the migration guides under `docs/*/migration/`, which name the database they move data out of, since a reader searches for it by name (decided 2026-10-03). The name stays inside those pages: not in their commit messages, and not in any other page, which links to them as the migration guides.
 - **Our own code from the start.** No existing database engine is embedded with a plan to swap it out later, and no existing database is forked. Studying other designs is fine; copying them is not. **[Decided]**
 - **Everything in the repository is English**: code, identifiers, comments, commit messages, error messages. The Korean pages under `docs/ko` are the exception, and the changelogs stay English even on the Korean site.
 - **Prose is plain and explains why.** Comments and documentation say what a decision costs and what the alternative was, in complete sentences, with no emoji and no decoration.
