@@ -1,0 +1,86 @@
+name: run-test-dart
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      # The package's build hook compiles the engine, so a change to either
+      # is a change to what these tests load.
+      - crates/**
+      - packages/dart/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/run-test-dart.yml
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  run-test-dart:
+    runs-on: ${{ matrix.os }}
+    name: Test Dart ${{ matrix.sdk }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The package's minimum on Linux, and the current release everywhere.
+        # The build hook compiles the engine with the toolchain
+        # `packages/dart/darudb/native/rust-toolchain.toml` pins, which rustup
+        # installs on the first build.
+        include:
+          - { os: ubuntu-latest, sdk: '3.10.0' }
+          - { os: ubuntu-latest, sdk: stable }
+          - { os: macos-latest, sdk: stable }
+          - { os: windows-latest, sdk: stable }
+
+    defaults:
+      run:
+        working-directory: ./packages/dart/darudb
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk }}
+      - run: dart pub get
+      # The tests' models are annotated classes, whose parts the generator
+      # writes; they are not committed.
+      - name: Generate the tests' models
+        run: dart run build_runner build --delete-conflicting-outputs
+      - name: Analyze
+        run: dart analyze --fatal-infos
+      - name: Check formatting
+        if: matrix.sdk == 'stable'
+        run: dart format --output=none --set-exit-if-changed lib test hook
+      - name: Test
+        run: dart test
+
+  run-test-generator:
+    runs-on: ubuntu-latest
+    name: Test the generator with its ${{ matrix.dependencies }} dependencies
+    strategy:
+      fail-fast: false
+      matrix:
+        # `upgrade` takes the newest of every constraint, and `downgrade` the
+        # oldest, which is what an application on Dart 3.10 resolves.
+        include:
+          - { dependencies: newest, sdk: stable, resolve: upgrade }
+          - { dependencies: oldest, sdk: '3.10.0', resolve: downgrade }
+
+    defaults:
+      run:
+        working-directory: ./packages/dart/darudb_generator
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk }}
+      - run: dart pub ${{ matrix.resolve }}
+      - name: Analyze
+        run: dart analyze --fatal-infos
+      - name: Test
+        run: dart test
