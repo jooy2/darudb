@@ -537,6 +537,29 @@ function transformHead({ pageData, siteData, title, description }: TransformCont
   return head;
 }
 
+/**
+ * A heading's anchor, with Korean kept whole.
+ *
+ * The default slug decomposes the heading (NFKD) to strip accents from Latin
+ * letters, which also splits every Korean syllable into its letters. The id
+ * of `## 파일 백업하기` then holds those letters, while a link to
+ * `#파일-백업하기` is written, like all Korean text, with whole syllables:
+ * the two never compare equal, and the link scrolls nowhere. These are the
+ * default's steps, with the result composed again (NFC) at the end.
+ */
+function slugifyHeading(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036F]/g, '')
+    .replace(/[\u0000-\u001f]/g, '')
+    .replace(/[\s~`!@#$%^&*()\-_+=[\]{}|\\;:"'“”‘’<>,.?/]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/^(\d)/, '_$1')
+    .toLowerCase()
+    .normalize('NFC');
+}
+
 // Ref: https://vitepress.dev/reference/site-config
 const vitePressConfig: UserConfig = {
   title: 'DaruDB',
@@ -592,6 +615,8 @@ const vitePressConfig: UserConfig = {
    * language fails the build rather than hiding the block from everyone.
    */
   markdown: {
+    anchor: { slugify: slugifyHeading },
+    headers: { slugify: slugifyHeading },
     config(md: MarkdownRenderer) {
       md.use(container, 'lang', {
         validate: (params: string) => /^lang(\s+\S+)+$/.test(params.trim()),
