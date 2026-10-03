@@ -54,10 +54,18 @@ mod platform {
         match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
             Ok(()) => Ok(()),
             // A kernel older than the call, or a file system that does not
-            // take the flag.
-            Err(errno @ (Errno::NOSYS | Errno::INVAL | Errno::NOTSUP | Errno::OPNOTSUPP)) => Err(
-                io::Error::new(io::ErrorKind::Unsupported, io::Error::from(errno)),
-            ),
+            // take the flag. `ENOTSUP` and `EOPNOTSUPP` are one number on
+            // Linux and two on Apple's systems, so they are compared rather
+            // than matched.
+            Err(errno)
+                if [Errno::NOSYS, Errno::INVAL, Errno::NOTSUP, Errno::OPNOTSUPP]
+                    .contains(&errno) =>
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    io::Error::from(errno),
+                ))
+            }
             Err(errno) => Err(errno.into()),
         }
     }
