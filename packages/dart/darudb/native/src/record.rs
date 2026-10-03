@@ -231,3 +231,90 @@ impl<'a> Field<'a> {
         }
     }
 }
+
+/// Writes a record of ints, strings and lists of objects, for the reports the
+/// tools hand to Dart.
+pub(crate) struct Fields<'a> {
+    out: &'a mut Vec<u8>,
+    start: usize,
+    count: u64,
+}
+
+impl<'a> Fields<'a> {
+    /// A record written at the end of `out`, its count filled in by
+    /// [`finish`](Self::finish).
+    pub(crate) fn new(out: &'a mut Vec<u8>) -> Self {
+        let start = out.len();
+
+        // Room for a count up to 127, which every report keeps under.
+        out.push(0);
+
+        Self {
+            out,
+            start,
+            count: 0,
+        }
+    }
+
+    fn field(&mut self, id: u64) -> &mut Vec<u8> {
+        self.count += 1;
+        push_varint(self.out, id);
+        self.out
+    }
+
+    pub(crate) fn int(&mut self, id: u64, value: u64) -> &mut Self {
+        let out = self.field(id);
+
+        out.push(INT);
+        push_varint(out, zigzag(i64::try_from(value).unwrap_or(i64::MAX)));
+        self
+    }
+
+    pub(crate) fn string(&mut self, id: u64, value: &str) -> &mut Self {
+        let out = self.field(id);
+
+        out.push(STRING);
+        push_varint(out, value.len() as u64);
+        out.extend_from_slice(value.as_bytes());
+        self
+    }
+
+    /// A list of objects, each written by `write` into a record of its own.
+    pub(crate) fn objects<T>(
+        &mut self,
+        id: u64,
+        items: &[T],
+        write: impl Fn(&mut Fields<'_>, &T),
+    ) -> &mut Self {
+        let out = self.field(id);
+
+        out.push(LIST);
+        push_varint(out, items.len() as u64);
+
+        for item in items {
+            let mut inner = Vec::new();
+            let mut fields = Fields::new(&mut inner);
+
+            write(&mut fields, item);
+            fields.finish();
+            out.push(OBJECT);
+            push_varint(out, inner.len() as u64);
+            out.extend_from_slice(&inner);
+        }
+
+        self
+    }
+
+    pub(crate) fn finish(self) {
+        self.out[self.start] = u8::try_from(self.count.min(127)).unwrap_or(127);
+    }
+}
+
+fn push_varint(out: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        out.push(value.to_le_bytes()[0] | 0x80);
+        value >>= 7;
+    }
+
+    out.push(value.to_le_bytes()[0]);
+}

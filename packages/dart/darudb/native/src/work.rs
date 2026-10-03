@@ -788,3 +788,107 @@ pub unsafe extern "C" fn darudb_migration_previous_keys_async(
         Err(failure) => refuse(id, callback, failure),
     }
 }
+
+/// Runs `operation` on the database on a thread of the library, with the
+/// bytes it writes handed to Dart.
+///
+/// # Safety
+///
+/// As [`darudb_begin_write_async`].
+unsafe fn reporting(
+    database: *const Database,
+    id: i64,
+    callback: Callback,
+    operation: impl FnOnce(&Database, &mut Vec<u8>) -> Result<i32> + Send + 'static,
+) {
+    call(id, callback, || {
+        // SAFETY: the caller's promise.
+        let database = unsafe { share(database, closed) }?;
+
+        Ok(move |out: &mut Vec<u8>| operation(&database, out))
+    });
+}
+
+/// [`crate::darudb_check`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`darudb_begin_write_async`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_check_async(
+    database: *const Database,
+    id: i64,
+    callback: Callback,
+) {
+    // SAFETY: the caller's promise.
+    unsafe { reporting(database, id, callback, ops::check) };
+}
+
+/// [`crate::darudb_compact`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`darudb_begin_write_async`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_compact_async(
+    database: *const Database,
+    id: i64,
+    callback: Callback,
+) {
+    // SAFETY: the caller's promise.
+    unsafe { reporting(database, id, callback, ops::compact) };
+}
+
+/// [`crate::darudb_backup`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`crate::darudb_backup`], without `out`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_backup_async(
+    database: *const Database,
+    path: *const u8,
+    path_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    // SAFETY: the caller's promise for `path`.
+    match caught(|| unsafe { text(path, path_len) }.map(str::to_owned)) {
+        // SAFETY: the caller's promise for `database`.
+        Ok(path) => unsafe {
+            reporting(database, id, callback, move |database, out| {
+                ops::backup(database, &path, out)
+            });
+        },
+        Err(failure) => refuse(id, callback, failure),
+    }
+}
+
+/// [`crate::darudb_salvage`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`crate::darudb_salvage`], without `out`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_salvage_async(
+    from: *const u8,
+    from_len: usize,
+    into: *const u8,
+    into_len: usize,
+    options: *const u8,
+    options_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    call(id, callback, || {
+        // SAFETY: the caller's promise for `from`.
+        let from = unsafe { text(from, from_len) }?.to_owned();
+        // SAFETY: the caller's promise for `into`.
+        let into = unsafe { text(into, into_len) }?.to_owned();
+        // SAFETY: the caller's promise for `options`; the copy may hold a
+        // key or a password, and is wiped when dropped.
+        let options = Zeroizing::new(unsafe { bytes(options, options_len) }.to_vec());
+
+        Ok(move |out: &mut Vec<u8>| ops::salvage(&from, &into, &options, out))
+    });
+}

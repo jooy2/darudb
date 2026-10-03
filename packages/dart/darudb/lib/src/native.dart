@@ -657,3 +657,106 @@ external void darudb_migration_finish_async(
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,
 );
+
+@Native<Int32 Function(Pointer<NativeDatabase>, Pointer<Buf>)>()
+external int darudb_check(Pointer<NativeDatabase> database, Pointer<Buf> out);
+
+@Native<
+  Int32 Function(Pointer<NativeDatabase>, Pointer<Uint8>, Size, Pointer<Buf>)
+>()
+external int darudb_backup(
+  Pointer<NativeDatabase> database,
+  Pointer<Uint8> path,
+  int pathLength,
+  Pointer<Buf> out,
+);
+
+@Native<Int32 Function(Pointer<NativeDatabase>, Pointer<Buf>)>()
+external int darudb_compact(Pointer<NativeDatabase> database, Pointer<Buf> out);
+
+@Native<
+  Int32 Function(
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Buf>,
+  )
+>()
+external int darudb_salvage(
+  Pointer<Uint8> from,
+  int fromLength,
+  Pointer<Uint8> into,
+  int intoLength,
+  Pointer<Uint8> options,
+  int optionsLength,
+  Pointer<Buf> out,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_check_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_compact_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_backup_async(
+  Pointer<NativeDatabase> database,
+  Pointer<Uint8> path,
+  int pathLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_salvage_async(
+  Pointer<Uint8> from,
+  int fromLength,
+  Pointer<Uint8> into,
+  int intoLength,
+  Pointer<Uint8> options,
+  int optionsLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);

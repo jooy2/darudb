@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use zeroize::Zeroizing;
 
-use crate::record::{self, Reader};
+use crate::record::{self, Fields, Reader};
 use crate::{Failure, Result, closed, invalid};
 
 /// An open database. A read lock serves every call; closing takes the write
@@ -576,4 +576,94 @@ pub(crate) fn finish(held: &Held) -> Result<*const Database> {
     };
 
     Ok(Database::handle(pending.finish()?))
+}
+
+/// The integrity check, as a record: field 1 the commit id, 2 the pages of
+/// the file, 3 the pages checked, 4 the objects checked, and 5 the problems,
+/// each an object of the page (1), the tree (2) and the message (3), the
+/// first two when known.
+pub(crate) fn check(database: &Database, out: &mut Vec<u8>) -> Result<i32> {
+    let report = database.with(|database| database.check().map_err(Failure::from))?;
+    let mut fields = Fields::new(out);
+
+    fields
+        .int(1, report.commit_id)
+        .int(2, report.page_count)
+        .int(3, report.pages_checked)
+        .int(4, report.objects_checked)
+        .objects(5, &report.problems, |fields, problem| {
+            if let Some(page) = problem.page {
+                fields.int(1, page);
+            }
+
+            if let Some(tree) = &problem.tree {
+                fields.string(2, tree);
+            }
+
+            fields.string(3, &problem.message);
+        });
+    fields.finish();
+
+    Ok(i32::from(report.is_ok()))
+}
+
+/// A backup into `path`, and its report as a record: the commit id (1), the
+/// trees (2), the entries (3) and the bytes (4) of the copy.
+pub(crate) fn backup(database: &Database, path: &str, out: &mut Vec<u8>) -> Result<i32> {
+    let report = database.with(|database| database.backup(path).map_err(Failure::from))?;
+    let mut fields = Fields::new(out);
+
+    fields
+        .int(1, report.commit_id)
+        .int(2, report.trees)
+        .int(3, report.entries)
+        .int(4, report.bytes);
+    fields.finish();
+
+    Ok(0)
+}
+
+/// Compaction, and its report as a record: the bytes before (1) and after
+/// (2), and the pages moved (3).
+pub(crate) fn compact(database: &Database, out: &mut Vec<u8>) -> Result<i32> {
+    let report = database.with(|database| database.compact().map_err(Failure::from))?;
+    let mut fields = Fields::new(out);
+
+    fields
+        .int(1, report.bytes_before)
+        .int(2, report.bytes_after)
+        .int(3, report.pages_moved);
+    fields.finish();
+
+    Ok(0)
+}
+
+/// Salvage of the file at `from` into a new file at `into`, with the busy
+/// timeout, key or password of `options`, read as `Database.open`'s are, and
+/// its report as a record: the commit id (1) when there was one, then the
+/// pages scanned (2), damaged (3) and unread (4), the entries recovered (5),
+/// the values lost (6), the objects dropped (7), and the trees (8), entries
+/// (9) and bytes (10) of the new file. Status 1 when the new file holds the
+/// commit whole.
+pub(crate) fn salvage(from: &str, into: &str, options: &[u8], out: &mut Vec<u8>) -> Result<i32> {
+    let report = open_options(options)?.salvage(from, into)?;
+    let mut fields = Fields::new(out);
+
+    if let Some(commit_id) = report.commit_id {
+        fields.int(1, commit_id);
+    }
+
+    fields
+        .int(2, report.pages_scanned)
+        .int(3, report.pages_damaged)
+        .int(4, report.pages_unread)
+        .int(5, report.entries_recovered)
+        .int(6, report.values_lost)
+        .int(7, report.objects_dropped)
+        .int(8, report.trees)
+        .int(9, report.entries)
+        .int(10, report.bytes);
+    fields.finish();
+
+    Ok(i32::from(report.is_whole()))
 }

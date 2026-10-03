@@ -22,6 +22,7 @@ import 'query.dart';
 import 'schema.dart';
 
 part 'async.dart';
+part 'tools.dart';
 
 /// When a commit is durable.
 enum Durability {
@@ -866,6 +867,151 @@ final class Database implements Finalizable {
       _io.wipe(bytes.length);
       bytes.fillRange(0, bytes.length, 0);
     }
+  }
+
+  /// Checks the published commit completely: every page against its check,
+  /// the order of every key, every count, that every page is used, free or
+  /// retained exactly once, and every object against its indexes. It reports
+  /// every problem it finds rather than throwing, and reads while other
+  /// handles and processes write.
+  CheckReport check() {
+    _check(darudb_check(_live(), _io.out));
+
+    return CheckReport._(_report(_io.outBytes()));
+  }
+
+  /// [check] on a thread of the native library.
+  Future<CheckReport> checkAsync() async {
+    final reply = await _call(
+      (id, callback) => darudb_check_async(_live(), id, callback),
+    );
+
+    return CheckReport._(_report(reply.bytes));
+  }
+
+  /// Writes a copy of the published commit to a new file at [path], while
+  /// other handles and processes may write. The copy holds no free space,
+  /// has the file's page size, and opens with the same key or password. A
+  /// path that is taken fails with `INVALID_ARGUMENT`.
+  BackupReport backup(String path) {
+    final bytes = utf8.encode(path);
+
+    _check(darudb_backup(_live(), _io.load(bytes), bytes.length, _io.out));
+
+    return BackupReport._(_report(_io.outBytes()));
+  }
+
+  /// [backup] on a thread of the native library.
+  Future<BackupReport> backupAsync(String path) async {
+    final bytes = utf8.encode(path);
+    final reply = await _call(
+      (id, callback) => darudb_backup_async(
+        _live(),
+        _io.load(bytes),
+        bytes.length,
+        id,
+        callback,
+      ),
+    );
+
+    return BackupReport._(_report(reply.bytes));
+  }
+
+  /// Makes the file smaller in place, moving the pages at its end into free
+  /// pages nearer its start, while other handles and processes go on using
+  /// it.
+  CompactReport compact() {
+    _refuseWhileWritingAsync('compact');
+    _check(darudb_compact(_live(), _io.out));
+
+    return CompactReport._(_report(_io.outBytes()));
+  }
+
+  /// [compact] on a thread of the native library, after this isolate's
+  /// asynchronous writes on the file.
+  Future<CompactReport> compactAsync() => _turns.inTurn(_file, () async {
+    final reply = await _call(
+      (id, callback) => darudb_compact_async(_live(), id, callback),
+    );
+
+    return CompactReport._(_report(reply.bytes));
+  });
+
+  /// Rescues what it can of the damaged file at [from] into a new file at
+  /// [into], reading it page by page, so it works on a file that does not
+  /// open. A [key] or a [password] reads an encrypted file, and the new file
+  /// is encrypted under the same key. It waits up to [busyTimeout] for other
+  /// processes to close the file.
+  static SalvageReport salvage(
+    String from,
+    String into, {
+    Duration? busyTimeout,
+    Uint8List? key,
+    String? password,
+  }) {
+    final options = _salvageOptions(busyTimeout, key, password);
+    final fromBytes = utf8.encode(from);
+    final intoBytes = utf8.encode(into);
+    final paths = Uint8List.fromList([...fromBytes, ...intoBytes]);
+    final loaded = _io.load(paths, options);
+    final int whole;
+
+    try {
+      whole = _check(
+        darudb_salvage(
+          loaded,
+          fromBytes.length,
+          loaded + fromBytes.length,
+          intoBytes.length,
+          loaded + paths.length,
+          options.length,
+          _io.out,
+        ),
+      );
+    } finally {
+      _io.wipe(paths.length + options.length);
+      options.fillRange(0, options.length, 0);
+    }
+
+    return SalvageReport._(_report(_io.outBytes()), whole == 1);
+  }
+
+  /// [salvage] on a thread of the native library.
+  static Future<SalvageReport> salvageAsync(
+    String from,
+    String into, {
+    Duration? busyTimeout,
+    Uint8List? key,
+    String? password,
+  }) async {
+    final options = _salvageOptions(busyTimeout, key, password);
+    final fromBytes = utf8.encode(from);
+    final intoBytes = utf8.encode(into);
+    final paths = Uint8List.fromList([...fromBytes, ...intoBytes]);
+    final loaded = _io.load(paths, options);
+    final Future<_Reply> salvaged;
+
+    try {
+      salvaged = _call(
+        (id, callback) => darudb_salvage_async(
+          loaded,
+          fromBytes.length,
+          loaded + fromBytes.length,
+          intoBytes.length,
+          loaded + paths.length,
+          options.length,
+          id,
+          callback,
+        ),
+      );
+    } finally {
+      _io.wipe(paths.length + options.length);
+      options.fillRange(0, options.length, 0);
+    }
+
+    final reply = await salvaged;
+
+    return SalvageReport._(_report(reply.bytes), reply.status == 1);
   }
 
   /// Prepares a query in the query language on [collection], parsed once

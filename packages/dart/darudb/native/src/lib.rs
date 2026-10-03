@@ -1062,3 +1062,94 @@ pub unsafe extern "C" fn darudb_migration_finish(
         Ok(0)
     })
 }
+
+/// The integrity check of the published commit: its report, as a record,
+/// in `out`. Returns 1 if it found no problem, and 0 otherwise.
+///
+/// # Safety
+///
+/// `database` came from this library and has not been freed; `out` points
+/// to a `Buf` the caller can write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_check(database: *const Database, out: *mut Buf) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::check(database, bytes)) }
+    })
+}
+
+/// Writes a copy of the published commit to a new file at `path`: its
+/// report, as a record, in `out`.
+///
+/// # Safety
+///
+/// `database` came from this library and has not been freed; `path` points
+/// to `path_len` readable bytes; `out` to a `Buf` the caller can write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_backup(
+    database: *const Database,
+    path: *const u8,
+    path_len: usize,
+    out: *mut Buf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+        // SAFETY: the caller's promise for `path`.
+        let path = unsafe { text(path, path_len) }?;
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::backup(database, path, bytes)) }
+    })
+}
+
+/// Makes the file smaller in place: its report, as a record, in `out`.
+///
+/// # Safety
+///
+/// `database` came from this library and has not been freed; `out` points
+/// to a `Buf` the caller can write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_compact(database: *const Database, out: *mut Buf) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::compact(database, bytes)) }
+    })
+}
+
+/// Rescues what it can of the file at `from` into a new file at `into`,
+/// with the options in the record at `options`: its report, as a record, in
+/// `out`. Returns 1 if the new file holds the commit whole, and 0 otherwise.
+///
+/// # Safety
+///
+/// `from`, `into` and `options` point to as many readable bytes as their
+/// lengths say; `out` to a `Buf` the caller can write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_salvage(
+    from: *const u8,
+    from_len: usize,
+    into: *const u8,
+    into_len: usize,
+    options: *const u8,
+    options_len: usize,
+    out: *mut Buf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `from`.
+        let from = unsafe { text(from, from_len) }?;
+        // SAFETY: the caller's promise for `into`.
+        let into = unsafe { text(into, into_len) }?;
+        // SAFETY: the caller's promise for `options`.
+        let options = unsafe { bytes(options, options_len) };
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::salvage(from, into, options, bytes)) }
+    })
+}
