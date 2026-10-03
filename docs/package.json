@@ -37,5 +37,8 @@
     "vitepress-i18n": "^1.4.0",
     "vitepress-sidebar": "^1.40.0",
     "vue": "^3.5.43"
+  },
+  "overrides": {
+    "vite": "^6.4.3"
   }
 }
