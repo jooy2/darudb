@@ -224,3 +224,4 @@ The collection has no primary key field, so the engine gives each object an `id`
 - [Queries](./queries.md) finds objects by their fields, in code or as text.
 - [Transactions](./transactions.md) explains what a commit promises, and when to defer one.
 - [Errors](./errors.md) lists every error code.
+- [Migration](../migration/index.md) moves an application's data in from the embedded database it uses now.

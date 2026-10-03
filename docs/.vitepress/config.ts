@@ -78,10 +78,24 @@ const commonSidebarConfig: VitePressSidebarOptions = {
  */
 const groupLabels: Record<
   string,
-  { guide: string; engine: string; api: string; types: string; more: string }
+  { guide: string; engine: string; api: string; types: string; more: string; migration: string }
 > = {
-  en: { guide: 'Guide', engine: 'Engine', api: 'API', types: 'Types', more: 'Discover more' },
-  ko: { guide: '가이드', engine: '엔진', api: 'API', types: '타입', more: '더 알아보기' }
+  en: {
+    guide: 'Guide',
+    engine: 'Engine',
+    api: 'API',
+    types: 'Types',
+    more: 'Discover more',
+    migration: 'Migration'
+  },
+  ko: {
+    guide: '가이드',
+    engine: '엔진',
+    api: 'API',
+    types: '타입',
+    more: '더 알아보기',
+    migration: '마이그레이션'
+  }
 };
 
 const vitePressSidebarConfig = supportLocales.map((lang) => ({
@@ -394,7 +408,8 @@ function llmsTxt(): string {
     ['Rust API', 'api/rust'],
     ['Rust types', 'types/rust'],
     ['Node.js API', 'api/node'],
-    ['Node.js types', 'types/node']
+    ['Node.js types', 'types/node'],
+    ['Migration', 'migration']
   ];
 
   for (const [name, section] of sections) {
@@ -768,7 +783,8 @@ const startsWith = (prefix: string) => (item: GeneratedSidebarItem) =>
 
 /**
  * The groups in the order a reader needs them: the guide, the engine, the API
- * and the types, and the changelog last, under a heading of its own.
+ * and the types, and last a heading of its own over the changelog and the
+ * guides to moving data in from another database.
  *
  * The API and Types sections hold one folder per language. The folders are
  * not shown as groups: their pages go straight under the section's heading,
@@ -786,12 +802,14 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
   const api = find('api/');
   const types = find('types/');
   const changelog = find('changelog');
+  const migration = find('migration/');
 
   const titled: [T | undefined, string][] = [
     [guide, labels.guide],
     [engine, labels.engine],
     [api, labels.api],
-    [types, labels.types]
+    [types, labels.types],
+    [migration, labels.migration]
   ];
 
   for (const [group, text] of titled) {
@@ -811,10 +829,10 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
     }
   }
 
-  const loose = [changelog].filter(Boolean) as T[];
+  const loose = [changelog, migration].filter(Boolean) as T[];
   const more = loose.length ? ({ text: labels.more, items: loose } as unknown as T) : undefined;
   const placed = [guide, engine, api, types, more].filter(Boolean) as T[];
-  const moved = new Set<T | undefined>([...placed, changelog]);
+  const moved = new Set<T | undefined>([...placed, changelog, migration]);
 
   return [...placed, ...items.filter((item) => !moved.has(item))];
 }
