@@ -36,6 +36,10 @@ library;
 export 'src/annotations.dart';
 export 'src/database.dart'
     show
+        AsyncReadCollection,
+        AsyncReadTransaction,
+        AsyncWriteCollection,
+        AsyncWriteTransaction,
         Database,
         Durability,
         Migration,

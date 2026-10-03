@@ -7,8 +7,10 @@
 /// commit for the disk, so a Flutter app keeps them off its UI isolate.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io' show File;
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -18,6 +20,8 @@ import 'errors.dart';
 import 'native.dart';
 import 'query.dart';
 import 'schema.dart';
+
+part 'async.dart';
 
 /// When a commit is durable.
 enum Durability {
@@ -73,8 +77,10 @@ final class Migration {
   /// a field added with the same name.
   final Map<String, List<String>> replaceFields;
 
-  /// Moves data across, in the migration's write transaction.
-  final void Function(MigrationContext context)? run;
+  /// Moves data across, in the migration's write transaction. Through
+  /// [Database.openAsync], it may be asynchronous; the calls it makes on the
+  /// context are synchronous either way.
+  final FutureOr<void> Function(MigrationContext context)? run;
 }
 
 /// What a migration function gets: the collections of the new schema, and
@@ -475,9 +481,53 @@ void _migration(Writer w, Migration migration) {
   w.close(mark);
 }
 
+/// The write transaction of a migration under way, with the collections of
+/// the schema it leads to, and the context its functions get.
+(WriteTransaction, MigrationContext) _beginMigration(
+  Pointer<NativeTransaction> handle,
+  Schema schema,
+) {
+  final txn = WriteTransaction._(handle, null);
+
+  try {
+    _check(darudb_migration_schema_record(handle, 0, _io.out));
+
+    final next = StoredSchema.decode(Uint8List.fromList(_io.outBytes()));
+
+    _check(darudb_migration_schema_record(handle, 1, _io.out));
+
+    final previous = StoredSchema.decode(Uint8List.fromList(_io.outBytes()));
+
+    txn._collections = {
+      for (final collection in schema.collections)
+        collection: _Collection(
+          collection,
+          next.layoutOf(collection),
+          _NameHandle(collection.name).pointer,
+        ),
+    };
+
+    return (txn, MigrationContext._(txn, previous));
+  } on Object {
+    _endMigration(txn);
+
+    rethrow;
+  }
+}
+
+/// Ends a migration's transaction, throwing it away if it has not finished.
+void _endMigration(WriteTransaction txn) {
+  for (final collection in txn._collections?.values ?? const <_Collection>[]) {
+    darudb_name_free(collection.name);
+  }
+
+  txn._collections = null;
+  txn._end();
+}
+
 /// An open database. There is no constructor: use [Database.open].
 final class Database implements Finalizable {
-  Database._(this.path, this._handle, Schema? schema) {
+  Database._(this.path, this._handle, Schema? schema) : _file = _fileOf(path) {
     _databaseFinalizer.attach(this, _handle.cast(), detach: this);
 
     final record = _check(darudb_schema_record(_handle, _io.out)) == 1
@@ -570,46 +620,23 @@ final class Database implements Finalizable {
     Schema schema,
     List<Migration> migrations,
   ) {
-    final txn = WriteTransaction._(handle, null);
+    final (txn, context) = _beginMigration(handle, schema);
 
     try {
-      _check(darudb_migration_schema_record(handle, 0, _io.out));
-
-      final next = StoredSchema.decode(Uint8List.fromList(_io.outBytes()));
-
-      _check(darudb_migration_schema_record(handle, 1, _io.out));
-
-      final previous = StoredSchema.decode(Uint8List.fromList(_io.outBytes()));
-
-      txn._collections = {
-        for (final collection in schema.collections)
-          collection: _Collection(
-            collection,
-            next.layoutOf(collection),
-            _NameHandle(collection.name).pointer,
-          ),
-      };
-
-      final context = MigrationContext._(txn, previous);
-
       while (_check(darudb_migration_next_step(handle, _io.number)) == 1) {
         final version = _io.number.value;
 
         for (final migration in migrations) {
           if (migration.version == version) {
-            final run = migration.run;
+            final result = migration.run?.call(context);
 
-            if (run != null) {
-              final result = (run as Object? Function(MigrationContext))(
-                context,
+            if (result is Future) {
+              result.ignore();
+
+              throw invalidArgument(
+                'a migration function of `Database.open` returned a Future; '
+                'open with `Database.openAsync` for one that is asynchronous',
               );
-
-              if (result is Future) {
-                throw invalidArgument(
-                  'a migration function of the synchronous API returns '
-                  'before it is done; it cannot be asynchronous',
-                );
-              }
             }
           }
         }
@@ -619,17 +646,68 @@ final class Database implements Finalizable {
 
       return Database._(path, _io.database.value, schema);
     } finally {
-      for (final collection
-          in txn._collections?.values ?? const <_Collection>[]) {
-        darudb_name_free(collection.name);
-      }
-
-      txn._end();
+      _endMigration(txn);
     }
   }
 
+  /// Opens the database at [path] as [open] does, on a thread of the native
+  /// library, so that the isolate does not wait for the file, a recovery or
+  /// a migration's commit. A migration function may be asynchronous.
+  static Future<Database> openAsync(
+    String path, {
+    Schema? schema,
+    List<Migration> migrations = const [],
+    bool create = true,
+    int? pageSize,
+    Duration? busyTimeout,
+    int? cacheSize,
+    Uint8List? key,
+    String? password,
+    PasswordHashing? passwordHashing,
+  }) => _openAsync(
+    path,
+    schema,
+    migrations,
+    _options(
+      create: create,
+      pageSize: pageSize,
+      busyTimeout: busyTimeout,
+      cacheSize: cacheSize,
+      schema: schema == null ? null : encodeSchema(schema),
+      key: key,
+      password: password,
+      passwordHashing: passwordHashing,
+      migrations: migrations,
+    ),
+  );
+
   /// The path the database was opened at.
   final String path;
+
+  /// The file, as this isolate's asynchronous writes are queued on it: the
+  /// path with its links resolved, so that two paths to one file share a
+  /// queue.
+  final String _file;
+
+  static String _fileOf(String path) {
+    try {
+      return File(path).resolveSymbolicLinksSync();
+    } on Object {
+      return File(path).absolute.path;
+    }
+  }
+
+  /// Refuses a synchronous call that would wait for this isolate's own
+  /// asynchronous write, which needs the isolate's event loop to finish.
+  void _refuseWhileWritingAsync(String call) {
+    if (_turns.isHeld(_file)) {
+      throw invalidArgument(
+        'a synchronous `$call` waits for the writer, which is an '
+        'asynchronous write of this isolate that needs its event loop; use '
+        '`${call}Async`',
+      );
+    }
+  }
 
   Pointer<NativeDatabase> _handle;
   int? _schemaVersion;
@@ -685,6 +763,7 @@ final class Database implements Finalizable {
     R Function(WriteTransaction txn) fn, {
     Durability durability = Durability.sync,
   }) {
+    _refuseWhileWritingAsync('write');
     _check(darudb_begin_write(_live(), _io.transaction));
 
     final txn = WriteTransaction._(_io.transaction.value, this);
@@ -715,6 +794,78 @@ final class Database implements Finalizable {
     }
 
     return result;
+  }
+
+  /// Runs [fn], which may be asynchronous, in a read transaction, and
+  /// resolves to what it resolves to. The transaction's calls run on threads
+  /// of the native library, one after another in the order they were made.
+  Future<R> readAsync<R>(FutureOr<R> Function(AsyncReadTransaction txn) fn) =>
+      _readAsync(this, fn);
+
+  /// Runs [fn], which may be asynchronous, in a write transaction, commits
+  /// it when [fn] resolves, aborts it when [fn] fails, and resolves to what
+  /// [fn] resolves to. This isolate's asynchronous writes on one file take
+  /// turns.
+  Future<R> writeAsync<R>(
+    FutureOr<R> Function(AsyncWriteTransaction txn) fn, {
+    Durability durability = Durability.sync,
+  }) => _writeAsync(this, fn, durability);
+
+  /// [sync] on a thread of the native library, after this isolate's
+  /// asynchronous writes on the file.
+  Future<void> syncAsync() => _turns.inTurn(_file, () async {
+    await _call((id, callback) => darudb_sync_async(_live(), id, callback));
+  });
+
+  /// [close] on a thread of the native library, after this isolate's
+  /// asynchronous writes on the file.
+  Future<void> closeAsync() => _turns.inTurn(_file, () async {
+    final handle = _handle;
+
+    if (handle == nullptr) {
+      return;
+    }
+
+    try {
+      await _call((id, callback) => darudb_close_async(handle, id, callback));
+    } finally {
+      _release(handle);
+    }
+  });
+
+  /// [setKey] on a thread of the native library.
+  Future<void> setKeyAsync(Uint8List key) {
+    final loaded = _io.load(key);
+
+    try {
+      return _call(
+        (id, callback) =>
+            darudb_set_key_async(_live(), loaded, key.length, id, callback),
+      ).then((_) {});
+    } finally {
+      _io.wipe(key.length);
+    }
+  }
+
+  /// [setPassword] on a thread of the native library.
+  Future<void> setPasswordAsync(String password) {
+    final bytes = utf8.encode(password);
+    final loaded = _io.load(bytes);
+
+    try {
+      return _call(
+        (id, callback) => darudb_set_password_async(
+          _live(),
+          loaded,
+          bytes.length,
+          id,
+          callback,
+        ),
+      ).then((_) {});
+    } finally {
+      _io.wipe(bytes.length);
+      bytes.fillRange(0, bytes.length, 0);
+    }
   }
 
   /// Prepares a query in the query language on [collection], parsed once
@@ -765,6 +916,7 @@ final class Database implements Finalizable {
   /// Makes every deferred commit durable, whichever handle or process made
   /// it.
   void sync() {
+    _refuseWhileWritingAsync('sync');
     _check(darudb_sync(_live()));
   }
 
@@ -802,21 +954,28 @@ final class Database implements Finalizable {
       return;
     }
 
+    _refuseWhileWritingAsync('close');
+
     try {
       _check(darudb_close(handle));
     } finally {
-      _handle = nullptr;
-      _databaseFinalizer.detach(this);
-      _nameFinalizer.detach(this);
-      darudb_database_free(handle);
-
-      for (final collection in _collections.values) {
-        darudb_name_free(collection.name);
-      }
-
-      _collections.clear();
-      _kept.clear();
+      _release(handle);
     }
+  }
+
+  /// Frees the handle and everything made for it, once it has closed.
+  void _release(Pointer<NativeDatabase> handle) {
+    _handle = nullptr;
+    _databaseFinalizer.detach(this);
+    _nameFinalizer.detach(this);
+    darudb_database_free(handle);
+
+    for (final collection in _collections.values) {
+      darudb_name_free(collection.name);
+    }
+
+    _collections.clear();
+    _kept.clear();
   }
 
   _Collection _collection(Object schema) {

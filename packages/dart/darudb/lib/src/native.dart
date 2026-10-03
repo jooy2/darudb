@@ -357,3 +357,303 @@ external int darudb_migration_finish(
   Pointer<NativeTransaction> txn,
   Pointer<Pointer<NativeDatabase>> database,
 );
+
+/// What an asynchronous call is given to report its result with: the
+/// call's id, its status, and bytes the library allocated, which
+/// [darudb_buffer_free] frees.
+typedef ResultCallback =
+    Void Function(Int64 id, Int32 status, Pointer<Uint8> data, Size length);
+
+@Native<Void Function(Pointer<Uint8>, Size)>()
+external void darudb_buffer_free(Pointer<Uint8> data, int length);
+
+@Native<
+  Void Function(
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_open_async(
+  Pointer<Uint8> path,
+  int pathLength,
+  Pointer<Uint8> options,
+  int optionsLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_begin_write_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_sync_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_close_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_set_key_async(
+  Pointer<NativeDatabase> database,
+  Pointer<Uint8> key,
+  int keyLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_set_password_async(
+  Pointer<NativeDatabase> database,
+  Pointer<Uint8> password,
+  int passwordLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Uint8,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_commit_async(
+  Pointer<NativeTransaction> txn,
+  int deferred,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_get_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> key,
+  int keyLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<Uint8>,
+    Size,
+    Uint8,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_find_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<Uint8> ir,
+  int irLength,
+  int first,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_count_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<Uint8> ir,
+  int irLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Uint8,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_find_prepared_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  int first,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_count_prepared_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Uint8,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_write_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> records,
+  int recordsLength,
+  int replace,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_update_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> key,
+  int keyLength,
+  Pointer<Uint8> changes,
+  int changesLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_delete_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> key,
+  int keyLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_migration_next_step_async(
+  Pointer<NativeTransaction> txn,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_migration_finish_async(
+  Pointer<NativeTransaction> txn,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);

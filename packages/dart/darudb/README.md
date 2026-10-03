@@ -66,4 +66,20 @@ db.close();
 
 `write` commits when its function returns and aborts when it throws, and `durability: Durability.deferred` returns without waiting for the disk. Every failure is a `DaruException` whose `code` is the engine's, the same string in every language DaruDB ships to.
 
-A call holds the isolate until the engine answers, and a write may wait for another writer or for the disk, so a Flutter app keeps writes off its UI isolate until the package's `Future` API arrives.
+A call of the synchronous API holds the isolate until the engine answers, and a write may wait for another writer or for the disk. The `Future` API does the same work on threads of the native library, so a Flutter app's UI isolate never waits:
+
+```dart
+final db = await Database.openAsync('app.darudb', schema: const Schema(1, [userSchema]));
+
+await db.writeAsync((txn) async {
+  final users = txn.collection(userSchema);
+
+  await users.insert(const User(name: 'Grace'));
+});
+
+final count = await db.readAsync((txn) => txn.collection(userSchema).count());
+
+await db.closeAsync();
+```
+
+The calls of one transaction run in the order they were made, awaited or not. An isolate's asynchronous writes on one file take turns, and a synchronous `write`, `sync` or `close` on the file while one runs is refused with `INVALID_ARGUMENT`, since it would hold the isolate the running write needs.
