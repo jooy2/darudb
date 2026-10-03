@@ -13,6 +13,7 @@ on:
         options:
           - npm
           - crate
+          - dart
       publish:
         description: Publish it. Off, the run publishes nothing.
         type: boolean
@@ -52,6 +53,11 @@ jobs:
             echo "changelog=packages/node/CHANGELOG.md" >> "$GITHUB_OUTPUT"
             echo "tag=node-v$version" >> "$GITHUB_OUTPUT"
             echo "title=darudb $version for Node.js" >> "$GITHUB_OUTPUT"
+          elif [ "$PACKAGE" = dart ]; then
+            version=$(sed -n 's/^version: \(.*\)$/\1/p' packages/dart/darudb/pubspec.yaml)
+            echo "changelog=packages/dart/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "tag=dart-v$version" >> "$GITHUB_OUTPUT"
+            echo "title=darudb $version for Dart" >> "$GITHUB_OUTPUT"
           else
             version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/darudb/Cargo.toml | head -n 1)
             echo "changelog=crates/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
@@ -275,11 +281,193 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
+
+  build-dart:
+    if: inputs.package == 'dart'
+    needs: version
+    runs-on: ${{ matrix.host }}
+    name: Build the Dart library for ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every target in packages/dart/darudb/native/rust-toolchain.toml,
+        # since the manifest of a release needs a library for each. `test`
+        # runs the package's tests on the library built, where the runner
+        # can load it.
+        include:
+          - { host: macos-latest, target: aarch64-apple-darwin, file: libdarudb_dart.dylib, test: true }
+          - { host: macos-latest, target: x86_64-apple-darwin, file: libdarudb_dart.dylib }
+          - { host: macos-latest, target: aarch64-apple-ios, file: libdarudb_dart.dylib }
+          - { host: macos-latest, target: aarch64-apple-ios-sim, file: libdarudb_dart.dylib }
+          - { host: macos-latest, target: x86_64-apple-ios, file: libdarudb_dart.dylib }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, file: darudb_dart.dll, test: true }
+          - { host: windows-latest, target: aarch64-pc-windows-msvc, file: darudb_dart.dll }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, file: libdarudb_dart.so, test: true }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, file: libdarudb_dart.so }
+          - { host: ubuntu-latest, target: aarch64-linux-android, file: libdarudb_dart.so }
+          - { host: ubuntu-latest, target: armv7-linux-androideabi, file: libdarudb_dart.so }
+          - { host: ubuntu-latest, target: x86_64-linux-android, file: libdarudb_dart.so }
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      # The oldest systems Flutter builds for, so that the library loads
+      # wherever an application does.
+      MACOSX_DEPLOYMENT_TARGET: '10.14'
+      IPHONEOS_DEPLOYMENT_TARGET: '13.0'
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # The first `cargo` command installs the toolchain `rust-toolchain.toml`
+      # pins, and the target is added to that toolchain.
+      - name: Add the target
+        run: |
+          cargo --version
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dart-${{ matrix.target }}
+      # Linux builds link through Zig against glibc 2.17, so that the library
+      # loads on old Linux systems too.
+      - uses: mlugg/setup-zig@v2
+        if: contains(matrix.target, 'linux-gnu')
+        with:
+          version: 0.15.2
+      - uses: taiki-e/install-action@v2
+        if: contains(matrix.target, 'linux-gnu')
+        with:
+          tool: cargo-zigbuild
+      # Android builds link with the runner's NDK, for API level 21, with the
+      # 16 KB page alignment Android 15 requires.
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          FILE: ${{ matrix.file }}
+        run: |
+          case "$TARGET" in
+            *-linux-gnu)
+              cargo zigbuild --release -p darudb-dart --target "$TARGET.2.17"
+              ;;
+            *-android*)
+              tools="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+              linker="${TARGET/armv7-linux-androideabi/armv7a-linux-androideabi}21-clang"
+              variable="CARGO_TARGET_$(printf '%s' "$TARGET" | tr 'a-z-' 'A-Z_')_LINKER"
+              export "$variable=$tools/$linker"
+              RUSTFLAGS='-C link-arg=-Wl,-z,max-page-size=16384' cargo build --release -p darudb-dart --target "$TARGET"
+              ;;
+            *)
+              cargo build --release -p darudb-dart --target "$TARGET"
+              ;;
+          esac
+
+          mkdir -p libraries
+          cp "target/$TARGET/release/$FILE" "libraries/darudb_dart-$TARGET.${FILE##*.}"
+      - uses: actions/setup-python@v6
+        if: matrix.test
+        with:
+          python-version: '3.13'
+      - uses: dart-lang/setup-dart@v1
+        if: matrix.test
+      # The package's tests, with the build hook downloading this library
+      # from a local server and checking its hash, as a published copy of
+      # the package does with the release's.
+      - name: Test the library through the build hook
+        if: matrix.test
+        working-directory: packages/dart/darudb
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # The server writes nowhere the step reads, or it would hold the
+          # step open after the tests end.
+          python -m http.server 8765 --bind 127.0.0.1 --directory "$GITHUB_WORKSPACE/libraries" > /dev/null 2>&1 &
+          python - <<'SCRIPT'
+          import hashlib, json, os, pathlib
+
+          target = os.environ['TARGET']
+          library = next(pathlib.Path(os.environ['GITHUB_WORKSPACE'], 'libraries').iterdir())
+          pathlib.Path('hook/prebuilt.json').write_text(json.dumps({
+              'base': 'http://127.0.0.1:8765/',
+              'libraries': {target: {
+                  'file': library.name,
+                  'sha256': hashlib.sha256(library.read_bytes()).hexdigest(),
+              }},
+          }))
+          SCRIPT
+          dart pub get
+          dart run build_runner build --delete-conflicting-outputs
+          dart test --exclude-tags checkout
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dart-library-${{ matrix.target }}
+          path: libraries/*
+          if-no-files-found: error
+
+  dart:
+    if: inputs.package == 'dart'
+    needs: [version, build-dart]
+    runs-on: ubuntu-latest
+    name: Package for pub.dev
+
+    defaults:
+      run:
+        working-directory: ./packages/dart/darudb
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@v1
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dart-library-*
+          merge-multiple: true
+          path: libraries
+      - run: dart pub get
+      # The copy of the package that is published downloads these libraries
+      # from the GitHub release this run makes, and checks them against the
+      # hashes written here.
+      - name: Write the manifest of the libraries
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          dart --packages=.dart_tool/package_config.json tool/prebuilt_manifest.dart \
+            "$GITHUB_WORKSPACE/libraries" "https://github.com/$REPOSITORY/releases/download/$TAG/"
+          cat hook/prebuilt.json
+      # `publish_to: none` keeps the repository's copy, whose manifest lists
+      # no library, from being published by accident. Pub reports warnings,
+      # such as a changelog that does not name the version yet, with the same
+      # exit code as errors, so only an error fails the run.
+      - name: List what the package would contain
+        run: |
+          sed -i '/^publish_to: none$/d' pubspec.yaml
+          dart pub publish --dry-run 2>&1 | tee publish.log || true
+
+          if grep -q 'found the following .*error' publish.log; then
+            exit 1
+          fi
+
+          rm publish.log
+      # The package as it is published, for the maintainer to publish with
+      # `dart pub publish` once the GitHub release holds its libraries.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dart-package
+          path: |
+            packages/dart/darudb
+            !packages/dart/darudb/.dart_tool
+            !packages/dart/darudb/pubspec.lock
+          if-no-files-found: error
+
   # Its own job, so that the jobs that install and build third-party code
   # never hold a token that can write to the repository.
   github-release:
     if: inputs.publish && !cancelled() && !failure()
-    needs: [version, crate, npm]
+    needs: [version, crate, npm, dart]
     runs-on: ubuntu-latest
     name: Tag and release on GitHub
     permissions:
@@ -289,6 +477,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # A Dart release holds the native libraries that the published package
+      # downloads, under the names its manifest gives them.
+      - uses: actions/download-artifact@v8
+        if: inputs.package == 'dart'
+        with:
+          pattern: dart-library-*
+          merge-multiple: true
+          path: libraries
       # The release notes are the changelog's section for the version.
       - name: Create the tag and the release
         env:
@@ -303,4 +499,10 @@ jobs:
             found && /^## / { exit }
             found { print }
           ' "$CHANGELOG" > notes.md
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md
+          files=()
+
+          if [ -d libraries ]; then
+            files=(libraries/*)
+          fi
+
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md "${files[@]}"
