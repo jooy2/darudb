@@ -282,25 +282,23 @@ function collectLanguagePages(): LanguagePages {
 
   for (const filePath of pagesUnder(defaultLocale)) {
     const route = routeOfFile(filePath);
-    const counterpart = frontmatterOf(filePath, 'counterpart');
 
-    if (!counterpart) {
-      continue;
-    }
+    // One counterpart, or a list of them, one for each other language.
+    for (const counterpart of listOf(frontmatterOf(filePath, 'counterpart'))) {
+      if (!routes.has(counterpart)) {
+        problems.push(`${filePath} has a counterpart that does not exist: ${counterpart}.`);
+        continue;
+      }
 
-    if (!routes.has(counterpart)) {
-      problems.push(`${filePath} has a counterpart that does not exist: ${counterpart}.`);
-      continue;
-    }
+      for (const [from, to] of [
+        [route, counterpart],
+        [counterpart, route]
+      ]) {
+        const known = (pages.counterparts[from] ??= []);
 
-    for (const [from, to] of [
-      [route, counterpart],
-      [counterpart, route]
-    ]) {
-      const known = (pages.counterparts[from] ??= []);
-
-      if (!known.includes(to)) {
-        known.push(to);
+        if (!known.includes(to)) {
+          known.push(to);
+        }
       }
     }
   }
