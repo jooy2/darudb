@@ -7,32 +7,38 @@
 //! `design/objects.md`, which the Dart side writes and reads, so that a batch
 //! of objects costs one call and one buffer.
 //!
+//! - `ops`: what each call does, once for both kinds of call.
+//! - `work`: the asynchronous calls, which run on threads of this library
+//!   and hand their result to a callback.
+//! - `record`: the few records from Dart this library reads itself.
+//!
 //! The interface keeps to a few rules, so that each function reads alike:
 //!
 //! - **Handles** are pointers this library made: a database, a transaction,
 //!   a prepared query, a collection's name. Each has a function that frees
 //!   it, which the Dart side calls once, from its finalizer or when the
-//!   handle is closed.
+//!   handle is closed. An asynchronous call holds a reference of its own to
+//!   the handles it uses, so freeing one while a call runs is safe.
 //! - **Status.** A function that can fail returns an `i32`: `-1` for a
 //!   failure, whose code and message [`darudb_last_error`] gives, and
 //!   otherwise `0`, or `1` where it answers a yes or no question.
 //! - **Bytes in** are a pointer and a length, read during the call only.
-//! - **Bytes out** go into a buffer this thread keeps, which a [`Buf`] points
-//!   into until the next call on the thread that returns bytes. A Dart
-//!   isolate runs on one thread between its awaits, so it reads them before
-//!   anything else can write there.
+//! - **Bytes out** of a synchronous call go into a buffer this thread keeps,
+//!   which a [`Buf`] points into until the next call on the thread that
+//!   returns bytes. A Dart isolate runs on one thread between its awaits, so
+//!   it reads them before anything else can write there.
 //! - **Panics** never cross into Dart: each function catches one and reports
 //!   it as `INTERNAL`.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::Arc;
 
-use zeroize::Zeroizing;
-
+mod ops;
 mod record;
+mod work;
 
-use record::Reader;
+pub use ops::{Database, Held, Prepared};
 
 /// Bytes this library hands to Dart: where they are and how many.
 #[repr(C)]
@@ -56,7 +62,7 @@ pub struct Info {
 
 /// A failure as Dart gets it: the engine's error code, unchanged, and its
 /// message.
-struct Failure {
+pub(crate) struct Failure {
     code: &'static str,
     message: String,
 }
@@ -70,16 +76,16 @@ impl From<darudb::Error> for Failure {
     }
 }
 
-type Result<T> = std::result::Result<T, Failure>;
+pub(crate) type Result<T> = std::result::Result<T, Failure>;
 
-fn invalid(message: impl Into<String>) -> Failure {
+pub(crate) fn invalid(message: impl Into<String>) -> Failure {
     Failure {
         code: "INVALID_ARGUMENT",
         message: message.into(),
     }
 }
 
-fn closed() -> Failure {
+pub(crate) fn closed() -> Failure {
     darudb::Error::Closed.into()
 }
 
@@ -89,42 +95,48 @@ thread_local! {
         RefCell::new(Failure { code: "", message: String::new() })
     };
 
-    /// The bytes the last call on this thread handed out.
+    /// The bytes the last synchronous call on this thread handed out.
     static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Runs `body`, turning a failure or a panic into `-1` and keeping it for
-/// [`darudb_last_error`].
-fn guard(body: impl FnOnce() -> Result<i32>) -> i32 {
-    let failure = match catch_unwind(AssertUnwindSafe(body)) {
-        Ok(Ok(status)) => return status,
-        Ok(Err(failure)) => failure,
-        Err(panic) => Failure {
+/// Runs `body`, catching a panic as an `INTERNAL` failure.
+pub(crate) fn caught<T>(body: impl FnOnce() -> Result<T>) -> Result<T> {
+    catch_unwind(AssertUnwindSafe(body)).unwrap_or_else(|panic| {
+        Err(Failure {
             code: "INTERNAL",
             message: panic
                 .downcast_ref::<&str>()
                 .map(|text| (*text).to_owned())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "the engine panicked".to_owned()),
-        },
-    };
-
-    LAST_ERROR.with_borrow_mut(|last| *last = failure);
-
-    -1
+        })
+    })
 }
 
-/// Hands out bytes that `fill` writes into this thread's buffer, through
+/// Runs `body`, turning a failure or a panic into `-1` and keeping it for
+/// [`darudb_last_error`].
+fn guard(body: impl FnOnce() -> Result<i32>) -> i32 {
+    match caught(body) {
+        Ok(status) => status,
+        Err(failure) => {
+            LAST_ERROR.with_borrow_mut(|last| *last = failure);
+
+            -1
+        }
+    }
+}
+
+/// Hands out the bytes `fill` writes into this thread's buffer, through
 /// `out`.
 ///
 /// # Safety
 ///
 /// `out` points to a `Buf` the caller can write.
-unsafe fn hand_out<T>(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<T>) -> Result<T> {
+unsafe fn hand_out(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<i32>) -> Result<i32> {
     OUT.with_borrow_mut(|bytes| {
         bytes.clear();
 
-        let value = fill(bytes)?;
+        let status = fill(bytes)?;
 
         // SAFETY: the caller promises `out` is writable; the buffer lives in
         // this thread until its next use, which is after Dart has read it.
@@ -140,7 +152,7 @@ unsafe fn hand_out<T>(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<T
             bytes.shrink_to(1 << 16);
         }
 
-        Ok(value)
+        Ok(status)
     })
 }
 
@@ -149,7 +161,7 @@ unsafe fn hand_out<T>(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<T
 /// # Safety
 ///
 /// `ptr` points to `len` readable bytes that do not change during the call.
-unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+pub(crate) unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if len == 0 || ptr.is_null() {
         return &[];
     }
@@ -163,7 +175,7 @@ unsafe fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 /// # Safety
 ///
 /// As [`bytes`].
-unsafe fn text<'a>(ptr: *const u8, len: usize) -> Result<&'a str> {
+pub(crate) unsafe fn text<'a>(ptr: *const u8, len: usize) -> Result<&'a str> {
     // SAFETY: the caller's promise, passed on.
     let bytes = unsafe { bytes(ptr, len) };
 
@@ -182,6 +194,51 @@ unsafe fn put<T>(out: *mut T, value: T) {
     }
 }
 
+/// The value a handle points to.
+///
+/// # Safety
+///
+/// `handle` is null, or came from this library and has not been freed.
+pub(crate) unsafe fn at<'a, T>(handle: *const T, gone: fn() -> Failure) -> Result<&'a T> {
+    // SAFETY: the caller's promise; null is refused.
+    unsafe { handle.as_ref() }.ok_or_else(gone)
+}
+
+/// A new reference to the value an `Arc` handle points to, for work that
+/// outlives the call.
+///
+/// # Safety
+///
+/// As [`at`], with `handle` made by `Arc::into_raw`.
+pub(crate) unsafe fn share<T>(handle: *const T, gone: fn() -> Failure) -> Result<Arc<T>> {
+    if handle.is_null() {
+        return Err(gone());
+    }
+
+    // SAFETY: the caller promises the handle is a live `Arc` this library
+    // made; one more strong count is taken, for the `Arc` made below.
+    unsafe { Arc::increment_strong_count(handle) };
+
+    // SAFETY: the count taken above is the one this `Arc` owns.
+    Ok(unsafe { Arc::from_raw(handle) })
+}
+
+/// Frees an `Arc` handle.
+///
+/// # Safety
+///
+/// `handle` is null, or came from this library and is not used after.
+unsafe fn release<T>(handle: *const T) {
+    if !handle.is_null() {
+        // SAFETY: the caller hands the reference back, once.
+        drop(unsafe { Arc::from_raw(handle) });
+    }
+}
+
+fn gone_prepared() -> Failure {
+    invalid("a prepared query that is gone")
+}
+
 /// Gives the code and the message of the last failure on this thread.
 ///
 /// # Safety
@@ -191,8 +248,8 @@ unsafe fn put<T>(out: *mut T, value: T) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_last_error(code: *mut Buf, message: *mut Buf) {
     LAST_ERROR.with_borrow(|last| {
-        // SAFETY: the caller promises both are writable or null; the code is
-        // static and the message lives until the next failure.
+        // SAFETY: the caller promises `code` is writable or null; the code
+        // is static.
         unsafe {
             put(
                 code,
@@ -202,7 +259,8 @@ pub unsafe extern "C" fn darudb_last_error(code: *mut Buf, message: *mut Buf) {
                 },
             );
         }
-        // SAFETY: as above.
+        // SAFETY: the caller promises `message` is writable or null; the
+        // message lives until the next failure.
         unsafe {
             put(
                 message,
@@ -240,274 +298,6 @@ pub extern "C" fn darudb_format_version() -> u32 {
     darudb::FORMAT_VERSION
 }
 
-/// An open database. A read lock serves every call; closing takes the write
-/// lock, so a call never finds the database gone halfway through.
-pub struct Database {
-    inner: RwLock<Option<darudb::Database>>,
-}
-
-impl Database {
-    fn boxed(database: darudb::Database) -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            inner: RwLock::new(Some(database)),
-        }))
-    }
-
-    fn with<T>(&self, operation: impl FnOnce(&darudb::Database) -> Result<T>) -> Result<T> {
-        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-
-        operation(inner.as_ref().ok_or_else(closed)?)
-    }
-}
-
-/// What a transaction handle holds: a read or a write transaction, or a
-/// migration under way, whose write transaction its functions use. `None`
-/// once it has committed or ended.
-enum Txn {
-    Read(Box<darudb::ReadTransaction>),
-    Write(Box<darudb::WriteTransaction>),
-    Migration(Box<darudb::PendingMigration>),
-}
-
-/// A transaction handle. A mutex, so that the asynchronous API can run a
-/// transaction's work on another thread; the Dart side sends it one call at
-/// a time, so the mutex is never contended.
-pub struct Held(Mutex<Option<Txn>>);
-
-fn handle_of(txn: Txn) -> *const Held {
-    Arc::into_raw(Arc::new(Held(Mutex::new(Some(txn)))))
-}
-
-fn lock(held: &Held) -> MutexGuard<'_, Option<Txn>> {
-    held.0.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Runs `operation` on the transaction `held` holds.
-fn with_txn<T>(held: &Held, operation: impl FnOnce(&mut Txn) -> Result<T>) -> Result<T> {
-    let mut txn = lock(held);
-
-    operation(txn.as_mut().ok_or_else(ended)?)
-}
-
-fn ended() -> Failure {
-    invalid("the transaction has ended")
-}
-
-impl Txn {
-    fn writing(&mut self) -> Result<&mut darudb::WriteTransaction> {
-        match self {
-            Txn::Read(_) => Err(invalid("a read transaction does not write")),
-            Txn::Write(txn) => Ok(txn),
-            Txn::Migration(pending) => Ok(pending.transaction()),
-        }
-    }
-
-    fn migration(&mut self) -> Result<&mut darudb::PendingMigration> {
-        match self {
-            Txn::Migration(pending) => Ok(pending),
-            _ => Err(invalid("the transaction is not a migration")),
-        }
-    }
-
-    /// Runs `read` on collection `name` of a read or a write transaction.
-    fn reading<T>(
-        &mut self,
-        name: &str,
-        read: impl FnOnce(Collection<'_>) -> darudb::Result<T>,
-    ) -> Result<T> {
-        match self {
-            Txn::Read(txn) => txn.collection(name).and_then(|c| read(Collection::Read(c))),
-            _ => self
-                .writing()?
-                .collection(name)
-                .and_then(|c| read(Collection::Write(c))),
-        }
-        .map_err(Failure::from)
-    }
-}
-
-/// A collection a transaction reads, of either kind.
-enum Collection<'a> {
-    Read(darudb::CollectionReader<'a>),
-    Write(darudb::CollectionWriter<'a>),
-}
-
-impl Collection<'_> {
-    fn get_record_with(
-        &self,
-        key: darudb::Value,
-        visit: impl FnMut(&[u8]) -> darudb::Result<()>,
-    ) -> darudb::Result<bool> {
-        match self {
-            Collection::Read(c) => c.get_record_with(key, visit),
-            Collection::Write(c) => c.get_record_with(key, visit),
-        }
-    }
-
-    fn query_records_with(
-        &self,
-        query: &darudb::Query,
-        visit: impl FnMut(&[u8]) -> darudb::Result<()>,
-    ) -> darudb::Result<()> {
-        match self {
-            Collection::Read(c) => c.query_records_with(query, visit),
-            Collection::Write(c) => c.query_records_with(query, visit),
-        }
-    }
-
-    fn count(&self, query: &darudb::Query) -> darudb::Result<u64> {
-        match self {
-            Collection::Read(c) => c.count(query),
-            Collection::Write(c) => c.count(query),
-        }
-    }
-}
-
-/// The options of `Database.open`, from their record:
-///
-/// | Field | Value                                                      |
-/// | ----- | ---------------------------------------------------------- |
-/// | 1     | `bool`: create the file when it does not exist             |
-/// | 2     | `int`: the page size of a new file                         |
-/// | 3     | `int`: the busy timeout, in milliseconds                   |
-/// | 4     | `int`: the page cache's size, in bytes                     |
-/// | 5     | `bytes`: the declared schema, as `Schema::decode` reads it |
-/// | 6     | `bytes`: a key of 32 bytes                                 |
-/// | 7     | `bytes`: a password                                        |
-/// | 8     | `object`: password hashing, fields 1 to 3 the memory in    |
-/// |       | KiB, the iterations and the lanes                          |
-/// | 9     | `list(object)`: migrations, as [`migration_of`] reads them |
-fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
-    let mut options = darudb::OpenOptions::new();
-
-    for field in Reader::new(record).fields()? {
-        let (id, value) = field?;
-
-        match id {
-            1 => {
-                options.create(value.bool()?);
-            }
-            2 => {
-                options.page_size(
-                    u32::try_from(value.int()?)
-                        .map_err(|_| invalid("a page size beyond 32 bits"))?,
-                );
-            }
-            3 => {
-                let milliseconds =
-                    u64::try_from(value.int()?).map_err(|_| invalid("a negative busy timeout"))?;
-
-                options.busy_timeout(std::time::Duration::from_millis(milliseconds));
-            }
-            4 => {
-                options.cache_size(usize::try_from(value.int()?).unwrap_or(usize::MAX));
-            }
-            5 => {
-                options.schema(darudb::Schema::decode(value.bytes()?)?);
-            }
-            6 => {
-                let key = Zeroizing::new(
-                    <[u8; 32]>::try_from(value.bytes()?)
-                        .map_err(|_| invalid("a key is 32 bytes long"))?,
-                );
-
-                options.key(*key);
-            }
-            7 => {
-                options.password(value.bytes()?);
-            }
-            8 => {
-                let mut cost = [0u32; 3];
-
-                for field in value.object()?.fields()? {
-                    let (id, value) = field?;
-                    let slot = usize::try_from(id)
-                        .ok()
-                        .and_then(|id| id.checked_sub(1))
-                        .and_then(|at| cost.get_mut(at))
-                        .ok_or_else(|| invalid("password hashing has three fields"))?;
-
-                    *slot = u32::try_from(value.int()?)
-                        .map_err(|_| invalid("a password hashing cost beyond 32 bits"))?;
-                }
-
-                options.password_hashing(cost[0], cost[1], cost[2]);
-            }
-            9 => {
-                for migration in value.list()? {
-                    options.migration(migration_of(migration?.object()?)?);
-                }
-            }
-            _ => {
-                return Err(invalid(format!(
-                    "an option the library does not know, {id}"
-                )));
-            }
-        }
-    }
-
-    Ok(options)
-}
-
-/// A migration step's changes besides its function, from their record:
-/// field 1 the version, 2 the collections renamed as objects of the old name
-/// (1) and the new (2), 3 the fields renamed as objects of the collection
-/// (1), the old name (2) and the new (3), 4 the names of the collections
-/// deleted, and 5 the fields replaced as objects of the collection (1) and
-/// the field (2).
-fn migration_of(record: Reader<'_>) -> Result<darudb::Migration> {
-    let mut migration = None;
-    let mut changes = Vec::new();
-
-    for field in record.fields()? {
-        let (id, value) = field?;
-
-        match id {
-            1 => {
-                migration = Some(darudb::Migration::to(
-                    u64::try_from(value.int()?)
-                        .map_err(|_| invalid("a negative schema version"))?,
-                ));
-            }
-            2..=5 => changes.push((id, value)),
-            _ => {
-                return Err(invalid(format!(
-                    "a migration field the library does not know, {id}"
-                )));
-            }
-        }
-    }
-
-    let mut migration = migration.ok_or_else(|| invalid("a migration without a version"))?;
-
-    for (id, value) in changes {
-        for item in value.list()? {
-            let item = item?;
-
-            migration = match id {
-                2 => {
-                    let [from, to] = item.object()?.strings::<2>()?;
-
-                    migration.rename_collection(from, to)
-                }
-                3 => {
-                    let [collection, from, to] = item.object()?.strings::<3>()?;
-
-                    migration.rename_field(collection, from, to)
-                }
-                4 => migration.delete_collection(item.string()?),
-                _ => {
-                    let [collection, field] = item.object()?.strings::<2>()?;
-
-                    migration.replace_field(collection, field)
-                }
-            };
-        }
-    }
-
-    Ok(migration)
-}
-
 /// Opens the database at `path` with the options in the record at
 /// `options`. Returns 0 with the database in `database`, or 1 with the
 /// migration under way in `migration`, when the file held an older schema.
@@ -522,7 +312,7 @@ pub unsafe extern "C" fn darudb_open(
     path_len: usize,
     options: *const u8,
     options_len: usize,
-    database: *mut *mut Database,
+    database: *mut *const Database,
     migration: *mut *const Held,
 ) -> i32 {
     guard(|| {
@@ -531,16 +321,16 @@ pub unsafe extern "C" fn darudb_open(
         // SAFETY: the caller's promise for `options`.
         let options = unsafe { bytes(options, options_len) };
 
-        match open_options(options)?.open_migrating(path)? {
-            darudb::Opening::Open(opened) => {
+        match ops::open(path, options)? {
+            ops::Opened::Database(opened) => {
                 // SAFETY: the caller's promise for `database`.
-                unsafe { put(database, Database::boxed(opened)) };
+                unsafe { put(database, opened) };
 
                 Ok(0)
             }
-            darudb::Opening::Migrating(pending) => {
+            ops::Opened::Migration(pending) => {
                 // SAFETY: the caller's promise for `migration`.
-                unsafe { put(migration, handle_of(Txn::Migration(Box::new(pending)))) };
+                unsafe { put(migration, pending) };
 
                 Ok(1)
             }
@@ -548,28 +338,16 @@ pub unsafe extern "C" fn darudb_open(
     })
 }
 
-/// Frees a database handle, closing the database first if it is open. Its
-/// transactions live on.
+/// Frees a database handle. A database that is still open closes when the
+/// last call that uses it has returned. Its transactions live on.
 ///
 /// # Safety
 ///
 /// `database` came from this library and is not used after.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn darudb_database_free(database: *mut Database) {
-    if !database.is_null() {
-        // SAFETY: the caller hands the box back, once.
-        drop(unsafe { Box::from_raw(database) });
-    }
-}
-
-/// The database a handle points to.
-///
-/// # Safety
-///
-/// `database` came from this library and has not been freed.
-unsafe fn database_at<'a>(database: *const Database) -> Result<&'a Database> {
-    // SAFETY: the caller's promise; null is refused.
-    unsafe { database.as_ref() }.ok_or_else(closed)
+pub unsafe extern "C" fn darudb_database_free(database: *const Database) {
+    // SAFETY: the caller's promise.
+    unsafe { release(database) };
 }
 
 /// Closes the database, making deferred commits durable first. The handle
@@ -583,17 +361,9 @@ unsafe fn database_at<'a>(database: *const Database) -> Result<&'a Database> {
 pub unsafe extern "C" fn darudb_close(database: *const Database) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-        let inner = database
-            .inner
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
+        let database = unsafe { at(database, closed) }?;
 
-        match inner {
-            Some(inner) => inner.close().map(|()| 0).map_err(Failure::from),
-            None => Ok(0),
-        }
+        ops::close(database)
     })
 }
 
@@ -607,8 +377,8 @@ pub unsafe extern "C" fn darudb_close(database: *const Database) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_database_info(database: *const Database, info: *mut Info) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
         let found = database.with(|database| {
             Ok(Info {
                 page_size: database.page_size(),
@@ -634,8 +404,8 @@ pub unsafe extern "C" fn darudb_database_info(database: *const Database, info: *
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_schema_record(database: *const Database, out: *mut Buf) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
 
         database.with(|database| {
             // SAFETY: the caller's promise for `out`.
@@ -666,12 +436,12 @@ pub unsafe extern "C" fn darudb_begin_read(
     txn: *mut *const Held,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-        let read = database.with(|database| database.begin_read().map_err(Failure::from))?;
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+        let read = ops::begin_read(database)?;
 
         // SAFETY: the caller's promise for `txn`.
-        unsafe { put(txn, handle_of(Txn::Read(Box::new(read)))) };
+        unsafe { put(txn, read) };
 
         Ok(0)
     })
@@ -689,12 +459,12 @@ pub unsafe extern "C" fn darudb_begin_write(
     txn: *mut *const Held,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-        let write = database.with(|database| database.begin_write().map_err(Failure::from))?;
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+        let write = ops::begin_write(database)?;
 
         // SAFETY: the caller's promise for `txn`.
-        unsafe { put(txn, handle_of(Txn::Write(Box::new(write)))) };
+        unsafe { put(txn, write) };
 
         Ok(0)
     })
@@ -709,9 +479,7 @@ pub unsafe extern "C" fn darudb_begin_write(
 pub unsafe extern "C" fn darudb_sync(database: *const Database) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-
-        database.with(|database| database.sync().map(|()| 0).map_err(Failure::from))
+        ops::sync(unsafe { at(database, closed) }?)
     })
 }
 
@@ -728,15 +496,11 @@ pub unsafe extern "C" fn darudb_set_key(
     key_len: usize,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-        // SAFETY: the caller's promise for `key`.
-        let key = Zeroizing::new(
-            <[u8; 32]>::try_from(unsafe { bytes(key, key_len) })
-                .map_err(|_| invalid("a key is 32 bytes long"))?,
-        );
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
 
-        database.with(|database| database.set_key(*key).map(|()| 0).map_err(Failure::from))
+        // SAFETY: the caller's promise for `key`.
+        ops::set_key(database, unsafe { bytes(key, key_len) })
     })
 }
 
@@ -753,42 +517,25 @@ pub unsafe extern "C" fn darudb_set_password(
     password_len: usize,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let database = unsafe { database_at(database) }?;
-        // SAFETY: the caller's promise for `password`.
-        let password = unsafe { bytes(password, password_len) };
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
 
-        database.with(|database| {
-            database
-                .set_password(password)
-                .map(|()| 0)
-                .map_err(Failure::from)
-        })
+        // SAFETY: the caller's promise for `password`.
+        ops::set_password(database, unsafe { bytes(password, password_len) })
     })
 }
 
-/// The transaction mutex a handle points to.
-///
-/// # Safety
-///
-/// `txn` came from this library and has not been freed.
-unsafe fn held_at<'a>(txn: *const Held) -> Result<&'a Held> {
-    // SAFETY: the caller's promise; null is refused.
-    unsafe { txn.as_ref() }.ok_or_else(ended)
-}
-
-/// Frees a transaction handle, ending the transaction if it has not ended:
-/// a write's changes are thrown away.
+/// Frees a transaction handle, ending the transaction if it has not ended
+/// and no asynchronous call still holds it: a write's changes are thrown
+/// away.
 ///
 /// # Safety
 ///
 /// `txn` came from this library and is not used after.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_txn_free(txn: *const Held) {
-    if !txn.is_null() {
-        // SAFETY: the caller hands the reference back, once.
-        drop(unsafe { Arc::from_raw(txn) });
-    }
+    // SAFETY: the caller's promise.
+    unsafe { release(txn) };
 }
 
 /// Ends the transaction, throwing a write's changes away, and keeps the
@@ -800,8 +547,8 @@ pub unsafe extern "C" fn darudb_txn_free(txn: *const Held) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_txn_end(txn: *const Held) {
     // SAFETY: the caller's promise.
-    if let Ok(held) = unsafe { held_at(txn) } {
-        *lock(held) = None;
+    if let Ok(held) = unsafe { at(txn, ops::ended) } {
+        held.end();
     }
 }
 
@@ -814,16 +561,7 @@ pub unsafe extern "C" fn darudb_txn_end(txn: *const Held) {
 pub unsafe extern "C" fn darudb_commit(txn: *const Held, deferred: u8) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise.
-        let held = unsafe { held_at(txn) }?;
-        let taken = lock(held).take().ok_or_else(ended)?;
-
-        match taken {
-            Txn::Write(txn) if deferred != 0 => txn.commit_deferred(),
-            Txn::Write(txn) => txn.commit(),
-            _ => return Err(invalid("only a write transaction commits")),
-        }
-        .map(|()| 0)
-        .map_err(Failure::from)
+        ops::commit(unsafe { at(txn, ops::ended) }?, deferred != 0)
     })
 }
 
@@ -855,29 +593,18 @@ pub unsafe extern "C" fn darudb_name_free(name: *mut String) {
     }
 }
 
+fn no_name() -> Failure {
+    invalid("a collection without a name")
+}
+
 /// The name a handle points to.
 ///
 /// # Safety
 ///
 /// `name` came from [`darudb_name`] and has not been freed.
-unsafe fn name_at<'a>(name: *const String) -> Result<&'a str> {
-    // SAFETY: the caller's promise; null is refused.
-    unsafe { name.as_ref() }
-        .map(String::as_str)
-        .ok_or_else(|| invalid("a collection without a name"))
-}
-
-/// A primary key, from the value at `key`: a record's `int`, `string` or
-/// `bytes`, tag first.
-///
-/// # Safety
-///
-/// `key` points to `key_len` readable bytes.
-unsafe fn key_at(key: *const u8, key_len: usize) -> Result<darudb::Value> {
+pub(crate) unsafe fn name_at<'a>(name: *const String) -> Result<&'a str> {
     // SAFETY: the caller's promise.
-    let bytes = unsafe { bytes(key, key_len) };
-
-    Reader::new(bytes).value()?.key()
+    unsafe { at(name, no_name) }.map(String::as_str)
 }
 
 /// The record of the object of collection `name` whose primary key is the
@@ -898,82 +625,15 @@ pub unsafe extern "C" fn darudb_get(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
         // SAFETY: the caller's promise for `key`.
-        let key = unsafe { key_at(key, key_len)? };
+        let key = ops::key(unsafe { bytes(key, key_len) })?;
 
-        with_txn(held, |txn| {
-            // SAFETY: the caller's promise for `out`.
-            unsafe {
-                hand_out(out, |bytes| {
-                    txn.reading(name, |collection| {
-                        collection.get_record_with(key, |record| {
-                            bytes.extend_from_slice(record);
-
-                            Ok(())
-                        })
-                    })
-                    .map(i32::from)
-                })
-            }
-        })
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::get(held, name, key, bytes)) }
     })
-}
-
-/// Appends `value` as a varint, as a record's lengths are written.
-fn push_varint(out: &mut Vec<u8>, mut value: u64) {
-    while value >= 0x80 {
-        out.push(value.to_le_bytes()[0] | 0x80);
-        value >>= 7;
-    }
-
-    out.push(value.to_le_bytes()[0]);
-}
-
-/// Hands out the records `query` finds on collection `name`, each after its
-/// length.
-///
-/// # Safety
-///
-/// `out` points to a `Buf` the caller can write.
-unsafe fn find_records(
-    txn: &mut Txn,
-    name: &str,
-    query: &darudb::Query,
-    out: *mut Buf,
-) -> Result<i32> {
-    // SAFETY: the caller's promise for `out`.
-    unsafe {
-        hand_out(out, |bytes| {
-            txn.reading(name, |collection| {
-                collection.query_records_with(query, |record| {
-                    push_varint(bytes, record.len() as u64);
-                    bytes.extend_from_slice(record);
-
-                    Ok(())
-                })
-            })
-            .map(|()| 0)
-        })
-    }
-}
-
-/// The query whose IR is at `ir`, the first object alone with `first`.
-///
-/// # Safety
-///
-/// `ir` points to `ir_len` readable bytes.
-unsafe fn request_at(ir: *const u8, ir_len: usize, first: u8) -> Result<darudb::QueryRequest> {
-    // SAFETY: the caller's promise.
-    let mut request = darudb::QueryRequest::decode(unsafe { bytes(ir, ir_len) })?;
-
-    if first != 0 {
-        request.query = request.query.first();
-    }
-
-    Ok(request)
 }
 
 /// The records of the objects the query whose IR is at `ir` finds, one after
@@ -993,14 +653,16 @@ pub unsafe extern "C" fn darudb_find(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `ir`.
-        let request = unsafe { request_at(ir, ir_len, first)? };
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, first != 0)?;
 
         // SAFETY: the caller's promise for `out`.
-        with_txn(held, |txn| unsafe {
-            find_records(txn, &request.collection, &request.query, out)
-        })
+        unsafe {
+            hand_out(out, |bytes| {
+                ops::find(held, &request.collection, &request.query, bytes)
+            })
+        }
     })
 }
 
@@ -1019,14 +681,10 @@ pub unsafe extern "C" fn darudb_count(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `ir`.
-        let request = unsafe { request_at(ir, ir_len, 0)? };
-        let found = with_txn(held, |txn| {
-            txn.reading(&request.collection, |collection| {
-                collection.count(&request.query)
-            })
-        })?;
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+        let found = ops::count(held, &request.collection, &request.query)?;
 
         // SAFETY: the caller's promise for `count`.
         unsafe { put(count, found) };
@@ -1035,19 +693,12 @@ pub unsafe extern "C" fn darudb_count(
     })
 }
 
-/// A query parsed once, for a collection, which each run gives its
-/// parameters' values.
-pub struct Prepared {
-    collection: String,
-    query: darudb::Query,
-}
-
-/// Prepares the query in the query language at `text` on collection `name`,
-/// into `prepared`.
+/// Prepares the query in the query language at `query` on collection
+/// `name`, into `prepared`.
 ///
 /// # Safety
 ///
-/// `name` and `text` point to as many readable bytes as their lengths say;
+/// `name` and `query` point to as many readable bytes as their lengths say;
 /// `prepared` to a handle the caller can write. The result is freed with
 /// [`darudb_prepared_free`].
 #[unsafe(no_mangle)]
@@ -1060,9 +711,9 @@ pub unsafe extern "C" fn darudb_prepare_text(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { text(name, name_len)? };
+        let name = unsafe { text(name, name_len) }?;
         // SAFETY: the caller's promise for `query`.
-        let query = unsafe { text(query, query_len)? };
+        let query = unsafe { text(query, query_len) }?;
         let made = Prepared {
             collection: name.to_owned(),
             query: darudb::Query::prepare(query)?,
@@ -1088,8 +739,8 @@ pub unsafe extern "C" fn darudb_prepare_ir(
     prepared: *mut *const Prepared,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let request = unsafe { request_at(ir, ir_len, 0) }?;
+        // SAFETY: the caller's promise for `ir`.
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
         let made = Prepared {
             collection: request.collection,
             query: request.query,
@@ -1109,43 +760,12 @@ pub unsafe extern "C" fn darudb_prepare_ir(
 /// `prepared` came from this library and is not used after.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_prepared_free(prepared: *const Prepared) {
-    if !prepared.is_null() {
-        // SAFETY: the caller hands the reference back, once.
-        drop(unsafe { Arc::from_raw(prepared) });
-    }
+    // SAFETY: the caller's promise.
+    unsafe { release(prepared) };
 }
 
-/// The prepared query, bound to the parameters' values in the record at
-/// `parameters` (`design/objects.md`, "The IR"), the first alone with
-/// `first`, and the collection it is on.
-///
-/// # Safety
-///
-/// `prepared` came from this library and has not been freed; `parameters`
-/// points to `parameters_len` readable bytes.
-unsafe fn bound<'a>(
-    prepared: *const Prepared,
-    parameters: *const u8,
-    parameters_len: usize,
-    first: u8,
-) -> Result<(&'a str, darudb::Query)> {
-    // SAFETY: the caller's promise; null is refused.
-    let prepared =
-        unsafe { prepared.as_ref() }.ok_or_else(|| invalid("a prepared query that is gone"))?;
-    // SAFETY: the caller's promise for `parameters`.
-    let mut query = prepared
-        .query
-        .bind_encoded(unsafe { bytes(parameters, parameters_len) })?;
-
-    if first != 0 {
-        query = query.first();
-    }
-
-    Ok((&prepared.collection, query))
-}
-
-/// The records a prepared query finds with the parameters' values at
-/// `parameters`, as [`darudb_find`] gives them.
+/// The records a prepared query finds with the parameters' values in the
+/// record at `parameters`, as [`darudb_find`] gives them.
 ///
 /// # Safety
 ///
@@ -1163,12 +783,18 @@ pub unsafe extern "C" fn darudb_find_prepared(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
-        // SAFETY: the caller's promise for `prepared` and `parameters`.
-        let (name, query) = unsafe { bound(prepared, parameters, parameters_len, first)? };
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promise for `prepared`.
+        let prepared = unsafe { at(prepared, gone_prepared) }?;
+        // SAFETY: the caller's promise for `parameters`.
+        let query = prepared.bound(unsafe { bytes(parameters, parameters_len) }, first != 0)?;
 
         // SAFETY: the caller's promise for `out`.
-        with_txn(held, |txn| unsafe { find_records(txn, name, &query, out) })
+        unsafe {
+            hand_out(out, |bytes| {
+                ops::find(held, &prepared.collection, &query, bytes)
+            })
+        }
     })
 }
 
@@ -1187,41 +813,18 @@ pub unsafe extern "C" fn darudb_count_prepared(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
-        // SAFETY: the caller's promise for `prepared` and `parameters`.
-        let (name, query) = unsafe { bound(prepared, parameters, parameters_len, 0)? };
-        let found = with_txn(held, |txn| {
-            txn.reading(name, |collection| collection.count(&query))
-        })?;
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promise for `prepared`.
+        let prepared = unsafe { at(prepared, gone_prepared) }?;
+        // SAFETY: the caller's promise for `parameters`.
+        let query = prepared.bound(unsafe { bytes(parameters, parameters_len) }, false)?;
+        let found = ops::count(held, &prepared.collection, &query)?;
 
         // SAFETY: the caller's promise for `count`.
         unsafe { put(count, found) };
 
         Ok(0)
     })
-}
-
-/// Writes a key as a record's value, tag first.
-fn write_key(out: &mut Vec<u8>, key: &darudb::Value) -> Result<()> {
-    match key {
-        darudb::Value::Int(value) => {
-            out.push(record::INT);
-            push_varint(out, record::zigzag(*value));
-        }
-        darudb::Value::String(value) => {
-            out.push(record::STRING);
-            push_varint(out, value.len() as u64);
-            out.extend_from_slice(value.as_bytes());
-        }
-        darudb::Value::Bytes(value) => {
-            out.push(record::BYTES);
-            push_varint(out, value.len() as u64);
-            out.extend_from_slice(value);
-        }
-        _ => return Err(invalid("a primary key of another type")),
-    }
-
-    Ok(())
 }
 
 /// Inserts, or with `replace` puts, the objects whose records are at
@@ -1245,35 +848,18 @@ pub unsafe extern "C" fn darudb_write(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
         // SAFETY: the caller's promise for `records`.
         let records = unsafe { bytes(records, records_len) };
 
-        with_txn(held, |txn| {
-            let mut writer = txn.writing()?.collection(name)?;
-
-            // SAFETY: the caller's promise for `out`.
-            unsafe {
-                hand_out(out, |keys| {
-                    let mut reader = Reader::new(records);
-
-                    while !reader.is_empty() {
-                        let record = reader.counted()?;
-                        let key = if replace != 0 {
-                            writer.put_record(record)
-                        } else {
-                            writer.insert_record(record)
-                        }?;
-
-                        write_key(keys, &key)?;
-                    }
-
-                    Ok(0)
-                })
-            }
-        })
+        // SAFETY: the caller's promise for `out`.
+        unsafe {
+            hand_out(out, |keys| {
+                ops::write(held, name, records, replace != 0, keys)
+            })
+        }
     })
 }
 
@@ -1296,22 +882,14 @@ pub unsafe extern "C" fn darudb_update(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
         // SAFETY: the caller's promise for `key`.
-        let key = unsafe { key_at(key, key_len)? };
+        let key = ops::key(unsafe { bytes(key, key_len) })?;
+
         // SAFETY: the caller's promise for `changes`.
-        let changes = unsafe { bytes(changes, changes_len) };
-
-        with_txn(held, |txn| {
-            let found = txn
-                .writing()?
-                .collection(name)?
-                .update_record(key, changes)?;
-
-            Ok(i32::from(found))
-        })
+        ops::update(held, name, key, unsafe { bytes(changes, changes_len) })
     })
 }
 
@@ -1331,17 +909,13 @@ pub unsafe extern "C" fn darudb_delete(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
         // SAFETY: the caller's promise for `key`.
-        let key = unsafe { key_at(key, key_len)? };
+        let key = ops::key(unsafe { bytes(key, key_len) })?;
 
-        with_txn(held, |txn| {
-            let found = txn.writing()?.collection(name)?.delete(key)?;
-
-            Ok(i32::from(found))
-        })
+        ops::delete(held, name, key)
     })
 }
 
@@ -1357,9 +931,8 @@ pub unsafe extern "C" fn darudb_migration_previous_version(
     version: *mut u64,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let held = unsafe { held_at(txn) }?;
-        let found = with_txn(held, |txn| Ok(txn.migration()?.previous_version()))?;
+        // SAFETY: the caller's promise for `txn`.
+        let found = ops::previous_version(unsafe { at(txn, ops::ended) }?)?;
 
         // SAFETY: the caller's promise for `version`.
         unsafe { put(version, found) };
@@ -1382,25 +955,11 @@ pub unsafe extern "C" fn darudb_migration_schema_record(
     out: *mut Buf,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let held = unsafe { held_at(txn) }?;
+        // SAFETY: the caller's promise for `txn`.
+        let held = unsafe { at(txn, ops::ended) }?;
 
-        with_txn(held, |txn| {
-            let migration = txn.migration()?;
-
-            // SAFETY: the caller's promise for `out`.
-            unsafe {
-                hand_out(out, |bytes| {
-                    if previous != 0 {
-                        bytes.extend_from_slice(&migration.previous_schema_record());
-                    } else {
-                        bytes.extend_from_slice(migration.schema_record());
-                    }
-
-                    Ok(0)
-                })
-            }
-        })
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::schema_record(held, previous != 0, bytes)) }
     })
 }
 
@@ -1415,13 +974,8 @@ pub unsafe extern "C" fn darudb_migration_schema_record(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_migration_next_step(txn: *const Held, version: *mut u64) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let held = unsafe { held_at(txn) }?;
-        let step = with_txn(held, |txn| {
-            txn.migration()?.next_step().map_err(Failure::from)
-        })?;
-
-        match step {
+        // SAFETY: the caller's promise for `txn`.
+        match ops::next_step(unsafe { at(txn, ops::ended) }?)? {
             Some(step) => {
                 // SAFETY: the caller's promise for `version`.
                 unsafe { put(version, step) };
@@ -1450,28 +1004,14 @@ pub unsafe extern "C" fn darudb_migration_previous_record(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
         // SAFETY: the caller's promise for `key`.
-        let key = unsafe { key_at(key, key_len)? };
+        let key = ops::key(unsafe { bytes(key, key_len) })?;
 
-        with_txn(held, |txn| {
-            let record = txn.migration()?.migrating().previous_record(name, key)?;
-
-            // SAFETY: the caller's promise for `out`.
-            unsafe {
-                hand_out(out, |bytes| {
-                    Ok(match record {
-                        Some(record) => {
-                            bytes.extend_from_slice(&record);
-                            1
-                        }
-                        None => 0,
-                    })
-                })
-            }
-        })
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::previous_record(held, name, key, bytes)) }
     })
 }
 
@@ -1490,24 +1030,12 @@ pub unsafe extern "C" fn darudb_migration_previous_keys(
 ) -> i32 {
     guard(|| {
         // SAFETY: the caller's promise for `txn`.
-        let held = unsafe { held_at(txn)? };
+        let held = unsafe { at(txn, ops::ended) }?;
         // SAFETY: the caller's promise for `name`.
-        let name = unsafe { name_at(name)? };
+        let name = unsafe { name_at(name) }?;
 
-        with_txn(held, |txn| {
-            let keys = txn.migration()?.migrating().previous_keys(name)?;
-
-            // SAFETY: the caller's promise for `out`.
-            unsafe {
-                hand_out(out, |bytes| {
-                    for key in &keys {
-                        write_key(bytes, key)?;
-                    }
-
-                    Ok(0)
-                })
-            }
-        })
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::previous_keys(held, name, bytes)) }
     })
 }
 
@@ -1522,19 +1050,14 @@ pub unsafe extern "C" fn darudb_migration_previous_keys(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_migration_finish(
     txn: *const Held,
-    database: *mut *mut Database,
+    database: *mut *const Database,
 ) -> i32 {
     guard(|| {
-        // SAFETY: the caller's promise.
-        let held = unsafe { held_at(txn) }?;
-        let taken = lock(held).take().ok_or_else(ended)?;
-        let Txn::Migration(pending) = taken else {
-            return Err(invalid("only a migration finishes"));
-        };
-        let opened = pending.finish()?;
+        // SAFETY: the caller's promise for `txn`.
+        let opened = ops::finish(unsafe { at(txn, ops::ended) }?)?;
 
         // SAFETY: the caller's promise for `database`.
-        unsafe { put(database, Database::boxed(opened)) };
+        unsafe { put(database, opened) };
 
         Ok(0)
     })
