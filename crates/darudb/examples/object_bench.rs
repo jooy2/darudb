@@ -29,6 +29,10 @@
 //!   index), and `age == $0 LIMIT 10` parsed from text each time.
 //! - Changing: 10,000 objects' ages in one transaction, and deleting 10,000
 //!   objects in one transaction.
+//!
+//! The reads run again through a struct that `#[derive(Object)]` makes the
+//! collection's type, read straight from the records, which the lines marked
+//! "typed" measure.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -36,6 +40,18 @@ use std::time::{Duration, Instant};
 use std::{env, fs, process};
 
 use darudb::{Collection, Filter, Object, OpenOptions, Query, Schema, Type, Value};
+
+/// The objects of `people`, as a struct.
+#[derive(darudb_derive::Object, Debug)]
+#[darudb(collection = "people")]
+struct Person {
+    id: Option<i64>,
+    name: String,
+    email: String,
+    age: i64,
+    city: String,
+    score: f64,
+}
 
 /// Objects in the read and query workloads.
 const OBJECTS: i64 = 100_000;
@@ -196,6 +212,51 @@ fn run(directory: &Path, label: &str, options: &OpenOptions) -> Outcome {
 
         people.query(&query).map(drop)
     })?;
+    drop(people);
+
+    let people = read.collection_of::<Person>()?;
+
+    measure(
+        "get by primary key, random order, typed",
+        unsigned(OBJECTS),
+        |round| {
+            people
+                .get(1 + signed(scatter(round) % unsigned(OBJECTS)))
+                .map(drop)
+        },
+    )?;
+    measure(
+        "get by unique email, random order, typed",
+        20_000,
+        |round| {
+            let n = scatter(round) % unsigned(OBJECTS);
+
+            people
+                .query(&Query::new().filter(Filter::eq("email", format!("{n}@example.com"))))
+                .map(drop)
+        },
+    )?;
+    measure("query age == a, 1250 objects, typed", 200, |round| {
+        people
+            .query(&Query::new().filter(Filter::eq("age", signed(round % 80))))
+            .map(drop)
+    })?;
+    measure(
+        "query age range, sorted descending, limit 20, typed",
+        5_000,
+        |round| {
+            let age = signed(round % 76);
+
+            people
+                .query(
+                    &Query::new()
+                        .filter(Filter::between("age", age, age + 4))
+                        .sort_by_desc("age")
+                        .limit(20),
+                )
+                .map(drop)
+        },
+    )?;
     drop(people);
     drop(read);
 
