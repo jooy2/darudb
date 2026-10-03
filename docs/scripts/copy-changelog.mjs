@@ -63,6 +63,16 @@ const PACKAGES = [
     label: 'Node.js',
     heading: { en: 'Node.js package `darudb`', ko: 'Node.js 패키지 `darudb`' },
     source: 'packages/node/CHANGELOG.md'
+  },
+  {
+    label: 'Dart',
+    heading: { en: 'Dart package `darudb`', ko: 'Dart 패키지 `darudb`' },
+    source: 'packages/dart/darudb/CHANGELOG.md'
+  },
+  {
+    label: 'Dart generator',
+    heading: { en: 'Dart package `darudb_generator`', ko: 'Dart 패키지 `darudb_generator`' },
+    source: 'packages/dart/darudb_generator/CHANGELOG.md'
   }
 ];
 
