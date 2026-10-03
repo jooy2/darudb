@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/public/logo-256.png" alt="" width="128" height="128">
-</p>
+<img src="docs/public/logo-256.png" alt="" width="128" height="128">
 
 # DaruDB
 
