@@ -234,7 +234,8 @@ impl Harness {
             TREE,
             &mut self.root,
             key,
-            &mut |old| {
+            &mut Vec::new(),
+            &mut |old, new| {
                 visited = Some(old.to_vec());
 
                 if refuse {
@@ -243,7 +244,9 @@ impl Harness {
                     });
                 }
 
-                Ok(value.map(<[u8]>::to_vec))
+                new.extend_from_slice(value.unwrap_or_default());
+
+                Ok(value.is_some())
             },
         );
 

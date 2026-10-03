@@ -21,7 +21,7 @@ use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
 };
 use crate::format::object::{Object, Value};
-use crate::txn::{Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
+use crate::txn::{EntryBuffers, Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
 
 /// The tree of the object layer's own records: the stored schema and the
 /// auto-increment counters.
@@ -474,30 +474,22 @@ struct IndexKeys {
 const ENTRY_ROOM: usize = 48;
 
 impl IndexKeys {
-    /// Room for the entries of a collection with `indexes` indexes, one each.
-    fn with_capacity(indexes: usize) -> Self {
-        let mut entries = Self::default();
-
-        entries.reserve(indexes);
-        entries
-    }
-
     /// Room for the entries of a collection with `indexes` indexes, one
-    /// each, in the buffers `spare` lends.
-    fn lent(spare: &mut Spare, indexes: usize) -> Self {
+    /// each, in the buffers a transaction lends.
+    fn lent(buffers: &mut EntryBuffers, indexes: usize) -> Self {
         let mut entries = Self {
-            bytes: std::mem::take(&mut spare.entries),
-            ends: std::mem::take(&mut spare.ends),
+            bytes: std::mem::take(&mut buffers.bytes),
+            ends: std::mem::take(&mut buffers.ends),
         };
 
         entries.reserve(indexes);
         entries
     }
 
-    /// Gives the buffers back to `spare`.
-    fn give_back(self, spare: &mut Spare) {
-        spare.entries = kept(self.bytes);
-        spare.ends = kept(self.ends);
+    /// Gives the buffers back to the transaction.
+    fn give_back(self, buffers: &mut EntryBuffers) {
+        buffers.bytes = kept(self.bytes);
+        buffers.ends = kept(self.ends);
     }
 
     /// Makes room for one more entry in each of `indexes` indexes.
@@ -1028,12 +1020,13 @@ enum Previous {
 }
 
 /// What an update learns while its visitor has the record stored, for
-/// [`CollectionWriter::finish_update`].
+/// [`CollectionWriter::finish_update`]. The object's entries in the indexes
+/// the update may change, and those it had, are kept apart from this, in
+/// buffers the transaction lends ([`Lent`]).
 #[derive(Default)]
 struct Update {
-    /// The entries the object has in the indexes the update may change, and
-    /// those it had, when it changes the record.
-    entries: Option<(IndexKeys, IndexKeys)>,
+    /// Whether the update replaces the record, and so the entries.
+    made: bool,
     /// The record stored, when a unique value the object did not hold may
     /// refuse the new one after it is stored, and it has to go back.
     previous: Option<Vec<u8>>,
@@ -1043,54 +1036,83 @@ struct Update {
 
 impl Update {
     /// Keeps what an update that replaces the record `stored` needs after
-    /// the visitor: the entries, and the record if it may have to go back.
+    /// the visitor, whose entries are `entries` and were `old`: the record,
+    /// if it may have to go back.
     fn made(
         &mut self,
         collection: &CollectionDef,
         stored: &[u8],
-        entries: IndexKeys,
-        old: IndexKeys,
+        entries: &IndexKeys,
+        old: &IndexKeys,
     ) {
-        if adds_unique(collection, &entries, &old) {
+        if adds_unique(collection, entries, old) {
             self.previous = Some(stored.to_vec());
         }
 
-        self.entries = Some((entries, old));
+        self.made = true;
     }
 }
 
-/// The record of `object` of `collection`, whose fields are in `order` by
-/// name and whose key encodes as `key`, and its entries in every index, as
-/// [`CollectionWriter::write`] makes them for an object with its key.
+/// The buffers an update takes from the transaction: the object's key, its
+/// new record, and its entries and those it had.
+struct Lent {
+    key: Vec<u8>,
+    record: Vec<u8>,
+    entries: IndexKeys,
+    old: IndexKeys,
+}
+
+impl Lent {
+    fn take(spare: &mut Spare) -> Self {
+        Self {
+            key: std::mem::take(&mut spare.key),
+            record: std::mem::take(&mut spare.record),
+            entries: IndexKeys::lent(&mut spare.entries, 0),
+            old: IndexKeys::lent(&mut spare.old, 0),
+        }
+    }
+
+    fn give_back(self, spare: &mut Spare) {
+        spare.key = kept(self.key);
+        spare.record = kept(self.record);
+        self.entries.give_back(&mut spare.entries);
+        self.old.give_back(&mut spare.old);
+    }
+}
+
+/// Writes the record of `object` of `collection`, whose fields are in
+/// `order` by name and whose key encodes as `key`, into `record`, and its
+/// entries in every index into `entries`, as [`CollectionWriter::write`]
+/// makes them for an object with its key.
 fn object_written(
     schema: &OpenSchema,
     collection: &CollectionDef,
     order: &codec::NameOrder,
     object: &Object,
     key: &[u8],
-) -> Result<(Vec<u8>, IndexKeys)> {
+    record: &mut Vec<u8>,
+    entries: &mut IndexKeys,
+) -> Result<()> {
     let slots = codec::Slots::of(object, &collection.fields, order);
-    let mut record = Vec::new();
 
     codec::record_of_slots(
         object,
         &slots,
         &collection.fields,
         &|id| schema.schema.key_kind(id),
-        &mut record,
+        record,
     )
     .map_err(|message| Error::InvalidArgument {
         message: format!("an object of `{}`: {message}", collection.name),
     })?;
-
-    let mut entries = IndexKeys::with_capacity(collection.indexes.len());
+    entries.reserve(collection.indexes.len());
 
     for (index_position, index) in collection.indexes.iter().enumerate() {
         let position = field_position(collection, index.field)?;
         let field = &collection.fields.list[position];
 
         found_entries(
-            &mut entries,
+            entries,
             index_position,
             index,
             field,
@@ -1099,31 +1121,31 @@ fn object_written(
         )?;
     }
 
-    Ok((record, entries))
+    Ok(())
 }
 
-/// What an update of an object of a collection whose fields all hold scalars
-/// writes: the new record, and the entries of the indexes on the fields it
-/// changes, before and after.
-struct Changed {
-    record: Vec<u8>,
-    entries: IndexKeys,
-    old: IndexKeys,
-}
-
-/// What the update `changes`, which [`codec::flat_changes`] read, makes of
-/// the object of `collection` whose record is `stored` and whose key encodes
-/// as `key`; `stored_key` is the position of the key field and the key.
-/// `None` when the record stays as it is. What is wrong with a damaged
-/// record is told apart, for the caller to make the error for once the tree
-/// it reads the record from is free.
+/// Writes what the update `changes`, which [`codec::flat_changes`] read,
+/// makes of the object of `collection` whose record is `stored` and whose
+/// key encodes as `key`: the new record into `record`, and the entries of
+/// the indexes on the fields it changes into `entries`, and those the object
+/// had into `old`. `stored_key` is the position of the key field and the
+/// key. Returns false when the record stays as it is. What is wrong with a
+/// damaged record is told apart, for the caller to make the error for once
+/// the tree it reads the record from is free.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three of them are buffers the transaction lends, which a struct would only rename"
+)]
 fn changed(
     collection: &CollectionDef,
     stored: &[u8],
     changes: &[(usize, Option<FieldRef<'_>>)],
     stored_key: (usize, &Value),
     key: &[u8],
-) -> Result<Option<Changed>, Unread> {
+    record: &mut Vec<u8>,
+    entries: &mut IndexKeys,
+    old: &mut IndexKeys,
+) -> Result<bool, Unread> {
     let fields = &collection.fields;
     let mut present = codec::stored_flat_fields(stored, fields).map_err(Unread::Damaged)?;
 
@@ -1149,20 +1171,15 @@ fn changed(
     }
 
     // Only a change can leave out a required field now: one made null.
-    let mut record = Vec::new();
-
-    codec::flat_record(&present, fields, None, &mut record).map_err(|message| {
+    codec::flat_record(&present, fields, None, record).map_err(|message| {
         Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         }
     })?;
 
-    if record == stored {
-        return Ok(None);
+    if record.as_slice() == stored {
+        return Ok(false);
     }
-
-    let mut entries = IndexKeys::default();
-    let mut old = IndexKeys::default();
 
     for (index_position, index) in collection.indexes.iter().enumerate() {
         let position = field_position(collection, index.field)?;
@@ -1171,9 +1188,9 @@ fn changed(
             continue;
         }
 
-        stored_entries(&mut old, index_position, index, collection, stored, key)?;
+        stored_entries(old, index_position, index, collection, stored, key)?;
         present_entries(
-            &mut entries,
+            entries,
             (index_position, index),
             collection,
             &present,
@@ -1182,11 +1199,7 @@ fn changed(
         )?;
     }
 
-    Ok(Some(Changed {
-        record,
-        entries,
-        old,
-    }))
+    Ok(true)
 }
 
 /// Whether `found` is the primary key `key`.
@@ -1282,14 +1295,19 @@ impl<'a> CollectionWriter<'a> {
     pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool> {
         let schema = Arc::clone(&self.schema);
         let collection = &schema.schema.collections[self.position];
-        let key = key_bytes(collection, &key.into())?;
-        let mut entries = IndexKeys::default();
+        let spare = self.txn.spare();
+        let mut bytes = std::mem::take(&mut spare.key);
+        let mut entries = IndexKeys::lent(&mut spare.old, 0);
+
+        key_bytes_into(collection, &key.into(), &mut bytes)?;
+
+        let key = bytes.as_slice();
         let mut damage = None;
         // The object goes first, read on its way out for its entries.
         let found = self
             .txn
-            .remove_in_with(&records(collection.id), &key, &mut |stored| {
-                record_entries(&mut entries, collection, stored, &key, &mut damage)
+            .remove_in_with(&records(collection.id), key, &mut |stored| {
+                record_entries(&mut entries, collection, stored, key, &mut damage)
             });
         let found = released(&*self.txn, collection, found, damage)?;
 
@@ -1299,6 +1317,11 @@ impl<'a> CollectionWriter<'a> {
 
             self.txn.remove_present_in(&tree, entry)?;
         }
+
+        let spare = self.txn.spare();
+
+        spare.key = kept(bytes);
+        entries.give_back(&mut spare.old);
 
         Ok(found)
     }
@@ -1380,13 +1403,24 @@ impl<'a> CollectionWriter<'a> {
             }
         }
 
-        let key = key_bytes(collection, &key_value)?;
         let max_key_len = self.txn.max_key_len();
+        let mut lent = Lent::take(self.txn.spare());
+
+        key_bytes_into(collection, &key_value, &mut lent.key)?;
+
+        let Lent {
+            key,
+            record,
+            entries,
+            old,
+        } = &mut lent;
         let mut changes = Some(changes);
         let mut update = Update::default();
-        let found = self
-            .txn
-            .update_in_with(&records(collection.id), &key, &mut |stored| {
+        let found = self.txn.update_in_with(
+            &records(collection.id),
+            key,
+            record,
+            &mut |stored, record| {
                 let mut object = codec::object_in_order(stored, &collection.fields, order)
                     .map_err(|reason| {
                         update.damage = Some(reason);
@@ -1395,24 +1429,23 @@ impl<'a> CollectionWriter<'a> {
                     })?;
 
                 object.absorb(changes.take().unwrap_or_default());
+                object_written(&schema, collection, order, &object, key, record, entries)?;
 
-                let (record, entries) = object_written(&schema, collection, order, &object, &key)?;
-
-                if record == stored {
-                    return Ok(None);
+                if record.as_slice() == stored {
+                    return Ok(false);
                 }
 
-                check_lengths(collection, max_key_len, &record, &entries)?;
-
-                let mut old = IndexKeys::with_capacity(collection.indexes.len());
-
-                record_entries(&mut old, collection, stored, &key, &mut update.damage)?;
+                check_lengths(collection, max_key_len, record, entries)?;
+                record_entries(old, collection, stored, key, &mut update.damage)?;
                 update.made(collection, stored, entries, old);
 
-                Ok(Some(record))
-            });
+                Ok(true)
+            },
+        );
+        let updated = self.finish_update(collection, key, found, update, entries, old);
 
-        self.finish_update(collection, &key, found, update)
+        lent.give_back(self.txn.spare());
+        updated
     }
 
     /// Ends an update whose record [`update_in_with`] replaced, which found
@@ -1426,14 +1459,17 @@ impl<'a> CollectionWriter<'a> {
         key: &[u8],
         found: Result<bool>,
         update: Update,
+        entries: &IndexKeys,
+        old: &IndexKeys,
     ) -> Result<bool> {
         let found = released(&*self.txn, collection, found, update.damage)?;
-        let Some((entries, old)) = update.entries else {
+
+        if !update.made {
             // No object, or one the changes leave as it was.
             return Ok(found);
-        };
+        }
 
-        if let Err(error) = self.check_unique(collection, key, &entries, &old) {
+        if let Err(error) = self.check_unique(collection, key, entries, old) {
             let previous = update.previous.map_or(Previous::Object, Previous::Record);
 
             self.put_back(collection, key, previous)?;
@@ -1442,7 +1478,7 @@ impl<'a> CollectionWriter<'a> {
         }
 
         // Nothing below can refuse the change.
-        self.replace_entries(collection, key, &entries, &old)?;
+        self.replace_entries(collection, key, entries, old)?;
 
         Ok(true)
     }
@@ -1474,7 +1510,10 @@ impl<'a> CollectionWriter<'a> {
             return self.update(key_value, changes);
         }
 
-        let key = key_bytes(collection, &key_value)?;
+        let mut lent = Lent::take(self.txn.spare());
+
+        key_bytes_into(collection, &key_value, &mut lent.key)?;
+
         let changes = codec::flat_changes(changes, &collection.fields).map_err(refused)?;
         let key_position = field_position(collection, collection.key)?;
 
@@ -1490,16 +1529,27 @@ impl<'a> CollectionWriter<'a> {
         // that may refuse a value the object did not hold, and the record
         // replaced is kept aside then, to go back.
         let max_key_len = self.txn.max_key_len();
+        let Lent {
+            key,
+            record,
+            entries,
+            old,
+        } = &mut lent;
         let mut update = Update::default();
-        let found = self
-            .txn
-            .update_in_with(&records(collection.id), &key, &mut |stored| {
+        let found = self.txn.update_in_with(
+            &records(collection.id),
+            key,
+            record,
+            &mut |stored, record| {
                 let changed = changed(
                     collection,
                     stored,
                     &changes,
                     (key_position, &key_value),
-                    &key,
+                    key,
+                    record,
+                    entries,
+                    old,
                 )
                 .map_err(|unread| match unread {
                     Unread::Damaged(reason) => {
@@ -1509,22 +1559,21 @@ impl<'a> CollectionWriter<'a> {
                     }
                     Unread::Failed(error) => error,
                 })?;
-                let Some(Changed {
-                    record,
-                    entries,
-                    old,
-                }) = changed
-                else {
-                    return Ok(None);
-                };
 
-                check_lengths(collection, max_key_len, &record, &entries)?;
+                if !changed {
+                    return Ok(false);
+                }
+
+                check_lengths(collection, max_key_len, record, entries)?;
                 update.made(collection, stored, entries, old);
 
-                Ok(Some(record))
-            });
+                Ok(true)
+            },
+        );
+        let updated = self.finish_update(collection, key, found, update, entries, old);
 
-        self.finish_update(collection, &key, found, update)
+        lent.give_back(self.txn.spare());
+        updated
     }
 
     /// Writes the object whose record a binding sent. In a collection whose
@@ -1572,7 +1621,7 @@ impl<'a> CollectionWriter<'a> {
         let spare = self.txn.spare();
         let mut key = std::mem::take(&mut spare.key);
         let mut stored = std::mem::take(&mut spare.record);
-        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+        let mut entries = IndexKeys::lent(&mut spare.entries, collection.indexes.len());
 
         key_bytes_into(collection, &key_value, &mut key)?;
         codec::flat_record(
@@ -1724,7 +1773,7 @@ impl<'a> CollectionWriter<'a> {
         };
         let spare = self.txn.spare();
         let mut key = std::mem::take(&mut spare.key);
-        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+        let mut entries = IndexKeys::lent(&mut spare.entries, collection.indexes.len());
 
         key_bytes_into(collection, &key_value, &mut key)?;
 
@@ -1778,7 +1827,7 @@ impl<'a> CollectionWriter<'a> {
         let spare = self.txn.spare();
 
         spare.key = kept(key);
-        entries.give_back(spare);
+        entries.give_back(&mut spare.entries);
     }
 
     /// The transaction's buffers, for a [`TypedWriter`] to encode a record
@@ -1851,7 +1900,7 @@ impl<'a> CollectionWriter<'a> {
         let spare = self.txn.spare();
         let mut key = std::mem::take(&mut spare.key);
         let mut record = std::mem::take(&mut spare.record);
-        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+        let mut entries = IndexKeys::lent(&mut spare.entries, collection.indexes.len());
 
         key_bytes_into(collection, &key_value, &mut key)?;
         codec::record_of_slots(
@@ -1941,7 +1990,13 @@ impl<'a> CollectionWriter<'a> {
             return Err(too_long());
         }
 
-        let mut old = IndexKeys::default();
+        // The entries of the object a replacement replaces, in buffers the
+        // transaction lends; an insert has none.
+        let mut old = if replace {
+            IndexKeys::lent(&mut self.txn.spare().old, 0)
+        } else {
+            IndexKeys::default()
+        };
         let previous = if replace {
             Some(self.replace_record(collection, key, record, entries, &mut old)?)
         } else {
@@ -2007,6 +2062,10 @@ impl<'a> CollectionWriter<'a> {
         if let Some(next) = raised {
             self.txn
                 .insert_later(META, counter(collection.id).as_bytes(), &next.to_le_bytes())?;
+        }
+
+        if replace {
+            old.give_back(&mut self.txn.spare().old);
         }
 
         Ok(key_value)

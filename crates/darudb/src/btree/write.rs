@@ -310,9 +310,12 @@ fn insert_into<L: Load, S: Store>(
     }
 }
 
-/// What an update makes of the value under its key: a new value, or `None`
-/// to keep the one there.
-pub(crate) type Change<'v> = dyn FnMut(&[u8]) -> Result<Option<Vec<u8>>> + 'v;
+/// What an update makes of the value under its key, the first argument:
+/// it writes a new value into the second, a buffer the caller of the update
+/// lends, and returns true, or returns false to keep the value there. The
+/// buffer stays the caller's, for its next update, rather than coming back
+/// as a vector the tree drops once it holds the value.
+pub(crate) type Change<'v> = dyn FnMut(&[u8], &mut Vec<u8>) -> Result<bool> + 'v;
 
 /// What an update found under its key.
 enum Updated {
@@ -325,24 +328,25 @@ enum Updated {
     Replaced(Option<OverflowRef>),
 }
 
-/// Replaces the value under `key` with what `change` makes of it, going down
-/// to the key once, for a caller whose new value depends on the old: reading
-/// the value first and then replacing it went down twice. Returns whether
-/// the key was there. The nodes on the way to it are copied whether it is
-/// there or not, and whether `change` keeps the value or not; an error
-/// `change` returns stores nothing.
+/// Replaces the value under `key` with what `change` makes of it in
+/// `value`, going down to the key once, for a caller whose new value
+/// depends on the old: reading the value first and then replacing it went
+/// down twice. Returns whether the key was there. The nodes on the way to it
+/// are copied whether it is there or not, and whether `change` keeps the
+/// value or not; an error `change` returns stores nothing.
 pub(crate) fn update_with<L: Load, S: Store>(
     load: &L,
     store: &mut S,
     tree: u64,
     root: &mut Option<Child>,
     key: &[u8],
+    value: &mut Vec<u8>,
     change: &mut Change<'_>,
 ) -> Result<bool> {
     let Some(child) = root.as_mut() else {
         return Ok(false);
     };
-    let (updated, split) = update_into(load, store, tree, child, None, key, change)?;
+    let (updated, split) = update_into(load, store, tree, child, None, key, value, change)?;
 
     grow_root(store, child, split)?;
 
@@ -357,6 +361,10 @@ pub(crate) fn update_with<L: Load, S: Store>(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "it passes down what `update_with` was given, which a struct would only rename"
+)]
 fn update_into<L: Load, S: Store>(
     load: &L,
     store: &mut S,
@@ -364,6 +372,7 @@ fn update_into<L: Load, S: Store>(
     child: &mut Child,
     level: Option<u8>,
     key: &[u8],
+    value: &mut Vec<u8>,
     change: &mut Change<'_>,
 ) -> Result<(Updated, Split)> {
     let page_size = load.page_size();
@@ -376,14 +385,18 @@ fn update_into<L: Load, S: Store>(
                 return Ok((Updated::Missing, None));
             };
             let changed = match leaf.value(index).map_err(internal)? {
-                StoredRef::Inline(old) => change(old)?,
-                StoredRef::Overflow(reference) => change(&load.read_overflow(&reference, tree)?)?,
+                StoredRef::Inline(old) => change(old, value)?,
+                StoredRef::Overflow(reference) => {
+                    change(&load.read_overflow(&reference, tree)?, value)?
+                }
             };
-            let Some(value) = changed else {
+
+            if !changed {
                 return Ok((Updated::Kept, None));
-            };
-            let run = store_value(page_size, store, tree, key.len(), &value)?;
-            let stored = run.map_or(StoredRef::Inline(&value), StoredRef::Overflow);
+            }
+
+            let run = store_value(page_size, store, tree, key.len(), value)?;
+            let stored = run.map_or(StoredRef::Inline(value), StoredRef::Overflow);
             let (replaced, split) = replace_in_leaf(store, leaf, index, key, stored, capacity)?;
 
             Ok((Updated::Replaced(replaced), split))
@@ -397,6 +410,7 @@ fn update_into<L: Load, S: Store>(
                 &mut branch.children[index],
                 Some(branch.level - 1),
                 key,
+                value,
                 change,
             )?;
 

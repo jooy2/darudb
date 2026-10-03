@@ -35,19 +35,28 @@ pub(super) struct TreeState {
 }
 
 /// Buffers the object layer lends itself between the objects a write
-/// transaction stores: an object's record, its key, the keys of its index
-/// entries and where each one ends, and where each field of a typed record
-/// lies. A write takes the ones it needs and gives them back cleared, so
-/// that a transaction storing many objects allocates them once rather than
-/// for each object: allocating and freeing them took about a tenth of an
-/// insert.
+/// transaction stores, changes and deletes: an object's record, its key,
+/// its index entries and those of the object it replaces, and where each
+/// field of a typed record lies. A write takes the ones it needs and gives
+/// them back cleared, so that a transaction writing many objects allocates
+/// them once rather than for each object: allocating and freeing them took
+/// about a tenth of an insert.
 #[derive(Debug, Default)]
 pub(crate) struct Spare {
     pub(crate) record: Vec<u8>,
     pub(crate) key: Vec<u8>,
-    pub(crate) entries: Vec<u8>,
-    pub(crate) ends: Vec<(usize, usize)>,
+    pub(crate) entries: EntryBuffers,
+    pub(crate) old: EntryBuffers,
     pub(crate) placed: Vec<(usize, usize)>,
+}
+
+/// The buffers of an object's index entries in [`Spare`]: the keys of the
+/// entries one after another, and the position of each one's index and
+/// where its key ends.
+#[derive(Debug, Default)]
+pub(crate) struct EntryBuffers {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) ends: Vec<(usize, usize)>,
 }
 
 /// The most bytes a buffer [`kept`] keeps, so that one large object does
@@ -408,7 +417,8 @@ impl WriteTransaction {
     /// Replaces the value under `key` in tree `tree` of the engine's with
     /// what `change` makes of it, for a caller whose new value depends on the
     /// old: the key is gone down to once, rather than once to read the value
-    /// and once to replace it. `change` keeps the value by returning `None`.
+    /// and once to replace it. `change` writes the new value into `value`, a
+    /// buffer the caller lends, and keeps the old one by returning false.
     /// Returns whether there was a value. An error `change` returns stores
     /// nothing and leaves the transaction able to commit, though the pages on
     /// the way to the key may have been copied, as they may be when the key
@@ -417,6 +427,7 @@ impl WriteTransaction {
         &mut self,
         tree: &str,
         key: &[u8],
+        value: &mut Vec<u8>,
         change: &mut btree::Change<'_>,
     ) -> Result<bool> {
         self.check_open()?;
@@ -429,9 +440,9 @@ impl WriteTransaction {
             .and_then(|waiting| waiting.get(key))
             .cloned()
         {
-            if let Some(value) = change(&old)? {
-                check_value(&value)?;
-                self.insert_in(tree, key, &value)?;
+            if change(&old, value)? {
+                check_value(value)?;
+                self.insert_in(tree, key, value)?;
             }
 
             return Ok(true);
@@ -459,16 +470,19 @@ impl WriteTransaction {
             state.id,
             &mut state.root,
             key,
-            &mut |old| {
-                let value = change(old).and_then(|value| {
-                    value.as_deref().map_or(Ok(()), check_value)?;
+            value,
+            &mut |old, value| {
+                let changed = change(old, value).and_then(|changed| {
+                    if changed {
+                        check_value(value)?;
+                    }
 
-                    Ok(value)
+                    Ok(changed)
                 });
 
-                refused = value.is_err();
+                refused = changed.is_err();
 
-                value
+                changed
             },
         );
 
