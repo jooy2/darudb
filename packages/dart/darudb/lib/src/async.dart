@@ -474,8 +474,10 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
   WriteCollection<T, Q, K> get _writer => _sync as WriteCollection<T, Q, K>;
 
-  Future<List<K>> _write(Iterable<T> objects, {required bool replace}) {
-    // The objects are encoded when the call is made, as they are then.
+  Future<List<K>> _write(Iterable<T> objects, {required bool replace}) async {
+    // The objects are encoded when the call is made, as they are then: an
+    // asynchronous function runs up to its first `await` at once, and what
+    // it throws there completes its future rather than reaching the caller.
     final writer = Writer(256);
 
     for (final object in objects) {
@@ -527,7 +529,7 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
   /// Deletes the object whose primary key is [key], and returns whether
   /// there was one.
-  Future<bool> delete(K key) {
+  Future<bool> delete(K key) async {
     final writer = Writer(32);
 
     writeKey(writer, key);
@@ -550,7 +552,7 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
   /// Sets the fields [changes] gives in the object whose primary key is
   /// [key]; see [WriteCollection.update].
-  Future<bool> update(K key, List<Change> Function(Q q) changes) {
+  Future<bool> update(K key, List<Change> Function(Q q) changes) async {
     final keyWriter = Writer(32);
     final changesWriter = Writer(64);
 

@@ -667,7 +667,7 @@ final class Database implements Finalizable {
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
-  }) => _openAsync(
+  }) async => _openAsync(
     path,
     schema,
     migrations,

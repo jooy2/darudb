@@ -21,6 +21,43 @@ void main() {
 
   tearDown(() => directory.deleteSync(recursive: true));
 
+  test(
+    'openAsync fails through its Future, even for a schema the package refuses',
+    () {
+      late Future<Database> opening;
+
+      expect(
+        () => opening = Database.openAsync(
+          path,
+          schema: const Schema(1, [userSchema, userSchema]),
+        ),
+        returnsNormally,
+      );
+
+      return expectLater(opening, failsWith('INVALID_ARGUMENT'));
+    },
+  );
+
+  test(
+    'a call of an asynchronous collection fails through its Future',
+    () async {
+      final db = Database.open(path, schema: const Schema(1, [userSchema]));
+
+      await db.writeAsync((txn) async {
+        final users = txn.collection(userSchema);
+        late Future<bool> updating;
+
+        expect(
+          () => updating = users.update(1, (q) => [q.friend.name.set('x')]),
+          returnsNormally,
+        );
+        await expectLater(updating, failsWith('INVALID_ARGUMENT'));
+      });
+
+      db.close();
+    },
+  );
+
   test('the Future API writes, reads, queries and closes', () async {
     final db = await Database.openAsync(
       path,
