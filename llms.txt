@@ -1,0 +1,144 @@
+# DaruDB
+
+> An embedded database that keeps an application's data in one local file, for Rust, Node.js and Dart. One engine written in Rust, with encryption, crash safety and several processes on one file as goals from the start.
+
+One engine, written in Rust, shipped to Rust as the crate `darudb`, to Node.js as the npm
+package `darudb`, and to Dart as the package `darudb`. Every language reads and writes the same file the same
+way, because every rule about the file lives in the engine. The project is in early
+development and nothing is published yet.
+
+## Guide
+
+- [Introduction](https://darudb.cdget.com/guide/introduction): DaruDB is an embedded database that keeps an application's data in one local file, with one engine written in Rust that programs in Rust, Node.js and Dart all…
+- [Getting started](https://darudb.cdget.com/guide/getting-started): DaruDB is not published yet, so for now you build it from source, add it to your project by path, and open a first database.
+- [Collections and objects](https://darudb.cdget.com/guide/objects): A database opened with a schema holds collections of typed objects, with indexes the engine keeps in step with them.
+- [Queries](https://darudb.cdget.com/guide/queries): A query says which objects of a collection to find, in what order, and how many, and can be built in code or written as text.
+- [Transactions](https://darudb.cdget.com/guide/transactions): Every read happens in a read transaction and every change in a write transaction, which commits whole or not at all.
+- [Migrations](https://darudb.cdget.com/guide/migrations): Changing a schema means raising its version, and opening a file that holds an older version migrates it in one write transaction that either commits whole or…
+- [Encryption](https://darudb.cdget.com/guide/encryption): A database created with a key or a password is encrypted and authenticated, every page of it, and opens only with the same key or password.
+- [Several processes](https://darudb.cdget.com/guide/processes): Several processes can have one database file open at once, each reading and writing it, with nothing to set up and nothing to clean up after a process dies.
+- [Tools](https://darudb.cdget.com/guide/tools): DaruDB ships with tools for a file that has to be checked, copied, made smaller or rescued. The check, backup and compaction work while other handles and…
+- [Errors](https://darudb.cdget.com/guide/errors): Every error DaruDB returns carries a code that names the failure, the same in every language and stable across releases.
+- [Asynchronous API](https://darudb.cdget.com/guide/async): Every method of Database that uses the file has a twin whose name ends in Async, which does the engine's work off the thread that runs your code, so that it…
+- [Electron](https://darudb.cdget.com/guide/electron): The Node.js package runs in Electron's main process as it does in Node.js, with the same addon, since Node-API stays the same across Node.js and Electron…
+
+## Engine
+
+- [How the engine is built](https://darudb.cdget.com/engine/architecture): DaruDB is one engine written in Rust, and this page explains how it is put together: its layers from the file up, what a binding hands it, how it reads and…
+- [Storage kernel](https://darudb.cdget.com/engine/storage-kernel): The storage kernel is the layer under collections: named trees of byte keys and byte values, read and written in transactions, which a Rust program can use…
+- [File format](https://darudb.cdget.com/engine/file-format): This page summarises how a DaruDB database file is laid out: its pages, the header and its three commit slots, the pointers that verify every page, and how the…
+- [Commits and recovery](https://darudb.cdget.com/engine/commits-and-recovery): This page explains how a write transaction changes the file without putting any committed state at risk, when a commit becomes durable, and what opening a file…
+- [Locking](https://darudb.cdget.com/engine/locking): This page explains how several processes share one database file through the operating system's byte-range locks alone, with no shared memory and nothing for a…
+- [Encryption](https://darudb.cdget.com/engine/encryption): This page explains how DaruDB encrypts and authenticates a database file: the page cipher and how it is chosen, the data key and how a key or a password wraps…
+- [Building a binding](https://darudb.cdget.com/engine/bindings): This page describes the calls of the Rust crate that a language binding is built on, the byte formats a binding exchanges with the engine, and how the Node.js…
+
+## Rust API
+
+- [Database](https://darudb.cdget.com/api/rust/database): Database is a handle to an open database file, from which every transaction begins.
+- [OpenOptions](https://darudb.cdget.com/api/rust/open-options): OpenOptions holds the options a database is opened with: whether to create it, its page size, how long to wait, how much memory to use, its key or password,…
+- [ReadTransaction](https://darudb.cdget.com/api/rust/read-transaction): ReadTransaction is a consistent view of the database as of one commit, for reading the storage kernel's trees and the collections of a schema.
+- [WriteTransaction](https://darudb.cdget.com/api/rust/write-transaction): WriteTransaction holds changes to the database that become visible together when it commits, or not at all.
+- [CollectionReader](https://darudb.cdget.com/api/rust/collection-reader): CollectionReader gives the objects of one collection as a read transaction sees them: by primary key, all in key order, or found by a query.
+- [CollectionWriter](https://darudb.cdget.com/api/rust/collection-writer): CollectionWriter gives the objects of one collection inside a write transaction, with the transaction's changes, and the calls that insert, replace, update and…
+- [TypedReader](https://darudb.cdget.com/api/rust/typed-reader): TypedReader gives the objects of one collection as a read transaction sees them, read straight into the Rust type of the collection.
+- [TypedWriter](https://darudb.cdget.com/api/rust/typed-writer): TypedWriter reads and writes the objects of one collection in a write transaction, as the Rust type of the collection.
+- [Schema](https://darudb.cdget.com/api/rust/schema): Schema declares the collections of a database and what their objects hold, at one version.
+- [Collection](https://darudb.cdget.com/api/rust/collection): Collection declares one collection of a schema: its fields, its primary key and its indexes.
+- [Embedded](https://darudb.cdget.com/api/rust/embedded): Embedded declares the fields of an embedded object, an object stored inside another object with fields of its own.
+- [Derive macros](https://darudb.cdget.com/api/rust/derive): #[derive(Object)] makes a struct the objects of a collection, and #[derive(Embedded)] makes one an embedded object. A schema declares the collection from the…
+- [Query](https://darudb.cdget.com/api/rust/query): Query says what to find in a collection, in what order, and how many.
+- [Filter](https://darudb.cdget.com/api/rust/filter): Filter is a condition that objects have to meet, for Query::filter.
+- [Migration](https://darudb.cdget.com/api/rust/migration): Migration says what schema version n changes from version n - 1 beyond what the engine works out by itself: renames, replaced fields, deleted collections, and…
+- [Migrating](https://darudb.cdget.com/api/rust/migrating): Migrating is the write transaction of a migration as a migration function gets it: collections of the new schema, and objects as the old schema read them.
+- [Opening and PendingMigration](https://darudb.cdget.com/api/rust/opening): Opening and PendingMigration let a language binding open a database and drive its migration one version step at a time, running a function of its own in each…
+- [QueryRequest](https://darudb.cdget.com/api/rust/query-request): QueryRequest is a query as it crosses a language boundary: the query, the collection it runs on, and whether it counts the objects rather than returning them.
+
+## Rust types
+
+- [Object](https://darudb.cdget.com/types/rust/object): Object is a set of field values by name, which is what a collection stores and what reading a collection returns.
+- [Value](https://darudb.cdget.com/types/rust/value): Value is the value of one field of an object, and also the type of primary keys and of the values a query compares fields with.
+- [Type](https://darudb.cdget.com/types/rust/type): Type is the type of a field, which a schema gives every field of a collection and of an embedded object.
+- [CollectionType](https://darudb.cdget.com/types/rust/collection-type): CollectionType is a Rust type whose values are the objects of a collection, and EmbeddedType one whose values are embedded objects.…
+- [FieldType](https://darudb.cdget.com/types/rust/field-type): FieldType is the Rust type of a field of a typed object: how a schema declares it, and how it is written into a record and read from one.
+- [Link](https://darudb.cdget.com/types/rust/link): Link is a link to an object of T's collection: the object's primary key, typed by the collection it points into.
+- [Error and Result](https://darudb.cdget.com/types/rust/error): Error is the failure every fallible call of the crate returns, and Result is the crate's result type with that error.
+- [CheckReport](https://darudb.cdget.com/types/rust/check-report): CheckReport is what the integrity check found: the commit it checked, how much it read, and every problem.
+- [BackupReport](https://darudb.cdget.com/types/rust/backup-report): BackupReport is what a backup wrote: the commit it copied, how much of it, and the size of the new file.
+- [CompactReport](https://darudb.cdget.com/types/rust/compact-report): CompactReport is what a compaction did: the size of the file before and after, and how many pages it moved.
+- [SalvageReport](https://darudb.cdget.com/types/rust/salvage-report): SalvageReport is what a salvage rescued from a damaged file and what it could not, with the size of the new file it wrote.
+- [Range](https://darudb.cdget.com/types/rust/range): Range is the iterator over a tree's entries that range, rangebackward and iter of a transaction return.
+- [Constants](https://darudb.cdget.com/types/rust/constants): The crate exports two constants: the version of the crate and the file format version it reads and writes.
+
+## Node.js API
+
+- [Database](https://darudb.cdget.com/api/node/database): Database is an open DaruDB file in Node.js, through which a program runs transactions, prepares queries and uses the file's tools.
+- [schema](https://darudb.cdget.com/api/node/schema): schema declares a database's collections at a version, and returns the Schema that Database.open takes.
+- [collection](https://darudb.cdget.com/api/node/collection): collection declares one collection of a schema: its fields, by name, and through them its primary key and indexes.
+- [t](https://darudb.cdget.com/api/node/t): t holds the builders of field types, with which collection and t.object declare their fields.
+- [ReadTransaction](https://darudb.cdget.com/api/node/read-transaction): A ReadTransaction reads one commit of the database, for as long as the function Database.read runs it in.
+- [WriteTransaction](https://darudb.cdget.com/api/node/write-transaction): A WriteTransaction holds changes to the database that commit together when the function Database.write runs it in returns.
+- [ReadCollection](https://darudb.cdget.com/api/node/read-collection): A ReadCollection reads the objects of one collection in a transaction: by primary key, and by query.
+- [WriteCollection](https://darudb.cdget.com/api/node/write-collection): A WriteCollection writes the objects of one collection in a write transaction, and reads them as a ReadCollection does.
+- [Query](https://darudb.cdget.com/api/node/query): A Query says which objects a collection's find, findOne and count look for, in what order, and how many.
+- [conditions](https://darudb.cdget.com/api/node/conditions): conditions makes the conditions that a query's filter is made of, and joins them with and, or and not.
+- [param](https://darudb.cdget.com/api/node/param): param puts a parameter in place of a value in a query that Database.prepare prepares, so that each run of the query gives the value.
+- [Migrating](https://darudb.cdget.com/api/node/migrating): Migrating is the write transaction a migration function runs in: the collections of the new schema, and the objects as the schema before the migration read…
+
+## Node.js types
+
+- [OpenOptions](https://darudb.cdget.com/types/node/open-options): OpenOptions is what Database.open takes besides the path: whether to create the file, its page size, how long to wait for other processes, the page cache, the…
+- [WriteOptions](https://darudb.cdget.com/types/node/write-options): WriteOptions says how a write transaction commits: whether the commit waits for the disk.
+- [PasswordHashing](https://darudb.cdget.com/types/node/password-hashing): PasswordHashing is what hashing a password into a key costs, as Argon2id counts it: memory, iterations and parallelism.
+- [Migration](https://darudb.cdget.com/types/node/migration): Migration says what schema version version changes from the version before it, beyond what the engine works out by itself.
+- [Key](https://darudb.cdget.com/types/node/key): Key is a primary key as JavaScript passes and receives it: a number or a bigint for an int key, a string, or bytes.
+- [Field types](https://darudb.cdget.com/types/node/field-types): The field types are what t makes for the fields of a schema, each with the modifiers that field can have.
+- [Object types](https://darudb.cdget.com/types/node/object-types): The object types say how TypeScript types an object of a collection, as the database gives it and as it is written, from the collection's fields.
+- [QueryInput](https://darudb.cdget.com/types/node/query-input): QueryInput is a query built in JavaScript, as find, findOne, count and Database.prepare take it: a function that builds one, or a Query.
+- [Prepared](https://darudb.cdget.com/types/node/prepared): Prepared is a query parsed once, on one collection, that each run gives values for its parameters.
+- [CheckReport](https://darudb.cdget.com/types/node/check-report): CheckReport is what the integrity check found: the commit it checked, how much it read, and every problem.
+- [BackupReport](https://darudb.cdget.com/types/node/backup-report): BackupReport is what a backup wrote: the commit it copied, how much it copied, and the size of the copy.
+- [CompactReport](https://darudb.cdget.com/types/node/compact-report): CompactReport is what compaction did: the size of the file before and after, and the pages it moved.
+- [SalvageReport](https://darudb.cdget.com/types/node/salvage-report): SalvageReport is what salvage rescued into the new file, and what it could not.
+- [SalvageOptions](https://darudb.cdget.com/types/node/salvage-options): SalvageOptions is what Database.salvage takes besides the two paths: the key or password of an encrypted file, and how long to wait for the file.
+- [Error](https://darudb.cdget.com/types/node/error): Every error the package throws is a JavaScript Error with a code, one of the engine's error codes, beside its message.
+- [Constants](https://darudb.cdget.com/types/node/constants): The package exports two values besides its API: the file format version this build reads and writes, and the version of the engine inside it.
+
+## Dart API
+
+- [Database](https://darudb.cdget.com/api/dart/database): Database is an open DaruDB file in Dart, through which a program runs transactions, prepares queries and uses the file's tools.
+- [Annotations](https://darudb.cdget.com/api/dart/annotations): The annotations make a Dart class the objects of a collection, or an embedded object, and darudbgenerator writes the code that stores it.
+- [Schema](https://darudb.cdget.com/api/dart/schema): Schema declares a database's collections at a version, from the schema constants darudbgenerator writes, for Database.open to take.
+- [Migration](https://darudb.cdget.com/api/dart/migration): Migration says what schema version version changes from the version before it, beyond what the engine works out by itself.
+- [MigrationContext](https://darudb.cdget.com/api/dart/migration-context): MigrationContext is what a migration function gets: the collections of the new schema, and the objects as the schema before the migration read them.
+- [ReadTransaction](https://darudb.cdget.com/api/dart/read-transaction): A ReadTransaction reads one commit of the database, for as long as the function Database.read runs it in.
+- [WriteTransaction](https://darudb.cdget.com/api/dart/write-transaction): A WriteTransaction holds changes to the database that commit together when the function Database.write runs it in returns.
+- [ReadCollection](https://darudb.cdget.com/api/dart/read-collection): A ReadCollection reads the objects of one collection in a transaction: by primary key, and by query.
+- [WriteCollection](https://darudb.cdget.com/api/dart/write-collection): A WriteCollection writes the objects of one collection in a write transaction, and reads them as a ReadCollection does.
+- [QueryBuilder](https://darudb.cdget.com/api/dart/query-builder): QueryBuilder holds the parts of a query on one collection: a filter, a sort, an offset and a limit.
+- [Fields](https://darudb.cdget.com/api/dart/fields): A field object names one field in a query, and its methods make the conditions a filter is made of and the changes update makes.
+
+## Dart types
+
+- [Durability](https://darudb.cdget.com/types/dart/durability): Durability says how a write transaction commits: whether the commit waits for the disk.
+- [PasswordHashing](https://darudb.cdget.com/types/dart/password-hashing): PasswordHashing is what hashing a password into a key costs, as Argon2id counts it: memory, iterations and parallelism.
+- [Link](https://darudb.cdget.com/types/dart/link): Link is a link to an object of the collection of class T: the object's primary key, typed by the collection it points into.
+- [CollectionSchema](https://darudb.cdget.com/types/dart/collection-schema): CollectionSchema is what darudbgenerator writes for a class annotated @Collection(): the collection's name and fields, and how its objects are written and read.
+- [Field types](https://darudb.cdget.com/types/dart/field-types): A field's Dart type decides what the field holds in the file, whether it may be null, and which field object a query reaches it through.
+- [Prepared](https://darudb.cdget.com/types/dart/prepared): Prepared is a query in the query language, parsed once, on one collection, that each run gives values for its parameters.
+- [CheckReport](https://darudb.cdget.com/types/dart/check-report): CheckReport is what the integrity check found: the commit it checked, how much it read, and every problem.
+- [BackupReport](https://darudb.cdget.com/types/dart/backup-report): BackupReport is what a backup wrote: the commit it copied, how much it copied, and the size of the copy.
+- [CompactReport](https://darudb.cdget.com/types/dart/compact-report): CompactReport is what compaction did: the size of the file before and after, and the pages it moved.
+- [SalvageReport](https://darudb.cdget.com/types/dart/salvage-report): SalvageReport is what salvage rescued into the new file, and what it could not.
+- [DaruException](https://darudb.cdget.com/types/dart/error): DaruException is what the package throws for every failure of the database, with one of the engine's error codes beside its message.
+- [Constants](https://darudb.cdget.com/types/dart/constants): The package exports two top-level getters besides its API: the file format version this build reads and writes, and the version of the engine inside it.
+
+## Migration
+
+- [Migration](https://darudb.cdget.com/migration/): These guides move an application's data into DaruDB from the embedded database it uses now, one page for each.
+- [SQLite](https://darudb.cdget.com/migration/sqlite): This page moves the data of a SQLite database into DaruDB: how tables, columns and indexes map onto collections and fields, a script that copies every row, and…
+- [Realm](https://darudb.cdget.com/migration/realm): This page moves the data of a Realm file into DaruDB: how object schemas and property types map onto collections and fields, a Node.js script that copies every…
+
+## Optional
+
+- [Changelog](https://darudb.cdget.com/changelog): every package's changes, newest first
+- [Repository](https://github.com/jooy2/darudb): the engine, the bindings, and how to build and test each
