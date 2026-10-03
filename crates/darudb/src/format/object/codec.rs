@@ -1674,7 +1674,7 @@ mod tests {
             let bytes = record_of(&object, &fields, &keys).unwrap();
             let expected = write(
                 &(1..=set)
-                    .map(|id| (id.cast_unsigned(), Raw::Int(id)))
+                    .map(|id| (id as u64, Raw::Int(id)))
                     .collect::<Vec<_>>(),
             );
 
