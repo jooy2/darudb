@@ -269,6 +269,13 @@ thread_local! {
     /// Set with [`NO_LINKS`], the file system has no rename that never
     /// replaces a file either.
     pub(crate) static NO_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// How many typed writes this thread stored as they were encoded,
+    /// without reading their record again. Any other typed write goes
+    /// through the checks a binding's record does and stores the same, so
+    /// only this tells the test comparing the two that the first way was
+    /// taken at all.
+    pub(crate) static TYPED_AS_ENCODED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Whether [`pause_in_recovery`] pauses. A helper sets it before it opens a

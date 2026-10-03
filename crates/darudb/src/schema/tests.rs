@@ -4,6 +4,7 @@
 use std::ops::Bound;
 
 use super::objects::{Source, check_indexes, index_tree, records};
+use super::typed::{CollectionType, FieldReader, ValueWriter};
 use super::{Collection, Schema, Type};
 use crate::format::object::codec::Raw;
 use crate::format::object::schema::Kind;
@@ -377,24 +378,28 @@ fn a_process_whose_file_another_process_migrated_fails_with_schema_mismatch() {
 /// take the path that checks and completes the record as it is.
 fn flat_schema() -> Schema {
     Schema::new(1)
-        .collection(
-            Collection::new("people")
-                .field("name", Type::String)
-                .optional("email", Type::String)
-                .with_default("age", Type::Int, 18)
-                .optional("score", Type::Float)
-                .with_default("admin", Type::Bool, false)
-                .optional("photo", Type::Bytes)
-                .unique("email")
-                .index("age")
-                .index("admin"),
-        )
-        .collection(
-            Collection::new("tags")
-                .primary_key("label", Type::String)
-                .with_default("uses", Type::Int, 0)
-                .index("uses"),
-        )
+        .collection(flat_people())
+        .collection(flat_tags())
+}
+
+fn flat_people() -> Collection {
+    Collection::new("people")
+        .field("name", Type::String)
+        .optional("email", Type::String)
+        .with_default("age", Type::Int, 18)
+        .optional("score", Type::Float)
+        .with_default("admin", Type::Bool, false)
+        .optional("photo", Type::Bytes)
+        .unique("email")
+        .index("age")
+        .index("admin")
+}
+
+fn flat_tags() -> Collection {
+    Collection::new("tags")
+        .primary_key("label", Type::String)
+        .with_default("uses", Type::Int, 0)
+        .index("uses")
 }
 
 /// A record as a binding might send one for a collection whose fields are
@@ -567,6 +572,270 @@ fn a_binding_s_records_are_written_as_the_objects_they_hold_would_be() {
         }
 
         assert!(written > 100, "seed {seed}: only {written} records written");
+    }
+}
+
+/// An object of `people` in [`flat_schema`] as a type written by hand
+/// might write it: each field's value by the field's slot, `None` for null,
+/// of whatever kind it holds, the field's or another.
+struct FlatPerson(Vec<Option<Raw>>);
+
+/// An object of `tags`, as [`FlatPerson`] is one of `people`.
+struct FlatTag(Vec<Option<Raw>>);
+
+/// Writes `value` as a type written by hand writes a field's value.
+fn write_raw(value: Option<&Raw>, writer: ValueWriter<'_>) -> crate::Result<()> {
+    match value {
+        None => writer.null(),
+        Some(Raw::Bool(value)) => writer.bool(*value),
+        Some(Raw::Int(value)) => writer.int(*value),
+        Some(Raw::Float(value)) => writer.float(*value),
+        Some(Raw::String(value)) => writer.string(value),
+        Some(Raw::Bytes(value)) => writer.bytes(value),
+        Some(other) => panic!("not a scalar: {other:?}"),
+    }
+}
+
+fn not_read() -> crate::Error {
+    crate::Error::Internal {
+        message: "the test reads no typed object".to_owned(),
+    }
+}
+
+impl CollectionType for FlatPerson {
+    type Key = i64;
+
+    const COLLECTION: &'static str = "people";
+
+    fn collection() -> Collection {
+        flat_people()
+    }
+
+    fn write_field(&self, slot: usize, value: ValueWriter<'_>) -> crate::Result<()> {
+        write_raw(self.0[slot].as_ref(), value)
+    }
+
+    fn read(_: FieldReader<'_>) -> crate::Result<Self> {
+        Err(not_read())
+    }
+}
+
+impl CollectionType for FlatTag {
+    type Key = String;
+
+    const COLLECTION: &'static str = "tags";
+
+    fn collection() -> Collection {
+        flat_tags()
+    }
+
+    fn write_field(&self, slot: usize, value: ValueWriter<'_>) -> crate::Result<()> {
+        write_raw(self.0[slot].as_ref(), value)
+    }
+
+    fn read(_: FieldReader<'_>) -> crate::Result<Self> {
+        Err(not_read())
+    }
+}
+
+/// The values of an object of the collection whose fields are `kinds`, by
+/// slot, the key first: most of them of their own kind and drawn from small
+/// sets, so that keys and unique values repeat; now and then null, or a value
+/// of another kind. `auto` says whether the key is an auto-increment, which
+/// an object mostly leaves out.
+fn random_values(rng: &mut Rng, kinds: &[&str], auto: bool) -> Vec<Option<Raw>> {
+    kinds
+        .iter()
+        .enumerate()
+        .map(|(slot, kind)| {
+            let leave_out = match (slot, auto) {
+                (0, true) => rng.below(4) > 0,
+                (0, false) => rng.below(30) == 0,
+                _ => rng.below(4) == 0,
+            };
+
+            if leave_out {
+                return None;
+            }
+
+            let kind = if rng.below(30) == 0 {
+                ["string", "int", "float", "bool", "bytes"][rng.index(5)]
+            } else {
+                kind
+            };
+
+            Some(match kind {
+                "string" => {
+                    Raw::String(["ace", "bee", "cat", "dot", "é\0"][rng.index(5)].to_owned())
+                }
+                "int" => Raw::Int(i64::try_from(rng.below(40)).unwrap() - 2),
+                "float" => Raw::Float([0.5, -1.0, 1e300][rng.index(3)]),
+                "bool" => Raw::Bool(rng.below(2) == 0),
+                _ => {
+                    let len = rng.index(4);
+
+                    Raw::Bytes(rng.bytes(len))
+                }
+            })
+        })
+        .collect()
+}
+
+/// A typed write stores what a binding's record of the same object stores,
+/// and fails where that fails, with the same error: the same records, byte
+/// for byte, the same index entries and the same auto-increment counters.
+/// The types are written by hand, so that now and then they leave out a
+/// field the collection requires, with a default or without, or write a
+/// value of another kind, which the record a typed writer encodes is not
+/// checked for as a binding's is.
+#[test]
+fn a_typed_write_stores_what_a_binding_s_record_of_the_object_stores() {
+    use crate::format::object::codec;
+    use crate::schema::objects::{META, counter};
+
+    for seed in 0..6 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(flat_schema());
+
+        let typed = options.open(dir.path().join("typed.darudb")).unwrap();
+        let through_records = options.open(dir.path().join("records.darudb")).unwrap();
+        let mut rng = Rng::new(200 + seed);
+        let as_encoded = crate::testing::TYPED_AS_ENCODED.get();
+        let mut written = 0;
+
+        for _ in 0..20 {
+            let mut left = typed.begin_write().unwrap();
+            let mut right = through_records.begin_write().unwrap();
+            let open = left.schema().cloned().unwrap();
+
+            for _ in 0..30 {
+                let position = rng.index(2);
+                let definition = &open.schema.collections[position];
+                let declared = if position == 0 {
+                    flat_people()
+                } else {
+                    flat_tags()
+                }
+                .all_fields();
+                let kinds: Vec<&str> = declared
+                    .iter()
+                    .map(|field| match field.kind {
+                        Type::String => "string",
+                        Type::Int => "int",
+                        Type::Float => "float",
+                        Type::Bool => "bool",
+                        _ => "bytes",
+                    })
+                    .collect();
+                let values = random_values(&mut rng, &kinds, definition.auto);
+                let replace = rng.below(2) == 0;
+                // The record the typed writer sent before it encoded records
+                // in the file's form, as a binding sends one: the fields the
+                // object has, in id order.
+                let record = codec::write(
+                    &definition
+                        .fields
+                        .list
+                        .iter()
+                        .filter_map(|field| {
+                            let slot = declared
+                                .iter()
+                                .position(|declared| declared.name == field.name)
+                                .unwrap();
+
+                            values[slot].clone().map(|value| (field.id, value))
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                let fast = if position == 0 {
+                    let mut people = left.collection_of::<FlatPerson>().unwrap();
+                    let person = FlatPerson(values);
+
+                    if replace {
+                        people.put(&person)
+                    } else {
+                        people.insert(&person)
+                    }
+                    .map(Value::Int)
+                } else {
+                    let mut tags = left.collection_of::<FlatTag>().unwrap();
+                    let tag = FlatTag(values);
+
+                    if replace {
+                        tags.put(&tag)
+                    } else {
+                        tags.insert(&tag)
+                    }
+                    .map(Value::String)
+                };
+                let slow = {
+                    let mut collection = right.collection(&definition.name).unwrap();
+
+                    if replace {
+                        collection.put_record(&record)
+                    } else {
+                        collection.insert_record(&record)
+                    }
+                };
+
+                match (&fast, &slow) {
+                    (Ok(fast), Ok(slow)) => {
+                        assert_eq!(fast, slow, "seed {seed}");
+                        written += 1;
+                    }
+                    (Err(fast), Err(slow)) => {
+                        assert_eq!(fast.to_string(), slow.to_string(), "seed {seed}");
+                    }
+                    _ => panic!(
+                        "seed {seed}: {record:?} gave {fast:?} typed and {slow:?} as a record"
+                    ),
+                }
+            }
+
+            for collection in &open.schema.collections {
+                let trees = std::iter::once(records(collection.id))
+                    .chain(collection.indexes.iter().map(|index| index_tree(index.id)));
+
+                for tree in trees {
+                    let entries = |txn: &crate::WriteTransaction| {
+                        txn.range_in::<Vec<u8>>(
+                            &tree,
+                            &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+                            false,
+                        )
+                        .unwrap()
+                        .collect::<crate::Result<Vec<_>>>()
+                        .unwrap()
+                    };
+
+                    assert_eq!(
+                        entries(&left),
+                        entries(&right),
+                        "seed {seed}: tree {:?}",
+                        &*tree
+                    );
+                }
+
+                let next = |txn: &crate::WriteTransaction| {
+                    txn.get_in(META, counter(collection.id).as_bytes()).unwrap()
+                };
+
+                assert_eq!(next(&left), next(&right), "seed {seed}");
+            }
+
+            check_indexes(&left as &dyn Source, &open.schema)
+                .unwrap_or_else(|reason| panic!("seed {seed}: {reason}"));
+            left.commit().unwrap();
+            right.commit().unwrap();
+        }
+
+        assert!(written > 100, "seed {seed}: only {written} objects written");
+        assert!(
+            crate::testing::TYPED_AS_ENCODED.get() - as_encoded > 100,
+            "seed {seed}: few typed writes stored as encoded"
+        );
     }
 }
 

@@ -428,6 +428,99 @@ fn a_declared_key_and_links_round_trip() {
     );
 }
 
+/// A type whose fields all hold scalars, whose objects a typed write stores
+/// as it encodes them.
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "accounts")]
+struct Account {
+    id: Option<i64>,
+    #[darudb(unique)]
+    email: String,
+    #[darudb(index)]
+    level: i64,
+    note: Option<String>,
+}
+
+#[test]
+fn a_type_of_scalars_numbers_indexes_and_refuses_as_objects_are() {
+    let dir = TestDir::new();
+    let db = open(&dir, Schema::new(1).collection(Collection::of::<Account>()));
+    let account = |email: &str, level| Account {
+        id: None,
+        email: email.to_owned(),
+        level,
+        note: None,
+    };
+    let mut txn = db.begin_write().unwrap();
+    let mut accounts = txn.collection_of::<Account>().unwrap();
+
+    assert_eq!(accounts.insert(&account("a@example.com", 1)).unwrap(), 1);
+    // A key of its own moves the numbering past it.
+    assert_eq!(
+        accounts
+            .insert(&Account {
+                id: Some(10),
+                ..account("b@example.com", 2)
+            })
+            .unwrap(),
+        10
+    );
+    assert_eq!(accounts.insert(&account("c@example.com", 2)).unwrap(), 11);
+    assert_eq!(
+        code(accounts.insert(&account("a@example.com", 3))),
+        "DUPLICATE_KEY"
+    );
+    assert_eq!(
+        accounts
+            .put(&Account {
+                id: Some(1),
+                note: Some("moved".to_owned()),
+                ..account("d@example.com", 2)
+            })
+            .unwrap(),
+        1
+    );
+    assert_eq!(accounts.insert(&account("a@example.com", 3)).unwrap(), 12);
+    drop(accounts);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let accounts = read.collection_of::<Account>().unwrap();
+    let level = |level: i64| {
+        let mut ids: Vec<_> = accounts
+            .query(&Query::new().filter(Filter::eq("level", level)))
+            .unwrap()
+            .into_iter()
+            .filter_map(|account| account.id)
+            .collect();
+
+        ids.sort_unstable();
+        ids
+    };
+
+    assert_eq!(level(1), Vec::<i64>::new());
+    assert_eq!(level(2), vec![1, 10, 11]);
+    assert_eq!(level(3), vec![12]);
+    assert_eq!(
+        accounts
+            .query(&Query::new().filter(Filter::eq("email", "d@example.com")))
+            .unwrap()
+            .first()
+            .and_then(|account| account.note.clone()),
+        Some("moved".to_owned())
+    );
+    assert_eq!(
+        read.collection("accounts").unwrap().get(12).unwrap(),
+        Some(
+            Object::new()
+                .with("id", 12)
+                .with("email", "a@example.com")
+                .with("level", 3)
+                .with("note", Value::Null)
+        )
+    );
+}
+
 #[derive(darudb_derive::Object, Debug, PartialEq)]
 #[darudb(collection = "people")]
 struct Stranger {

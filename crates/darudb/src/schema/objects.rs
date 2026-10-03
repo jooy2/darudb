@@ -963,11 +963,11 @@ impl<'a> CollectionReader<'a> {
 }
 
 /// An object about to be stored: what the checks and the trees need of it.
-struct Written {
+struct Written<'r> {
     key: Vec<u8>,
     /// The primary key, which the write returns.
     key_value: Value,
-    record: Vec<u8>,
+    record: &'r [u8],
     /// The object's entries in the indexes of its collection.
     entries: IndexKeys,
     /// What the write does to the auto-increment counter.
@@ -1581,7 +1581,136 @@ impl<'a> CollectionWriter<'a> {
             Written {
                 key,
                 key_value,
-                record: stored,
+                record: &stored,
+                entries,
+                numbering,
+            },
+            replace,
+        )
+    }
+
+    /// Writes the object whose record a [`TypedWriter`] encoded, whose
+    /// fields lie where `placed` says: each one's position in the
+    /// collection's list, and where its value starts, counted from the first
+    /// field. `assigned` is the auto-increment number the writer gave an
+    /// object without a key, which the record holds.
+    ///
+    /// The writer took the field ids from the stored schema, in order, and
+    /// wrote each value through a [`ValueWriter`], whose strings are `&str`,
+    /// so the record is whole and in the form the file holds already. Of
+    /// what [`write_record`](Self::write_record) checks, only the kind of
+    /// each value and the presence of each required field are left, and
+    /// reading the record again to check the rest, then writing it again to
+    /// put the number in, took an eighth of a typed insert. A record that
+    /// fails either check, or one of a collection whose fields are not all
+    /// scalars, goes through `write_record`, which refuses it, or fills in a
+    /// default a hand-written type left out, as it does a binding's record.
+    ///
+    /// [`TypedWriter`]: super::typed::TypedWriter
+    /// [`ValueWriter`]: super::typed::ValueWriter
+    pub(crate) fn write_typed(
+        &mut self,
+        record: &[u8],
+        placed: &[(usize, usize)],
+        assigned: Option<i64>,
+        replace: bool,
+    ) -> Result<Value> {
+        let schema = Arc::clone(&self.schema);
+        let collection = &schema.schema.collections[self.position];
+        let list = &collection.fields.list;
+        let Ok((_, first)) = codec::quick_varint(record, 0) else {
+            return self.write_record(record, replace);
+        };
+        let fits = codec::is_flat(&collection.fields) && {
+            let mut given = placed.iter().peekable();
+
+            list.iter().enumerate().all(|(position, field)| {
+                match given.next_if(|(at, _)| *at == position) {
+                    Some(&(_, start)) => record
+                        .get(first + start)
+                        .is_some_and(|&tag| codec::holds(tag, &field.kind)),
+                    None => field.optional,
+                }
+            })
+        };
+
+        if !fits {
+            return self.write_record(record, replace);
+        }
+
+        let found = |position: usize| {
+            placed
+                .iter()
+                .find(|(at, _)| *at == position)
+                .map(|&(_, start)| codec::scalar_at(record, first + start, &list[position].kind))
+                .transpose()
+                .map_err(internal)
+        };
+        let key_position = list
+            .iter()
+            .position(|field| field.id == collection.key)
+            .ok_or_else(|| internal("a collection has no key field"))?;
+        let (key_value, numbering) = match assigned {
+            // A number is never negative, and the next one fits.
+            Some(number) => (
+                Value::Int(number),
+                Numbering::Raised(number.unsigned_abs() + 1),
+            ),
+            None => {
+                let given = found(key_position)?
+                    .map(|found| codec::field_value(found, &list[key_position].kind))
+                    .transpose()
+                    .map_err(internal)?;
+                let numbering = if collection.auto {
+                    match self.number(collection, given.as_ref())? {
+                        // A number the record does not hold.
+                        (Some(_), _) => return self.write_record(record, replace),
+                        (None, numbering) => numbering,
+                    }
+                } else {
+                    Numbering::Kept
+                };
+
+                (given.unwrap_or(Value::Null), numbering)
+            }
+        };
+        let key = key_bytes(collection, &key_value)?;
+        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
+
+        for (index_position, index) in collection.indexes.iter().enumerate() {
+            let position = field_position(collection, index.field)?;
+            let field = &list[position];
+            // A field left out is optional, so null; the key never is.
+            let value = match found(position)? {
+                Some(found) => {
+                    if scalar_entry(
+                        &mut entries,
+                        index_position,
+                        index,
+                        found,
+                        &field.kind,
+                        &key,
+                    )? {
+                        continue;
+                    }
+
+                    codec::field_value(found, &field.kind).map_err(internal)?
+                }
+                None => Value::Null,
+            };
+
+            value_entries(&mut entries, index_position, index, &value, &key)?;
+        }
+
+        #[cfg(test)]
+        crate::testing::TYPED_AS_ENCODED.set(crate::testing::TYPED_AS_ENCODED.get() + 1);
+
+        self.store(
+            collection,
+            Written {
+                key,
+                key_value,
+                record,
                 entries,
                 numbering,
             },
@@ -1674,7 +1803,7 @@ impl<'a> CollectionWriter<'a> {
             Written {
                 key,
                 key_value,
-                record,
+                record: &record,
                 entries,
                 numbering,
             },
@@ -1695,7 +1824,7 @@ impl<'a> CollectionWriter<'a> {
     fn store(
         &mut self,
         collection: &CollectionDef,
-        written: Written,
+        written: Written<'_>,
         replace: bool,
     ) -> Result<Value> {
         let Written {
@@ -1731,7 +1860,7 @@ impl<'a> CollectionWriter<'a> {
 
         let mut old = IndexKeys::default();
         let previous = if replace {
-            Some(self.replace_record(collection, &key, &record, &entries, &mut old)?)
+            Some(self.replace_record(collection, &key, record, &entries, &mut old)?)
         } else {
             None
         };
@@ -1759,7 +1888,7 @@ impl<'a> CollectionWriter<'a> {
         if !replace
             && !self
                 .txn
-                .insert_new_in(&records(collection.id), &key, &record)?
+                .insert_new_in(&records(collection.id), &key, record)?
         {
             return Err(Error::DuplicateKey {
                 message: format!(
@@ -1954,6 +2083,9 @@ impl<'a> CollectionWriter<'a> {
 
     /// The collection's next auto-increment number, if the object gives no
     /// key, `given`, and what the write does to the counter.
+    // Inlined by hand, as `Reader::scalar_as` is and for the same reason:
+    // `auto_number` calls it too.
+    #[inline(always)]
     fn number(
         &self,
         collection: &CollectionDef,
@@ -1971,6 +2103,18 @@ impl<'a> CollectionWriter<'a> {
             Some(Value::Int(chosen)) => Ok((None, Numbering::PastKey(*chosen))),
             // Not an int: the key check refuses the object.
             Some(_) => Ok((None, Numbering::Kept)),
+        }
+    }
+
+    /// The number the collection's auto-increment gives the next object
+    /// without a key, for a [`TypedWriter`] to write into the record it
+    /// encodes.
+    ///
+    /// [`TypedWriter`]: super::typed::TypedWriter
+    pub(crate) fn auto_number(&self) -> Result<i64> {
+        match self.number(self.definition(), None)? {
+            (Some(number), _) => Ok(number),
+            (None, _) => Err(internal("an object without a key got no number")),
         }
     }
 

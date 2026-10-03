@@ -643,6 +643,10 @@ impl<'a> Reader<'a> {
     /// A value of the scalar kind `kind`, borrowed from the record: what
     /// [`value_as`](Self::value_as) reads, and refuses, without copying a
     /// string or bytes.
+    // Inlined by hand: with `scalar_at` calling it too, the compiler kept
+    // it apart, and with `CollectionWriter::number` kept apart the same way,
+    // typed inserts were 6% slower and inserts of a binding's records 1%.
+    #[inline(always)]
     fn scalar_as(&mut self, kind: &Kind) -> Result<FieldRef<'a>, &'static str> {
         let start = self.at;
 
@@ -1244,6 +1248,28 @@ pub(crate) fn flat_fields<'a>(
     }
 
     Ok(present)
+}
+
+/// Whether a value whose tag is `tag` is of kind `kind`, a scalar.
+pub(crate) fn holds(tag: u8, kind: &Kind) -> bool {
+    matches!(
+        (kind, tag),
+        (Kind::Bool, FALSE | TRUE)
+            | (Kind::Int, INT)
+            | (Kind::Float, FLOAT)
+            | (Kind::String, STRING)
+            | (Kind::Bytes, BYTES)
+    )
+}
+
+/// The scalar of kind `kind` whose value starts at `at` of the record
+/// `bytes`, read and checked as [`flat_fields`] reads one.
+pub(crate) fn scalar_at<'a>(
+    bytes: &'a [u8],
+    at: usize,
+    kind: &Kind,
+) -> Result<FieldRef<'a>, &'static str> {
+    Reader { bytes, at }.scalar_as(kind)
 }
 
 /// The changes the record `bytes` from outside the engine holds for an

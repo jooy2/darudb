@@ -30,9 +30,10 @@
 //! - Changing: 10,000 objects' ages in one transaction, and deleting 10,000
 //!   objects in one transaction.
 //!
-//! The reads run again through a struct that `#[derive(Object)]` makes the
-//! collection's type, read straight from the records, which the lines marked
-//! "typed" measure.
+//! The inserts in one transaction and the reads run again through a struct
+//! that `#[derive(Object)]` makes the collection's type, written straight
+//! into records and read straight from them, which the lines marked "typed"
+//! measure.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -99,18 +100,32 @@ fn schema() -> Schema {
 }
 
 fn person(n: i64) -> Object {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the counts stay far below 2^52, where f64 is exact"
-    )]
-    let score = (n as f64 * 0.618).fract();
-
     Object::new()
         .with("name", format!("person {n}"))
         .with("email", format!("{n}@example.com"))
         .with("age", n * 7919 % 80)
         .with("city", format!("city {}", n % 100))
-        .with("score", score)
+        .with("score", score(n))
+}
+
+/// The object [`person`] makes, as the struct.
+fn typed_person(n: i64) -> Person {
+    Person {
+        id: None,
+        name: format!("person {n}"),
+        email: format!("{n}@example.com"),
+        age: n * 7919 % 80,
+        city: format!("city {}", n % 100),
+        score: score(n),
+    }
+}
+
+fn score(n: i64) -> f64 {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the counts stay far below 2^52, where f64 is exact"
+    )]
+    (n as f64 * 0.618).fract()
 }
 
 fn run(directory: &Path, label: &str, options: &OpenOptions) -> Outcome {
@@ -151,6 +166,25 @@ fn run(directory: &Path, label: &str, options: &OpenOptions) -> Outcome {
     measure("commit of that transaction", 1, |_| {
         bulk.take().map_or(Ok(()), darudb::WriteTransaction::commit)
     })?;
+
+    // The same objects as the struct, into a file of their own, whose
+    // transaction is dropped.
+    let typed = options.open(directory.join("typed.darudb"))?;
+    let mut typed_bulk = Some(typed.begin_write()?);
+
+    measure(
+        "insert in one transaction, two indexes, typed",
+        unsigned(OBJECTS),
+        |round| match &mut typed_bulk {
+            Some(txn) => txn
+                .collection_of::<Person>()?
+                .insert(&typed_person(signed(round)))
+                .map(drop),
+            None => Ok(()),
+        },
+    )?;
+    drop(typed_bulk);
+    typed.close()?;
 
     let read = db.begin_read()?;
     let people = read.collection("people")?;

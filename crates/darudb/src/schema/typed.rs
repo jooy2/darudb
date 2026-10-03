@@ -7,9 +7,13 @@
 //! A typed read decodes a record straight into the type, with no [`Object`]
 //! in between: building an `Object`, a vector of named values with an
 //! allocation for each string, cost about as much as finding the record.
-//! A typed write encodes the type into a record, which the engine checks as
-//! it checks a record a language binding sends, so a hand-written
-//! implementation cannot store what the schema does not allow.
+//! A typed write encodes the type into the record the file holds, with the
+//! auto-increment number of an object without a key in it, and notes where
+//! each field lies. The engine checks the kind of each value and that every
+//! required field is there, and sends a record that fails, or one with more
+//! than scalars, through the checks a language binding's record goes
+//! through, so a hand-written implementation cannot store what the schema
+//! does not allow.
 //!
 //! The type's fields are matched with the stored collection's by name once
 //! for each handle and type, into a [`Layout`]: the stored fields in id
@@ -233,6 +237,18 @@ pub struct ValueWriter<'a> {
 }
 
 impl<'a> ValueWriter<'a> {
+    /// The value of `field`, counted in `written` once it is written.
+    fn field(out: &'a mut Vec<u8>, field: &'a Slot, written: &'a mut u64) -> Self {
+        Self {
+            out,
+            place: Place::Field {
+                id: field.id,
+                written,
+            },
+            layout: field.nested.as_deref(),
+        }
+    }
+
     fn element(out: &'a mut Vec<u8>) -> Self {
         Self {
             out,
@@ -365,9 +381,13 @@ impl<'a> ValueWriter<'a> {
         // written, so it is written apart first.
         let mut inner = Vec::new();
 
-        encode(layout, &mut inner, |slot, value| {
-            object.write_field(slot, value)
-        })?;
+        encode(
+            layout,
+            &mut inner,
+            |slot, value| object.write_field(slot, value),
+            |_, _| Ok(()),
+            |_, _| {},
+        )?;
         self.begin();
         self.out.push(OBJECT);
         codec::write_varint(inner.len() as u64, self.out);
@@ -390,11 +410,17 @@ impl<'a> ValueWriter<'a> {
 
 /// Writes the record of an object or an embedded object whose fields lie as
 /// `layout` says, each written by `write_field`, after the count of fields
-/// written, into `out`.
+/// written, into `out`. A field `write_field` leaves out is offered to
+/// `left_out`, by its position in the layout, which may write it instead.
+/// `placed` hears of each field written: its position, and where its value
+/// starts, counted from the first field, since the count may yet take fewer
+/// bytes than the room made for it.
 fn encode(
     layout: &Layout,
     out: &mut Vec<u8>,
     mut write_field: impl FnMut(usize, ValueWriter<'_>) -> Result<()>,
+    mut left_out: impl FnMut(usize, ValueWriter<'_>) -> Result<()>,
+    mut placed: impl FnMut(usize, usize),
 ) -> Result<()> {
     let start = out.len();
     let most = layout.fields.len() as u64;
@@ -402,20 +428,22 @@ fn encode(
 
     out.extend_from_slice(&room[..reserved]);
 
+    let first = out.len();
     let mut written = 0;
 
-    for field in &layout.fields {
-        write_field(
-            field.slot,
-            ValueWriter {
-                out: &mut *out,
-                place: Place::Field {
-                    id: field.id,
-                    written: &mut written,
-                },
-                layout: field.nested.as_deref(),
-            },
-        )?;
+    for (position, field) in layout.fields.iter().enumerate() {
+        let at = out.len();
+        let before = written;
+
+        write_field(field.slot, ValueWriter::field(out, field, &mut written))?;
+
+        if written == before {
+            left_out(position, ValueWriter::field(out, field, &mut written))?;
+        }
+
+        if written != before {
+            placed(position, at - first + codec::varint_bytes(field.id).1);
+        }
     }
 
     if written != most {
@@ -960,11 +988,13 @@ struct Slot {
 }
 
 /// How a type lies in a collection: the collection's position in the stored
-/// schema, and the layout of its fields.
+/// schema, the layout of its fields, and the position in the layout of the
+/// auto-increment key, in a collection keyed by one.
 #[derive(Debug)]
 pub(crate) struct Typed {
     position: usize,
     layout: Layout,
+    auto: Option<usize>,
 }
 
 /// The layout of the fields `declared` in the stored `fields` of `owner`, or
@@ -1095,8 +1125,23 @@ fn typed_layout<T: CollectionType>(schema: &StoredSchema) -> Result<Typed> {
         &declared.name,
     )
     .map_err(|reason| refuse(&reason))?;
+    // The layout lists the stored fields in the stored order.
+    let auto = stored
+        .auto
+        .then(|| {
+            stored
+                .fields
+                .list
+                .iter()
+                .position(|field| field.id == stored.key)
+        })
+        .flatten();
 
-    Ok(Typed { position, layout })
+    Ok(Typed {
+        position,
+        layout,
+        auto,
+    })
 }
 
 /// How `T` lies in the collection of `schema`, worked out the first time a
@@ -1238,6 +1283,9 @@ pub struct TypedWriter<'a, T> {
     typed: Arc<Typed>,
     /// The record of the object being written, kept for the next write.
     record: Vec<u8>,
+    /// Where each field of `record` lies, as
+    /// [`CollectionWriter::write_typed`] takes them, kept with it.
+    placed: Vec<(usize, usize)>,
     target: PhantomData<fn() -> T>,
 }
 
@@ -1258,6 +1306,7 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
             inner: CollectionWriter::at(txn, schema, typed.position),
             typed,
             record: Vec::new(),
+            placed: Vec::new(),
             target: PhantomData,
         })
     }
@@ -1284,11 +1333,51 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
         )
     }
 
-    fn encode(&mut self, object: &T) -> Result<()> {
-        self.record.clear();
-        encode(&self.typed.layout, &mut self.record, |slot, value| {
-            object.write_field(slot, value)
-        })
+    /// Writes `object` and returns its primary key, replacing the object
+    /// with that key when `replace`.
+    ///
+    /// The record is written in the form the file holds: an object without
+    /// a key in a collection keyed by an auto-increment gets the next number
+    /// in it here, rather than the engine writing the record again to put
+    /// the number in, and where each field lies goes with it, so that the
+    /// engine does not read the record again to find them.
+    fn write(&mut self, object: &T, replace: bool) -> Result<T::Key> {
+        let Self {
+            inner,
+            typed,
+            record,
+            placed,
+            ..
+        } = self;
+        let mut assigned = None;
+        let fields = typed.layout.fields.len();
+
+        record.clear();
+        placed.clear();
+        // Room for most records at once: a writer is often made for one
+        // write, and growing its buffers from nothing took an eighth of it.
+        record.reserve(16 * (fields + 1));
+        placed.reserve(fields);
+        encode(
+            &typed.layout,
+            record,
+            |slot, value| object.write_field(slot, value),
+            |position, value| {
+                if typed.auto != Some(position) {
+                    return Ok(());
+                }
+
+                let number = inner.auto_number()?;
+
+                assigned = Some(number);
+                value.int(number)
+            },
+            |position, at| placed.push((position, at)),
+        )?;
+
+        let key = inner.write_typed(record, placed, assigned, replace)?;
+
+        T::Key::from_value(key)
     }
 
     /// Inserts `object` and returns its primary key. In a collection keyed
@@ -1300,11 +1389,7 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     /// As [`CollectionWriter::insert`] fails, leaving the transaction as it
     /// was.
     pub fn insert(&mut self, object: &T) -> Result<T::Key> {
-        self.encode(object)?;
-
-        let key = self.inner.insert_record(&self.record)?;
-
-        T::Key::from_value(key)
+        self.write(object, false)
     }
 
     /// Inserts `object`, or replaces the object with its primary key, and
@@ -1314,11 +1399,7 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     ///
     /// As [`CollectionWriter::put`] fails, leaving the transaction as it was.
     pub fn put(&mut self, object: &T) -> Result<T::Key> {
-        self.encode(object)?;
-
-        let key = self.inner.put_record(&self.record)?;
-
-        T::Key::from_value(key)
+        self.write(object, true)
     }
 
     /// Deletes the object whose primary key is `key`, and returns whether
@@ -1529,9 +1610,13 @@ mod tests {
     fn written(note: &Note) -> Vec<u8> {
         let mut out = Vec::new();
 
-        encode(&layout(), &mut out, |slot, value| {
-            note.write_field(slot, value)
-        })
+        encode(
+            &layout(),
+            &mut out,
+            |slot, value| note.write_field(slot, value),
+            |_, _| Ok(()),
+            |_, _| {},
+        )
         .unwrap_or_else(|error| panic!("{error}"));
         out
     }
