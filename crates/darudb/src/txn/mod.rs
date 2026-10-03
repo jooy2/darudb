@@ -23,6 +23,7 @@ use crate::instance::Learned;
 
 pub use read::ReadTransaction;
 pub use write::WriteTransaction;
+pub(crate) use write::{Spare, kept};
 
 /// Entries of a tree in key order, as [`ReadTransaction::range`] and
 /// [`WriteTransaction::range`] return them, or in reverse key order, as their

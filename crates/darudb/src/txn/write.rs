@@ -34,6 +34,37 @@ pub(super) struct TreeState {
     pub(super) changed: bool,
 }
 
+/// Buffers the object layer lends itself between the objects a write
+/// transaction stores: an object's record, its key, the keys of its index
+/// entries and where each one ends, and where each field of a typed record
+/// lies. A write takes the ones it needs and gives them back cleared, so
+/// that a transaction storing many objects allocates them once rather than
+/// for each object: allocating and freeing them took about a tenth of an
+/// insert.
+#[derive(Debug, Default)]
+pub(crate) struct Spare {
+    pub(crate) record: Vec<u8>,
+    pub(crate) key: Vec<u8>,
+    pub(crate) entries: Vec<u8>,
+    pub(crate) ends: Vec<(usize, usize)>,
+    pub(crate) placed: Vec<(usize, usize)>,
+}
+
+/// The most bytes a buffer [`kept`] keeps, so that one large object does
+/// not hold its memory for the rest of the transaction.
+const SPARE_MOST: usize = 64 * 1024;
+
+/// `buffer` cleared, to give back to [`Spare`], or an empty one in its place
+/// if it grew past [`SPARE_MOST`] bytes.
+pub(crate) fn kept<T>(mut buffer: Vec<T>) -> Vec<T> {
+    if buffer.capacity().saturating_mul(size_of::<T>()) > SPARE_MOST {
+        return Vec::new();
+    }
+
+    buffer.clear();
+    buffer
+}
+
 /// Changes to the database that become visible together, when
 /// [`commit`](WriteTransaction::commit) returns, or not at all.
 ///
@@ -88,6 +119,8 @@ pub struct WriteTransaction {
     /// a migration writes the stored schema, and it sets the schema anew, so
     /// the answer holds for the rest of the transaction.
     pub(super) schema_checked: AtomicBool,
+    /// The object layer's buffers, between the objects it stores.
+    pub(super) spare: Spare,
 }
 
 impl WriteTransaction {
@@ -255,6 +288,7 @@ impl WriteTransaction {
             failed: false,
             schema,
             schema_checked: AtomicBool::new(false),
+            spare: Spare::default(),
         })
     }
 
@@ -274,6 +308,11 @@ impl WriteTransaction {
     /// schema already.
     pub(crate) fn schema_checked(&self) -> &AtomicBool {
         &self.schema_checked
+    }
+
+    /// The object layer's buffers, to take from and give back to.
+    pub(crate) fn spare(&mut self) -> &mut Spare {
+        &mut self.spare
     }
 
     /// The longest key a tree of this file holds.
@@ -1297,4 +1336,27 @@ fn corrupted(shared: &Shared, reason: &str) -> Error {
     shared
         .pager
         .corrupted(format!("the retained tree: {reason}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SPARE_MOST, kept};
+
+    #[test]
+    fn a_buffer_is_kept_cleared_unless_it_grew_past_the_limit() {
+        let mut small = Vec::with_capacity(100);
+
+        small.extend_from_slice(&[1u8; 50]);
+
+        let small = kept(small);
+
+        assert!(small.is_empty());
+        assert!(small.capacity() >= 100);
+        assert_eq!(kept(vec![0u8; SPARE_MOST + 1]).capacity(), 0);
+
+        // The limit counts bytes, not elements.
+        let pairs: Vec<(usize, usize)> = Vec::with_capacity(SPARE_MOST / 8);
+
+        assert_eq!(kept(pairs).capacity(), 0);
+    }
 }

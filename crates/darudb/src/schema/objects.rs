@@ -21,7 +21,7 @@ use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
 };
 use crate::format::object::{Object, Value};
-use crate::txn::{Range, ReadTransaction, Seeker, WriteTransaction};
+use crate::txn::{Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
 
 /// The tree of the object layer's own records: the stored schema and the
 /// auto-increment counters.
@@ -294,6 +294,17 @@ fn too_long(collection: &CollectionDef, max_key_len: usize) -> Error {
 
 /// The key encoding of `key`, once it is known to be a key of `collection`.
 pub(crate) fn key_bytes(collection: &CollectionDef, key: &Value) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+
+    key_bytes_into(collection, key, &mut out).map(|()| out)
+}
+
+/// Writes [`key_bytes`] into `out`.
+pub(crate) fn key_bytes_into(
+    collection: &CollectionDef,
+    key: &Value,
+    out: &mut Vec<u8>,
+) -> Result<()> {
     let fits = matches!(
         (collection.key_field().map(|field| &field.kind), key),
         (Some(Kind::Int), Value::Int(_))
@@ -307,7 +318,7 @@ pub(crate) fn key_bytes(collection: &CollectionDef, key: &Value) -> Result<Vec<u
         });
     }
 
-    key::encoded(key).map_err(internal)
+    key::encode(key, out).map_err(internal)
 }
 
 pub(crate) fn internal(reason: &str) -> Error {
@@ -469,6 +480,24 @@ impl IndexKeys {
 
         entries.reserve(indexes);
         entries
+    }
+
+    /// Room for the entries of a collection with `indexes` indexes, one
+    /// each, in the buffers `spare` lends.
+    fn lent(spare: &mut Spare, indexes: usize) -> Self {
+        let mut entries = Self {
+            bytes: std::mem::take(&mut spare.entries),
+            ends: std::mem::take(&mut spare.ends),
+        };
+
+        entries.reserve(indexes);
+        entries
+    }
+
+    /// Gives the buffers back to `spare`.
+    fn give_back(self, spare: &mut Spare) {
+        spare.entries = kept(self.bytes);
+        spare.ends = kept(self.ends);
     }
 
     /// Makes room for one more entry in each of `indexes` indexes.
@@ -964,12 +993,12 @@ impl<'a> CollectionReader<'a> {
 
 /// An object about to be stored: what the checks and the trees need of it.
 struct Written<'r> {
-    key: Vec<u8>,
+    key: &'r [u8],
     /// The primary key, which the write returns.
     key_value: Value,
     record: &'r [u8],
     /// The object's entries in the indexes of its collection.
-    entries: IndexKeys,
+    entries: &'r IndexKeys,
     /// What the write does to the auto-increment counter.
     numbering: Numbering,
 }
@@ -1041,12 +1070,19 @@ fn object_written(
     key: &[u8],
 ) -> Result<(Vec<u8>, IndexKeys)> {
     let slots = codec::Slots::of(object, &collection.fields, order);
-    let record = codec::record_of_slots(object, &slots, &collection.fields, &|id| {
-        schema.schema.key_kind(id)
-    })
+    let mut record = Vec::new();
+
+    codec::record_of_slots(
+        object,
+        &slots,
+        &collection.fields,
+        &|id| schema.schema.key_kind(id),
+        &mut record,
+    )
     .map_err(|message| Error::InvalidArgument {
         message: format!("an object of `{}`: {message}", collection.name),
     })?;
+
     let mut entries = IndexKeys::with_capacity(collection.indexes.len());
 
     for (index_position, index) in collection.indexes.iter().enumerate() {
@@ -1113,10 +1149,13 @@ fn changed(
     }
 
     // Only a change can leave out a required field now: one made null.
-    let record =
-        codec::flat_record(&present, fields, None).map_err(|message| Error::InvalidArgument {
+    let mut record = Vec::new();
+
+    codec::flat_record(&present, fields, None, &mut record).map_err(|message| {
+        Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
-        })?;
+        }
+    })?;
 
     if record == stored {
         return Ok(None);
@@ -1530,16 +1569,21 @@ impl<'a> CollectionWriter<'a> {
             Some(number) => Value::Int(number),
             None => given.unwrap_or(Value::Null),
         };
-        let key = key_bytes(collection, &key_value)?;
-        let stored = codec::flat_record(
+        let spare = self.txn.spare();
+        let mut key = std::mem::take(&mut spare.key);
+        let mut stored = std::mem::take(&mut spare.record);
+        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+
+        key_bytes_into(collection, &key_value, &mut key)?;
+        codec::flat_record(
             &present,
             &collection.fields,
             assigned.map(|number| (key_position, number)),
+            &mut stored,
         )
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
 
         for (index_position, index) in collection.indexes.iter().enumerate() {
             let (position, field) = collection
@@ -1576,17 +1620,21 @@ impl<'a> CollectionWriter<'a> {
             value_entries(&mut entries, index_position, index, &value, &key)?;
         }
 
-        self.store(
+        let stored_key = self.store(
             collection,
             Written {
-                key,
+                key: &key,
                 key_value,
                 record: &stored,
-                entries,
+                entries: &entries,
                 numbering,
             },
             replace,
-        )
+        );
+
+        self.txn.spare().record = kept(stored);
+        self.give_back(key, entries);
+        stored_key
     }
 
     /// Writes the object whose record a [`TypedWriter`] encoded, whose
@@ -1674,8 +1722,11 @@ impl<'a> CollectionWriter<'a> {
                 (given.unwrap_or(Value::Null), numbering)
             }
         };
-        let key = key_bytes(collection, &key_value)?;
-        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
+        let spare = self.txn.spare();
+        let mut key = std::mem::take(&mut spare.key);
+        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+
+        key_bytes_into(collection, &key_value, &mut key)?;
 
         for (index_position, index) in collection.indexes.iter().enumerate() {
             let position = field_position(collection, index.field)?;
@@ -1705,17 +1756,37 @@ impl<'a> CollectionWriter<'a> {
         #[cfg(test)]
         crate::testing::TYPED_AS_ENCODED.set(crate::testing::TYPED_AS_ENCODED.get() + 1);
 
-        self.store(
+        let stored_key = self.store(
             collection,
             Written {
-                key,
+                key: &key,
                 key_value,
                 record,
-                entries,
+                entries: &entries,
                 numbering,
             },
             replace,
-        )
+        );
+
+        self.give_back(key, entries);
+        stored_key
+    }
+
+    /// Gives a write's key and entries back to the transaction's buffers,
+    /// for the next write.
+    fn give_back(&mut self, key: Vec<u8>, entries: IndexKeys) {
+        let spare = self.txn.spare();
+
+        spare.key = kept(key);
+        entries.give_back(spare);
+    }
+
+    /// The transaction's buffers, for a [`TypedWriter`] to encode a record
+    /// in.
+    ///
+    /// [`TypedWriter`]: super::typed::TypedWriter
+    pub(crate) fn spare(&mut self) -> &mut Spare {
+        self.txn.spare()
     }
 
     fn record_object(&self, record: &[u8]) -> Result<Object> {
@@ -1777,14 +1848,22 @@ impl<'a> CollectionWriter<'a> {
             Numbering::Kept
         };
         let key_value = slots.get(key_position).cloned().unwrap_or(Value::Null);
-        let key = key_bytes(collection, &key_value)?;
-        let record = codec::record_of_slots(&object, &slots, &collection.fields, &|id| {
-            schema.schema.key_kind(id)
-        })
+        let spare = self.txn.spare();
+        let mut key = std::mem::take(&mut spare.key);
+        let mut record = std::mem::take(&mut spare.record);
+        let mut entries = IndexKeys::lent(spare, collection.indexes.len());
+
+        key_bytes_into(collection, &key_value, &mut key)?;
+        codec::record_of_slots(
+            &object,
+            &slots,
+            &collection.fields,
+            &|id| schema.schema.key_kind(id),
+            &mut record,
+        )
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-        let mut entries = IndexKeys::with_capacity(collection.indexes.len());
 
         for (position, index) in collection.indexes.iter().enumerate() {
             let (at, field) = collection
@@ -1798,17 +1877,21 @@ impl<'a> CollectionWriter<'a> {
             found_entries(&mut entries, position, index, field, slots.get(at), &key)?;
         }
 
-        self.store(
+        let stored_key = self.store(
             collection,
             Written {
-                key,
+                key: &key,
                 key_value,
                 record: &record,
-                entries,
+                entries: &entries,
                 numbering,
             },
             replace,
-        )
+        );
+
+        self.txn.spare().record = kept(record);
+        self.give_back(key, entries);
+        stored_key
     }
 
     /// Stores an object of `collection` with its index entries, after the
@@ -1860,7 +1943,7 @@ impl<'a> CollectionWriter<'a> {
 
         let mut old = IndexKeys::default();
         let previous = if replace {
-            Some(self.replace_record(collection, &key, record, &entries, &mut old)?)
+            Some(self.replace_record(collection, key, record, entries, &mut old)?)
         } else {
             None
         };
@@ -1868,7 +1951,7 @@ impl<'a> CollectionWriter<'a> {
         let checked = self
             .raised(collection, numbering, replaced)
             .and_then(|raised| {
-                self.check_unique(collection, &key, &entries, &old)?;
+                self.check_unique(collection, key, entries, &old)?;
 
                 Ok(raised)
             });
@@ -1876,7 +1959,7 @@ impl<'a> CollectionWriter<'a> {
             Ok(raised) => raised,
             Err(error) => {
                 if let Some(previous) = previous {
-                    self.put_back(collection, &key, previous)?;
+                    self.put_back(collection, key, previous)?;
                 }
 
                 return Err(error);
@@ -1888,7 +1971,7 @@ impl<'a> CollectionWriter<'a> {
         if !replace
             && !self
                 .txn
-                .insert_new_in(&records(collection.id), &key, record)?
+                .insert_new_in(&records(collection.id), key, record)?
         {
             return Err(Error::DuplicateKey {
                 message: format!(
@@ -1915,7 +1998,7 @@ impl<'a> CollectionWriter<'a> {
                 let index = &collection.indexes[position];
 
                 self.txn
-                    .insert_in(&index_tree(index.id), entry, entry_value(index, &key))?;
+                    .insert_in(&index_tree(index.id), entry, entry_value(index, key))?;
             }
         }
 

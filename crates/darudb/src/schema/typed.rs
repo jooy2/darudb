@@ -36,7 +36,7 @@ use crate::format::object::codec::{
     self, BYTES, FALSE, FLOAT, INT, LINK, LIST, OBJECT, STRING, TRUE,
 };
 use crate::format::object::schema::{Fields, Kind, OpenSchema, StoredSchema};
-use crate::txn::{ReadTransaction, WriteTransaction};
+use crate::txn::{ReadTransaction, WriteTransaction, kept};
 
 use super::declare::{Collection, Embedded, Field, Type};
 use super::objects::{
@@ -1281,11 +1281,6 @@ impl<'a, T: CollectionType> TypedReader<'a, T> {
 pub struct TypedWriter<'a, T> {
     inner: CollectionWriter<'a>,
     typed: Arc<Typed>,
-    /// The record of the object being written, kept for the next write.
-    record: Vec<u8>,
-    /// Where each field of `record` lies, as
-    /// [`CollectionWriter::write_typed`] takes them, kept with it.
-    placed: Vec<(usize, usize)>,
     target: PhantomData<fn() -> T>,
 }
 
@@ -1305,8 +1300,6 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
         Ok(Self {
             inner: CollectionWriter::at(txn, schema, typed.position),
             typed,
-            record: Vec::new(),
-            placed: Vec::new(),
             target: PhantomData,
         })
     }
@@ -1340,27 +1333,24 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     /// a key in a collection keyed by an auto-increment gets the next number
     /// in it here, rather than the engine writing the record again to put
     /// the number in, and where each field lies goes with it, so that the
-    /// engine does not read the record again to find them.
+    /// engine does not read the record again to find them. Both are written
+    /// in buffers the transaction lends, since a writer is often made for
+    /// one write.
     fn write(&mut self, object: &T, replace: bool) -> Result<T::Key> {
-        let Self {
-            inner,
-            typed,
-            record,
-            placed,
-            ..
-        } = self;
+        let Self { inner, typed, .. } = self;
+        let spare = inner.spare();
+        let mut record = std::mem::take(&mut spare.record);
+        let mut placed = std::mem::take(&mut spare.placed);
         let mut assigned = None;
         let fields = typed.layout.fields.len();
 
-        record.clear();
-        placed.clear();
-        // Room for most records at once: a writer is often made for one
-        // write, and growing its buffers from nothing took an eighth of it.
+        // Room for most records at once: growing the buffers from nothing
+        // took an eighth of a write.
         record.reserve(16 * (fields + 1));
         placed.reserve(fields);
         encode(
             &typed.layout,
-            record,
+            &mut record,
             |slot, value| object.write_field(slot, value),
             |position, value| {
                 if typed.auto != Some(position) {
@@ -1375,9 +1365,12 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
             |position, at| placed.push((position, at)),
         )?;
 
-        let key = inner.write_typed(record, placed, assigned, replace)?;
+        let key = inner.write_typed(&record, &placed, assigned, replace);
+        let spare = inner.spare();
 
-        T::Key::from_value(key)
+        spare.record = kept(record);
+        spare.placed = kept(placed);
+        T::Key::from_value(key?)
     }
 
     /// Inserts `object` and returns its primary key. In a collection keyed

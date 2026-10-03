@@ -849,9 +849,9 @@ pub(crate) fn unzigzag(value: u64) -> i64 {
 /// The primary key kinds of the collections links point to, by collection id.
 pub(crate) type KeyKinds<'a> = &'a dyn Fn(u64) -> Option<Kind>;
 
-/// The record of `object`, checked against `fields`: every name is a field,
-/// every value has its field's type, and every required field without a
-/// default has a value. A required field left out is written with its
+/// Writes the record of `object` into `out`, checked against `fields`:
+/// every name is a field, every value has its field's type, and every
+/// required field without a default has a value. A required field left out is written with its
 /// default, so that a later change of the default changes no object already
 /// written; an optional one left out or null is not written. `slots` holds
 /// the object's value of each field, and the value of fields the object
@@ -872,17 +872,20 @@ pub(crate) fn record_of_slots(
     slots: &Slots<'_>,
     fields: &Fields,
     keys: KeyKinds<'_>,
-) -> Result<Vec<u8>, String> {
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
     // Room for the fields of a small object, which most are, so that the
     // record is written without growing its buffer.
-    let mut out = Vec::with_capacity(16 * (fields.list.len() + 1));
-    let reserved = reserve_count(fields, &mut out);
-    let written = encode_fields(fields, keys, &mut out, |position, _| slots.get(position));
+    out.reserve(16 * (fields.list.len() + 1));
+
+    let start = out.len();
+    let reserved = reserve_count(fields, out);
+    let written = encode_fields(fields, keys, out, |position, _| slots.get(position));
 
     refuse_unknown(object, fields, &written, slots.known)?;
-    set_count(&mut out, 0, reserved, written?, fields);
+    set_count(out, start, reserved, written?, fields);
 
-    Ok(out)
+    Ok(())
 }
 
 /// [`record_of_slots`] for an object whose values it finds itself.
@@ -893,8 +896,16 @@ pub(crate) fn record_of(
     keys: KeyKinds<'_>,
 ) -> Result<Vec<u8>, String> {
     let order = NameOrder::of(fields);
+    let mut out = Vec::new();
 
-    record_of_slots(object, &Slots::of(object, fields, &order), fields, keys)
+    record_of_slots(
+        object,
+        &Slots::of(object, fields, &order),
+        fields,
+        keys,
+        &mut out,
+    )
+    .map(|()| out)
 }
 
 /// The value an object holds for each field of a collection, at the field's
@@ -1354,9 +1365,9 @@ pub(crate) fn stored_flat_fields<'a>(
     Ok(present)
 }
 
-/// The record the file holds for the fields `present` that [`flat_fields`]
-/// read, under the same `fields`: the bytes [`record_of`] writes for the
-/// object they make. A required field left out is written with its default,
+/// Writes into `out` the record the file holds for the fields `present`
+/// that [`flat_fields`] read, under the same `fields`: the bytes
+/// [`record_of`] writes for the object they make. A required field left out is written with its default,
 /// and an optional one is not written. `assigned` is the position in the
 /// list of the auto-increment key the record left out, and the number it
 /// gets.
@@ -1366,7 +1377,8 @@ pub(crate) fn flat_record(
     present: &[(usize, FieldRef<'_>)],
     fields: &Fields,
     assigned: Option<(usize, i64)>,
-) -> Result<Vec<u8>, String> {
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
     let given = |position: usize| {
         present
             .iter()
@@ -1390,26 +1402,25 @@ pub(crate) fn flat_record(
         }
     }
 
-    let mut out = Vec::with_capacity(16 * (fields.list.len() + 1));
-
-    write_varint(count, &mut out);
+    out.reserve(16 * (fields.list.len() + 1));
+    write_varint(count, out);
 
     for (position, field) in fields.list.iter().enumerate() {
         match (given(position), &field.default) {
             (Some(value), _) => {
-                write_varint(field.id, &mut out);
-                write_ref(value, &mut out);
+                write_varint(field.id, out);
+                write_ref(value, out);
             }
             (None, Some(default)) if !field.optional => {
-                write_varint(field.id, &mut out);
-                encode_value(default, &field.kind, &|_| None, &mut out)
+                write_varint(field.id, out);
+                encode_value(default, &field.kind, &|_| None, out)
                     .map_err(|expected| format!("`{}` holds {expected}", field.name))?;
             }
             (None, _) => {}
         }
     }
 
-    Ok(out)
+    Ok(())
 }
 
 /// Writes a value [`find_field`] or [`flat_fields`] read, as a record holds
