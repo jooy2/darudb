@@ -24,7 +24,7 @@ DaruDB is not published yet, so for now you build it from source, add it to your
 
 ::: lang dart
 
-- **Dart 3.10 or later**, or Flutter 3.38 or later: the package builds its native library in a build hook, which those releases made stable.
+- **Dart 3.10 or later**, or Flutter 3.38 or later: the package provides its native library through a build hook, which those releases made stable.
 - **Rust**, installed with [rustup](https://rustup.rs). Until the package is published with prebuilt libraries, its build hook compiles the engine, with the compiler `packages/dart/darudb/native/rust-toolchain.toml` pins, which `rustup` installs on the first build with the targets it lists.
 
 :::
