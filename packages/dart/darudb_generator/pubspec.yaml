@@ -1,0 +1,22 @@
+name: darudb_generator
+description: Generates the schema, the query builder and copyWith of a class annotated for DaruDB, with build_runner.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+# The oldest of each is the newest that runs on Dart 3.10, the package's
+# minimum; the generator is checked against both ends.
+dependencies:
+  analyzer: ">=13.0.0 <15.0.0"
+  build: ^4.0.7
+  source_gen: ">=4.2.4 <5.0.0"
+
+dev_dependencies:
+  build_runner: ^2.10.0
+  build_test: ^3.5.0
+  darudb:
+    path: ../darudb
+  lints: ^6.1.0
+  test: ^1.30.0

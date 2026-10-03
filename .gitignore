@@ -45,6 +45,16 @@ packages/node/native.d.ts
 # Per-platform packages, created by the napi CLI at release time.
 packages/node/npm/
 
+# The Dart packages. `.dart_tool/` holds what pub and the build hooks make,
+# the native library among it, and `build_runner` writes the `.g.dart` parts
+# of the tests' models. A library package keeps no `pubspec.lock`: its users
+# resolve its dependencies their own way, and CI checks both ends of the
+# generator's constraints.
+packages/dart/*/.dart_tool/
+packages/dart/*/pubspec.lock
+packages/dart/*/test/**/*.g.dart
+packages/dart/*/build/
+
 # VitePress files
 docs/.vitepress/.temp
 docs/.vitepress/.temp/*
