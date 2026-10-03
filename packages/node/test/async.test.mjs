@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { linkSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -392,28 +392,35 @@ describe('asynchronous transactions', () => {
 describe('writes on one file', () => {
   it('queue in this process, however many there are and wherever they come from', async (context) => {
     const { path, db } = await withData(context);
+    // A hard link names the file another way on every system, Windows
+    // included, where a symbolic link needs a privilege that a test cannot
+    // count on.
+    const hard = join(dirname(path), 'hard.darudb');
     let link = path;
 
-    // A symbolic link needs a privilege on Windows that a test cannot count on.
+    linkSync(path, hard);
+
     if (process.platform !== 'win32') {
       link = join(dirname(path), 'link.darudb');
       symlinkSync(path, link);
     }
 
-    // Two more handles to the same file, one by another name. More writes
-    // than the thread pool has threads: waiting there would leave none.
+    // More handles to the same file, two by other names. More writes than
+    // the thread pool has threads: waiting there would leave none.
     const other = await Database.openAsync(path, { schema: v1 });
     const linked = await Database.openAsync(link, { schema: v1 });
+    const hardLinked = await Database.openAsync(hard, { schema: v1 });
 
     context.after(() => {
       other.close();
       linked.close();
+      hardLinked.close();
     });
 
-    const handles = [db, other, linked];
+    const handles = [db, other, linked, hardLinked];
     const keys = await Promise.all(
       Array.from({ length: 30 }, (_, n) =>
-        handles[n % 3].writeAsync(async (txn) => {
+        handles[n % handles.length].writeAsync(async (txn) => {
           await delay(1);
 
           return txn.collection('users').insert({ name: `user ${n}` });
@@ -433,9 +440,19 @@ describe('writes on one file', () => {
 
   it('do not nest, asynchronous or not', async (context) => {
     const { path, db } = await withData(context);
-    const other = await Database.openAsync(path, { schema: v1 });
+    const hard = join(dirname(path), 'hard.darudb');
 
-    context.after(() => other.close());
+    linkSync(path, hard);
+
+    // One handle by the file's own name and one by a hard link: the package
+    // has to tell that both are the file the write holds, on every system.
+    const other = await Database.openAsync(path, { schema: v1 });
+    const hardLinked = await Database.openAsync(hard, { schema: v1 });
+
+    context.after(() => {
+      other.close();
+      hardLinked.close();
+    });
 
     await db.writeAsync(async (txn) => {
       await assertRejects(
@@ -449,6 +466,14 @@ describe('writes on one file', () => {
       assert.throws(
         () => other.write(() => {}),
         (error) => error.code === 'INVALID_ARGUMENT'
+      );
+      assert.throws(
+        () => hardLinked.write(() => {}),
+        (error) => error.code === 'INVALID_ARGUMENT'
+      );
+      await assertRejects(
+        hardLinked.writeAsync(() => {}),
+        'INVALID_ARGUMENT'
       );
       await txn.collection('users').insert({ name: 'Dave' });
     });

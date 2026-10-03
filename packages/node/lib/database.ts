@@ -11,7 +11,7 @@
  * and so hold the writer lock, by forgetting it.
  */
 
-import { realpathSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import native = require('../native.js');
@@ -418,15 +418,14 @@ function runsOf<M>(options: OpenOptions<M>): Map<number, Migration<M>['run']> {
 
 /**
  * The file at `path`, as the engine tells one open file from another: by
- * device and inode, or on Windows by its real path. Two handles to one file
- * get the same key however each named it, so their writes queue together.
+ * device and inode, which on Windows Node.js fills with the volume serial
+ * number and the file index, the two the engine reads there. Two handles to
+ * one file get the same key however each named it, through a link or another
+ * spelling, so their writes queue together. `bigint`, because a file index
+ * does not fit in a number.
  */
 function fileKeyOf(path: string): string {
   try {
-    if (process.platform === 'win32') {
-      return realpathSync.native(path);
-    }
-
     const { dev, ino } = statSync(path, { bigint: true });
 
     return `${dev}:${ino}`;
