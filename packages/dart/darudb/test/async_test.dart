@@ -142,6 +142,36 @@ void main() {
     },
   );
 
+  test('a write inside a write on the same file is refused', () async {
+    final db = await Database.openAsync(
+      path,
+      schema: const Schema(1, [userSchema]),
+    );
+
+    await expectLater(
+      db.writeAsync((txn) => db.writeAsync((inner) => 1)),
+      failsWith('INVALID_ARGUMENT'),
+    );
+    await expectLater(
+      db.writeAsync((txn) => db.syncAsync()),
+      failsWith('INVALID_ARGUMENT'),
+    );
+    // Another file's write is not nested.
+    final other = await Database.openAsync(
+      '${directory.path}/other.darudb',
+      schema: const Schema(1, [userSchema]),
+    );
+
+    await db.writeAsync(
+      (txn) => other.writeAsync(
+        (inner) => inner.collection(userSchema).insert(const User(name: 'a')),
+      ),
+    );
+    expect(other.read((txn) => txn.collection(userSchema).count()), 1);
+    await other.closeAsync();
+    await db.closeAsync();
+  });
+
   test('a failing function or call aborts the write, with the code', () async {
     final db = await Database.openAsync(
       path,

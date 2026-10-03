@@ -90,6 +90,11 @@ Future<_Reply> _call(
   return completer.future;
 }
 
+/// The zone value that names the files whose write transaction the code
+/// running in the zone is inside, so that a write that would wait for its
+/// own turn is refused rather than waiting for ever.
+const Symbol _insideWrite = #darudbInsideWrite;
+
 /// The asynchronous writes of this isolate, queued by file.
 final class _Turns {
   final Map<String, (Future<void>, int)> _queues = {};
@@ -99,7 +104,20 @@ final class _Turns {
   bool isHeld(String file) => _queues.containsKey(file);
 
   /// Runs [body] once every write queued on [file] before it has finished.
+  /// Called from inside a write transaction's function on the same file, it
+  /// fails with `INVALID_ARGUMENT`: that turn ends only when the function
+  /// does.
   Future<T> inTurn<T>(String file, Future<T> Function() body) async {
+    final inside = Zone.current[_insideWrite];
+
+    if (inside is Set<String> && inside.contains(file)) {
+      throw invalidArgument(
+        'write transactions do not nest: inside a write function, a write, '
+        'sync, close or compaction on the same file would wait for the '
+        'function itself',
+      );
+    }
+
     final (previous, holders) = _queues[file] ?? (Future<void>.value(), 0);
     final done = Completer<void>();
 
@@ -598,7 +616,13 @@ Future<R> _writeAsync<R>(
   );
 
   try {
-    final result = await fn(txn);
+    final inside = Zone.current[_insideWrite];
+    final result = await runZoned(
+      () => fn(txn),
+      zoneValues: {
+        _insideWrite: {if (inside is Set<String>) ...inside, database._file},
+      },
+    );
 
     await txn._serial.drain();
     await _call(
