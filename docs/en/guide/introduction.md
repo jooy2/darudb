@@ -9,6 +9,18 @@ DaruDB is an embedded database that keeps an application's data in one local fil
 
 An embedded database runs inside your program rather than beside it. There is no server to install, start or connect to: your program opens a file, reads and writes objects in it, and closes it. That makes it the kind of database a desktop application, a mobile app, a command-line tool or a small server keeps its own data in.
 
+## Packages
+
+| Package | Language | What it is |
+| --- | --- | --- |
+| Crate `darudb` | Rust | The engine itself, and a library a Rust program uses directly |
+| npm package `darudb` | Node.js | A binding over the engine, with a typed TypeScript API, synchronous and asynchronous |
+| Dart package | Dart | Planned: a binding for Flutter apps and Dart programs |
+
+The Rust crate is not only the core the other packages are built on. A Rust program depends on it the way a Node.js program depends on the npm package, and gets the same collections, queries, migrations and tools. It also has two things the bindings do not: the [storage kernel](../engine/storage-kernel.md) of named byte trees under the objects, and the [calls bindings are built on](../engine/bindings.md).
+
+Choose your language with the switch at the top of the sidebar. The examples on every page, and the API and Types sections, follow it, and the site remembers the choice.
+
 ## What it is designed for
 
 Five requirements shape every decision, in this order of priority.
@@ -23,33 +35,16 @@ These are goals. Each one becomes a claim when the benchmark or the test suite t
 
 ## How it is built
 
-The engine is written once, in Rust. The Rust crate is the engine itself, and the Node.js and Dart packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language.
-
-Inside the engine, each layer only uses the layers below it:
-
-| Layer | What it does |
-| --- | --- |
-| Objects, schema, queries | Collections, indexes, migrations, and the queries run against them |
-| Transactions and locks | Snapshots for readers, one writer at a time, coordinated between processes through file locks |
-| Copy-on-write B+tree | Stores records and indexes without ever overwriting a committed page |
-| Pages | Reads and writes fixed-size pages, with a checksum on each and, when enabled, encryption |
-| File format | What every byte of the file means, with the format version in the header |
-
-The file is read and written at explicit offsets and never mapped into memory. Mapping would give faster reads in some cases, but it cannot be made safe when another process changes the file, and it does not combine with page encryption. The performance goal is to be met without it.
+The engine is written once, in Rust, and the Node.js and Dart packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
 
 ## Where it stands
 
-The storage kernel works:
+- **Storage.** A copy-on-write tree of pages, each verified against the check its parent recorded before it is used, so a damaged page is reported rather than read. A commit is durable when it returns; a deferred commit returns before the disk has it and reaches it within a second by default.
+- **Encryption.** A database created with a key or a password is encrypted and authenticated, every page of it, and changing the password re-encrypts nothing.
+- **Several processes.** Processes share one file through the operating system's file locks alone: one writes at a time, readers never wait, and a process that dies leaves nothing behind.
+- **Objects.** Schemas, collections, indexes, links and embedded objects, queries built in code or written as text, and migrations from one schema version to the next.
+- **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
+- **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
+- **Packages.** The Rust crate and the Node.js package have all of the above. Nothing is published yet: both are built from source.
 
-- The Rust crate stores named trees of byte keys and byte values in read and write transactions. A commit is durable when it returns, and a file opened after a crash or a power cut holds the last commit that returned. A deferred commit trades that for speed: it returns without waiting for the disk, survives a crash of the process, and reaches the disk within a second by default.
-- Every page is verified against the check its parent recorded before it is used, so a damaged page is reported rather than read.
-- A database created with a key or a password is encrypted and authenticated, every page of it, and changing the password re-encrypts nothing.
-- Several processes can have one file open at once. They coordinate through file locks alone: one writes at a time, readers never wait, and a process that dies leaves nothing behind.
-- The crash suites back this up, with encryption on and off: thousands of simulated power cuts, each keeping an arbitrary part of the writes in flight, hundreds of real processes killed in the middle of a commit, and several processes reading and writing one file while random ones are killed.
-- The Node.js package opens and closes a database through that engine, and passes its errors on with the same codes. Transactions reach it once the engine's API has settled.
-
-The work ahead, in order:
-
-1. **Objects and queries**: schemas, indexes, queries and migrations, with benchmarks.
-1. **Bindings and release**: the Dart package and prebuilt binaries for every supported platform.
-1. **Tools**: integrity check, salvage, backup and compaction.
+Still to come: the comparison with other embedded databases that the performance goal is measured by, the Dart package, and prebuilt binaries for every supported platform.

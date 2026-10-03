@@ -5,12 +5,23 @@ order: 2
 
 # Getting started
 
-DaruDB is not published yet, so for now you build it from source and open a first database from Rust or Node.js.
+DaruDB is not published yet, so for now you build it from source, add it to your project by path, and open a first database.
 
 ## Requirements
 
-- **Rust**, installed with [rustup](https://rustup.rs). The repository pins the compiler version in `rust-toolchain.toml`, and `rustup` installs that version on the first build. A program that depends on the `darudb` crate needs Rust 1.85 or later.
-- **Node.js 20 or later**, for the Node.js package. Building it from source needs a little more, because of its build tool: 20.17 or later on the 20 line, or 22.13 or later.
+::: lang rust
+
+- **Rust**, installed with [rustup](https://rustup.rs). The repository pins its compiler in `rust-toolchain.toml`, and `rustup` installs that version on the first build. A program that depends on the `darudb` crate needs Rust 1.85 or later.
+
+:::
+
+::: lang node
+
+- **Node.js 20 or later.** Building the package from source needs a little more, because of its build tool: 20.17 or later on the 20 line, or 22.13 or later.
+- **Rust**, installed with [rustup](https://rustup.rs), since the package's native addon is compiled from the engine. The repository pins the compiler in `rust-toolchain.toml`, and `rustup` installs it on the first build.
+
+:::
+
 - **Git**, to clone the repository.
 
 DaruDB runs on Unix-like systems and on Windows. Network file systems such as NFS and SMB are not supported, because their file locks and syncs do not keep the promises a database relies on.
@@ -20,12 +31,19 @@ DaruDB runs on Unix-like systems and on Windows. Network file systems such as NF
 ```bash
 git clone https://github.com/jooy2/darudb.git
 cd darudb
-cargo test --workspace
+```
+
+::: lang rust
+
+```bash
+cargo test -p darudb
 ```
 
 `cargo test` builds the engine and runs its tests, which is the quickest way to know your toolchain works.
 
-For the Node.js package, build the native addon in its folder:
+:::
+
+::: lang node
 
 ```bash
 cd packages/node
@@ -33,13 +51,13 @@ npm install
 npm run build
 ```
 
-`npm run build` compiles the engine and the binding into one addon for your platform, and writes the files that load it next to it.
+`npm run build` compiles the engine and the binding into one addon for your platform, writes the files that load it, and compiles the TypeScript API into `dist/`. `npm test` then runs the package's tests against that build.
 
-## Open a database
+:::
 
-A database is one file. Opening a path where nothing exists creates the file; opening an existing file checks that it is a DaruDB database this version can read.
+## Add it to a project
 
-### Rust
+::: lang rust
 
 Add the crate by path until it is published:
 
@@ -47,6 +65,26 @@ Add the crate by path until it is published:
 [dependencies]
 darudb = { path = "../darudb/crates/darudb" }
 ```
+
+:::
+
+::: lang node
+
+Install the folder you built, which links it into your project:
+
+```bash
+npm install ../darudb/packages/node
+```
+
+The package is TypeScript-first: its declarations ship with it, and the types of your objects follow from the schema you declare. It works from JavaScript as well.
+
+:::
+
+## Open a database
+
+A database is one file. Opening a path where nothing exists creates the file; opening an existing file checks that it is a DaruDB database this build can read.
+
+::: lang rust
 
 ```rust
 use darudb::{Database, OpenOptions};
@@ -62,107 +100,127 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-The storage kernel stores named trees of byte keys and byte values. Every change goes through a write transaction and becomes visible, and durable, together when `commit` returns. A read transaction sees one commit for as long as it lives, whatever is committed after it began.
+:::
 
-```rust
-use darudb::Database;
+::: lang node
 
-fn main() -> Result<(), darudb::Error> {
-    let db = Database::open("app.darudb")?;
-
-    let mut txn = db.begin_write()?;
-    txn.insert("users", b"alice", b"admin")?;
-    txn.insert("users", b"bob", b"member")?;
-    txn.commit()?;
-
-    let read = db.begin_read()?;
-    assert_eq!(read.get("users", b"alice")?, Some(b"admin".to_vec()));
-
-    // Keys come back in byte order.
-    for entry in read.range("users", b"a".as_slice()..b"c".as_slice())? {
-        let (key, value) = entry?;
-        println!("{} = {}", String::from_utf8_lossy(&key), String::from_utf8_lossy(&value));
-    }
-
-    Ok(())
-}
-```
-
-`range_backward` walks the same keys from the last down, which is how to read the newest entries of a tree whose keys grow.
-
-A write transaction dropped without `commit` is aborted, and nothing it did reaches the file. There is one write transaction at a time; `begin_write` waits for the one already running for up to the busy timeout, five seconds unless `OpenOptions::busy_timeout` says otherwise.
-
-`commit` waits for the disk before it returns. `commit_deferred` does not: readers see the changes at once, and they reach the disk together with later commits, at the next `commit`, at `Database::sync`, when the database is closed, or once they have waited one second by default. A crash of the process loses none of them. A power cut can undo the newest ones, but never leaves a gap and never damages the file. `OpenOptions::max_unsynced_time` and `OpenOptions::max_unsynced_pages` set how much may wait.
-
-Several processes can have one file open at once. Each sees the others' commits as soon as they are made, one writes at a time, and a reader never waits for a writer. `begin_write` waits for a writer in another process as it does for one in its own, up to the busy timeout. The processes coordinate through the operating system's file locks and nothing else, so a process that dies at any moment leaves nothing the others have to clean up. Those locks, and the syncs a commit waits for, work only on a local disk: a database on a network file system such as NFS or SMB is refused with `UNSUPPORTED_FILE_SYSTEM`. Two more rules come with the locks. Nothing else in a process that has a database open may open the file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. And on iOS, an app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
-
-Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. `OpenOptions::cache_size` sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
-
-Opened with a schema, a database also holds collections of typed objects, kept in trees of the engine's own that `tree_names` does not list. [Collections and objects](./objects.md) shows how.
-
-#### Encryption
-
-A database created with a key or a password is encrypted: every page, keys, values and tree names included. Every page is authenticated, and so is the header's record of each commit, so a changed byte is reported as `CORRUPTED` rather than read.
-
-```rust
-use darudb::OpenOptions;
-
-fn main() -> Result<(), darudb::Error> {
-    let db = OpenOptions::new()
-        .password("correct horse battery staple")
-        .open("secret.darudb")?;
-
-    db.set_password("a new password")?;
-    db.close()
-}
-```
-
-Pages are encrypted with XAES-256-GCM on processors with AES instructions and with XChaCha20-Poly1305 elsewhere, whichever is faster on the machine that creates the database. `OpenOptions::key` takes a 32-byte key instead of a password, such as one kept in the operating system's keystore. A password is hashed with Argon2id, which takes tens of milliseconds by default; `OpenOptions::password_hashing` raises or lowers that cost. Changing the key or the password re-encrypts nothing, and once it returns, the old one no longer opens the file. A plain database stays plain, and an encrypted one cannot be opened without its key: keep it where it cannot be lost.
-
-### Node.js
-
-```js
+```ts
 import { Database } from 'darudb';
 
 const db = Database.open('app.darudb');
 
 console.log(`page size: ${db.pageSize} bytes`);
 db.close();
+
+// Open only if the file is already there.
+Database.open('app.darudb', { create: false }).close();
 ```
 
-`Database.open` takes an options object as its second argument: `create: false` refuses to create a missing file, `pageSize` sets the page size of a new one, `cacheSize` the memory the page cache may take, in bytes, and `key` or `password` encrypts a new file or opens an encrypted one. With a `schema`, the database holds collections of objects that transactions read and write and queries find: [Node.js](./nodejs.md) shows how.
+:::
 
-## Errors
+## Store your first objects
 
-Every error carries a `code` that names the failure. The code is the same in Rust (`Error::code`) and in Node.js (`error.code`), and it does not change between releases, so a program can rely on it where the message is meant for a person.
+A schema names the collections the database holds and the fields of their objects. Open the database with it, write objects in a write transaction, and find them again in a read transaction.
 
-| Code | When |
-| --- | --- |
-| `NOT_FOUND` | Nothing exists at the path, and creating a database was not allowed. |
-| `NOT_A_DATABASE` | The file exists but is not a DaruDB database. |
-| `UNSUPPORTED_FORMAT_VERSION` | The file is a DaruDB database in a format version this build cannot read: a newer build wrote it. |
-| `CORRUPTED` | The file is a DaruDB database, but part of it has been damaged. |
-| `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two, or an object does not fit the schema. |
-| `CLOSED` | A Node.js database object was used after `close`. |
-| `BUSY` | The database stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it. Salvage fails with it when the file is open, and so does opening a file salvage is reading. |
-| `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
-| `KEY_REQUIRED` | The database is encrypted, and it was opened without a key or password. |
-| `WRONG_KEY` | The key or password does not open the database. |
-| `UNSUPPORTED_FILE_SYSTEM` | The database is on a network file system, or on one whose file locks do not work. It has to be on a local disk. |
-| `SCHEMA_MISMATCH` | The declared schema differs from the one the file holds at the same version, or the file was migrated since this handle opened it. |
-| `SCHEMA_TOO_NEW` | The file holds a newer schema version than the one declared: a newer application wrote it. |
-| `DUPLICATE_KEY` | An insert found its primary key taken, or a unique index found a value taken. |
-| `INVALID_QUERY` | A query names a field the collection does not have, or tests one with a value of another type. |
-| `MIGRATION_FAILED` | A migration function reported that it failed. The file keeps its old schema and data. |
-| `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
-| `IO` | The operating system failed an operation on the file. The message says what it reported. |
+::: lang rust
 
-```js
-try {
-  Database.open('missing.darudb', { create: false });
-} catch (error) {
-  if (error.code === 'NOT_FOUND') {
-    // Nothing exists at that path.
-  }
+```rust
+use darudb::{Collection, Filter, Object, OpenOptions, Query, Schema, Type};
+
+fn main() -> Result<(), darudb::Error> {
+    let schema = Schema::new(1).collection(
+        Collection::new("users")
+            .field("name", Type::String)
+            .with_default("age", Type::Int, 0)
+            .index("age"),
+    );
+    let db = OpenOptions::new().schema(schema).open("app.darudb")?;
+
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection("users")?;
+    users.insert(Object::new().with("name", "Alice").with("age", 31))?;
+    users.insert(Object::new().with("name", "Bob").with("age", 17))?;
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    let adults = read
+        .collection("users")?
+        .query(&Query::new().filter(Filter::ge("age", 18)))?;
+    println!("{adults:?}");
+
+    db.close()
 }
 ```
+
+:::
+
+::: lang node
+
+```ts
+import { collection, Database, schema, t } from 'darudb';
+
+const app = schema(1, {
+  users: collection({
+    name: t.string(),
+    age: t.int().default(0).index()
+  })
+});
+
+const db = Database.open('app.darudb', { schema: app });
+
+db.write((txn) => {
+  const users = txn.collection('users');
+
+  users.insert({ name: 'Alice', age: 31 });
+  users.insert({ name: 'Bob', age: 17 });
+});
+
+const adults = db.read((txn) => txn.collection('users').find((q) => q.where('age', '>=', 18)));
+
+console.log(adults); // [{ id: 1, name: 'Alice', age: 31 }]
+db.close();
+```
+
+:::
+
+The collection has no primary key field, so the engine gives each object an `id`, numbered from 1. The index on `age` lets the query read only the objects it finds rather than every object.
+
+## Options
+
+::: lang rust
+
+`OpenOptions` sets everything about opening. Each method returns the builder, and `open` opens the file:
+
+- `create(false)` refuses to create a missing file, which then fails with `NOT_FOUND`.
+- `page_size` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
+- `cache_size` sets how much memory, in bytes, the page cache may take: 32 MiB by default.
+- `busy_timeout` sets how long a write waits for another writer before failing with `BUSY`: five seconds by default.
+- `max_unsynced_pages` and `max_unsynced_time` limit how much deferred commits may leave unsynced. See [Transactions](./transactions.md).
+- `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
+- `schema` and `migration` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+
+[`OpenOptions`](../api/rust/open-options.md) in the API section has each of them in full.
+
+:::
+
+::: lang node
+
+`Database.open` takes an options object as its second argument:
+
+- `create: false` refuses to create a missing file, which then fails with `NOT_FOUND`.
+- `pageSize` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
+- `cacheSize` sets how much memory, in bytes, the page cache may take: 32 MiB by default.
+- `busyTimeout` sets how long, in milliseconds, a write waits for another writer before failing with `BUSY`: 5000 by default.
+- `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
+- `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+
+[`OpenOptions`](../types/node/open-options.md) in the Types section has each of them in full.
+
+:::
+
+## Next steps
+
+- [Collections and objects](./objects.md) declares a schema and reads and writes objects.
+- [Queries](./queries.md) finds objects by their fields, in code or as text.
+- [Transactions](./transactions.md) explains what a commit promises, and when to defer one.
+- [Errors](./errors.md) lists every error code.

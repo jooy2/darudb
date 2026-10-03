@@ -1,6 +1,6 @@
 ---
 title: Tools
-order: 5
+order: 9
 ---
 
 # Tools
@@ -9,7 +9,9 @@ DaruDB ships with tools for a file that has to be checked, copied, made smaller 
 
 ## Check a file
 
-The integrity check reads everything the published commit reaches and verifies it: every page against the check its parent recorded, the order of every key, every tree's count, that every page of the file is used, free or retained exactly once, and, in a file with a schema, every object against its indexes. It reports every problem it finds rather than stopping at the first, and it throws only when it cannot begin, as when the database is closed.
+The integrity check reads everything the published commit reaches and verifies it: every page against the check its parent recorded, the order of every key, every tree's count, that every page of the file is used, free or retained exactly once, and, in a file with a schema, every object against its indexes. It reports every problem it finds rather than stopping at the first, and it fails only when it cannot begin, as when the database is closed.
+
+::: lang rust
 
 ```rust
 use darudb::Database;
@@ -27,6 +29,10 @@ fn check(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+:::
+
+::: lang node
+
 ```ts
 const report = db.check(); // or `await db.checkAsync()`
 
@@ -37,6 +43,8 @@ if (!report.ok) {
 }
 ```
 
+:::
+
 - A problem names the page it is in, where it is in one, and the tree or collection it was found in.
 - The check reads the whole file, so it takes about as long as reading every object. It keeps one bit for each page in memory, and nothing that grows with the number of objects.
 - A page that cannot be read hides the pages below it. The check counts those in one problem rather than reporting each as leaked.
@@ -44,6 +52,8 @@ if (!report.ok) {
 ## Back up a file
 
 A backup writes a copy of the published commit to a new file, while other handles and processes keep reading and writing. The copy holds no free space, has the page size of the file, and opens with the same key or password when the file is encrypted.
+
+::: lang rust
 
 ```rust
 use darudb::Database;
@@ -56,9 +66,17 @@ fn back_up(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+:::
+
+::: lang node
+
 ```ts
 const report = await db.backupAsync('backups/app.darudb'); // or `db.backup(path)`
+
+console.log(`${report.entries} entries of commit ${report.commitId}`);
 ```
+
+:::
 
 - The copy is written under a temporary name beside the path and takes the path only once it is whole and durable. A backup never replaces a file: when the path is taken, it fails with `INVALID_ARGUMENT`.
 - The backup holds the commit it copies for as long as it runs, as a read transaction does, so the file may grow meanwhile if others write.
@@ -66,6 +84,8 @@ const report = await db.backupAsync('backups/app.darudb'); // or `db.backup(path
 ## Compact a file
 
 A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. It works in place, while other handles and processes keep reading and writing.
+
+::: lang rust
 
 ```rust
 use darudb::Database;
@@ -78,9 +98,17 @@ fn compact(db: &Database) -> Result<(), darudb::Error> {
 }
 ```
 
+:::
+
+::: lang node
+
 ```ts
 const report = await db.compactAsync(); // or `db.compact()`
+
+console.log(`${report.bytesBefore} bytes, then ${report.bytesAfter}`);
 ```
+
+:::
 
 - Compaction is made of ordinary write transactions, so it waits for the writer lock like any write, and a crash in the middle leaves the file at one of its commits.
 - A page that a read transaction can still reach cannot move until the transaction ends, so the file shrinks less next to long readers. The next compaction takes the rest.
@@ -89,6 +117,8 @@ const report = await db.compactAsync(); // or `db.compact()`
 ## Salvage a damaged file
 
 When a file does not open, or the check finds damage, salvage rescues what it can into a new file. It reads the old file page by page instead of opening it, starts from the newest commit the file records, and where that commit's pages cannot be read, takes the same keys from older versions of those pages that are still in the file. It then builds every index again from the objects, so the new file passes the check.
+
+::: lang rust
 
 ```rust
 use darudb::OpenOptions;
@@ -107,6 +137,12 @@ fn rescue() -> Result<(), darudb::Error> {
 }
 ```
 
+An encrypted file is salvaged with its key or password set on the `OpenOptions`.
+
+:::
+
+::: lang node
+
 ```ts
 import { Database } from 'darudb';
 
@@ -117,8 +153,12 @@ if (!report.whole) {
 }
 ```
 
-- The report is whole (`is_whole()` in Rust, `whole` in TypeScript) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
+An encrypted file is salvaged with its `key` or `password` in the third argument's options.
+
+:::
+
+- The report is whole (<LangCode rust="is_whole()" node="whole" />) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
 - An object whose record cannot be read, or whose value of a unique index another object has taken, is left out and counted.
 - Salvage needs the file to itself. A file open in any process fails with `BUSY`, and so does opening the file while salvage runs.
-- The new file has the page size of the old one. An encrypted file is salvaged with its key or password in the options, which then opens the new file too. Like a backup, salvage never replaces a file already at the path.
+- The new file has the page size of the old one, and an encrypted file's key or password opens the new file too. Like a backup, salvage never replaces a file already at the path.
 - It reads the whole file about twice, and keeps the first and last key of every page of entries in memory, so a large file needs memory in proportion.
