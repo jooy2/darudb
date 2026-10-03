@@ -21,11 +21,16 @@ mod open;
 mod resolve;
 #[cfg(test)]
 mod tests;
+pub(crate) mod typed;
 
 pub use declare::{Collection, Embedded, Migration, Schema, Type};
 pub use objects::{CollectionReader, CollectionWriter};
 pub use open::Migrating;
 pub(crate) use open::{Opened, Pending, check, open};
+pub use typed::{
+    CollectionType, ElementType, EmbeddedType, FieldReader, FieldType, KeyType, Link, TypedReader,
+    TypedWriter, ValueReader, ValueWriter,
+};
 
 use crate::error::Result;
 use crate::txn::{ReadTransaction, WriteTransaction};
@@ -42,6 +47,17 @@ impl ReadTransaction {
     pub fn collection(&self, name: &str) -> Result<CollectionReader<'_>> {
         CollectionReader::new(self, name)
     }
+
+    /// The collection of `T`, for reading its objects as `T`: the
+    /// collection of the schema with the name `T` declares, whose fields
+    /// have to be `T`'s, with the same types.
+    ///
+    /// It fails as [`collection`](Self::collection) does, and with
+    /// [`Error::InvalidArgument`](crate::Error::InvalidArgument) if the
+    /// collection does not match `T`.
+    pub fn collection_of<T: CollectionType>(&self) -> Result<TypedReader<'_, T>> {
+        TypedReader::new(self)
+    }
 }
 
 impl WriteTransaction {
@@ -50,5 +66,11 @@ impl WriteTransaction {
     /// [`ReadTransaction::collection`] does.
     pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>> {
         CollectionWriter::new(self, name)
+    }
+
+    /// The collection of `T`, for reading and writing its objects as `T`.
+    /// It fails as [`ReadTransaction::collection_of`] does.
+    pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>> {
+        TypedWriter::new(self)
     }
 }

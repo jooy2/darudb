@@ -34,6 +34,16 @@ zeroize.workspace = true
 # builds on it already. MIT OR Apache-2.0.
 blake2.workspace = true
 
+# `#[derive(Object)]` and `#[derive(Embedded)]`, with the `derive` feature.
+# The project's own crate; it brings `syn`, `quote` and `proc-macro2`, MIT OR
+# Apache-2.0, at build time only.
+darudb-derive = { workspace = true, optional = true }
+
+[features]
+# The derive macros, off by default so that a program that does not use them
+# does not build a Rust parser.
+derive = ["dep:darudb-derive"]
+
 [target.'cfg(unix)'.dependencies]
 # The C library's `fcntl` record locks, which the standard library does not
 # expose: it locks whole files only. `fstatfs` tells a network file system
@@ -59,6 +69,12 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The integration tests of typed objects derive their types with it, so that
+# they run without the `derive` feature.
+darudb-derive.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints.rust]
 # The engine is safe Rust, with one exception: `sys/` makes the operating

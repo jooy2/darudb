@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/darudb", "packages/node"]
+members = ["crates/darudb", "crates/darudb-derive", "packages/node"]
 
 # What every crate in the repository shares. The version is not here: each
 # package versions on its own, so each manifest carries its own number.
@@ -17,7 +17,11 @@ homepage = "https://darudb.cdget.com"
 
 [workspace.dependencies]
 darudb = { path = "crates/darudb", version = "0.1.0" }
+darudb-derive = { path = "crates/darudb-derive", version = "=0.1.0" }
 tempfile = "3.27.0"
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "2.0.119", default-features = false, features = ["derive", "parsing", "printing", "proc-macro", "clone-impls"] }
 twox-hash = { version = "2.1.4", default-features = false, features = ["std", "xxhash3_128"] }
 getrandom = "0.4.3"
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"] }

@@ -12,21 +12,21 @@ use super::value::{Name, Object, Value};
 /// Null, in the changes a binding sends for an update alone: the field becomes
 /// null. A record the file holds leaves a null field out instead, and every
 /// other reader refuses the tag.
-const NULL: u8 = 0x01;
-const FALSE: u8 = 0x02;
-const TRUE: u8 = 0x03;
-const INT: u8 = 0x04;
-const FLOAT: u8 = 0x05;
-const STRING: u8 = 0x06;
-const BYTES: u8 = 0x07;
-const LIST: u8 = 0x08;
-const OBJECT: u8 = 0x09;
-const LINK: u8 = 0x0A;
+pub(crate) const NULL: u8 = 0x01;
+pub(crate) const FALSE: u8 = 0x02;
+pub(crate) const TRUE: u8 = 0x03;
+pub(crate) const INT: u8 = 0x04;
+pub(crate) const FLOAT: u8 = 0x05;
+pub(crate) const STRING: u8 = 0x06;
+pub(crate) const BYTES: u8 = 0x07;
+pub(crate) const LIST: u8 = 0x08;
+pub(crate) const OBJECT: u8 = 0x09;
+pub(crate) const LINK: u8 = 0x0A;
 
 /// How deeply lists and objects may nest in a record read from the file. A
 /// schema nests far less; the bound keeps a damaged record from exhausting
 /// the stack.
-const MAX_DEPTH: usize = 64;
+pub(crate) const MAX_DEPTH: usize = 64;
 
 /// How many fields or elements reading a record reserves room for before it
 /// has read them. A count is bounded by the bytes left in the record, but a
@@ -446,7 +446,7 @@ struct Reader<'a> {
 /// record whole keeps the call, which inlined there made queries that read
 /// whole objects slower.
 #[inline(always)]
-fn quick_varint(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
+pub(crate) fn quick_varint(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
     match bytes.get(at) {
         Some(&byte) if byte < 0x80 => Ok((u64::from(byte), at + 1)),
         _ => varint_at(bytes, at),
@@ -466,7 +466,7 @@ fn varint_at(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
 /// caller: most fields a filter steps over on its way to the one it tests
 /// are scalars, and a call for each cost more than stepping over it.
 #[inline(always)]
-fn skip_scalar(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
+pub(crate) fn skip_scalar(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
     match bytes.get(at) {
         Some(&(FALSE | TRUE)) => Ok(at + 1),
         Some(&INT) => quick_varint(bytes, at + 1).map(|(_, end)| end),
@@ -482,7 +482,7 @@ fn skip_scalar(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
 
 /// Where `len` bytes from `at` of `bytes` end, if `bytes` holds them.
 #[inline(always)]
-fn skip_bytes(bytes: &[u8], at: usize, len: u64) -> Result<usize, &'static str> {
+pub(crate) fn skip_bytes(bytes: &[u8], at: usize, len: u64) -> Result<usize, &'static str> {
     usize::try_from(len)
         .ok()
         .and_then(|len| at.checked_add(len))
@@ -492,7 +492,7 @@ fn skip_bytes(bytes: &[u8], at: usize, len: u64) -> Result<usize, &'static str> 
 
 /// [`Reader::skip`] at `at` of `bytes`, for [`skip_scalar`].
 #[inline(never)]
-fn skip_at(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
+pub(crate) fn skip_at(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
     let mut reader = Reader { bytes, at };
 
     reader.skip(0).map(|()| reader.at)
@@ -809,7 +809,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn write_varint(mut value: u64, out: &mut Vec<u8>) {
+pub(crate) fn write_varint(mut value: u64, out: &mut Vec<u8>) {
     while value >= 0x80 {
         out.push(value.to_le_bytes()[0] | 0x80);
         value >>= 7;
@@ -819,7 +819,7 @@ fn write_varint(mut value: u64, out: &mut Vec<u8>) {
 }
 
 /// The varint of `value`, in the first of the bytes, and how many it takes.
-fn varint_bytes(mut value: u64) -> ([u8; 10], usize) {
+pub(crate) fn varint_bytes(mut value: u64) -> ([u8; 10], usize) {
     let mut bytes = [0; 10];
     let mut len = 0;
 
@@ -834,11 +834,11 @@ fn varint_bytes(mut value: u64) -> ([u8; 10], usize) {
     (bytes, len + 1)
 }
 
-fn zigzag(value: i64) -> u64 {
+pub(crate) fn zigzag(value: i64) -> u64 {
     u64::from_le_bytes(((value << 1) ^ (value >> 63)).to_le_bytes())
 }
 
-fn unzigzag(value: u64) -> i64 {
+pub(crate) fn unzigzag(value: u64) -> i64 {
     i64::from_le_bytes((value >> 1).to_le_bytes()) ^ -i64::from_le_bytes((value & 1).to_le_bytes())
 }
 
@@ -1051,7 +1051,7 @@ fn encode_fields<'v>(
 
 /// Writes `value` as a record holds it, if it has kind `kind`. The error
 /// names the kind expected.
-fn encode_value(
+pub(crate) fn encode_value(
     value: &Value,
     kind: &Kind,
     keys: KeyKinds<'_>,

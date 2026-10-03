@@ -78,6 +78,58 @@ fn main() -> Result<(), darudb::Error> {
 
 A query reads through the primary key or an index when a condition of its filter allows it, and gives the same objects either way. Results are plain objects that outlive the transaction.
 
+### Objects as Rust types
+
+With the `derive` feature, `#[derive(Object)]` makes a struct the objects of a collection. A typed read decodes the record straight into the struct, without the `Object` of named values in between.
+
+```toml
+[dependencies]
+darudb = { version = "0.1", features = ["derive"] }
+```
+
+```rust
+use darudb::{Collection, Filter, Object, OpenOptions, Query, Schema};
+
+#[derive(Object, Debug)]
+#[darudb(collection = "users")]
+struct User {
+    id: Option<i64>,
+    name: String,
+    #[darudb(unique)]
+    email: Option<String>,
+    #[darudb(index, default = 0)]
+    age: i64,
+}
+
+fn main() -> Result<(), darudb::Error> {
+    let db = OpenOptions::new()
+        .schema(Schema::new(1).collection(Collection::of::<User>()))
+        .open("app.darudb")?;
+
+    let mut txn = db.begin_write()?;
+    let id = txn.collection_of::<User>()?.insert(&User {
+        id: None,
+        name: "Alice".to_owned(),
+        email: None,
+        age: 31,
+    })?;
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    let users = read.collection_of::<User>()?;
+
+    assert_eq!(users.get(id)?.map(|user| user.name), Some("Alice".to_owned()));
+
+    for user in users.query(&Query::new().filter(Filter::ge("age", 18)))? {
+        println!("{user:?}");
+    }
+
+    Ok(())
+}
+```
+
+`Option` fields are optional, `Vec<T>` is a list, `Link<T>` a link to another collection's object, and a struct with `#[derive(Embedded)]` an embedded object. A struct whose fields do not match the stored collection fails with `INVALID_ARGUMENT` when a transaction reaches the collection through it.
+
 ### Encryption
 
 A database created with a key or a password is encrypted, every page of it, and cannot be opened without it:

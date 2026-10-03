@@ -27,7 +27,7 @@ use crate::format::object::Object;
 use crate::format::object::codec::NameOrder;
 use crate::format::object::schema::{CollectionDef, StoredSchema};
 use crate::schema::objects::{Decoder, Source};
-use crate::schema::{CollectionReader, CollectionWriter};
+use crate::schema::{CollectionReader, CollectionType, CollectionWriter, TypedReader, TypedWriter};
 
 /// `query` on `collection`, checked and planned, with its parameters'
 /// values if it is a bound prepared query.
@@ -202,5 +202,52 @@ impl CollectionWriter<'_> {
         let (source, schema, collection) = self.parts();
 
         each_stored(source, schema, collection, query, &mut visit)
+    }
+}
+
+impl<T: CollectionType> TypedReader<'_, T> {
+    /// The objects `query` finds, in its order, read straight into `T`.
+    ///
+    /// It fails as [`CollectionReader::query`] does, and with
+    /// [`Error::Corrupted`](crate::Error::Corrupted) for a record that does
+    /// not read as `T`.
+    pub fn query(&self, query: &Query) -> Result<Vec<T>> {
+        let (source, schema, collection) = self.untyped().parts();
+        let mut found = Vec::new();
+
+        each_stored(source, schema, collection, query, &mut |record| {
+            found.push(self.read(record)?);
+
+            Ok(())
+        })?;
+
+        Ok(found)
+    }
+
+    /// How many objects `query` finds; see [`CollectionReader::count`].
+    pub fn count(&self, query: &Query) -> Result<u64> {
+        self.untyped().count(query)
+    }
+}
+
+impl<T: CollectionType> TypedWriter<'_, T> {
+    /// The objects `query` finds, with this transaction's changes; see
+    /// [`TypedReader::query`].
+    pub fn query(&self, query: &Query) -> Result<Vec<T>> {
+        let (source, schema, collection) = self.untyped_ref().parts();
+        let mut found = Vec::new();
+
+        each_stored(source, schema, collection, query, &mut |record| {
+            found.push(self.read(record)?);
+
+            Ok(())
+        })?;
+
+        Ok(found)
+    }
+
+    /// How many objects `query` finds, with this transaction's changes.
+    pub fn count(&self, query: &Query) -> Result<u64> {
+        self.untyped_ref().count(query)
     }
 }

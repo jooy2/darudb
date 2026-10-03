@@ -1,0 +1,38 @@
+[package]
+name = "darudb-derive"
+version = "0.1.0"
+description = "The derive macros of DaruDB, `#[derive(Object)]` and `#[derive(Embedded)]`, which the `darudb` crate re-exports with its `derive` feature."
+readme = "README.md"
+keywords = ["database", "embedded", "derive"]
+categories = ["database-implementations"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# The compiler's tokens outside a procedural macro, and quoting them back.
+# MIT OR Apache-2.0, both with no dependencies but each other.
+proc-macro2.workspace = true
+quote.workspace = true
+# Parsing the struct the macro is on. MIT OR Apache-2.0. Only the features a
+# derive needs, so it does not compile a parser for all of Rust.
+syn.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[dev-dependencies]
+# The examples in the macros' documentation run against the crate that
+# re-exports them.
+darudb = { path = "../darudb", features = ["derive"] }

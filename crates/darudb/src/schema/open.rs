@@ -18,6 +18,7 @@ use super::objects::{
     records,
 };
 use super::resolve::{Resolution, resolve};
+use super::typed::{CollectionType, TypedWriter};
 use crate::error::{Error, Result};
 use crate::format::object::key;
 use crate::format::object::schema::{
@@ -379,6 +380,12 @@ impl Migrating<'_> {
     /// Collection `name` of the new schema.
     pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>> {
         self.txn.collection(name)
+    }
+
+    /// The collection of `T` in the new schema; see
+    /// [`WriteTransaction::collection_of`].
+    pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>> {
+        self.txn.collection_of()
     }
 
     /// The primary keys of every object of collection `collection`, named as

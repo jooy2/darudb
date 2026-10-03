@@ -887,6 +887,16 @@ impl<'a> CollectionReader<'a> {
         })
     }
 
+    /// The collection at `position` in `schema`, which the caller checked
+    /// the file still holds.
+    pub(crate) fn at(txn: &'a ReadTransaction, schema: Arc<OpenSchema>, position: usize) -> Self {
+        Self {
+            txn,
+            schema,
+            position,
+        }
+    }
+
     fn definition(&self) -> &CollectionDef {
         &self.schema.schema.collections[self.position]
     }
@@ -1180,6 +1190,20 @@ impl<'a> CollectionWriter<'a> {
             schema,
             position,
         })
+    }
+
+    /// The collection at `position` in `schema`, which the caller checked
+    /// the file still holds.
+    pub(crate) fn at(
+        txn: &'a mut WriteTransaction,
+        schema: Arc<OpenSchema>,
+        position: usize,
+    ) -> Self {
+        Self {
+            txn,
+            schema,
+            position,
+        }
     }
 
     fn definition(&self) -> &CollectionDef {

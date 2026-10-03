@@ -2,6 +2,9 @@
 //! gives them, and its encoding as a record (`design/objects.md`, "The stored
 //! schema").
 
+use std::any::{Any, TypeId};
+use std::sync::{Arc, Mutex, PoisonError};
+
 use super::codec::{self, NameOrder, Raw};
 use super::value::Value;
 
@@ -137,6 +140,11 @@ pub(crate) struct OpenSchema {
     /// opened a file with does not change while the handle lives, where the
     /// fields of a schema being migrated are renamed in place.
     orders: Vec<NameOrder>,
+    /// How each Rust type a transaction of the handle reached its collection
+    /// as lies in it, by the type's id: worked out from the type and the
+    /// stored schema the first time, and kept for the life of the schema.
+    /// The object layer above knows what each holds.
+    typed: Mutex<Vec<(TypeId, Arc<dyn Any + Send + Sync>)>>,
 }
 
 impl OpenSchema {
@@ -151,12 +159,33 @@ impl OpenSchema {
             schema,
             encoded,
             orders,
+            typed: Mutex::new(Vec::new()),
         }
     }
 
     /// The order of the fields by name of the collection at `position`.
     pub(crate) fn order(&self, position: usize) -> Option<&NameOrder> {
         self.orders.get(position)
+    }
+
+    /// What [`keep_typed`](Self::keep_typed) kept for the type `id`.
+    pub(crate) fn typed(&self, id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(kept, _)| *kept == id)
+            .map(|(_, typed)| Arc::clone(typed))
+    }
+
+    /// Keeps `typed` for the type `id`, unless another thread kept one
+    /// first, which is the same.
+    pub(crate) fn keep_typed(&self, id: TypeId, typed: Arc<dyn Any + Send + Sync>) {
+        let mut kept = self.typed.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if kept.iter().all(|(other, _)| *other != id) {
+            kept.push((id, typed));
+        }
     }
 }
 

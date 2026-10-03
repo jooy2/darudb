@@ -17,7 +17,10 @@
 //! A database opened with a [`Schema`] ([`OpenOptions::schema`]) also holds
 //! collections of typed [`Object`]s, with indexes kept in step with them and
 //! [`Migration`]s from one schema version to the next, and [`Query`]s that
-//! read them through their indexes.
+//! read them through their indexes. With the `derive` feature,
+//! `#[derive(Object)]` makes a struct a collection's type, which
+//! [`ReadTransaction::collection_of`] reads records straight into, without an
+//! `Object` in between; [`CollectionType`] says what it implements.
 //!
 //! ```no_run
 //! let db = darudb::Database::open("app.darudb")?;
@@ -84,9 +87,17 @@ pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};
 pub use options::OpenOptions;
 pub use query::{Filter, Query, QueryRequest};
+/// What the code of `#[derive(Object)]` and `#[derive(Embedded)]` calls.
+#[doc(hidden)]
+pub use schema::typed::derive as __derive;
 pub use schema::{
-    Collection, CollectionReader, CollectionWriter, Embedded, Migrating, Migration, Schema, Type,
+    Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
+    EmbeddedType, FieldReader, FieldType, KeyType, Link, Migrating, Migration, Schema, Type,
+    TypedReader, TypedWriter, ValueReader, ValueWriter,
 };
+
+#[cfg(feature = "derive")]
+pub use darudb_derive::{Embedded, Object};
 pub use tools::{BackupReport, CheckReport, CompactReport, Problem, SalvageReport};
 pub use txn::{Range, ReadTransaction, WriteTransaction};
 

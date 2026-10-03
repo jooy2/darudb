@@ -8,6 +8,8 @@ use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::schema::{FieldDef, Kind, StoredSchema};
 
+use super::typed::{CollectionType, EmbeddedType};
+
 /// The type of a field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -62,6 +64,11 @@ pub struct Embedded {
 }
 
 impl Embedded {
+    /// The fields `E` declares, as `#[derive(Embedded)]` declares them.
+    pub fn of<E: EmbeddedType>() -> Self {
+        E::embedded()
+    }
+
     /// An embedded object with no field yet.
     pub fn new() -> Self {
         Self::default()
@@ -119,6 +126,12 @@ pub struct Collection {
 }
 
 impl Collection {
+    /// The collection `T` declares, as `#[derive(Object)]` or a
+    /// hand-written [`CollectionType`] declares it.
+    pub fn of<T: CollectionType>() -> Self {
+        T::collection()
+    }
+
     /// A collection with no field yet, keyed by an auto-increment.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
