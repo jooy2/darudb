@@ -68,14 +68,16 @@ final class Migration {
   /// New names by old name.
   final Map<String, String> renameCollections;
 
-  /// For each collection, by its new name, new field names by old name.
+  /// For each collection, by its name before the migration, new field names
+  /// by old name.
   final Map<String, Map<String, String>> renameFields;
 
   /// Collections this step deletes, after its function has run.
   final List<String> deleteCollections;
 
-  /// For each collection, the fields whose type changes: a field removed and
-  /// a field added with the same name.
+  /// For each collection, by its name before the migration, the fields
+  /// whose type changes: a field removed and a field added with the same
+  /// name.
   final Map<String, List<String>> replaceFields;
 
   /// Moves data across, in the migration's write transaction. Through
