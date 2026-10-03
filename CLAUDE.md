@@ -32,12 +32,13 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 ## Layout
 
-| Path            | What it is                                              | Entered with                                                    |
-| --------------- | ------------------------------------------------------- | --------------------------------------------------------------- |
-| `crates/darudb` | The engine and the Rust API, the crate `darudb`         | `cargo test -p darudb` from the root                            |
-| `packages/node` | The Node.js binding, the npm package `darudb` (napi-rs) | `npm install`, then `npm run build`, `npm test`, `npm run lint` |
-| `docs`          | The VitePress site, shared by every package             | `npm install`, then `npm run dev`                               |
-| `design`        | The engine's specifications, in English only            | Read before changing `format`, `storage`, `txn` or `lock`       |
+| Path                   | What it is                                                                                         | Entered with                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `crates/darudb`        | The engine and the Rust API, the crate `darudb`                                                    | `cargo test -p darudb` from the root                            |
+| `crates/darudb-derive` | `#[derive(Object)]` and `#[derive(Embedded)]`, which `darudb` re-exports with its `derive` feature | `cargo test -p darudb -p darudb-derive`                         |
+| `packages/node`        | The Node.js binding, the npm package `darudb` (napi-rs)                                            | `npm install`, then `npm run build`, `npm test`, `npm run lint` |
+| `docs`                 | The VitePress site, shared by every package                                                        | `npm install`, then `npm run dev`                               |
+| `design`               | The engine's specifications, in English only                                                       | Read before changing `format`, `storage`, `txn` or `lock`       |
 
 **The root is a Cargo workspace and nothing else.** `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml` are there; there is no root `package.json` and no npm workspace. Each JavaScript folder installs and runs on its own, so check which folder a command belongs to before running it. `packages/node` is both an npm package and a member of the Cargo workspace.
 
@@ -47,23 +48,23 @@ The project is written and maintained with coding agents, now and later. Keep th
 
 `crates/darudb/src` is layered, and a module only uses the modules below it. Keeping that one-way is what lets a layer be read, tested and replaced on its own.
 
-| Module        | Owns                                                                                     | State            |
-| ------------- | ---------------------------------------------------------------------------------------- | ---------------- |
-| `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1          |
-| `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1          |
-| `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1          |
-| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1          |
-| `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1          |
-| `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1          |
-| `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1          |
-| `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1          |
-| `format/`     | What bytes on disk mean: the layouts of `design/`, objects in `format/object`. No I/O    | Phase 4          |
-| `lock/`       | Cross-process coordination through file range locks                                      | Phase 3          |
-| `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2          |
-| `sys/`        | The operating system's calls the standard library lacks; the one module with `unsafe`    | Phase 3          |
-| `schema/`     | Declared schemas, migrations, and objects written with their indexes in step             | Phase 4          |
-| `query/`      | The query IR, the builder and the query language, choosing an index, running a query     | Phase 4          |
-| `tools/`      | Integrity check, salvage, backup, compact                                                | Phase 6          |
+| Module        | Owns                                                                                     | State   |
+| ------------- | ---------------------------------------------------------------------------------------- | ------- |
+| `database.rs` | `Database`, the public handle: open, create, begin a transaction, close                  | Phase 1 |
+| `options.rs`  | `OpenOptions`, and validating what the caller asked for                                  | Phase 1 |
+| `error.rs`    | `Error`, `Result`, and each failure's stable code                                        | Phase 1 |
+| `txn/`        | Read and write transactions, the commit, recovery                                        | Phase 1 |
+| `instance.rs` | The one shared instance of each open file in the process: header, writer gate, snapshots | Phase 1 |
+| `space.rs`    | Free space during a write transaction: allocation, release, reclaiming                   | Phase 1 |
+| `btree/`      | The copy-on-write B+tree: reads, changes, commit-time encoding, verified loading         | Phase 1 |
+| `storage/`    | How bytes reach the disk: positional I/O, the pager, the page cache, file creation       | Phase 1 |
+| `format/`     | What bytes on disk mean: the layouts of `design/`, objects in `format/object`. No I/O    | Phase 4 |
+| `lock/`       | Cross-process coordination through file range locks                                      | Phase 3 |
+| `crypto/`     | Page encryption, key wrapping, key derivation. No I/O, like `format`                     | Phase 2 |
+| `sys/`        | The operating system's calls the standard library lacks; the one module with `unsafe`    | Phase 3 |
+| `schema/`     | Declared schemas, migrations, objects written with their indexes in step, typed objects  | Phase 4 |
+| `query/`      | The query IR, the builder and the query language, choosing an index, running a query     | Phase 4 |
+| `tools/`      | Integrity check, salvage, backup, compact                                                | Phase 6 |
 
 From the bottom up: `format`, `crypto` and `sys`, then `storage`, `btree`, `space`, `lock`, `instance`, `txn`, `schema` and `query`, `tools`, and `database` on top. `lib.rs` re-exports the public surface and nothing below `database`'s level leaks into it.
 
@@ -73,7 +74,7 @@ Tests sit beside what they test, plus these places that test the whole engine:
 - `tests/process_kill.rs`: real child processes killed while they commit. `DARUDB_KILL_ROUNDS` makes it longer.
 - `src/processes.rs`: the multi-process suite, the phase 3 exit criterion. Worker processes of the test binary read and write one file through several handles and threads while random ones are killed and new ones start; then the integrity check, and every commit a worker reported. Each commit also writes an object under a unique index the workers contend for, and readers check the indexes against the objects. One run uses an encrypted file. `DARUDB_PROCESS_KILLS` makes it longer.
 - The lock tests in `lock/tests.rs` run a second process through `testing::Helper`, since a process never conflicts with its own locks on Unix-like systems.
-- `tests/transactions.rs`, `tests/open.rs` and `tests/objects.rs`: the public API on real files.
+- `tests/transactions.rs`, `tests/open.rs`, `tests/objects.rs` and `tests/typed.rs`: the public API on real files, the last through types the derive macros implement.
 
 `examples/kernel_bench.rs` measures the storage kernel: commits, bulk writes, reads and large values, on a plain file and on an encrypted one, and opening a file with a password. `examples/object_bench.rs` measures the object layer: inserts, reads by key and by index, queries with and without an index, updates and deletes; its doc comment spells out the workloads, so that they can be run against other databases outside this repository. Both are for comparing two builds on one machine, and a performance change quotes their numbers from before and after.
 
@@ -237,6 +238,8 @@ Each of these was tried elsewhere and caused the problems this project exists to
 - **The file format is not stable yet.** `format::FORMAT_VERSION` identifies it, and any change to what is on disk changes that number. Until the first release there are no migrations: a file from an older build is refused with `UNSUPPORTED_FORMAT_VERSION`, not upgraded. From the first release on, opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back, which then upgrades it with an explicit call (decided 2026-09-29). The code implements `design/file-format.md` as far as phase 1 has reached; the module map above says which parts exist.
 - **The storage kernel stores named trees of byte keys and byte values.** Keys are ordered as unsigned bytes and nothing else; typed objects are the object layer in `schema/`, built on top. Its trees have names that begin with a NUL character, which `tree_names` leaves out and the kernel's public calls refuse; the engine reaches them through the `*_in` methods of the transactions.
 - **A bound prepared query still holds its parameters.** `Query::bind` keeps the values beside the prepared query's IR, which the two share through an `Arc`, rather than copying the IR with the values in place, so `Query::ir` of a bound query has `Expr::Prepared` in it. The planner reads each value from `Query::parameters` where the IR names a parameter; `bound_ir` makes the IR with the values in place, only for equality and for encoding.
+- **A typed collection is matched with its Rust type once for each handle and type.** `collection_of::<T>()` compares `T::collection()` with the stored collection by name, and keeps the result, a layout of the stored fields with the slot `T` numbers each, in the handle's `OpenSchema` under `T`'s `TypeId` (`schema/typed.rs`). Reading walks the record and the layout together, so a field a record leaves out reads as its default without the record being decoded into an `Object` first. A typed write still goes through `insert_record` and `put_record`, so the engine checks it as it checks a binding's record.
+- **A workspace build turns on the engine's `derive` feature.** `darudb-derive` has `darudb` with that feature as a development dependency, for its documentation's examples, and Cargo unifies features across the workspace, so `cargo test --workspace` builds `darudb` with `darudb::Object` both the type and the derive. `tests/typed.rs` names the derives by their path, `darudb_derive::Object`, which works either way; a `use` of both crates' `Object` does not.
 - **Each handle keeps the schema it was opened with.** Handles to one file share an instance, but the schema lives on `Database`, and every transaction gets its handle's. Reaching a collection compares the stored schema's record with the handle's, which is how a handle notices another handle's or another process's migration (`SCHEMA_MISMATCH`).
 - **The header in memory is not the file's.** Another process may commit at any moment, so a reader reads the header from the file and locks its snapshot's byte, and a writer reads it again under the writer lock (`Shared::refresh_header`). The instance's copy is what this process's writer last knew, and a difference from the file is how it learns that another process committed.
 - **`sys/` is the only module with `unsafe` code.** The crate denies `unsafe_code`, and that module allows it for the operating system's calls the standard library does not offer: byte-range locks in `sys/lock.rs`, and in `sys/fs.rs` the rename that never replaces a file, for file systems without links, and what identifies a file on Windows. On Unix-like systems `sys/fs.rs` makes its calls through `rustix`, without `unsafe`. Clippy requires a `SAFETY` comment on every `unsafe` block, and one unsafe operation per block.
