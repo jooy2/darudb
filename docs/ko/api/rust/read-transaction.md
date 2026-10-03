@@ -116,3 +116,11 @@ pub fn collection(&self, name: &str) -> Result<CollectionReader<'_>>
 핸들을 열 때 쓴 스키마에서 `name` 컬렉션을 꺼내 객체를 읽을 수 있게 합니다. [`CollectionReader`](./collection-reader.md)를 보세요. 트랜잭션을 빌려 쓰며, 여러 컬렉션을 한꺼번에 읽어도 됩니다.
 
 스키마에 그런 컬렉션이 없거나 스키마 없이 연 데이터베이스면 `INVALID_ARGUMENT`로 실패합니다. 이 핸들을 연 뒤에 다른 핸들이나 프로세스가 파일을 마이그레이션해서, 이 트랜잭션이 보는 커밋에 다른 스키마가 있으면 `SCHEMA_MISMATCH`로 실패합니다.
+
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&self) -> Result<TypedReader<'_, T>>
+```
+
+`T`의 컬렉션을 꺼내 객체를 `T`로 읽을 수 있게 합니다. 이름이 `T::COLLECTION`인 컬렉션이고, 필드와 그 타입이 `T`와 같아야 합니다. [`TypedReader`](./typed-reader.md)와 [파생 매크로](./derive.md)를 보세요. `collection`과 같은 경우에 실패하고, 저장된 컬렉션이 `T`와 맞지 않으면 맞지 않는 필드를 알려 주며 `INVALID_ARGUMENT`로 실패합니다. 맞춰 보는 일은 핸들과 타입마다 한 번만 합니다.

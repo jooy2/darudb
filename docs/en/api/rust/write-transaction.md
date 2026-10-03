@@ -124,6 +124,14 @@ pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>>
 
 Collection `name` of the schema the handle was opened with, for reading and writing its objects; see [`CollectionWriter`](./collection-writer.md). It borrows the transaction mutably, so one collection is in use at a time, and the borrow has to end before the transaction commits. It fails as [`ReadTransaction::collection`](./read-transaction.md#collection) does.
 
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>>
+```
+
+The collection of `T`, for reading and writing its objects as `T`; see [`TypedWriter`](./typed-writer.md). It borrows the transaction as `collection` does, and fails as [`ReadTransaction::collection_of`](./read-transaction.md#collection-of) does.
+
 ### commit
 
 ```rust

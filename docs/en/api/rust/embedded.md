@@ -1,6 +1,6 @@
 ---
 title: Embedded
-order: 9
+order: 11
 counterpart: /api/node/t
 ---
 
@@ -36,6 +36,14 @@ fn schema() -> Schema {
 ```
 
 ## Associated functions
+
+### of
+
+```rust
+pub fn of<E: EmbeddedType>() -> Self
+```
+
+The fields `E` declares, as [`#[derive(Embedded)]`](./derive.md#embedded) declares them. A field whose Rust type is `E` declares this for itself, so it is rarely needed.
 
 ### new
 

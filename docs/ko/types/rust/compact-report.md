@@ -1,6 +1,6 @@
 ---
 title: CompactReport
-order: 7
+order: 10
 ---
 
 # CompactReport

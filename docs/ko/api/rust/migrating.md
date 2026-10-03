@@ -1,6 +1,6 @@
 ---
 title: Migrating
-order: 13
+order: 16
 ---
 
 # Migrating
@@ -66,6 +66,14 @@ pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>>
 ```
 
 새 스키마에서 `name` 컬렉션을 꺼내 객체를 읽고 쓸 수 있게 합니다. [`CollectionWriter`](./collection-writer.md)를 보세요. 새 스키마에 없는 컬렉션이면 `INVALID_ARGUMENT`로 실패합니다.
+
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>>
+```
+
+새 스키마에서 `T`의 컬렉션을 [`WriteTransaction::collection_of`](./write-transaction.md#collection-of)처럼 꺼냅니다. 예전 컬렉션의 타입은 보통 프로그램에서 이미 사라졌으므로, 마이그레이션 전 스키마로 읽는 객체는 여전히 [`previous`](#previous)에서 `Object`로 읽습니다.
 
 ### previous_keys
 

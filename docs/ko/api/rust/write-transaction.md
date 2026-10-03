@@ -124,6 +124,14 @@ pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>>
 
 핸들을 열 때 쓴 스키마에서 `name` 컬렉션을 꺼내 객체를 읽고 쓸 수 있게 합니다. [`CollectionWriter`](./collection-writer.md)를 보세요. 트랜잭션을 가변으로 빌리므로 한 번에 컬렉션 하나만 쓸 수 있고, 트랜잭션을 커밋하기 전에 그 빌림이 끝나야 합니다. 실패하는 경우는 [`ReadTransaction::collection`](./read-transaction.md#collection)과 같습니다.
 
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>>
+```
+
+`T`의 컬렉션을 꺼내 객체를 `T`로 읽고 쓸 수 있게 합니다. [`TypedWriter`](./typed-writer.md)를 보세요. `collection`처럼 트랜잭션을 빌리고, 실패하는 경우는 [`ReadTransaction::collection_of`](./read-transaction.md#collection-of)와 같습니다.
+
 ### commit
 
 ```rust

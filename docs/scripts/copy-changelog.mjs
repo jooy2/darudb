@@ -55,6 +55,11 @@ const PACKAGES = [
     source: 'crates/darudb/CHANGELOG.md'
   },
   {
+    label: 'Rust derive',
+    heading: { en: 'Rust crate `darudb-derive`', ko: 'Rust 크레이트 `darudb-derive`' },
+    source: 'crates/darudb-derive/CHANGELOG.md'
+  },
+  {
     label: 'Node.js',
     heading: { en: 'Node.js package `darudb`', ko: 'Node.js 패키지 `darudb`' },
     source: 'packages/node/CHANGELOG.md'

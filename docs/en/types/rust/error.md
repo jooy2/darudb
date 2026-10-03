@@ -1,6 +1,6 @@
 ---
 title: Error and Result
-order: 4
+order: 7
 counterpart: /types/node/error
 ---
 

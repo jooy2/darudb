@@ -1,6 +1,6 @@
 ---
 title: Collection
-order: 8
+order: 10
 ---
 
 # Collection
@@ -46,6 +46,14 @@ fn schema() -> Schema {
 - **인덱스.** 컬렉션에 없는 필드, 내장 객체나 내장 객체의 목록에 건 인덱스, 같은 필드에 두 번 건 인덱스.
 
 ## 연관 함수
+
+### of
+
+```rust
+pub fn of<T: CollectionType>() -> Self
+```
+
+`T`가 선언하는 컬렉션을 돌려줍니다. [`#[derive(Object)]`](./derive.md)나 직접 구현한 [`CollectionType`](../../types/rust/collection-type.md)이 선언한 그대로입니다.
 
 ### new
 

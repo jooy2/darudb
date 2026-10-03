@@ -66,6 +66,8 @@ npm run build
 darudb = { path = "../darudb/crates/darudb" }
 ```
 
+`derive` 기능을 켜면 구조체를 컬렉션의 객체로 만드는 `#[derive(Object)]`를 쓸 수 있습니다. [컬렉션과 객체](./objects.md#객체를-rust-타입으로)를 보세요.
+
 :::
 
 ::: lang node

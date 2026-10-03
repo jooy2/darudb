@@ -116,3 +116,11 @@ pub fn collection(&self, name: &str) -> Result<CollectionReader<'_>>
 Collection `name` of the schema the handle was opened with, for reading its objects; see [`CollectionReader`](./collection-reader.md). It borrows the transaction, and several collections can be read at once.
 
 It fails with `INVALID_ARGUMENT` if the schema has no such collection or the database was opened without a schema, and with `SCHEMA_MISMATCH` if the commit this transaction sees holds another schema, because another handle or process has migrated the file since this handle opened it.
+
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&self) -> Result<TypedReader<'_, T>>
+```
+
+The collection of `T`, for reading its objects as `T`: the collection named `T::COLLECTION`, whose fields have to be `T`'s, with the same types; see [`TypedReader`](./typed-reader.md) and [Derive macros](./derive.md). It fails as `collection` does, and with `INVALID_ARGUMENT`, naming the field, if the stored collection does not match `T`. The match is worked out once for each handle and type.

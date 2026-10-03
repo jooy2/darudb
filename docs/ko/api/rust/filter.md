@@ -1,6 +1,6 @@
 ---
 title: Filter
-order: 11
+order: 14
 counterpart: /api/node/conditions
 ---
 

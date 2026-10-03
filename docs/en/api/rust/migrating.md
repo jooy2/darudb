@@ -1,6 +1,6 @@
 ---
 title: Migrating
-order: 13
+order: 16
 ---
 
 # Migrating
@@ -66,6 +66,14 @@ pub fn collection(&mut self, name: &str) -> Result<CollectionWriter<'_>>
 ```
 
 Collection `name` of the new schema, for reading and writing its objects; see [`CollectionWriter`](./collection-writer.md). A collection the new schema does not have fails with `INVALID_ARGUMENT`.
+
+### collection_of
+
+```rust
+pub fn collection_of<T: CollectionType>(&mut self) -> Result<TypedWriter<'_, T>>
+```
+
+The collection of `T` in the new schema, as [`WriteTransaction::collection_of`](./write-transaction.md#collection-of) gives it. The objects as the schema before the migration reads them are still [`previous`](#previous), as `Object`s, since the type of the old collection is usually gone from the program.
 
 ### previous_keys
 

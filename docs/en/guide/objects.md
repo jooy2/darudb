@@ -181,6 +181,54 @@ These hold in every language:
 - A refused write changes nothing, and the transaction can go on and commit.
 - Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.
 
+::: lang rust
+
+## Objects as Rust types
+
+With the crate's `derive` feature, `#[derive(Object)]` makes a struct the objects of a collection. The schema declares the collection from the struct, and `collection_of` reads records straight into it and writes it as records, without the `Object` of named values in between, which costs about as much as finding the record.
+
+```rust
+use darudb::{Collection, Database, Filter, Object, OpenOptions, Query, Schema};
+
+#[derive(Object, Debug, Clone)]
+#[darudb(collection = "users")]
+struct User {
+    id: Option<i64>,
+    name: String,
+    #[darudb(unique)]
+    email: Option<String>,
+    #[darudb(index, default = 0)]
+    age: i64,
+}
+
+fn open() -> darudb::Result<Database> {
+    OpenOptions::new()
+        .schema(Schema::new(1).collection(Collection::of::<User>()))
+        .open("app.darudb")
+}
+
+fn write_and_read(db: &Database) -> darudb::Result<()> {
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection_of::<User>()?;
+    let id = users.insert(&User { id: None, name: "Alice".to_owned(), email: None, age: 31 })?;
+
+    drop(users);
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    let users = read.collection_of::<User>()?;
+    let alice: Option<User> = users.get(id)?;
+    let adults: Vec<User> = users.query(&Query::new().filter(Filter::ge("age", 18)))?;
+
+    println!("{alice:?} {adults:?}");
+    Ok(())
+}
+```
+
+An `Option` field is optional, `Vec<T>` a list, `Link<T>` a link, and a struct with `#[derive(Embedded)]` an embedded object. Without a field marked `#[darudb(key)]`, the struct needs `id: Option<i64>`, which is `None` until the object is inserted. [Derive macros](../api/rust/derive.md) lists the attributes. A typed and an untyped handle read and write the same objects, so the two APIs mix freely.
+
+:::
+
 ## Several handles and processes
 
 Each handle keeps the schema it was opened with. When another process, or another handle in the same process, migrates the file, the next transaction to reach a collection through the old handle fails with `SCHEMA_MISMATCH`, and the handle has to be opened again with the new schema. A read transaction that began before the migration goes on reading under the old schema, since it sees the commit it began at.

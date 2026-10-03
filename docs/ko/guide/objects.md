@@ -181,6 +181,54 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 - 거부된 쓰기는 아무것도 바꾸지 않으므로, 트랜잭션은 계속 쓰다가 커밋해도 됩니다.
 - 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 값입니다. 스키마의 필드가 모두 들어 있고, 빠진 필드에는 기본값이나 null이 들어갑니다.
 
+::: lang rust
+
+## 객체를 Rust 타입으로
+
+크레이트의 `derive` 기능을 켜면 `#[derive(Object)]`로 구조체를 컬렉션의 객체로 만들 수 있습니다. 스키마는 구조체에서 컬렉션을 선언하고, `collection_of`는 레코드를 구조체로 바로 읽고 구조체를 레코드로 씁니다. 이름 붙은 값을 담는 `Object`를 거치지 않으므로, 레코드를 찾는 데 드는 만큼의 비용이 빠집니다.
+
+```rust
+use darudb::{Collection, Database, Filter, Object, OpenOptions, Query, Schema};
+
+#[derive(Object, Debug, Clone)]
+#[darudb(collection = "users")]
+struct User {
+    id: Option<i64>,
+    name: String,
+    #[darudb(unique)]
+    email: Option<String>,
+    #[darudb(index, default = 0)]
+    age: i64,
+}
+
+fn open() -> darudb::Result<Database> {
+    OpenOptions::new()
+        .schema(Schema::new(1).collection(Collection::of::<User>()))
+        .open("app.darudb")
+}
+
+fn write_and_read(db: &Database) -> darudb::Result<()> {
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection_of::<User>()?;
+    let id = users.insert(&User { id: None, name: "Alice".to_owned(), email: None, age: 31 })?;
+
+    drop(users);
+    txn.commit()?;
+
+    let read = db.begin_read()?;
+    let users = read.collection_of::<User>()?;
+    let alice: Option<User> = users.get(id)?;
+    let adults: Vec<User> = users.query(&Query::new().filter(Filter::ge("age", 18)))?;
+
+    println!("{alice:?} {adults:?}");
+    Ok(())
+}
+```
+
+`Option` 필드는 선택 필드이고, `Vec<T>`는 목록, `Link<T>`는 링크, `#[derive(Embedded)]`를 붙인 구조체는 내장 객체입니다. `#[darudb(key)]`를 붙인 필드가 없으면 구조체에 `id: Option<i64>`가 있어야 하고, 이 필드는 객체를 넣기 전까지 `None`입니다. 쓸 수 있는 속성은 [파생 매크로](../api/rust/derive.md)에 있습니다. 타입으로 읽고 쓰는 쪽과 `Object`로 읽고 쓰는 쪽은 같은 객체를 다루므로 두 API를 섞어 써도 됩니다.
+
+:::
+
 ## 여러 핸들과 프로세스
 
 핸들은 열 때 받은 스키마를 계속 씁니다. 다른 프로세스나 같은 프로세스의 다른 핸들이 파일을 마이그레이션하면, 예전 핸들로 컬렉션에 접근하는 다음 트랜잭션은 `SCHEMA_MISMATCH`로 실패합니다. 그러면 새 스키마로 다시 열어야 합니다. 마이그레이션 전에 시작한 읽기 트랜잭션은 시작할 때의 커밋을 보므로 예전 스키마로 계속 읽습니다.

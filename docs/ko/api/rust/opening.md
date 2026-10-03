@@ -1,6 +1,6 @@
 ---
 title: Opening과 PendingMigration
-order: 14
+order: 17
 ---
 
 # Opening과 PendingMigration

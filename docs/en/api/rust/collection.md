@@ -1,6 +1,6 @@
 ---
 title: Collection
-order: 8
+order: 10
 ---
 
 # Collection
@@ -46,6 +46,14 @@ The declaration is checked when a file is opened with it. Each of these fails `o
 - **Indexes.** An index on a field the collection does not have, on an embedded object or a list of them, or on one field twice.
 
 ## Associated functions
+
+### of
+
+```rust
+pub fn of<T: CollectionType>() -> Self
+```
+
+The collection `T` declares, as [`#[derive(Object)]`](./derive.md) or a hand-written [`CollectionType`](../../types/rust/collection-type.md) declares it.
 
 ### new
 

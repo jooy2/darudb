@@ -1,6 +1,6 @@
 ---
 title: Embedded
-order: 9
+order: 11
 counterpart: /api/node/t
 ---
 
@@ -36,6 +36,14 @@ fn schema() -> Schema {
 ```
 
 ## 연관 함수
+
+### of
+
+```rust
+pub fn of<E: EmbeddedType>() -> Self
+```
+
+`E`가 선언하는 필드를 돌려줍니다. [`#[derive(Embedded)]`](./derive.md#embedded)가 선언한 그대로입니다. Rust 타입이 `E`인 필드는 이 선언을 스스로 하므로 직접 부를 일은 드뭅니다.
 
 ### new
 

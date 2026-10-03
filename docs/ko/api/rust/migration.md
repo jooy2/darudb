@@ -1,6 +1,6 @@
 ---
 title: Migration
-order: 12
+order: 15
 counterpart: /types/node/migration
 ---
 

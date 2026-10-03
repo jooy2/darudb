@@ -66,6 +66,8 @@ Add the crate by path until it is published:
 darudb = { path = "../darudb/crates/darudb" }
 ```
 
+The `derive` feature adds `#[derive(Object)]`, which makes a struct the objects of a collection; see [Collections and objects](./objects.md#objects-as-rust-types).
+
 :::
 
 ::: lang node
