@@ -25,17 +25,19 @@ When creating an issue, keep the following in mind:
 
 The repository holds one database engine, written in Rust, the bindings that ship it to each language, and one documentation site shared by all of them:
 
-| Path                   | What it is                                                  | How it is run                                                          |
-| ---------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `crates/darudb`        | The engine and the Rust API, the crate `darudb`             | `cargo test -p darudb` from the repository root                        |
-| `crates/darudb-derive` | `#[derive(Object)]` and `#[derive(Embedded)]` for the crate | `cargo test -p darudb -p darudb-derive` from the repository root       |
-| `packages/node`        | The Node.js binding, the npm package `darudb`               | `cd packages/node && npm install`, then `npm run build` and `npm test` |
-| `docs`                 | The documentation site, shared by every language            | `cd docs && npm install`, then `npm run dev`                           |
-| `design`               | The engine's specifications, in English only                | Read before changing the file format, commits, recovery or locking     |
+| Path                             | What it is                                                      | How it is run                                                          |
+| -------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `crates/darudb`                  | The engine and the Rust API, the crate `darudb`                 | `cargo test -p darudb` from the repository root                        |
+| `crates/darudb-derive`           | `#[derive(Object)]` and `#[derive(Embedded)]` for the crate     | `cargo test -p darudb -p darudb-derive` from the repository root       |
+| `packages/node`                  | The Node.js binding, the npm package `darudb`                   | `cd packages/node && npm install`, then `npm run build` and `npm test` |
+| `packages/dart/darudb`           | The Dart package `darudb`, with its native library in `native/` | `dart pub get`, `dart run build_runner build`, then `dart test`        |
+| `packages/dart/darudb_generator` | The Dart code generator `darudb_generator`                      | `dart pub get`, then `dart test`                                       |
+| `docs`                           | The documentation site, shared by every language                | `cd docs && npm install`, then `npm run dev`                           |
+| `design`                         | The engine's specifications, in English only                    | Read before changing the file format, commits, recovery or locking     |
 
 The repository root holds the Cargo workspace (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`) and nothing for JavaScript. There is no root `package.json` and no npm workspace: each JavaScript folder is entered and installed on its own.
 
-A Dart binding is planned and will live in `packages/dart`.
+The Dart package builds its native library from `packages/dart/darudb/native`, a member of the Cargo workspace, in its build hook, which `dart test` runs; the first build compiles the engine and takes a minute or two. The tests' models are annotated classes whose `.g.dart` parts `build_runner` writes and git ignores, so `dart run build_runner build` comes before `dart test`.
 
 `design/` specifies the file format, the commit and recovery protocol and the locking protocol. A change to any of them updates the matching document in the same commit.
 
@@ -171,6 +173,7 @@ The scope names the part of the repository that changed, since one repository ho
 
 - `[core]`: `crates/darudb` and `crates/darudb-derive`, the engine, the Rust API and its derive macros
 - `[node]`: `packages/node`, the Node.js binding
+- `[dart]`: `packages/dart`, the Dart package, its native library and its code generator
 - `[docs]`: `docs`, the documentation site
 - `[common]`: anything shared by all of them, such as the repository files, the Cargo workspace or CI
 
