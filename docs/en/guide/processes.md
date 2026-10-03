@@ -31,3 +31,9 @@ Opening a file that is already open in the process gives another handle to the s
 In Electron, several instances of the app, or the main process and a utility process, share a file the same way. [Electron](./electron.md) has what is particular to it.
 
 :::
+
+::: lang dart
+
+In a Flutter app, several isolates share a file the same way: each opens its own `Database`, and the handles share the process's page cache and writer. An isolate's asynchronous writes take turns with each other; another isolate's write waits for them in the engine, as another process's would.
+
+:::

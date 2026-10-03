@@ -98,6 +98,56 @@ const db = Database.open('app.darudb', {
 
 :::
 
+::: lang dart
+
+```dart
+@Collection('people')
+class Person {
+  const Person({this.id, required this.fullName, this.email, this.age = ''});
+
+  final int? id;
+  @Name('full_name')
+  final String fullName;
+  @Unique()
+  final String? email;
+  final String age;
+}
+
+final db = Database.open(
+  'app.darudb',
+  schema: const Schema(2, [personSchema]),
+  migrations: [
+    Migration(
+      2,
+      renameCollections: const {'users': 'people'},
+      renameFields: const {
+        'users': {'name': 'full_name'},
+      },
+      replaceFields: const {
+        'users': ['age'],
+      },
+      deleteCollections: const ['teams'],
+      run: (m) {
+        final people = m.collection(personSchema);
+
+        for (final key in m.previousKeys('users')) {
+          final before = m.previous('users', key);
+          final person = people.get(key as int);
+
+          if (before != null && person != null) {
+            people.put(person.copyWith(age: '${before['age']} years'));
+          }
+        }
+      },
+    ),
+  ],
+);
+```
+
+`previous`는 객체를 예전 스키마대로 읽어, 필드를 예전 이름으로 담은 `Map`으로 돌려줍니다. 예전 스키마의 클래스는 보통 프로그램에 남아 있지 않기 때문입니다. 함수가 예외를 던지면 `open`도 같은 예외를 던집니다. `Database.openAsync`에서는 함수가 비동기여도 되지만, 컨텍스트에서 부르는 메서드는 동기 그대로입니다.
+
+:::
+
 - **이름 바꾸기**는 데이터를 옮기지 않으므로 객체가 아무리 많아도 비용이 없습니다. 컬렉션은 마이그레이션 전의 이름으로 적습니다.
 - **필드 교체**는 타입을 바꿀 때 씁니다. 같은 이름으로 새 필드를 만드는 것과 같습니다. **컬렉션 삭제**는 그 객체와 인덱스를 함께 지웁니다.
 - **마이그레이션 함수**는 이름 바꾸기가 끝난 뒤 마이그레이션의 쓰기 트랜잭션 안에서 새 스키마로 실행됩니다. `previous`로 읽으면 예전 이름과, 지우거나 교체한 필드의 값까지 예전 스키마대로 읽을 수 있습니다. 쓴 객체에는 새 스키마의 필드만 남으니, 객체를 쓰기 전에 이렇게 읽어 두세요. 지울 컬렉션도 마이그레이션이 커밋되기 전까지는 이렇게 읽을 수 있습니다.

@@ -117,6 +117,51 @@ const app = schema(1, {
 
 :::
 
+::: lang dart
+
+```dart
+import 'package:darudb/darudb.dart';
+
+part 'schema.g.dart';
+
+@Collection('users')
+class User {
+  const User({this.id, required this.name, this.email, this.age = 0});
+
+  final int? id;
+  final String name;
+  @Unique()
+  final String? email;
+  @Index()
+  final int age;
+}
+
+@Collection('posts')
+class Post {
+  const Post({
+    required this.slug,
+    this.author,
+    required this.body,
+    this.publishedAt,
+    required this.tags,
+  });
+
+  @PrimaryKey()
+  final String slug;
+  @Index()
+  final Link<User>? author;
+  final String body;
+  @Name('published_at')
+  final String? publishedAt;
+  @Index()
+  final List<String> tags;
+}
+
+const app = Schema(1, [userSchema, postSchema]);
+```
+
+:::
+
 ## Copy the rows
 
 ::: lang rust
@@ -280,11 +325,99 @@ sqlite.close();
 
 :::
 
+::: lang dart
+
+The script reads the old file with the `sqlite3` package, whose build hook brings SQLite with it:
+
+```yaml
+dependencies:
+  darudb:
+    path: ../darudb/packages/dart/darudb
+  sqlite3: ^3.7.0
+```
+
+```dart
+import 'package:darudb/darudb.dart';
+import 'package:sqlite3/sqlite3.dart';
+
+import 'schema.dart';
+
+void main() {
+  final sqlite = sqlite3.open('app.sqlite', mode: OpenMode.readOnly);
+  final db = Database.open('app.darudb', schema: app);
+
+  /// Copies [rows] into a collection, a thousand to a transaction.
+  void copy<T>(
+    Iterable<Row> rows,
+    CollectionSchema<T, QueryBuilder<T>, Object> collection,
+    T Function(Row row) convert,
+  ) {
+    final batch = <T>[];
+
+    void flush() {
+      db.write(
+        (txn) => txn.collection(collection).insertMany(batch),
+        durability: Durability.deferred,
+      );
+      batch.clear();
+    }
+
+    for (final row in rows) {
+      batch.add(convert(row));
+
+      if (batch.length == 1000) {
+        flush();
+      }
+    }
+
+    if (batch.isNotEmpty) {
+      flush();
+    }
+  }
+
+  copy(
+    sqlite.select('SELECT id, name, email, age FROM users'),
+    userSchema,
+    (row) => User(
+      id: row['id'] as int,
+      name: row['name'] as String,
+      email: row['email'] as String?,
+      age: row['age'] as int,
+    ),
+  );
+
+  // The join table becomes a list on each post.
+  final tags = <String, List<String>>{};
+
+  for (final row in sqlite.select('SELECT post_slug, tag FROM post_tags')) {
+    tags.putIfAbsent(row['post_slug'] as String, () => []).add(row['tag'] as String);
+  }
+
+  copy(
+    sqlite.select('SELECT slug, author_id, body, published_at FROM posts'),
+    postSchema,
+    (row) => Post(
+      slug: row['slug'] as String,
+      author: row['author_id'] == null ? null : Link<User>(row['author_id'] as int),
+      body: row['body'] as String,
+      publishedAt: row['published_at'] as String?,
+      tags: tags[row['slug']] ?? [],
+    ),
+  );
+
+  // Every deferred commit is durable once this returns.
+  db.close();
+  sqlite.close();
+}
+```
+
+:::
+
 The old file is opened read-only and stays as it was. Copying the whole join table into memory first is what lets each post be written once, with its tags; for a join table too large for memory, read it ordered by `post_slug` beside the posts ordered by `slug` instead.
 
 ## Check the copy
 
-Count each table and each collection, and compare: `SELECT count(*) FROM users` against <LangCode rust="len" node="count" /> on `users`. Then run the [integrity check](../guide/tools.md#check-a-file) on the new file, which also checks every object against its indexes.
+Count each table and each collection, and compare: `SELECT count(*) FROM users` against <LangCode rust="len" node="count" dart="count" /> on `users`. Then run the [integrity check](../guide/tools.md#check-a-file) on the new file, which also checks every object against its indexes.
 
 ## Queries
 
@@ -309,6 +442,6 @@ The query language reads much like a `WHERE` clause:
 
 ## What changes in the application
 
-- **Transactions** are <LangCode rust="begin_read and begin_write" node="db.read and db.write" /> instead of `BEGIN` and `COMMIT`, and a read happens in one too. [Transactions](../guide/transactions.md) says what a commit promises.
+- **Transactions** are <LangCode rust="begin_read and begin_write" node="db.read and db.write" dart="db.read and db.write" /> instead of `BEGIN` and `COMMIT`, and a read happens in one too. [Transactions](../guide/transactions.md) says what a commit promises.
 - **Schema changes** raise the schema's version instead of running `ALTER TABLE`: the engine adds new collections, fields and indexes by itself, and a migration names the rest. See [Migrations](../guide/migrations.md).
 - **Results are plain objects**, which keep their values after the transaction ends.

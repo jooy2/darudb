@@ -117,6 +117,51 @@ const app = schema(1, {
 
 :::
 
+::: lang dart
+
+```dart
+import 'package:darudb/darudb.dart';
+
+part 'schema.g.dart';
+
+@Collection('users')
+class User {
+  const User({this.id, required this.name, this.email, this.age = 0});
+
+  final int? id;
+  final String name;
+  @Unique()
+  final String? email;
+  @Index()
+  final int age;
+}
+
+@Collection('posts')
+class Post {
+  const Post({
+    required this.slug,
+    this.author,
+    required this.body,
+    this.publishedAt,
+    required this.tags,
+  });
+
+  @PrimaryKey()
+  final String slug;
+  @Index()
+  final Link<User>? author;
+  final String body;
+  @Name('published_at')
+  final String? publishedAt;
+  @Index()
+  final List<String> tags;
+}
+
+const app = Schema(1, [userSchema, postSchema]);
+```
+
+:::
+
 ## 행 복사하기
 
 ::: lang rust
@@ -280,11 +325,99 @@ sqlite.close();
 
 :::
 
+::: lang dart
+
+스크립트는 `sqlite3` 패키지로 원래 파일을 읽습니다. 이 패키지는 빌드 훅으로 SQLite를 함께 가져옵니다.
+
+```yaml
+dependencies:
+  darudb:
+    path: ../darudb/packages/dart/darudb
+  sqlite3: ^3.7.0
+```
+
+```dart
+import 'package:darudb/darudb.dart';
+import 'package:sqlite3/sqlite3.dart';
+
+import 'schema.dart';
+
+void main() {
+  final sqlite = sqlite3.open('app.sqlite', mode: OpenMode.readOnly);
+  final db = Database.open('app.darudb', schema: app);
+
+  /// [rows]를 컬렉션에 트랜잭션마다 천 개씩 복사합니다.
+  void copy<T>(
+    Iterable<Row> rows,
+    CollectionSchema<T, QueryBuilder<T>, Object> collection,
+    T Function(Row row) convert,
+  ) {
+    final batch = <T>[];
+
+    void flush() {
+      db.write(
+        (txn) => txn.collection(collection).insertMany(batch),
+        durability: Durability.deferred,
+      );
+      batch.clear();
+    }
+
+    for (final row in rows) {
+      batch.add(convert(row));
+
+      if (batch.length == 1000) {
+        flush();
+      }
+    }
+
+    if (batch.isNotEmpty) {
+      flush();
+    }
+  }
+
+  copy(
+    sqlite.select('SELECT id, name, email, age FROM users'),
+    userSchema,
+    (row) => User(
+      id: row['id'] as int,
+      name: row['name'] as String,
+      email: row['email'] as String?,
+      age: row['age'] as int,
+    ),
+  );
+
+  // 연결 테이블은 글마다의 목록이 됩니다.
+  final tags = <String, List<String>>{};
+
+  for (final row in sqlite.select('SELECT post_slug, tag FROM post_tags')) {
+    tags.putIfAbsent(row['post_slug'] as String, () => []).add(row['tag'] as String);
+  }
+
+  copy(
+    sqlite.select('SELECT slug, author_id, body, published_at FROM posts'),
+    postSchema,
+    (row) => Post(
+      slug: row['slug'] as String,
+      author: row['author_id'] == null ? null : Link<User>(row['author_id'] as int),
+      body: row['body'] as String,
+      publishedAt: row['published_at'] as String?,
+      tags: tags[row['slug']] ?? [],
+    ),
+  );
+
+  // 이 호출이 반환되면 지연 커밋이 모두 디스크에 기록됩니다.
+  db.close();
+  sqlite.close();
+}
+```
+
+:::
+
 원래 파일은 읽기 전용으로 열어서 그대로 남습니다. 연결 테이블을 먼저 메모리에 다 읽어 두기 때문에 글마다 태그와 함께 한 번에 쓸 수 있습니다. 연결 테이블이 메모리에 담기에 너무 크면, `post_slug`로 정렬해 읽으면서 `slug`로 정렬한 글과 나란히 맞춰 가세요.
 
 ## 복사본 확인하기
 
-테이블과 컬렉션마다 개수를 세어 비교합니다. `SELECT count(*) FROM users`의 결과를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" />)와 견주면 됩니다. 그다음 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌리면, 모든 객체를 인덱스와도 맞춰 봅니다.
+테이블과 컬렉션마다 개수를 세어 비교합니다. `SELECT count(*) FROM users`의 결과를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" dart="count" />)와 견주면 됩니다. 그다음 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌리면, 모든 객체를 인덱스와도 맞춰 봅니다.
 
 ## 쿼리
 
@@ -309,6 +442,6 @@ sqlite.close();
 
 ## 애플리케이션에서 바뀌는 것
 
-- **트랜잭션**은 `BEGIN`과 `COMMIT` 대신 <LangCode rust="begin_read와 begin_write" node="db.read와 db.write" />를 쓰고, 읽기도 트랜잭션 안에서 합니다. 커밋이 무엇을 보장하는지는 [트랜잭션](../guide/transactions.md)에 있습니다.
+- **트랜잭션**은 `BEGIN`과 `COMMIT` 대신 <LangCode rust="begin_read와 begin_write" node="db.read와 db.write" dart="db.read와 db.write" />를 쓰고, 읽기도 트랜잭션 안에서 합니다. 커밋이 무엇을 보장하는지는 [트랜잭션](../guide/transactions.md)에 있습니다.
 - **스키마 변경**은 `ALTER TABLE`을 실행하는 대신 스키마 버전을 올립니다. 새 컬렉션과 필드, 인덱스는 엔진이 알아서 추가하고, 나머지는 마이그레이션에 적습니다. [마이그레이션](../guide/migrations.md)을 보세요.
 - **결과는 평범한 객체**여서 트랜잭션이 끝나도 값이 그대로 남습니다.

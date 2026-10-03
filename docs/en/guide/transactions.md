@@ -45,7 +45,22 @@ const count = db.read((txn) => txn.collection('users').count());
 
 :::
 
-A read transaction sees one commit for as long as it lives, whatever is committed after it began, and never waits for a writer. There is one write transaction at a time in a file, across every handle and every process. A write waits for the one already running for up to the busy timeout, five seconds unless <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" /> says otherwise, and then fails with `BUSY`.
+::: lang dart
+
+`write` runs a function in a write transaction and commits when the function returns; if it throws, nothing it did is kept. `read` runs a function in a read transaction. Both return what the function returns, and neither lets a transaction outlive its function: a transaction or a collection used after its function has returned throws `CLOSED`.
+
+```dart
+final key = db.write((txn) => txn.collection(userSchema).insert(const User(name: 'Alice')));
+
+final count = db.read((txn) => txn.collection(userSchema).count());
+```
+
+- The functions are synchronous. A function that returns a `Future` is refused, and its transaction is aborted. The [`Future` API](./async.md) takes asynchronous functions.
+- Write transactions do not nest: `db.write` inside another's function fails at once, where it would otherwise wait for itself.
+
+:::
+
+A read transaction sees one commit for as long as it lives, whatever is committed after it began, and never waits for a writer. There is one write transaction at a time in a file, across every handle and every process. A write waits for the one already running for up to the busy timeout, five seconds unless <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" /> says otherwise, and then fails with `BUSY`.
 
 ## Sync and deferred commits
 
@@ -79,7 +94,21 @@ db.sync();
 
 :::
 
-Deferred commits become durable at the next sync commit, at <LangCode rust="Database::sync" node="db.sync()" />, when the database is closed, or once they have waited a second. A crash of the process loses none of them, because they are already in the file. A power cut can undo the newest ones, but it never leaves a gap and never damages the file: what comes back is a commit that was made, with every commit before it.
+::: lang dart
+
+```dart
+db.write(
+  (txn) => txn.collection(eventSchema).insert(const Event(kind: 'click')),
+  durability: Durability.deferred,
+);
+
+// Everything committed so far is durable once this returns.
+db.sync();
+```
+
+:::
+
+Deferred commits become durable at the next sync commit, at <LangCode rust="Database::sync" node="db.sync()" dart="db.sync()" />, when the database is closed, or once they have waited a second. A crash of the process loses none of them, because they are already in the file. A power cut can undo the newest ones, but it never leaves a gap and never damages the file: what comes back is a commit that was made, with every commit before it.
 
 ::: lang rust
 
@@ -91,6 +120,6 @@ A sync commit costs one wait for the disk, which on most machines is the larger 
 
 ## The page cache
 
-Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. <LangCode rust="OpenOptions::cache_size" node="cacheSize" /> sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
+Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" /> sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
 
 Opening a file that is already open in the process gives another handle to the same database, which shares its cache and its writer.

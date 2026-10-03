@@ -26,7 +26,7 @@ export interface CodeLanguage {
 export const CODE_LANGUAGES: CodeLanguage[] = [
   { id: 'rust', label: 'Rust', available: true },
   { id: 'node', label: 'Node.js', available: true },
-  { id: 'dart', label: 'Dart', available: false }
+  { id: 'dart', label: 'Dart', available: true }
 ];
 
 export const LANGUAGE_IDS: LanguageId[] = CODE_LANGUAGES.map((language) => language.id);

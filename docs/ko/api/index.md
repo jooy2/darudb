@@ -19,4 +19,10 @@ order: 1
 
 :::
 
+::: lang dart
+
+`darudb` 패키지는 모든 것을 라이브러리 하나에서 내보냅니다. `import 'package:darudb/darudb.dart';`로 가져오면 됩니다. 생성기 `darudb_generator`는 어노테이션을 붙인 클래스마다 스키마 상수와 쿼리 빌더를 씁니다. 이 호출들이 받고 돌려주는 타입은 [타입](../types/index.md)에 있습니다.
+
+:::
+
 <PageList section="api" />

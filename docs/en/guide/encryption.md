@@ -51,12 +51,34 @@ Database.open('secret.darudb', { schema: app }); // throws KEY_REQUIRED
 
 :::
 
+::: lang dart
+
+```dart
+final db = Database.open(
+  'secret.darudb',
+  schema: const Schema(1, [userSchema]),
+  password: 'correct horse battery staple',
+);
+
+print(db.isEncrypted); // true
+db.setPassword('a new password'); // or `await db.setPasswordAsync(...)`
+db.close();
+
+Database.open('secret.darudb', schema: const Schema(1, [userSchema])); // throws KEY_REQUIRED
+```
+
+- `key` is a `Uint8List` of 32 bytes, and `setKey` changes it. Give a `key` or a `password`, not both.
+- The package copies the key or the password into native memory when `open` or `openAsync` is called, and wipes its copies once the engine has its own. A `Uint8List` you pass can be wiped with `fillRange` as soon as the call returns; a `String` cannot be wiped, and stays in memory until the garbage collector reclaims it.
+- `setKey` and `setPassword` commit, so they follow the rules of a write: their `Async` twins wait their turn after this isolate's other asynchronous writes on the file, and the synchronous forms are refused while an asynchronous write holds it.
+
+:::
+
 Everything inside a page is encrypted: keys, values, collection and tree names included. Every page is authenticated, and so is the header's record of each commit, so a changed byte is reported as `CORRUPTED` rather than read. A file opened without its key fails with `KEY_REQUIRED`, and with the wrong one with `WRONG_KEY`.
 
 ## Keys and passwords
 
 - **A key** is 32 random bytes, such as one kept in the operating system's keystore.
-- **A password** is turned into a key with Argon2id, which takes tens of milliseconds at the default cost of 19 MiB, 2 iterations and 1 lane. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" /> raises or lowers that cost for a new file and for a password change. A file records the cost it was made with, so opening it takes that cost whatever the option says.
+- **A password** is turned into a key with Argon2id, which takes tens of milliseconds at the default cost of 19 MiB, 2 iterations and 1 lane. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" /> raises or lowers that cost for a new file and for a password change. A file records the cost it was made with, so opening it takes that cost whatever the option says.
 - **Changing the key or the password** re-encrypts nothing, and once it returns, the old one no longer opens the file.
 - A plain database stays plain, and an encrypted one cannot be opened without its key. Keep the key, or the password, where it cannot be lost: without it, the data cannot be read.
 

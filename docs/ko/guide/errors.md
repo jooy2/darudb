@@ -50,6 +50,24 @@ try {
 
 :::
 
+::: lang dart
+
+패키지가 데이터베이스에 대해 던지는 오류는 모두 `DaruException`이고, `code`는 아래 코드 중 하나입니다. `Future` API도 같은 오류로 끝납니다.
+
+```dart
+try {
+  Database.open('missing.darudb', create: false);
+} on DaruException catch (error) {
+  if (error.code == 'NOT_FOUND') {
+    // 경로에 아무것도 없습니다.
+  }
+}
+```
+
+트랜잭션이나 마이그레이션 안에서 내 함수가 던진 오류는 그대로 다시 던집니다. 자세한 내용은 타입 섹션의 [`DaruException`](../types/dart/error.md)에 있습니다.
+
+:::
+
 메시지는 사람이 읽으라고 있는 것이고 바뀔 수 있으니, 프로그램은 코드로 판단하면 됩니다.
 
 ## 모든 코드

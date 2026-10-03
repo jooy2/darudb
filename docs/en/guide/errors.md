@@ -50,6 +50,24 @@ try {
 
 :::
 
+::: lang dart
+
+Every error the package throws for the database is a `DaruException`, whose `code` is one of the codes below. The `Future` API completes with the same errors.
+
+```dart
+try {
+  Database.open('missing.darudb', create: false);
+} on DaruException catch (error) {
+  if (error.code == 'NOT_FOUND') {
+    // Nothing exists at that path.
+  }
+}
+```
+
+An error a function of yours throws inside a transaction or a migration is thrown again as it was. [`DaruException`](../types/dart/error.md) in the Types section has the details.
+
+:::
+
 A program can rely on the code, where the message is meant for a person and may change.
 
 ## Every code

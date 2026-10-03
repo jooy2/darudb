@@ -19,4 +19,10 @@ The types are exported from the package's root for TypeScript: `import type { Op
 
 :::
 
+::: lang dart
+
+The types are exported from the package's library, `package:darudb/darudb.dart`. The calls that take and return them are in [API](../api/index.md).
+
+:::
+
 <PageList section="types" />

@@ -141,6 +141,79 @@ fn schema() -> Schema {
 
 :::
 
+::: lang dart
+
+Dart 프로그램은 복사한 파일을 같은 선언을 어노테이션을 붙인 클래스로 옮긴 스키마로 엽니다. 버전과 컬렉션, 필드, 타입, 인덱스가 모두 같아야 하며, 다르면 `SCHEMA_MISMATCH`로 열리지 않습니다.
+
+```dart
+import 'dart:typed_data';
+
+import 'package:darudb/darudb.dart';
+
+part 'schema.g.dart';
+
+@Embedded()
+class Address {
+  const Address({required this.city, this.zip});
+
+  final String city;
+  final String? zip;
+}
+
+@Collection('users')
+class User {
+  const User({
+    required this.id,
+    required this.name,
+    this.email,
+    this.age = 0,
+    this.score,
+    this.avatar,
+    required this.joined,
+    required this.tags,
+    this.address,
+  });
+
+  @PrimaryKey()
+  final String id;
+  final String name;
+  @Index()
+  final String? email;
+  @Index()
+  final int age;
+  final double? score;
+  final Uint8List? avatar;
+  final int joined;
+  final List<String> tags;
+  final Address? address;
+}
+
+@Collection('posts')
+class Post {
+  const Post({
+    required this.slug,
+    this.author,
+    required this.readers,
+    this.price,
+    this.ref,
+    required this.meta,
+  });
+
+  @PrimaryKey()
+  final String slug;
+  @Index()
+  final Link<User>? author;
+  final List<Link<User>> readers;
+  final String? price;
+  final String? ref;
+  final String meta;
+}
+
+const app = Schema(1, [userSchema, postSchema]);
+```
+
+:::
+
 ## 객체 복사하기
 
 스크립트는 `realm` 패키지로 Realm 파일을 읽고 Node.js 패키지로 DaruDB 파일을 씁니다. DaruDB 파일은 어느 언어에서나 같은 파일이므로, 애플리케이션이 어떤 언어로 되어 있든 이 방법으로 옮깁니다.
@@ -148,6 +221,12 @@ fn schema() -> Schema {
 ::: lang rust
 
 Realm에는 Rust SDK가 없습니다. 아래 스크립트를 Node.js 패키지로 한 번 돌린 뒤, 스크립트가 쓴 파일을 Rust에서 `OpenOptions::new().schema(schema()).open("app.darudb")`로 여세요.
+
+:::
+
+::: lang dart
+
+Realm의 Flutter SDK로 앱의 Realm 모델 클래스를 거쳐 Dart에서 파일을 읽고, 클래스 하나씩 복사해도 됩니다. 아래 스크립트를 쓰면 그럴 필요가 없습니다. Node.js 패키지로 한 번 돌린 뒤, 스크립트가 쓴 파일을 Dart에서 `Database.open('app.darudb', schema: app)`으로 여세요.
 
 :::
 
@@ -214,7 +293,7 @@ process.exit(0);
 
 ## 복사본 확인하기
 
-클래스마다 `realm.objects('User').length`를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" />)와 견주고, 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌립니다.
+클래스마다 `realm.objects('User').length`를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" dart="count" />)와 견주고, 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌립니다.
 
 ## 쿼리
 
@@ -242,7 +321,7 @@ process.exit(0);
 
 - **결과는 평범한 객체입니다.** 쿼리는 파일에 묶인 라이브 객체가 아니라 파일에서 복사해 온 객체를 돌려줍니다. 데이터가 바뀌어도 객체는 바뀌지 않고, 트랜잭션과 데이터베이스를 닫은 뒤에도 그대로 쓸 수 있습니다. 바꾼 내용은 `put`이나 `update`로 다시 씁니다.
 - **변경 알림이 없습니다.** 데이터가 바뀌어도 애플리케이션을 불러 주는 것이 없습니다. 쓰기가 끝나면 화면에 보이는 것을 다시 읽으세요.
-- **트랜잭션**은 `realm.write` 대신 <LangCode rust="begin_write와 commit" node="db.write" />를 쓰고, 읽기도 읽기 트랜잭션 안에서 합니다. [트랜잭션](../guide/transactions.md)을 보세요.
+- **트랜잭션**은 `realm.write` 대신 <LangCode rust="begin_write와 commit" node="db.write" dart="db.write" />를 쓰고, 읽기도 읽기 트랜잭션 안에서 합니다. [트랜잭션](../guide/transactions.md)을 보세요.
 - **스키마 버전**은 그대로 같은 방식입니다. 스키마 버전을 올리고, 엔진이 알아서 하지 않는 변경은 마이그레이션에 적습니다. [마이그레이션](../guide/migrations.md)을 보세요.
 - **암호화**는 Realm의 64바이트 키 대신 32바이트 키나 비밀번호를 씁니다. 새 파일에는 새 키를 정합니다. [암호화](../guide/encryption.md)를 보세요.
 - **서버와의 동기화**에는 대응하는 것이 없습니다. DaruDB는 데이터를 로컬 파일에만 둡니다.

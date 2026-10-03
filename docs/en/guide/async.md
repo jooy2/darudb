@@ -1,16 +1,18 @@
 ---
 title: Asynchronous API
 order: 11
-languages: [node]
+languages: [node, dart]
 ---
 
 # Asynchronous API
 
-Every method of the Node.js package's `Database` has a twin whose name ends in `Async`, which does the engine's work on the libuv thread pool so that the event loop keeps running.
+Every method of `Database` that uses the file has a twin whose name ends in `Async`, which does the engine's work off the thread that runs your code, so that it keeps running while the engine waits.
 
 ## Use it
 
-`openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync` take what their synchronous forms take and resolve a promise. The event loop keeps running while the engine waits for the disk or for another process's writer, which is why a server should use them.
+::: lang node
+
+`openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync` take what their synchronous forms take and resolve a promise. The engine's work runs on the libuv thread pool, so the event loop keeps running while the engine waits for the disk or for another process's writer, which is why a server should use them.
 
 ```ts
 const db = await Database.openAsync('app.darudb', { schema: app });
@@ -35,18 +37,84 @@ const adults = await db.readAsync((txn) =>
 - `readAsync` begins its read on the calling thread, as `read` does, because beginning a read waits for no writer and costs less than a trip to the pool.
 - The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
 
+:::
+
+::: lang dart
+
+`openAsync`, `readAsync`, `writeAsync`, `syncAsync` and `closeAsync` take what their synchronous forms take and return a `Future`. The engine's work runs on threads of the package's native library, and the result comes back on the isolate's event loop, so a Flutter app's UI isolate never waits for the disk or for another writer.
+
+```dart
+final db = await Database.openAsync('app.darudb', schema: const Schema(1, [userSchema]));
+
+final key = await db.writeAsync((txn) async {
+  final users = txn.collection(userSchema);
+  final bob = await users.findOne((q) => q.where(q.name.equals('Bob')));
+
+  if (bob != null) {
+    await users.put(bob.copyWith(age: bob.age + 1));
+  }
+
+  return users.insert(const User(name: 'Carol'));
+});
+
+final adults = await db.readAsync(
+  (txn) => txn.collection(userSchema).find((q) => q.where(q.age.atLeast(18))),
+);
+```
+
+- The function may be asynchronous. `writeAsync` commits when it completes and aborts when it fails, and takes the same `durability` as `write`. `readAsync` sees one commit until the function completes.
+- `readAsync` begins its read on the calling isolate, as `read` does, because beginning a read waits for no writer.
+- The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
+
+:::
+
 ## How operations run
+
+::: lang node
 
 - Every collection method returns a promise. A transaction runs its operations in the order they were called, whether each was awaited or not, and commits only after the last one has settled. A rejected operation changes nothing, as in the synchronous API.
 - Operations called together, or while earlier ones are on the pool, go to the engine as one batch in one trip. A trip costs more than most operations, so starting many and awaiting them together is far cheaper than awaiting each in turn: `await Promise.all(keys.map((key) => users.get(key)))`.
 - The pool has four threads unless the `UV_THREADPOOL_SIZE` environment variable says otherwise, and Node.js runs its own file system calls there too.
 
+:::
+
+::: lang dart
+
+- Every collection method returns a `Future`. A transaction runs its operations in the order they were called, whether each was awaited or not, and commits only after the last one has completed. A failed operation changes nothing, as in the synchronous API.
+- Each operation is a trip to a thread of the library and back, which costs more than most operations do. A batch, such as `insertMany`, makes one trip for all of its objects.
+- The library's threads grow in number when every one is busy, so a write that waits for another one never holds the last thread the other needs, and end after ten seconds with nothing to do.
+
+:::
+
 ## Writes take turns
+
+::: lang node
 
 - This process's writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first without holding a thread of the pool, and so do `syncAsync` and `closeAsync`, which wait for the writer when a deferred commit is not yet durable.
 - Write transactions still do not nest. Inside a `writeAsync` function, `writeAsync`, `write`, `sync` or `close` on the same file fails with `INVALID_ARGUMENT`, and so do their asynchronous forms.
 - While an asynchronous write on the file is under way, a synchronous `write`, `sync` or `close` from anywhere fails the same way, because it would block the event loop that the other write needs to finish.
 
+:::
+
+::: lang dart
+
+- An isolate's asynchronous writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first, and so do `syncAsync`, `closeAsync`, `compactAsync` and the key changes, which wait for the writer too.
+- Write transactions still do not nest. Inside a `writeAsync` function, a write, sync, close or compaction on the same file fails with `INVALID_ARGUMENT`, synchronous or not.
+- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close` or `compact` fails the same way, because it would hold the isolate the other write needs to finish.
+- Another isolate's writes are another queue: they wait for this isolate's in the engine, as another process's would.
+
+:::
+
 ## Migrations
 
+::: lang node
+
 `openAsync` gives migration functions the same asynchronous collections, and `previous` and `previousKeys` return promises there. A migration function may be asynchronous, and its step ends once every operation it called has settled.
+
+:::
+
+::: lang dart
+
+With `openAsync`, a migration function may be asynchronous, and its step ends once the function's `Future` completes. The calls it makes on its `MigrationContext` are synchronous, as with `open`: the migration holds the writer, so nothing they wait for is another writer.
+
+:::

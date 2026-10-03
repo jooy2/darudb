@@ -64,6 +64,34 @@ In TypeScript, `where` accepts only the collection's fields, and a value of the 
 
 :::
 
+::: lang dart
+
+`find`, `findOne` and `count` take a function that builds a query on the query builder the generator made for the class. Each field is an object whose methods make a condition, and conditions combine with `&` (both), `|` (either) and `~` (not). `findOne` stops at the first object.
+
+```dart
+final adults = db.read(
+  (txn) => txn.collection(userSchema).find(
+    (q) => q.where(q.age.atLeast(18)).sortBy(q.age, descending: true).limit(10),
+  ),
+);
+
+db.read((txn) {
+  final users = txn.collection(userSchema);
+
+  users.find((q) => q.where(q.email.isNull()));
+  users.find((q) => q.where(q.tags.contains('new') & q.age.between(18, 30)));
+  users.find((q) => q.where(q.team.city.equals('Seoul')));
+  users.find((q) => q.where(q.name.equals('Alice') | q.email.isNull()));
+  users.count((q) => q.where(~q.name.startsWith('A')));
+});
+```
+
+The methods are `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull` and `isNotNull`, each on the fields it fits: `startsWith` on a string, `contains` on a string or a list. Calling `where` again adds a condition with AND, and `sortBy` again sorts the objects the first leaves equal. A link's field, `q.team`, compares the key it holds and has the linked collection's fields; an embedded object's field has its fields.
+
+The types check every condition: `q.age.atLeast('18')` does not compile.
+
+:::
+
 What a condition means is the same in every language:
 
 - **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
@@ -100,6 +128,16 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 ```
 
 The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again.
+
+:::
+
+::: lang dart
+
+```dart
+users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A']);
+```
+
+The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
 
 :::
 
@@ -141,6 +179,26 @@ db.read((txn) => {
 
   users.findOne(byEmail, ['alice@example.com']);
   users.find(inAges, [18, 30]);
+});
+```
+
+A prepared query runs only on the collection it was prepared on.
+
+:::
+
+::: lang dart
+
+`db.prepare` takes the schema constant and the text. `findPrepared`, `findOnePrepared` and `countPrepared` take the prepared query and the values, in any transaction, synchronous or asynchronous.
+
+```dart
+final byEmail = db.prepare(userSchema, r'email == $0');
+final inAges = db.prepare(userSchema, r'age BETWEEN $0 AND $1 SORT BY age');
+
+db.read((txn) {
+  final users = txn.collection(userSchema);
+
+  users.findOnePrepared(byEmail, ['alice@example.com']);
+  users.findPrepared(inAges, [18, 30]);
 });
 ```
 

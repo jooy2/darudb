@@ -83,6 +83,71 @@ The types are `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t
 
 :::
 
+::: lang dart
+
+Each collection is a class annotated `@Collection()`, with `final` fields and a constructor that takes each of them. `dart run build_runner build` writes, into the library's `.g.dart` part, a schema constant named after the class, `userSchema` for `User`, with the code that reads and writes its objects, a query builder, and a `copyWith`.
+
+```dart
+import 'package:darudb/darudb.dart';
+
+part 'models.g.dart';
+
+@Collection('teams')
+class Team {
+  const Team({required this.name, this.city});
+
+  @PrimaryKey()
+  final String name;
+  final String? city;
+}
+
+@Embedded()
+class Address {
+  const Address({required this.city, this.zip});
+
+  final String city;
+  final int? zip;
+}
+
+@Collection('users')
+class User {
+  const User({
+    this.id,
+    required this.name,
+    this.email,
+    this.age = 0,
+    this.tags,
+    this.team,
+    this.address,
+  });
+
+  final int? id;
+  final String name;
+  @Unique()
+  final String? email;
+  @Index()
+  final int age;
+  @Index()
+  final List<String>? tags;
+  final Link<Team>? team;
+  final Address? address;
+}
+
+final db = Database.open(
+  'app.darudb',
+  schema: const Schema(1, [teamSchema, userSchema]),
+);
+```
+
+A field's Dart type is its type: `bool`, `int` (64-bit), `double`, `String`, `Uint8List` for bytes, a `List` of those or of links, a `Link<T>` to an object of another collection, and a class annotated `@Embedded()` for an embedded object.
+
+- **Required and optional fields.** A field whose type is not nullable is required, and writing an object without it fails. A nullable one is optional, and null when it is left out. A constructor parameter's default is the field's default: the field stays required and holds the default when a record leaves it out.
+- **Primary keys.** `@PrimaryKey()` makes an `int`, `String` or `Uint8List` field the key. Without one, the class has a field `final int? id`, which is `null` until the object is inserted.
+- **Indexes.** `@Index()` keeps an index on a field, and `@Unique()` an index that also refuses two objects with the same value. `@Name('...')` gives a field another name in the file than in Dart.
+- **Objects are values.** The fields are final, and a changed object is a copy, made with the generated `copyWith`, written back with `put`.
+
+:::
+
 The rules the engine keeps are the same in every language:
 
 - **The automatic key.** A collection that names no primary key gets an integer field called `id`, and an object written without an `id` gets the next number, from 1 up. A number is never given twice in one file, even after its object is deleted.
@@ -170,6 +235,36 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 - `insert` and `insertMany` return the keys. `put` and `putMany` insert or replace. `delete` says whether there was an object.
 - `update` sets the fields it is given, keeps the rest, and says whether there was an object. `null` makes an optional field null and gives a field with a default its default, and a field left `undefined` stays as it is.
 - A batch crosses into the engine as one buffer in one call, which is much cheaper than one call per object.
+
+:::
+
+::: lang dart
+
+`txn.collection(userSchema)` gives a collection's objects as the class, and the calls that change them.
+
+```dart
+db.write((txn) {
+  txn.collection(teamSchema).insert(const Team(name: 'north', city: 'Seoul'));
+
+  final users = txn.collection(userSchema);
+  final alice = users.insert(
+    const User(name: 'Alice', email: 'alice@example.com', age: 31, team: Link<Team>('north')),
+  );
+
+  users.insertMany(const [User(name: 'Bob', tags: ['new'])]);
+  // `put` replaces the object with the same key.
+  users.put(users.get(alice)!.copyWith(age: 32));
+  // `update` sets the fields it is given and keeps the rest.
+  users.update(alice, (q) => [q.email.set(null)]);
+  users.delete(2);
+});
+
+final alice = db.read((txn) => txn.collection(userSchema).get(1));
+```
+
+- `insert` returns the new object's key, and `insertMany` the keys of a batch, which crosses into the engine as one buffer in one call. `put` and `putMany` insert or replace. `delete` says whether there was an object.
+- `update` takes a key and a function that gives the changes, each made by a field's `set`, and says whether there was an object. `set(null)` makes an optional field null and gives a field with a default its default.
+- `copyWith` keeps every field it is not given. It cannot make a field null: construct the object for that.
 
 :::
 

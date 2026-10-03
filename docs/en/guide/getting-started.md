@@ -22,6 +22,13 @@ DaruDB is not published yet, so for now you build it from source, add it to your
 
 :::
 
+::: lang dart
+
+- **Dart 3.10 or later**, or Flutter 3.38 or later: the package builds its native library in a build hook, which those releases made stable.
+- **Rust**, installed with [rustup](https://rustup.rs). Until the package is published with prebuilt libraries, its build hook compiles the engine, with the compiler `packages/dart/darudb/native/rust-toolchain.toml` pins, which `rustup` installs on the first build with the targets it lists.
+
+:::
+
 - **Git**, to clone the repository.
 
 DaruDB runs on Unix-like systems and on Windows. Network file systems such as NFS and SMB are not supported, because their file locks and syncs do not keep the promises a database relies on.
@@ -55,6 +62,19 @@ npm run build
 
 :::
 
+::: lang dart
+
+```bash
+cd packages/dart/darudb
+dart pub get
+dart run build_runner build
+dart test
+```
+
+`dart test` runs the package's build hook first, which compiles the engine for your platform, so the first run takes a minute or two. `build_runner` writes the code of the tests' models, as it does for an application's.
+
+:::
+
 ## Add it to a project
 
 ::: lang rust
@@ -79,6 +99,25 @@ npm install ../darudb/packages/node
 ```
 
 The package is TypeScript-first: its declarations ship with it, and the types of your objects follow from the schema you declare. It works from JavaScript as well.
+
+:::
+
+::: lang dart
+
+Add the package by path until it is published, with the generator that writes the code for your classes:
+
+```yaml
+dependencies:
+  darudb:
+    path: ../darudb/packages/dart/darudb
+
+dev_dependencies:
+  build_runner: ^2.10.0
+  darudb_generator:
+    path: ../darudb/packages/dart/darudb_generator
+```
+
+The package works in Flutter apps, Dart servers and command-line tools alike. [Collections and objects](./objects.md) shows the classes the generator reads.
 
 :::
 
@@ -116,6 +155,24 @@ db.close();
 
 // Open only if the file is already there.
 Database.open('app.darudb', { create: false }).close();
+```
+
+:::
+
+::: lang dart
+
+```dart
+import 'package:darudb/darudb.dart';
+
+void main() {
+  final db = Database.open('app.darudb');
+
+  print('page size: ${db.pageSize} bytes');
+  db.close();
+
+  // Open only if the file is already there.
+  Database.open('app.darudb', create: false).close();
+}
 ```
 
 :::
@@ -185,6 +242,46 @@ db.close();
 
 :::
 
+::: lang dart
+
+```dart
+import 'package:darudb/darudb.dart';
+
+part 'main.g.dart';
+
+@Collection('users')
+class User {
+  const User({this.id, required this.name, this.age = 0});
+
+  final int? id;
+  final String name;
+  @Index()
+  final int age;
+}
+
+void main() {
+  final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]));
+
+  db.write((txn) {
+    final users = txn.collection(userSchema);
+
+    users.insert(const User(name: 'Alice', age: 31));
+    users.insert(const User(name: 'Bob', age: 17));
+  });
+
+  final adults = db.read(
+    (txn) => txn.collection(userSchema).find((q) => q.where(q.age.atLeast(18))),
+  );
+
+  print(adults.map((user) => user.name)); // (Alice)
+  db.close();
+}
+```
+
+`dart run build_runner build` writes `main.g.dart`, which holds `userSchema` and the query builder whose `q.age` the query uses.
+
+:::
+
 The collection has no primary key field, so the engine gives each object an `id`, numbered from 1. The index on `age` lets the query read only the objects it finds rather than every object.
 
 ## Options
@@ -217,6 +314,21 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 
 [`OpenOptions`](../types/node/open-options.md) in the Types section has each of them in full.
+
+:::
+
+::: lang dart
+
+`Database.open` takes named options:
+
+- `create: false` refuses to create a missing file, which then fails with `NOT_FOUND`.
+- `pageSize` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
+- `cacheSize` sets how much memory, in bytes, the page cache may take: 32 MiB by default.
+- `busyTimeout`, a `Duration`, sets how long a write waits for another writer before failing with `BUSY`: five seconds by default.
+- `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
+- `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+
+[`Database.open`](../api/dart/database.md#open) in the API section has each of them in full, and `Database.openAsync` takes the same.
 
 :::
 

@@ -15,7 +15,7 @@ An embedded database runs inside your program rather than beside it. There is no
 | --- | --- | --- |
 | Crate `darudb` | Rust | The engine itself, and a library a Rust program uses directly |
 | npm package `darudb` | Node.js | A binding over the engine, with a typed TypeScript API, synchronous and asynchronous |
-| Dart package | Dart | Planned: a binding for Flutter apps and Dart programs |
+| Dart package `darudb` | Dart | A binding over the engine for Flutter apps and Dart programs, synchronous and with `Future`s, whose generator `darudb_generator` stores annotated classes |
 
 The Rust crate is not only the core the other packages are built on. A Rust program depends on it the way a Node.js program depends on the npm package, and gets the same collections, queries, migrations and tools. It also has two things the bindings do not: the [storage kernel](../engine/storage-kernel.md) of named byte trees under the objects, and the [calls bindings are built on](../engine/bindings.md).
 
@@ -45,6 +45,6 @@ The engine is written once, in Rust, and the Node.js and Dart packages are thin 
 - **Objects.** Schemas, collections, indexes, links and embedded objects, queries built in code or written as text, and migrations from one schema version to the next.
 - **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
 - **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
-- **Packages.** The Rust crate and the Node.js package have all of the above. Nothing is published yet: both are built from source.
+- **Packages.** The Rust crate, the Node.js package and the Dart package have all of the above. Nothing is published yet: each is built from source.
 
-Still to come: the comparison with other embedded databases that the performance goal is measured by, the Dart package, and prebuilt binaries for every supported platform.
+Still to come: prebuilt binaries for every supported platform, so that no package needs a Rust compiler to install.

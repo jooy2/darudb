@@ -141,6 +141,79 @@ fn schema() -> Schema {
 
 :::
 
+::: lang dart
+
+A Dart program opens the copied file with the same declaration as annotated classes. The two have to agree, in version, collections, fields, types and indexes, or opening fails with `SCHEMA_MISMATCH`:
+
+```dart
+import 'dart:typed_data';
+
+import 'package:darudb/darudb.dart';
+
+part 'schema.g.dart';
+
+@Embedded()
+class Address {
+  const Address({required this.city, this.zip});
+
+  final String city;
+  final String? zip;
+}
+
+@Collection('users')
+class User {
+  const User({
+    required this.id,
+    required this.name,
+    this.email,
+    this.age = 0,
+    this.score,
+    this.avatar,
+    required this.joined,
+    required this.tags,
+    this.address,
+  });
+
+  @PrimaryKey()
+  final String id;
+  final String name;
+  @Index()
+  final String? email;
+  @Index()
+  final int age;
+  final double? score;
+  final Uint8List? avatar;
+  final int joined;
+  final List<String> tags;
+  final Address? address;
+}
+
+@Collection('posts')
+class Post {
+  const Post({
+    required this.slug,
+    this.author,
+    required this.readers,
+    this.price,
+    this.ref,
+    required this.meta,
+  });
+
+  @PrimaryKey()
+  final String slug;
+  @Index()
+  final Link<User>? author;
+  final List<Link<User>> readers;
+  final String? price;
+  final String? ref;
+  final String meta;
+}
+
+const app = Schema(1, [userSchema, postSchema]);
+```
+
+:::
+
 ## Copy the objects
 
 The script reads the Realm file through the `realm` package and writes the DaruDB file through the Node.js package, whatever language the application is in: a DaruDB file is the same file in every language.
@@ -148,6 +221,12 @@ The script reads the Realm file through the `realm` package and writes the DaruD
 ::: lang rust
 
 Realm has no Rust SDK. Run the script below once with the Node.js package, then open the file it writes from Rust with `OpenOptions::new().schema(schema()).open("app.darudb")`.
+
+:::
+
+::: lang dart
+
+Realm's Flutter SDK reads the file from Dart too, through the app's own Realm model classes, and the copy can be written the same way in Dart, a class at a time. The script below needs neither: run it once with the Node.js package, then open the file it writes from Dart with `Database.open('app.darudb', schema: app)`.
 
 :::
 
@@ -214,7 +293,7 @@ process.exit(0);
 
 ## Check the copy
 
-Compare `realm.objects('User').length` with <LangCode rust="len" node="count" /> on `users`, for every class, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
+Compare `realm.objects('User').length` with <LangCode rust="len" node="count" dart="count" /> on `users`, for every class, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
 
 ## Queries
 
@@ -242,7 +321,7 @@ The query language is close to the Realm Query Language that `filtered` takes:
 
 - **Results are plain objects.** A query returns objects copied out of the file, not live objects tied to it: they do not change when the data does, and they stay usable after the transaction and the database are closed. A change is written back with `put` or `update`.
 - **No change notifications.** Nothing calls the application when data changes. After a write, read again what the screen shows.
-- **Transactions** are <LangCode rust="begin_write and commit" node="db.write" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
+- **Transactions** are <LangCode rust="begin_write and commit" node="db.write" dart="db.write" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
 - **Schema versions** keep working the same way: raise the schema's version, and give a migration for what the engine does not do by itself. See [Migrations](../guide/migrations.md).
 - **Encryption** takes a 32-byte key or a password instead of Realm's 64-byte key. The new file has a key of its own; see [Encryption](../guide/encryption.md).
 - **Sync** to a server has no counterpart: DaruDB keeps data in a local file only.

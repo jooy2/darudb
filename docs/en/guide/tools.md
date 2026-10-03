@@ -45,6 +45,20 @@ if (!report.ok) {
 
 :::
 
+::: lang dart
+
+```dart
+final report = db.check(); // or `await db.checkAsync()`
+
+if (!report.ok) {
+  for (final problem in report.problems) {
+    print('${problem.page} ${problem.tree} ${problem.message}');
+  }
+}
+```
+
+:::
+
 - A problem names the page it is in, where it is in one, and the tree or collection it was found in.
 - The check reads the whole file, so it takes about as long as reading every object. It keeps one bit for each page in memory, and nothing that grows with the number of objects.
 - A page that cannot be read hides the pages below it. The check counts those in one problem rather than reporting each as leaked.
@@ -78,6 +92,16 @@ console.log(`${report.entries} entries of commit ${report.commitId}`);
 
 :::
 
+::: lang dart
+
+```dart
+final report = await db.backupAsync('backups/app.darudb'); // or `db.backup(path)`
+
+print('${report.entries} entries of commit ${report.commitId}');
+```
+
+:::
+
 - The copy is written under a temporary name beside the path and takes the path only once it is whole and durable. A backup never replaces a file: when the path is taken, it fails with `INVALID_ARGUMENT`.
 - The backup holds the commit it copies for as long as it runs, as a read transaction does, so the file may grow meanwhile if others write.
 
@@ -106,6 +130,16 @@ fn compact(db: &Database) -> Result<(), darudb::Error> {
 const report = await db.compactAsync(); // or `db.compact()`
 
 console.log(`${report.bytesBefore} bytes, then ${report.bytesAfter}`);
+```
+
+:::
+
+::: lang dart
+
+```dart
+final report = await db.compactAsync(); // or `db.compact()`
+
+print('${report.bytesBefore} bytes, then ${report.bytesAfter}');
 ```
 
 :::
@@ -157,7 +191,21 @@ An encrypted file is salvaged with its `key` or `password` in the third argument
 
 :::
 
-- The report is whole (<LangCode rust="is_whole()" node="whole" />) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
+::: lang dart
+
+```dart
+final report = await Database.salvageAsync('app.darudb', 'rescued.darudb'); // or `Database.salvage`
+
+if (!report.whole) {
+  print('${report.entriesRecovered} ${report.valuesLost} ${report.objectsDropped}');
+}
+```
+
+An encrypted file is salvaged with its `key` or `password` among the named options.
+
+:::
+
+- The report is whole (<LangCode rust="is_whole()" node="whole" dart="whole" />) when the new file holds exactly the newest commit. Otherwise older versions filled what could not be read: an entry may have an older value, and one that a lost page had deleted may come back.
 - An object whose record cannot be read, or whose value of a unique index another object has taken, is left out and counted.
 - Salvage needs the file to itself. A file open in any process fails with `BUSY`, and so does opening the file while salvage runs.
 - The new file has the page size of the old one, and an encrypted file's key or password opens the new file too. Like a backup, salvage never replaces a file already at the path.

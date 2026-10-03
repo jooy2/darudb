@@ -26,5 +26,5 @@ Every guide follows the same four steps, and the old file is never changed:
 
 ## Guides
 
-- [SQLite](./sqlite.md): tables, rows and indexes, from Rust or from Node.js.
+- [SQLite](./sqlite.md): tables, rows and indexes, from Rust, Node.js or Dart.
 - [Realm](./realm.md): object schemas, links and embedded objects, with Node.js.

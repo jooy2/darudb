@@ -394,7 +394,7 @@ function llmsTxt(): string {
     `> ${SITE_DESCRIPTION}`,
     '',
     'One engine, written in Rust, shipped to Rust as the crate `darudb`, to Node.js as the npm',
-    'package `darudb`, and later to Dart. Every language reads and writes the same file the same',
+    'package `darudb`, and to Dart as the package `darudb`. Every language reads and writes the same file the same',
     'way, because every rule about the file lives in the engine. The project is in early',
     'development and nothing is published yet.',
     ''
@@ -407,6 +407,8 @@ function llmsTxt(): string {
     ['Rust types', 'types/rust'],
     ['Node.js API', 'api/node'],
     ['Node.js types', 'types/node'],
+    ['Dart API', 'api/dart'],
+    ['Dart types', 'types/dart'],
     ['Migration', 'migration']
   ];
 

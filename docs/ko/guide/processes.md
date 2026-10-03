@@ -31,3 +31,9 @@ order: 8
 Electron에서도 앱 인스턴스 여럿이나 메인 프로세스와 유틸리티 프로세스가 같은 방식으로 파일을 함께 씁니다. Electron에서만 챙길 점은 [Electron](./electron.md)에 있습니다.
 
 :::
+
+::: lang dart
+
+Flutter 앱에서는 isolate 여럿이 같은 방식으로 파일을 함께 씁니다. isolate마다 `Database`를 따로 열고, 핸들끼리는 프로세스의 페이지 캐시와 쓰기를 함께 씁니다. 한 isolate의 비동기 쓰기는 서로 차례를 지키고, 다른 isolate의 쓰기는 다른 프로세스의 쓰기처럼 엔진 안에서 그 차례를 기다립니다.
+
+:::

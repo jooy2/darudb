@@ -64,6 +64,34 @@ TypeScript에서 `where`는 컬렉션에 있는 필드와 그 필드 타입의 �
 
 :::
 
+::: lang dart
+
+`find`, `findOne`, `count`는 생성기가 클래스마다 만든 쿼리 빌더에 조건을 붙이는 함수를 받습니다. 빌더의 필드는 객체이고, 그 메서드가 조건을 만듭니다. 조건은 `&`(둘 다), `|`(둘 중 하나), `~`(부정)로 엮습니다. `findOne`은 첫 객체에서 멈춥니다.
+
+```dart
+final adults = db.read(
+  (txn) => txn.collection(userSchema).find(
+    (q) => q.where(q.age.atLeast(18)).sortBy(q.age, descending: true).limit(10),
+  ),
+);
+
+db.read((txn) {
+  final users = txn.collection(userSchema);
+
+  users.find((q) => q.where(q.email.isNull()));
+  users.find((q) => q.where(q.tags.contains('new') & q.age.between(18, 30)));
+  users.find((q) => q.where(q.team.city.equals('Seoul')));
+  users.find((q) => q.where(q.name.equals('Alice') | q.email.isNull()));
+  users.count((q) => q.where(~q.name.startsWith('A')));
+});
+```
+
+메서드는 `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull`, `isNotNull`이 있고, 필드마다 맞는 것만 있습니다. `startsWith`는 문자열에, `contains`는 문자열과 목록에 있습니다. `where`를 다시 부르면 AND로 조건이 붙고, `sortBy`를 다시 부르면 앞의 정렬에서 같은 객체끼리 그 필드로 정렬합니다. 링크 필드 `q.team`은 담긴 키와 비교하고, 대상 컬렉션의 필드도 가집니다. 내장 객체 필드는 그 객체의 필드를 가집니다.
+
+조건은 모두 타입 검사를 거치므로 `q.age.atLeast('18')`은 컴파일되지 않습니다.
+
+:::
+
 조건의 뜻은 언어와 관계없이 같습니다.
 
 - **경로**는 필드 이름이고, 내장 객체나 링크를 지날 때는 `.`으로 잇습니다. `address.city`처럼 쓰고, `author.name`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다.
@@ -100,6 +128,16 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 ```
 
 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다.
+
+:::
+
+::: lang dart
+
+```dart
+users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A']);
+```
+
+패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
 
 :::
 
@@ -141,6 +179,26 @@ db.read((txn) => {
 
   users.findOne(byEmail, ['alice@example.com']);
   users.find(inAges, [18, 30]);
+});
+```
+
+준비한 쿼리는 준비할 때 정한 컬렉션에서만 실행됩니다.
+
+:::
+
+::: lang dart
+
+`db.prepare`는 스키마 상수와 문자열을 받습니다. 준비한 쿼리와 값을 `findPrepared`, `findOnePrepared`, `countPrepared`에 넘기면 되며, 동기와 비동기 트랜잭션 어디서든 쓸 수 있습니다.
+
+```dart
+final byEmail = db.prepare(userSchema, r'email == $0');
+final inAges = db.prepare(userSchema, r'age BETWEEN $0 AND $1 SORT BY age');
+
+db.read((txn) {
+  final users = txn.collection(userSchema);
+
+  users.findOnePrepared(byEmail, ['alice@example.com']);
+  users.findPrepared(inAges, [18, 30]);
 });
 ```
 

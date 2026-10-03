@@ -19,4 +19,10 @@ The package `darudb` exports everything from its root: `import { Database, schem
 
 :::
 
+::: lang dart
+
+The package `darudb` exports everything from one library: `import 'package:darudb/darudb.dart';`. The generator `darudb_generator` writes a schema constant and a query builder for each annotated class. The types these calls take and return are in [Types](../types/index.md).
+
+:::
+
 <PageList section="api" />

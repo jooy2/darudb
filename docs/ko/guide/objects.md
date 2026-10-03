@@ -83,6 +83,71 @@ const db = Database.open('app.darudb', { schema: app });
 
 :::
 
+::: lang dart
+
+컬렉션마다 `@Collection()`을 붙인 클래스를 하나 둡니다. 필드는 `final`이고, 생성자가 필드를 모두 받습니다. `dart run build_runner build`는 라이브러리의 `.g.dart` 파트에 클래스 이름을 딴 스키마 상수를 씁니다. `User`라면 `userSchema`이고, 객체를 읽고 쓰는 코드와 쿼리 빌더, `copyWith`도 함께 들어 있습니다.
+
+```dart
+import 'package:darudb/darudb.dart';
+
+part 'models.g.dart';
+
+@Collection('teams')
+class Team {
+  const Team({required this.name, this.city});
+
+  @PrimaryKey()
+  final String name;
+  final String? city;
+}
+
+@Embedded()
+class Address {
+  const Address({required this.city, this.zip});
+
+  final String city;
+  final int? zip;
+}
+
+@Collection('users')
+class User {
+  const User({
+    this.id,
+    required this.name,
+    this.email,
+    this.age = 0,
+    this.tags,
+    this.team,
+    this.address,
+  });
+
+  final int? id;
+  final String name;
+  @Unique()
+  final String? email;
+  @Index()
+  final int age;
+  @Index()
+  final List<String>? tags;
+  final Link<Team>? team;
+  final Address? address;
+}
+
+final db = Database.open(
+  'app.darudb',
+  schema: const Schema(1, [teamSchema, userSchema]),
+);
+```
+
+필드의 타입은 Dart 타입 그대로입니다. `bool`, 64비트 `int`, `double`, `String`, 바이트를 담는 `Uint8List`, 이들이나 링크의 `List`, 다른 컬렉션의 객체를 가리키는 `Link<T>`, 그리고 `@Embedded()`를 붙인 클래스로 만드는 내장 객체가 있습니다.
+
+- **필수 필드와 선택 필드.** null이 될 수 없는 타입의 필드는 필수여서 빠진 객체는 쓸 수 없습니다. null이 될 수 있는 필드는 선택이고, 빠지면 null이 됩니다. 생성자 매개변수의 기본값은 필드의 기본값이 됩니다. 그 필드는 필수로 남고, 레코드에 없으면 기본값이 들어갑니다.
+- **기본 키.** `@PrimaryKey()`는 `int`, `String`, `Uint8List` 필드를 키로 삼습니다. 기본 키가 없는 클래스에는 `final int? id` 필드를 두고, 이 필드는 객체를 넣기 전까지 `null`입니다.
+- **인덱스.** `@Index()`는 필드에 인덱스를 두고, `@Unique()`는 값이 같은 객체 둘을 받지 않는 인덱스를 둡니다. `@Name('...')`을 붙이면 파일 안의 필드 이름을 Dart의 이름과 다르게 정할 수 있습니다.
+- **객체는 값입니다.** 필드는 모두 final이므로, 바꾼 객체는 생성된 `copyWith`로 만든 사본이고 `put`으로 다시 씁니다.
+
+:::
+
 엔진이 지키는 규칙은 언어와 관계없이 같습니다.
 
 - **자동 키.** 기본 키를 지정하지 않은 컬렉션에는 `id`라는 정수 필드가 생기고, `id` 없이 쓴 객체는 1부터 차례로 다음 번호를 받습니다. 객체를 지워도 한 파일 안에서 같은 번호를 두 번 주지 않습니다.
@@ -170,6 +235,36 @@ const alice = db.read((txn) => txn.collection('users').get(1));
 - `insert`와 `insertMany`는 키를 돌려줍니다. `put`과 `putMany`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
 - `update`는 받은 필드만 바꾸고 나머지는 그대로 두며, 객체가 있었는지 돌려줍니다. `null`을 주면 선택 필드는 null이 되고 기본값이 있는 필드는 기본값이 됩니다. `undefined`인 필드는 바뀌지 않습니다.
 - 여러 객체를 한 번에 넘기면 버퍼 하나에 담아 엔진을 한 번만 부릅니다. 객체마다 부르는 것보다 훨씬 쌉니다.
+
+:::
+
+::: lang dart
+
+`txn.collection(userSchema)`는 컬렉션의 객체를 클래스로 돌려주고, 객체를 바꾸는 메서드도 줍니다.
+
+```dart
+db.write((txn) {
+  txn.collection(teamSchema).insert(const Team(name: 'north', city: 'Seoul'));
+
+  final users = txn.collection(userSchema);
+  final alice = users.insert(
+    const User(name: 'Alice', email: 'alice@example.com', age: 31, team: Link<Team>('north')),
+  );
+
+  users.insertMany(const [User(name: 'Bob', tags: ['new'])]);
+  // `put`은 키가 같은 객체를 바꿉니다.
+  users.put(users.get(alice)!.copyWith(age: 32));
+  // `update`는 받은 필드만 바꾸고 나머지는 그대로 둡니다.
+  users.update(alice, (q) => [q.email.set(null)]);
+  users.delete(2);
+});
+
+final alice = db.read((txn) => txn.collection(userSchema).get(1));
+```
+
+- `insert`는 새 객체의 키를, `insertMany`는 한 묶음의 키를 돌려줍니다. 묶음은 버퍼 하나에 담겨 엔진을 한 번만 부릅니다. `put`과 `putMany`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
+- `update`는 키와, 바꿀 내용을 돌려주는 함수를 받습니다. 바꿀 내용은 필드의 `set`으로 만들고, 객체가 있었는지 돌려줍니다. `set(null)`을 주면 선택 필드는 null이 되고 기본값이 있는 필드는 기본값이 됩니다.
+- `copyWith`는 받지 않은 필드를 모두 그대로 둡니다. 필드를 null로 만들 수는 없으므로, 그럴 때는 객체를 새로 만듭니다.
 
 :::
 

@@ -98,6 +98,56 @@ If the function throws, `open` throws the same error. With `Database.openAsync`,
 
 :::
 
+::: lang dart
+
+```dart
+@Collection('people')
+class Person {
+  const Person({this.id, required this.fullName, this.email, this.age = ''});
+
+  final int? id;
+  @Name('full_name')
+  final String fullName;
+  @Unique()
+  final String? email;
+  final String age;
+}
+
+final db = Database.open(
+  'app.darudb',
+  schema: const Schema(2, [personSchema]),
+  migrations: [
+    Migration(
+      2,
+      renameCollections: const {'users': 'people'},
+      renameFields: const {
+        'users': {'name': 'full_name'},
+      },
+      replaceFields: const {
+        'users': ['age'],
+      },
+      deleteCollections: const ['teams'],
+      run: (m) {
+        final people = m.collection(personSchema);
+
+        for (final key in m.previousKeys('users')) {
+          final before = m.previous('users', key);
+          final person = people.get(key as int);
+
+          if (before != null && person != null) {
+            people.put(person.copyWith(age: '${before['age']} years'));
+          }
+        }
+      },
+    ),
+  ],
+);
+```
+
+`previous` gives an object as the old schema read it, as a `Map` of its fields by their old names, since the class of the old schema is usually gone from the program. If the function throws, `open` throws the same error. With `Database.openAsync`, the function may be asynchronous; the calls it makes on the context stay synchronous.
+
+:::
+
 - **Renames** keep the data where it is, so they cost nothing however many objects there are. A rename names the collection by its name before the migration.
 - **A replaced field** is a new field with the old name, for a change of type. **A deleted collection** goes with its objects and indexes.
 - **The migration function** runs in the migration's write transaction, after the renames, under the new schema. `previous` reads an object as the old schema did, with the old names and the values of removed and replaced fields, so read an object that way before writing it: a written object keeps only the new schema's fields. A deleted collection can still be read that way until the migration commits.
