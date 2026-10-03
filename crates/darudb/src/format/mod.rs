@@ -66,10 +66,11 @@ pub(crate) const MAGIC: [u8; 8] = *b"\x89DaruDB\n";
 
 /// The page size of a new database when the caller does not choose one.
 ///
-/// A placeholder rather than a measured choice; the benchmarks decide the real
-/// default. It is independent of the operating system's memory page size,
-/// which the engine never assumes, since it reads and writes the file without
-/// mapping it into memory.
+/// The size the benchmarks chose: larger pages made scans faster, but a lookup
+/// in a file larger than the page cache, and a small commit, slower. It is
+/// independent of the operating system's memory page size, which the engine
+/// never assumes, since it reads and writes the file without mapping it into
+/// memory.
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 4096;
 
 /// The smallest page size a database may use. Page 0 needs 2048 bytes, and

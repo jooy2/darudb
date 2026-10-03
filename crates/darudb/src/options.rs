@@ -72,7 +72,9 @@ impl OpenOptions {
     ///
     /// A power of two from 4096 to 65536. It only applies when the database is
     /// created: an existing file keeps the page size recorded in its header.
-    /// The default, 4096, is provisional until the benchmarks settle it.
+    /// The default, 4096, is the one the benchmarks chose: larger pages made
+    /// scans faster, but a lookup in a file larger than the page cache, and a
+    /// small commit, slower.
     pub fn page_size(&mut self, bytes: u32) -> &mut Self {
         self.page_size = bytes;
         self
@@ -115,8 +117,7 @@ impl OpenOptions {
     /// The limit bounds how much the barrier that makes them durable has to
     /// write, and how much recovery has to check after a power cut. Deferred
     /// commits reuse the pages they wrote before, so small ones that change
-    /// the same objects write the same pages again, and count them once. The
-    /// default is provisional until the benchmarks settle it.
+    /// the same objects write the same pages again, and count them once.
     pub fn max_unsynced_pages(&mut self, pages: u64) -> &mut Self {
         self.max_unsynced_pages = pages;
         self
