@@ -94,7 +94,7 @@ const groupLabels: Record<
     api: 'API',
     types: '타입',
     more: '더 알아보기',
-    migration: '마이그레이션'
+    migration: '다른 DB에서 옮기기'
   }
 };
 

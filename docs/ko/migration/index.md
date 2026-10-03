@@ -1,5 +1,5 @@
 ---
-title: 마이그레이션
+title: 다른 DB에서 옮기기
 order: 1
 ---
 
