@@ -624,6 +624,22 @@ describe('schemas', () => {
     assertCode(() => schema(0, {}), 'INVALID_ARGUMENT');
     assertCode(() => collection({ a: 'string' }), 'INVALID_ARGUMENT');
   });
+
+  it("refuse a modifier on a list's element rather than drop it", (context) => {
+    const path = tempPath(context);
+    const opening = (element) => () =>
+      Database.open(path, { schema: schema(1, { a: collection({ tags: t.list(element) }) }) });
+
+    assertCode(opening(t.string().index()), 'INVALID_ARGUMENT');
+    assertCode(opening(t.string().unique()), 'INVALID_ARGUMENT');
+    assertCode(opening(t.string().optional()), 'INVALID_ARGUMENT');
+    assertCode(opening(t.string().default('')), 'INVALID_ARGUMENT');
+
+    // The list itself is what an index goes on.
+    Database.open(path, {
+      schema: schema(1, { a: collection({ tags: t.list(t.string()).index() }) })
+    }).close();
+  });
 });
 
 describe('migrations', () => {

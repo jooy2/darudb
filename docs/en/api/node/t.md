@@ -96,7 +96,7 @@ list<T, I>(
 list(element: LinkType): FieldType<Key[]>;
 ```
 
-A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type that is optional or has a default, or a list of lists or of embedded objects, fails to open with `INVALID_ARGUMENT`. An index on a list has an entry for each element, and a condition on a list holds when it holds for any element.
+A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type with a modifier, `optional`, `default`, `index` or `unique`, or a list of lists or of embedded objects, fails to open with `INVALID_ARGUMENT`. An index goes on the list itself, as `t.list(t.string()).index()`, with an entry for each element. A condition on a list holds when it holds for any element.
 
 ### object
 

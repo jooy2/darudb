@@ -1827,9 +1827,22 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
 
       entries.push([2, 'int', target]);
     } else if (spec.type === 'list') {
-      if (spec.element.optional || spec.element.default !== undefined) {
+      // An index on a list is the list's own, with an entry for each element,
+      // so a modifier on the element would have no meaning. Refused rather
+      // than dropped, so that `t.list(t.string().index())` does not declare
+      // an index that is never kept.
+      const { element } = spec;
+
+      if (
+        element.optional ||
+        element.default !== undefined ||
+        element.index ||
+        element.unique ||
+        element.primaryKey
+      ) {
         throw invalid(
-          `\`${where}\` is a list, and a list's elements are neither optional nor defaulted`
+          `\`${where}\` is a list, and a list's elements are neither optional, defaulted, ` +
+            'indexed nor a key: index the list itself'
         );
       }
 
