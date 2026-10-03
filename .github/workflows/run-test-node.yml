@@ -1,23 +1,19 @@
 name: run-test-node
 
 on:
-  # Started by hand only, for now: the account's GitHub Actions minutes are
-  # short, and the same checks run locally (see CONTRIBUTING.md). To run this on
-  # every change, add the triggers below back in.
-  #
-  # pull_request:
-  #   branches: [main]
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     # The addon is the engine compiled in, so a change to either is a change
-  #     # to what these tests load.
-  #     - crates/**
-  #     - packages/node/**
-  #     - Cargo.toml
-  #     - Cargo.lock
-  #     - rust-toolchain.toml
-  #     - .github/workflows/run-test-node.yml
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      # The addon is the engine compiled in, so a change to either is a change
+      # to what these tests load.
+      - crates/**
+      - packages/node/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/run-test-node.yml
   workflow_dispatch:
 
 defaults:

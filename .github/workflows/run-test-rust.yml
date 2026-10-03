@@ -1,22 +1,18 @@
 name: run-test-rust
 
 on:
-  # Started by hand only, for now: the account's GitHub Actions minutes are
-  # short, and the same checks run locally (see CONTRIBUTING.md). To run this on
-  # every change, add the triggers below back in.
-  #
-  # pull_request:
-  #   branches: [main]
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - crates/**
-  #     - packages/*/src/**
-  #     - Cargo.toml
-  #     - Cargo.lock
-  #     - rust-toolchain.toml
-  #     - clippy.toml
-  #     - .github/workflows/run-test-rust.yml
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - crates/**
+      - packages/*/src/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - clippy.toml
+      - .github/workflows/run-test-rust.yml
   workflow_dispatch:
 
 env:

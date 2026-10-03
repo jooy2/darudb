@@ -1,19 +1,16 @@
 name: publish-documentation
 
 on:
-  # Started by hand only, for now: the account's GitHub Actions minutes are
-  # short. To deploy on every change to the site, add the trigger below back in.
-  #
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - docs/**
-  #     # The site copies every package's changelog in and reads its host from
-  #     # the npm package, so a change to either can change the site.
-  #     - crates/*/CHANGELOG.md
-  #     - packages/*/CHANGELOG.md
-  #     - packages/node/package.json
-  #     - .github/workflows/publish-documentation.yml
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      # The site copies every package's changelog in and reads its host from
+      # the npm package, so a change to either can change the site.
+      - crates/*/CHANGELOG.md
+      - packages/*/CHANGELOG.md
+      - packages/node/package.json
+      - .github/workflows/publish-documentation.yml
   workflow_dispatch:
 
 jobs:
