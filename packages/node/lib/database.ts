@@ -675,11 +675,16 @@ class Database {
     }
   }
 
-  /** The schema version the file holds, or `null` without a schema. */
-  get schemaVersion(): number | bigint | null {
+  /**
+   * The schema version the file holds, or `null` without a schema. The
+   * layout is the schema this handle declared, whose version `schema` only
+   * takes as a safe integer, so it is a number even where the record's
+   * decoder would allow a `bigint`.
+   */
+  get schemaVersion(): number | null {
     this.#database();
 
-    return this.#layout === null ? null : this.#layout.version;
+    return this.#layout === null ? null : Number(this.#layout.version);
   }
 
   /**
