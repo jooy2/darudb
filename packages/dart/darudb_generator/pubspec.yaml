@@ -1,6 +1,8 @@
 name: darudb_generator
 description: Generates the schema, the query builder and copyWith of a class annotated for DaruDB, with build_runner.
 version: 0.1.0
+repository: https://github.com/jooy2/darudb
+homepage: https://darudb.cdget.com
 publish_to: none
 
 environment:
