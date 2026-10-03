@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/public/logo-256.png" alt="" width="128" height="128">
+</p>
+
 # DaruDB
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jooy2/darudb/blob/main/LICENSE) [![run-test-rust](https://github.com/jooy2/darudb/actions/workflows/run-test-rust.yml/badge.svg)](https://github.com/jooy2/darudb/actions/workflows/run-test-rust.yml) [![run-test-node](https://github.com/jooy2/darudb/actions/workflows/run-test-node.yml/badge.svg)](https://github.com/jooy2/darudb/actions/workflows/run-test-node.yml)

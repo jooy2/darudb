@@ -1,0 +1,15 @@
+/**
+ * The logo in the home page's hero.
+ *
+ * The default theme sizes the hero image at 320 pixels, and expects an image
+ * with room around it. The logo is cropped close to its edges, so between 960
+ * and 1152 pixels, where the theme gives the image column less than 320
+ * pixels, it ran into the tagline beside it. Drawn smaller in that band, it
+ * stays inside its column.
+ */
+@media (min-width: 960px) and (max-width: 1151px) {
+  .VPHero.has-image .image-src {
+    max-width: 216px;
+    max-height: 216px;
+  }
+}

@@ -9,6 +9,9 @@ hero:
   name: DaruDB
   text: Rust와 Node.js, Dart를 위한 임베디드 데이터베이스
   tagline: Rust로 작성한 엔진 하나가 애플리케이션의 데이터를 로컬 파일 하나에 담습니다. 암호화와 크래시 안전성, 여러 프로세스가 파일 하나를 함께 쓰는 일은 나중에 덧붙이지 않고 처음부터 설계에 넣었습니다.
+  image:
+    src: /logo.webp
+    alt: DaruDB 로고
   actions:
     - theme: brand
       text: 소개

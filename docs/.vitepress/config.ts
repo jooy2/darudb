@@ -406,12 +406,23 @@ const vitePressConfig: UserConfig = {
     [`${defaultLocale}/:rest*`]: ':rest*'
   },
   head: [
+    // The logo at the sizes each consumer asks for: a 32-pixel PNG for a
+    // browser tab, the `.ico` that some clients fetch from the root without
+    // reading any tag, and the larger square a phone puts on its home screen.
+    ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/logo-32.png' }],
+    ['link', { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/logo-16.png' }],
+    ['link', { rel: 'shortcut icon', href: '/favicon.ico' }],
+    ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' }],
     // The half of the metadata that is the same on every page. The other half —
     // the canonical URL, the title, the description, the locale alternates — is
-    // per page and lives in `transformHead`. There is no `og:image` yet: the
-    // project has no mark to put in one.
+    // per page and lives in `transformHead`. The image is the square logo, which
+    // is what a `summary` card shows; it has to be an absolute URL.
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'DaruDB' }],
+    ['meta', { property: 'og:image', content: `${siteUrl}/logo-256.png` }],
+    ['meta', { property: 'og:image:width', content: '256' }],
+    ['meta', { property: 'og:image:height', content: '256' }],
+    ['meta', { property: 'og:image:alt', content: 'The DaruDB logo' }],
     ['meta', { name: 'twitter:card', content: 'summary' }]
   ],
   sitemap: {
@@ -459,6 +470,10 @@ const vitePressConfig: UserConfig = {
   },
   transformHead,
   themeConfig: {
+    // Beside the site title rather than in place of it: the mark is a picture,
+    // and the name is what a reader searches for. 64 pixels for a slot of 24,
+    // so that it stays sharp on a high-density screen.
+    logo: { src: '/logo-64.png', alt: '' },
     /**
      * `h2` and `h3`, nested. A guide page is a handful of `h2`s with the steps
      * or options as `h3`s under them, and the thing a reader came for is often

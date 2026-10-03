@@ -9,6 +9,9 @@ hero:
   name: DaruDB
   text: An embedded database for Rust, Node.js and Dart
   tagline: One engine, written in Rust, keeps your application's data in a single local file. Encryption, crash safety and several processes sharing one file are designed in from the start, not added later.
+  image:
+    src: /logo.webp
+    alt: The DaruDB logo
   actions:
     - theme: brand
       text: Introduction
