@@ -83,3 +83,10 @@ await db.closeAsync();
 ```
 
 The calls of one transaction run in the order they were made, awaited or not. An isolate's asynchronous writes on one file take turns, and a synchronous `write`, `sync` or `close` on the file while one runs is refused with `INVALID_ARGUMENT`, since it would hold the isolate the running write needs.
+
+## The native library
+
+The package's build hook gives the application the engine as a native library for its target, in one of two ways:
+
+- **A published copy** downloads the library built for the target from the package's GitHub release, the first time it builds for that target, and keeps it in the hook's cache. It uses the file only if its SHA-256 hash is the one `hook/prebuilt.json` in the package names, so the package vouches for what it loads. A build without network access needs the library in the cache already. Libraries ship for Android on arm64, armv7 and x86_64, for iOS devices and simulators, and for macOS, Windows and Linux (glibc 2.17 or later) on arm64 and x86_64. They are dynamic libraries, so a build that requires a static one needs a checkout of the repository.
+- **A checkout of the repository**, which an application gets by depending on the package through git or a path, builds the engine from the Rust crate in `native/` with the compiler `native/rust-toolchain.toml` pins, which [rustup](https://rustup.rs) installs on the first build. The first build takes a minute or two.

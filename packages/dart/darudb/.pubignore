@@ -1,0 +1,8 @@
+# What `dart pub publish` leaves out of the package. A published copy
+# downloads its native library, so the Rust crate stays in the repository,
+# where it builds against the engine's sources. The tests need the
+# repository too, and the release tooling is for the release workflow.
+native/
+test/
+tool/
+pubspec.lock

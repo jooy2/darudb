@@ -1,0 +1,4 @@
+tags:
+  # Holds only in a checkout of the repository, whose `hook/prebuilt.json`
+  # lists no library.
+  checkout:
