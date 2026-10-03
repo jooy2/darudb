@@ -81,6 +81,30 @@ class User {
     expect(written, contains('final class UserLink extends LinkField'));
   });
 
+  test('an embedded object gets its schema, its fields and copyWith', () async {
+    final (written, errors) = await generate('''
+@Embedded()
+class Address {
+  const Address({required this.city, this.zip});
+
+  final String city;
+  final String? zip;
+}
+''');
+
+    expect(errors, isEmpty);
+    expect(written, contains('const addressSchema = EmbeddedSchema<Address>('));
+    // The field object takes the schema, which its `set` writes with.
+    expect(
+      written,
+      contains(
+        'final class AddressFields extends EmbeddedField<Address> {\n'
+        '  const AddressFields(List<String> path) : super(path, addressSchema);',
+      ),
+    );
+    expect(written, contains('extension AddressCopyWith on Address'));
+  });
+
   Future<void> refused(String body, String message) async {
     final (_, errors) = await generate(body);
 

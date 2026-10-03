@@ -374,6 +374,22 @@ final class FieldSink {
   }
 }
 
+/// Writes [value] as the embedded object [schema] declares, tag first, with
+/// its fields as [layout] says they lie: the value of an embedded field that
+/// `update` sets.
+void writeEmbedded<E>(
+  Writer writer,
+  E value,
+  EmbeddedSchema<E> schema,
+  Layout layout,
+) {
+  final sink = FieldSink();
+  final mark = writer.open();
+
+  sink._encode(writer, layout, (slot) => schema._write(value, slot, sink));
+  writer.close(mark);
+}
+
 /// Writes a list's element, tag first.
 void writeElement(Writer writer, Object? value) {
   switch (value) {
@@ -703,15 +719,15 @@ final class Layout {
   /// The stored fields, in id order.
   final List<LaidField> fields;
 
-  /// The field ids, by slot.
-  late final List<int> idOfSlot = () {
-    final ids = List<int>.filled(fields.length, -1);
+  /// The stored fields, by slot.
+  late final List<LaidField?> fieldOfSlot = () {
+    final bySlot = List<LaidField?>.filled(fields.length, null);
 
     for (final field in fields) {
-      ids[field.slot] = field.id;
+      bySlot[field.slot] = field;
     }
 
-    return ids;
+    return bySlot;
   }();
 }
 

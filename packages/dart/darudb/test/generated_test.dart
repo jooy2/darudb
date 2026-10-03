@@ -102,6 +102,102 @@ void main() {
     expect(ada.email, 'ada@example.com');
   });
 
+  group('update replaces an embedded object whole', () {
+    late Database places;
+    late int id;
+
+    // A file the first version made, opened with the second, whose embedded
+    // object lists its fields in another order than the file keeps them.
+    setUp(() {
+      final path = '${directory.path}/places.darudb';
+      final first = Database.open(
+        path,
+        schema: const Schema(1, [placeV1Schema]),
+      );
+
+      id = first.write(
+        (txn) => txn
+            .collection(placeV1Schema)
+            .insert(const PlaceV1(spot: SpotV1(city: 'Seoul'))),
+      );
+      first.close();
+      places = Database.open(path, schema: const Schema(2, [placeSchema]));
+    });
+
+    tearDown(() => places.close());
+
+    Spot? spot() =>
+        places.read((txn) => txn.collection(placeSchema).get(id))!.spot;
+
+    test('with its fields where the file keeps them', () {
+      places.write((txn) {
+        final updated = txn
+            .collection(placeSchema)
+            .update(
+              id,
+              (q) => [q.spot.set(const Spot(zip: 'N1', city: 'London'))],
+            );
+
+        expect(updated, isTrue);
+      });
+
+      expect(spot()!.city, 'London');
+      expect(spot()!.zip, 'N1');
+      expect(
+        places.read(
+          (txn) => txn
+              .collection(placeSchema)
+              .count((q) => q.where(q.spot.city.equals('London'))),
+        ),
+        1,
+      );
+      expect(
+        places.read(
+          (txn) =>
+              txn.collection(placeSchema).countText(r'spot.zip == $0', ['N1']),
+        ),
+        1,
+      );
+    });
+
+    test('or makes it null', () {
+      places.write(
+        (txn) =>
+            txn.collection(placeSchema).update(id, (q) => [q.spot.set(null)]),
+      );
+
+      expect(spot(), isNull);
+    });
+
+    test('through the Future API', () async {
+      await places.writeAsync(
+        (txn) => txn
+            .collection(placeSchema)
+            .update(id, (q) => [q.spot.set(const Spot(city: 'Busan'))]),
+      );
+
+      expect(spot()!.city, 'Busan');
+      expect(spot()!.zip, isNull);
+    });
+
+    test('but not a field inside it', () {
+      expect(
+        () => places.write(
+          (txn) => txn
+              .collection(placeSchema)
+              .update(id, (q) => [q.spot.city.set('Daegu')]),
+        ),
+        throwsA(
+          isA<DaruException>().having(
+            (error) => error.code,
+            'code',
+            'INVALID_ARGUMENT',
+          ),
+        ),
+      );
+    });
+  });
+
   test('a declared key that is taken is DUPLICATE_KEY', () {
     db.write((txn) {
       final people = txn.collection(personSchema);

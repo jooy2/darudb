@@ -68,7 +68,10 @@ final class Change {
   const Change._(this._name, this._write);
 
   final String _name;
-  final void Function(Writer writer)? _write;
+
+  /// Writes the value, tag first, given how the fields of an embedded
+  /// object lie in the stored field, or `null` for null.
+  final void Function(Writer writer, Layout? nested)? _write;
 }
 
 /// A field of a collection or an embedded object, as a query names it.
@@ -112,7 +115,7 @@ abstract base class ValueField<V extends Object> extends Field {
 
     return Change._(
       path.single,
-      value == null ? null : (writer) => _write(writer, value),
+      value == null ? null : (writer, _) => _write(writer, value),
     );
   }
 }
@@ -217,7 +220,7 @@ base class ListField<E extends Object> extends Field {
       path.single,
       values == null
           ? null
-          : (writer) {
+          : (writer, _) {
               writer
                 ..byte(Tag.list)
                 ..varint(values.length);
@@ -269,15 +272,44 @@ base class LinkField extends Field {
       path.single,
       link == null
           ? null
-          : (writer) => writeKey(writer..byte(Tag.link), link.key),
+          : (writer, _) => writeKey(writer..byte(Tag.link), link.key),
     );
   }
 }
 
-/// An embedded object's field. The code `darudb_generator` writes adds the
-/// embedded object's fields.
-base class EmbeddedField extends Field {
-  const EmbeddedField(super.path);
+/// A field that holds an embedded object of type [E]. The code
+/// `darudb_generator` writes adds the embedded object's fields.
+base class EmbeddedField<E> extends Field {
+  const EmbeddedField(super.path, this._schema);
+
+  final EmbeddedSchema<E> _schema;
+
+  /// The change that replaces the embedded object whole with [value], or
+  /// makes it null, for `update`. Null gives a required field with a
+  /// default its default.
+  Change set(E? value) {
+    if (path.length != 1) {
+      throw invalidArgument(
+        '`update` sets the fields of the object itself, not `${path.join('.')}`',
+      );
+    }
+
+    return Change._(
+      path.single,
+      value == null
+          ? null
+          : (writer, nested) {
+              if (nested == null) {
+                throw invalidArgument(
+                  '`${path.single}` does not hold an embedded object in the '
+                  'stored schema',
+                );
+              }
+
+              writeEmbedded(writer, value, _schema, nested);
+            },
+    );
+  }
 }
 
 /// The parts of a query: a filter, a sort, an offset and a limit. The code
@@ -341,16 +373,17 @@ void encodeChanges(
   Layout layout,
   List<String> names,
 ) {
-  final byId = <int, Change>{};
+  final byId = <int, (Change, LaidField)>{};
 
   for (final change in changes) {
     final slot = names.indexOf(change._name);
+    final field = slot < 0 ? null : layout.fieldOfSlot[slot];
 
-    if (slot < 0) {
+    if (field == null) {
       throw invalidArgument('`${change._name}` is not a field');
     }
 
-    byId[layout.idOfSlot[slot]] = change;
+    byId[field.id] = (change, field);
   }
 
   final ids = byId.keys.toList()..sort();
@@ -358,14 +391,15 @@ void encodeChanges(
   writer.varint(ids.length);
 
   for (final id in ids) {
-    final write = byId[id]!._write;
+    final (change, field) = byId[id]!;
+    final write = change._write;
 
     writer.varint(id);
 
     if (write == null) {
       writer.byte(Tag.nil);
     } else {
-      write(writer);
+      write(writer, field.nested);
     }
   }
 }

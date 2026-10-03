@@ -52,8 +52,8 @@ Address _readAddress(FieldSource source) {
   return Address(city: city!, zip: zip);
 }
 
-final class AddressFields extends EmbeddedField {
-  const AddressFields(super.path);
+final class AddressFields extends EmbeddedField<Address> {
+  const AddressFields(List<String> path) : super(path, addressSchema);
 
   StringField get city => StringField([...path, 'city']);
   StringField get zip => StringField([...path, 'zip']);

@@ -661,8 +661,8 @@ ${fields.map((field) => '    ${_spec(field)},').join('\n')}
 ${_codec(className, fields)}
 /// The fields of the embedded object [$className] inside the object that
 /// holds it, for a query.
-final class ${className}Fields extends EmbeddedField {
-  const ${className}Fields(super.path);
+final class ${className}Fields extends EmbeddedField<$className> {
+  const ${className}Fields(List<String> path) : super(path, $schema);
 
 ${_fieldGetters(fields, root: false)}}
 

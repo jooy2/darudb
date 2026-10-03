@@ -56,3 +56,37 @@ class Post {
   final Link<Person> author;
   final List<Link<Person>> readers;
 }
+
+// Two versions of one collection. The embedded object gains a field declared
+// before the one it had, so in a file the first version made, the stored
+// field ids of the newer class's embedded object differ from its slots.
+@Embedded()
+class SpotV1 {
+  const SpotV1({required this.city});
+
+  final String city;
+}
+
+@Collection('places')
+class PlaceV1 {
+  const PlaceV1({this.id, this.spot});
+
+  final int? id;
+  final SpotV1? spot;
+}
+
+@Embedded()
+class Spot {
+  const Spot({this.zip, required this.city});
+
+  final String? zip;
+  final String city;
+}
+
+@Collection('places')
+class Place {
+  const Place({this.id, this.spot});
+
+  final int? id;
+  final Spot? spot;
+}
