@@ -1,13 +1,30 @@
+import container from 'markdown-it-container';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withSidebar } from 'vitepress-sidebar';
 import packageJson from '../../packages/node/package.json' with { type: 'json' };
-import { defineConfig, HeadConfig, SiteData, TransformContext, UserConfig } from 'vitepress';
+import {
+  defineConfig,
+  HeadConfig,
+  MarkdownRenderer,
+  SiteData,
+  TransformContext,
+  UserConfig
+} from 'vitepress';
 import { withI18n } from 'vitepress-i18n';
 import type { VitePressI18nOptions } from 'vitepress-i18n/types';
 import type { VitePressSidebarOptions } from 'vitepress-sidebar/types';
+import {
+  LANGUAGE_IDS,
+  languageHeadScript,
+  languageOfRoute,
+  languagesOf,
+  type LanguageId,
+  type LanguagePages
+} from './languages';
+import { summaryFromSource } from './pages';
 
 const vitePressDir = dirname(fileURLToPath(import.meta.url));
 /** `docs/`, which is where the locale folders live and what VitePress serves. */
@@ -53,16 +70,18 @@ const commonSidebarConfig: VitePressSidebarOptions = {
 };
 
 /**
- * The sidebar groups the folder tree cannot name.
+ * The sidebar's groups, in each locale.
  *
- * `guide/` has no `index.md` and the changelog is a loose page, so neither can
- * take its heading from a page. Left to the generator, `guide/` would be
- * capitalised to "Guide" over Korean pages and the changelog would sit at the
- * root with no heading over it at all.
+ * Named here rather than by the folders' own titles, because `guide/` and
+ * `engine/` have no `index.md` to take a heading from, the changelog is a loose
+ * page, and a group called "guide" over Korean pages is not a heading.
  */
-const groupLabels: Record<string, { guide: string; more: string }> = {
-  en: { guide: 'Guide', more: 'Discover more' },
-  ko: { guide: '가이드', more: '더 알아보기' }
+const groupLabels: Record<
+  string,
+  { guide: string; engine: string; api: string; types: string; more: string }
+> = {
+  en: { guide: 'Guide', engine: 'Engine', api: 'API', types: 'Types', more: 'Discover more' },
+  ko: { guide: '가이드', engine: '엔진', api: 'API', types: '타입', more: '더 알아보기' }
 };
 
 const vitePressSidebarConfig = supportLocales.map((lang) => ({
@@ -75,9 +94,12 @@ const vitePressSidebarConfig = supportLocales.map((lang) => ({
 }));
 
 /** The same destinations in every locale, prefixed with its base. */
-const navFor = (lang: string, labels: [string, string]) => [
-  { text: labels[0], link: `${localeBase(lang)}guide/introduction` },
-  { text: labels[1], link: `${localeBase(lang)}changelog` }
+const navFor = (lang: string, labels: [string, string, string, string, string]) => [
+  { text: labels[0], link: `${localeBase(lang)}guide/introduction`, activeMatch: '/guide/' },
+  { text: labels[1], link: `${localeBase(lang)}engine/architecture`, activeMatch: '/engine/' },
+  { text: labels[2], link: `${localeBase(lang)}api/`, activeMatch: '/api/' },
+  { text: labels[3], link: `${localeBase(lang)}types/`, activeMatch: '/types/' },
+  { text: labels[4], link: `${localeBase(lang)}changelog` }
 ];
 
 const vitePressI18nConfig: VitePressI18nOptions = {
@@ -89,8 +111,8 @@ const vitePressI18nConfig: VitePressI18nOptions = {
     ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 처음부터 목표로 설계합니다.'
   },
   themeConfig: {
-    en: { nav: navFor('en', ['Guide', 'Changelog']) },
-    ko: { nav: navFor('ko', ['가이드', '변경 기록']) }
+    en: { nav: navFor('en', ['Guide', 'Engine', 'API', 'Types', 'Changelog']) },
+    ko: { nav: navFor('ko', ['가이드', '엔진', 'API', '타입', '변경 기록']) }
   }
 };
 
@@ -136,57 +158,11 @@ function pageOf(filePath: string): string {
   return filePath.split('/').slice(1).join('/');
 }
 
-/** Inline Markdown and HTML dropped: a `<meta>` carries text and nothing else. */
-function plainText(source: string): string {
-  return source
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
-    .replace(/[`*_]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/** Cut at a word boundary, to about what a result page will show whole. */
-function clamp(text: string, limit = 160): string {
-  if (text.length <= limit) {
-    return text;
-  }
-
-  const cut = text.slice(0, limit);
-  const boundary = cut.lastIndexOf(' ');
-
-  return `${(boundary > 0 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
-}
-
-/**
- * A page's own one-line summary: the first block that is prose rather than the
- * title, a fenced example, a table or a container.
- */
+/** A page's own one-line summary, read from its source. See `pages.ts`. */
 function summaryOf(filePath: string): string | undefined {
   const file = resolve(srcDir, filePath);
 
-  if (!existsSync(file)) {
-    return undefined;
-  }
-
-  const source = readFileSync(file, 'utf8');
-
-  for (const block of source.replace(/^---\r?\n[\s\S]*?\r?\n---/, '').split(/\n\s*\n/)) {
-    const trimmed = block.trim();
-
-    if (!trimmed || /^[#<`:|>-]/.test(trimmed)) {
-      continue;
-    }
-
-    const text = plainText(trimmed);
-
-    if (text) {
-      return clamp(text);
-    }
-  }
-
-  return undefined;
+  return existsSync(file) ? summaryFromSource(readFileSync(file, 'utf8')) : undefined;
 }
 
 /** One field out of a page's frontmatter, if the page declares it. */
@@ -226,6 +202,167 @@ function pagesUnder(folder: string): string[] {
   return found;
 }
 
+/* ---------------------------------------------------------------------------
+ * Programming languages
+ *
+ * Which pages are written for which language. A page of a per-language
+ * section says it with its folder (`api/rust/`); any other page that is not
+ * for every language says it with `languages` in its frontmatter. The script
+ * in `<head>`, the sidebar and the switch all need the answer for pages they
+ * are not rendering, so it is collected here, once, from the files.
+ * ------------------------------------------------------------------------- */
+
+/** `/guide/async` for `en/guide/async.md` and for `ko/guide/async.md` alike. */
+function routeOfFile(filePath: string): string {
+  const page = pageOf(filePath)
+    .replace(/(^|\/)index\.md$/, '$1')
+    .replace(/\.md$/, '')
+    .replace(/\/$/, '');
+
+  return `/${page}`;
+}
+
+/** `[rust, node]`, `rust` or nothing, as a frontmatter value. */
+function listOf(value: string | undefined): string[] {
+  return (value ?? '')
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .map((item) => item.trim().replace(/^['"]|['"]$/g, ''))
+    .filter(Boolean);
+}
+
+/**
+ * Reads every page's languages and counterpart, and checks them.
+ *
+ * A typo in `languages` would hide a page from everyone, a counterpart that
+ * does not exist would send a reader to a 404, and a translation that names
+ * other languages than its original would make the two locales' sidebars
+ * disagree, which nobody reading one locale would notice. The build refuses
+ * all three; the dev server only warns, so that a page half written still
+ * loads.
+ */
+function collectLanguagePages(): LanguagePages {
+  const pages: LanguagePages = { only: {}, reference: [], counterparts: {} };
+  const routes = new Set<string>();
+  const problems: string[] = [];
+
+  for (const filePath of pagesUnder(defaultLocale)) {
+    const route = routeOfFile(filePath);
+
+    routes.add(route);
+
+    if (languageOfRoute(route)) {
+      pages.reference.push(route);
+      continue;
+    }
+
+    const languages = listOf(frontmatterOf(filePath, 'languages'));
+    const unknown = languages.filter((id) => !(LANGUAGE_IDS as string[]).includes(id));
+
+    if (unknown.length) {
+      problems.push(`${filePath} names unknown languages: ${unknown.join(', ')}.`);
+    } else if (languages.length) {
+      pages.only[route] = languages as LanguageId[];
+    }
+  }
+
+  for (const filePath of pagesUnder(defaultLocale)) {
+    const route = routeOfFile(filePath);
+    const counterpart = frontmatterOf(filePath, 'counterpart');
+
+    if (!counterpart) {
+      continue;
+    }
+
+    if (!routes.has(counterpart)) {
+      problems.push(`${filePath} has a counterpart that does not exist: ${counterpart}.`);
+      continue;
+    }
+
+    for (const [from, to] of [
+      [route, counterpart],
+      [counterpart, route]
+    ]) {
+      const known = (pages.counterparts[from] ??= []);
+
+      if (!known.includes(to)) {
+        known.push(to);
+      }
+    }
+  }
+
+  for (const locale of supportLocales.filter((lang) => lang !== defaultLocale)) {
+    for (const filePath of pagesUnder(locale)) {
+      const route = routeOfFile(filePath);
+
+      if (languageOfRoute(route) || !routes.has(route)) {
+        continue;
+      }
+
+      const translated = listOf(frontmatterOf(filePath, 'languages')).join(', ');
+      const original = (pages.only[route] ?? []).join(', ');
+
+      if (translated !== original) {
+        problems.push(
+          `${filePath} is for ${translated || 'every language'}, ` +
+            `where ${defaultLocale}${route}.md is for ${original || 'every language'}.`
+        );
+      }
+    }
+  }
+
+  if (problems.length) {
+    const report = ['The pages below name languages that do not add up:', ...problems].join('\n  ');
+
+    // `vitepress build` against `vitepress dev`: nothing that runs while the
+    // config loads knows which one it is in any other way.
+    if (process.argv.includes('build')) {
+      throw new Error(report);
+    }
+
+    console.warn(report);
+  }
+
+  return pages;
+}
+
+const languagePages = collectLanguagePages();
+
+/** The locales other than the default, which are the routes' prefixes. */
+const localePrefixes = supportLocales.filter((lang) => lang !== defaultLocale);
+
+/** The pages written for one language, which the script in `<head>` switches to. */
+const singleLanguagePages = Object.fromEntries(
+  Object.entries(languagePages.only)
+    .filter(([, languages]) => languages.length === 1)
+    .map(([route, languages]) => [route, languages[0]])
+);
+
+/**
+ * Sidebar rules for the shared pages that are written for some languages only.
+ *
+ * The per-language sections are hidden by their folders in `languages.css`.
+ * These pages have no folder to go by, so each gets a rule naming its link in
+ * every locale, written into `<head>` so that it applies before the first
+ * paint rather than after the app has started.
+ */
+function sidebarStyle(): string {
+  const rules = LANGUAGE_IDS.map((id) => {
+    const selectors = Object.entries(languagePages.only)
+      .filter(([, languages]) => !languages.includes(id))
+      .flatMap(([route]) =>
+        supportLocales.map(
+          (lang) =>
+            `html[data-code-lang='${id}'] .VPSidebarItem:has(> .item > .link[href='${localeBase(lang)}${route.slice(1)}'])`
+        )
+      );
+
+    return selectors.length ? `${selectors.join(',')}{display:none}` : '';
+  });
+
+  return rules.join('');
+}
+
 /**
  * `llms.txt`, which is this site's own map written for something reading it
  * rather than browsing it.
@@ -251,7 +388,22 @@ function llmsTxt(): string {
     ''
   ];
 
-  for (const [name, folder] of [['Guide', `${defaultLocale}/guide`]]) {
+  const sections = [
+    ['Guide', 'guide'],
+    ['Engine', 'engine'],
+    ['Rust API', 'api/rust'],
+    ['Rust types', 'types/rust'],
+    ['Node.js API', 'api/node'],
+    ['Node.js types', 'types/node']
+  ];
+
+  for (const [name, section] of sections) {
+    const folder = `${defaultLocale}/${section}`;
+
+    if (!existsSync(resolve(srcDir, folder))) {
+      continue;
+    }
+
     lines.push(`## ${name}`, '');
 
     // In the order the sidebar puts them in: the folders in turn, and inside
@@ -423,8 +575,45 @@ const vitePressConfig: UserConfig = {
     ['meta', { property: 'og:image:width', content: '256' }],
     ['meta', { property: 'og:image:height', content: '256' }],
     ['meta', { property: 'og:image:alt', content: 'The DaruDB logo' }],
-    ['meta', { name: 'twitter:card', content: 'summary' }]
+    ['meta', { name: 'twitter:card', content: 'summary' }],
+    // Which programming language every page is read in, applied to `<html>`
+    // before the first paint, and the sidebar entries that language does not
+    // have. See `languages.ts`.
+    ['script', {}, languageHeadScript(singleLanguagePages, localePrefixes)],
+    ['style', {}, sidebarStyle()]
   ],
+  /**
+   * `::: lang rust` … `:::`, the part of a page that one language's readers see.
+   *
+   * Every language's blocks stay in the document and CSS shows the reader's,
+   * which is what makes the switch instant and keeps the languages' versions of
+   * a page in one file, where they cannot drift apart. A block several
+   * languages share is written `::: lang rust node`. A name that is not a
+   * language fails the build rather than hiding the block from everyone.
+   */
+  markdown: {
+    config(md: MarkdownRenderer) {
+      md.use(container, 'lang', {
+        validate: (params: string) => /^lang(\s+\S+)+$/.test(params.trim()),
+        render(tokens: { nesting: number; info: string }[], index: number) {
+          const token = tokens[index];
+
+          if (token.nesting !== 1) {
+            return '</div>\n';
+          }
+
+          const ids = token.info.trim().split(/\s+/).slice(1);
+          const unknown = ids.filter((id) => !(LANGUAGE_IDS as string[]).includes(id));
+
+          if (unknown.length) {
+            throw new Error(`::: lang names unknown languages: ${unknown.join(', ')}`);
+          }
+
+          return `<div class="lang-only" data-code-lang="${ids.join(' ')}">\n`;
+        }
+      });
+    }
+  },
   sitemap: {
     hostname: packageJson.homepage
   },
@@ -467,6 +656,15 @@ const vitePressConfig: UserConfig = {
     if (!pageData.description && pageData.filePath) {
       pageData.description = summaryOf(pageData.filePath) ?? '';
     }
+
+    // The previous and next links, from the pages of the reader's language.
+    // A page that names its own keeps them.
+    const neighbours = pageData.filePath ? neighboursOf(pathOf(pageData.filePath)) : undefined;
+
+    if (neighbours) {
+      pageData.frontmatter.prev ??= neighbours.prev;
+      pageData.frontmatter.next ??= neighbours.next;
+    }
   },
   transformHead,
   themeConfig: {
@@ -474,6 +672,8 @@ const vitePressConfig: UserConfig = {
     // and the name is what a reader searches for. 64 pixels for a slot of 24,
     // so that it stays sharp on a high-density screen.
     logo: { src: '/logo-64.png', alt: '' },
+    // Read by the language switch and the layout. See `languages.ts`.
+    languagePages,
     /**
      * `h2` and `h3`, nested. A guide page is a handful of `h2`s with the steps
      * or options as `h3`s under them, and the thing a reader came for is often
@@ -542,26 +742,56 @@ const startsWith = (prefix: string) => (item: GeneratedSidebarItem) =>
   firstLink(item)?.startsWith(prefix) ?? false;
 
 /**
- * The guide first, then anything loose under a heading of its own.
+ * The groups in the order a reader needs them: the guide, the engine, the API
+ * and the types, and the changelog last, under a heading of its own.
  *
- * The changelog is a loose page with nothing above it, so it is given a group:
- * the place anything that is neither a guide nor a reference ends up.
+ * The API and Types sections hold one folder per language. The folders are
+ * not shown as groups: their pages go straight under the section's heading,
+ * and the reader's language hides the other folders' entries (`languages.css`),
+ * so a reader on Node.js sees the Node.js API and nothing else.
  */
 function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string): T[] {
   const labels = groupLabels[lang] ?? groupLabels[defaultLocale];
+  // Links are relative to the locale's `base`, so `guide/introduction` in
+  // every locale.
+  const find = (section: string) => items.find(startsWith(section));
 
-  const guide = items.find(startsWith('guide/'));
-  const changelog = items.find(startsWith('changelog'));
+  const guide = find('guide/');
+  const engine = find('engine/');
+  const api = find('api/');
+  const types = find('types/');
+  const changelog = find('changelog');
 
-  if (guide) {
-    guide.text = labels.guide;
+  const titled: [T | undefined, string][] = [
+    [guide, labels.guide],
+    [engine, labels.engine],
+    [api, labels.api],
+    [types, labels.types]
+  ];
+
+  for (const [group, text] of titled) {
+    if (group) {
+      group.text = text;
+    }
+  }
+
+  for (const [group, section] of [
+    [api, 'api'],
+    [types, 'types']
+  ] as const) {
+    if (group?.items) {
+      group.items = LANGUAGE_IDS.flatMap(
+        (id) => group.items?.find(startsWith(`${section}/${id}/`))?.items ?? []
+      );
+    }
   }
 
   const loose = [changelog].filter(Boolean) as T[];
   const more = loose.length ? ({ text: labels.more, items: loose } as unknown as T) : undefined;
-  const moved = new Set([guide, changelog].filter(Boolean));
+  const placed = [guide, engine, api, types, more].filter(Boolean) as T[];
+  const moved = new Set<T | undefined>([...placed, changelog]);
 
-  return [...([guide, more].filter(Boolean) as T[]), ...items.filter((item) => !moved.has(item))];
+  return [...placed, ...items.filter((item) => !moved.has(item))];
 }
 
 const config = withSidebar(withI18n(vitePressConfig, vitePressI18nConfig), vitePressSidebarConfig);
@@ -581,6 +811,74 @@ if (sidebar) {
       group.items = arrangeSidebar(cleanUpItems(group.items), lang);
     }
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Previous and next
+ *
+ * The default theme links each page to its neighbours in the sidebar. With the
+ * API and Types sections holding every language's pages in one list, that
+ * would send a reader of the last Rust page on to the first Node.js one, which
+ * the sidebar hides from them. So each page's neighbours are chosen here from
+ * the pages its own readers can see: a page for every language links to the
+ * next page for every language, and a page for some languages also to pages
+ * for those.
+ * ------------------------------------------------------------------------- */
+
+interface SidebarLink {
+  text: string;
+  link: string;
+}
+
+/** Every link in a sidebar, in the order a reader meets them, as absolute paths. */
+function flatten(items: GeneratedSidebarItem[], base: string): SidebarLink[] {
+  return items.flatMap((item) => [
+    ...(item.link && item.text
+      ? [{ text: item.text, link: item.link.startsWith('/') ? item.link : `${base}${item.link}` }]
+      : []),
+    ...flatten(item.items ?? [], base)
+  ]);
+}
+
+const sidebarLinks: Record<string, SidebarLink[]> = Object.fromEntries(
+  Object.entries(sidebar ?? {}).map(([path, group]) => [
+    path,
+    Array.isArray(group)
+      ? flatten(group, path)
+      : flatten(group?.items ?? [], (group as { base?: string })?.base ?? path)
+  ])
+);
+
+/** The page's languages, from its locale-prefixed path. */
+function readersOf(path: string): LanguageId[] {
+  const route = path.replace(new RegExp(`^/(?:${localePrefixes.join('|')})(?=/|$)`), '') || '/';
+
+  return languagesOf(route.replace(/\/+$/, '') || '/', languagePages);
+}
+
+function neighboursOf(
+  path: string
+): { prev: SidebarLink | false; next: SidebarLink | false } | undefined {
+  const first = path.split('/')[1] ?? '';
+  const links = sidebarLinks[localePrefixes.includes(first) ? `/${first}/` : '/'] ?? [];
+  const normalized = (link: string) => link.replace(/\/+$/, '') || '/';
+  const at = links.findIndex((item) => normalized(item.link) === normalized(path));
+
+  if (at < 0) {
+    return undefined;
+  }
+
+  const mine = readersOf(path);
+  const visible = (item: SidebarLink) => {
+    const theirs = readersOf(item.link);
+
+    return mine.every((id) => theirs.includes(id));
+  };
+
+  const prev = links.slice(0, at).reverse().find(visible);
+  const next = links.slice(at + 1).find(visible);
+
+  return { prev: prev ?? false, next: next ?? false };
 }
 
 export default defineConfig(config);

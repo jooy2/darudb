@@ -1,0 +1,262 @@
+/**
+ * The programming language switch, and what it hides.
+ *
+ * Every language's content is rendered into the page at once, and this file
+ * shows one of them. Doing it in CSS rather than with `v-if` costs some page
+ * weight and buys three things:
+ *
+ * - No flash. The script in `<head>` writes `data-code-lang` on `<html>`
+ *   before the first paint, which a `v-if` cannot do before hydration.
+ * - No hydration mismatch. The server renders every language, and so does the
+ *   client.
+ * - An instant switch: one attribute changes, and nothing renders again.
+ *
+ * `data-code-lang` on a block holds a space-separated list, since content two
+ * languages share and a third does not is a real case, hence `~=`. A page
+ * opened without scripts has no attribute on `<html>` and shows everything.
+ */
+
+/*
+ * "Hide the others" rather than "hide everything, then show one", because the
+ * second needs a `display` value to go back to, and a block is a `<div>` in one
+ * place and a `<code>` in another. One rule per language.
+ */
+html[data-code-lang='rust'] .lang-only[data-code-lang]:not([data-code-lang~='rust']),
+html[data-code-lang='node'] .lang-only[data-code-lang]:not([data-code-lang~='node']),
+html[data-code-lang='dart'] .lang-only[data-code-lang]:not([data-code-lang~='dart']) {
+  display: none;
+}
+
+/* A block brackets content rather than adding a section of its own, so it
+   must not add the margins its first and last children already have. */
+.vp-doc .lang-only > :first-child {
+  margin-top: 0;
+}
+
+.vp-doc .lang-only > :last-child {
+  margin-bottom: 0;
+}
+
+/* An "On this page" entry for a heading in another language's block; set by
+   `Layout.vue`. */
+.lang-hidden {
+  display: none;
+}
+
+/*
+ * The per-language sections in the sidebar. Their pages sit in a folder named
+ * after their language, so the reader's language hides the other folders'
+ * entries by their links alone. The shared pages that are written for some
+ * languages only get rules of their own, written into `<head>` by the config
+ * from each page's frontmatter.
+ */
+html[data-code-lang='rust']
+  .VPSidebarItem:has(> .item > .link:is([href*='/api/node/'], [href*='/types/node/'])),
+html[data-code-lang='node']
+  .VPSidebarItem:has(> .item > .link:is([href*='/api/rust/'], [href*='/types/rust/'])) {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * The switch
+ *
+ * Drawn from the default theme's own variables, since it is part of the site's
+ * chrome and sits among its navigation.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Pinned to the top of the sidebar's scroller, since it decides what every
+ * entry below it says. It needs an opaque background and a stacking order over
+ * the theme's curtain, which masks the sidebar's top padding.
+ *
+ * It is also the menu's containing block. The strip's bottom padding is what
+ * separates the switch from the entries below it, and `--lang-switch-gap` is
+ * how the menu is placed back up through it rather than hanging that far below
+ * the button.
+ */
+.lang-switch {
+  --lang-switch-gap: 18px;
+
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding: 12px 0 var(--lang-switch-gap);
+  border-bottom: 1px solid var(--vp-c-divider);
+  background-color: var(--vp-sidebar-bg-color);
+}
+
+.lang-switch-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+}
+
+.lang-switch-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background-color: var(--vp-c-bg-alt);
+  color: var(--vp-c-text-1);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 0.16s,
+    background-color 0.16s;
+}
+
+.lang-switch-button:hover {
+  border-color: var(--vp-c-brand-1);
+  background-color: var(--vp-c-bg);
+}
+
+.lang-switch-button:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.lang-switch-current {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.lang-switch-chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--vp-c-text-2);
+  transition: transform 0.18s;
+}
+
+.lang-switch-button[aria-expanded='true'] .lang-switch-chevron {
+  transform: rotate(180deg);
+}
+
+/*
+ * The menu covers the sidebar entries rather than pushing them down: those
+ * entries are where the reader is going, and a control that moves them every
+ * time it opens moves the link they were reaching for.
+ */
+.lang-switch-menu {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% - var(--lang-switch-gap) + 6px);
+  right: 0;
+  left: 0;
+  padding: 6px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background-color: var(--vp-c-bg-elv);
+  box-shadow: var(--vp-shadow-3);
+}
+
+.lang-switch-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--vp-c-text-1);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lang-switch-option:hover,
+.lang-switch-option:focus-visible {
+  outline: none;
+  background-color: var(--vp-c-default-soft);
+}
+
+.lang-switch-option[aria-selected='true'] {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+.lang-switch-option[aria-disabled='true'] {
+  color: var(--vp-c-text-2);
+  cursor: default;
+}
+
+.lang-switch-option-label {
+  flex: 1;
+}
+
+.lang-switch-planned {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: var(--vp-c-default-soft);
+  color: var(--vp-c-text-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.lang-switch-check {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  visibility: hidden;
+}
+
+.lang-switch-option[aria-selected='true'] .lang-switch-check {
+  visibility: visible;
+}
+
+.lang-switch-hint {
+  margin: 6px 4px 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vp-c-divider);
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+ * The lists on the API and Types overviews
+ * ------------------------------------------------------------------------- */
+
+.vp-doc .page-list ul {
+  padding-left: 0;
+  list-style: none;
+}
+
+.vp-doc .page-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc .page-list li + li {
+  margin-top: 0;
+}
+
+.vp-doc .page-list a {
+  font-weight: 600;
+}
+
+.page-list-summary {
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
