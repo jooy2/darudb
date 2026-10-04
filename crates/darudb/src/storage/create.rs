@@ -199,6 +199,24 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"someone else's");
     }
 
+    /// Whether the system renames without replacing in `dir`. A kernel older
+    /// than the call has no such rename either, as Android 5's Linux 3.10
+    /// has none, and a file then takes its name the way a system with
+    /// neither gives it.
+    fn renames_without_replacing(dir: &Path) -> bool {
+        let (from, to) = (dir.join("probe"), dir.join("probed"));
+
+        fs::write(&from, b"").unwrap();
+
+        let renamed = crate::sys::fs::rename_no_replace(&from, &to);
+
+        for probe in [&from, &to] {
+            let _ = fs::remove_file(probe);
+        }
+
+        !matches!(renamed, Err(error) if error.kind() == io::ErrorKind::Unsupported)
+    }
+
     /// Every way a file takes its name, as the file systems that have links,
     /// only a no-replace rename, or neither, give it.
     #[test]
@@ -224,6 +242,7 @@ mod tests {
 
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("app.darudb");
+            let rename = rename && renames_without_replacing(dir.path());
             let created = create_file(&path, b"page zero").unwrap().unwrap();
 
             match (created, links || rename) {
