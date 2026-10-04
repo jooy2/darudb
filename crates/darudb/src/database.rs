@@ -191,7 +191,21 @@ impl Database {
     /// `path` until then, and never replaces a file already at `path`, which
     /// fails with [`Error::InvalidArgument`] instead.
     pub fn backup(&self, path: impl AsRef<Path>) -> Result<crate::BackupReport> {
-        crate::tools::backup(self, path.as_ref())
+        crate::tools::backup(self, path.as_ref(), &crate::BackupOptions::new())
+    }
+
+    /// Writes a copy of the published commit to a new file at `path` as
+    /// [`backup`](Self::backup) does, as `options` say: with a key or a
+    /// password there, the copy is encrypted under a new data key, which it
+    /// wraps, and opens only with it. See [`BackupOptions`](crate::BackupOptions).
+    ///
+    /// An empty password fails with [`Error::InvalidArgument`].
+    pub fn backup_with(
+        &self,
+        path: impl AsRef<Path>,
+        options: &crate::BackupOptions,
+    ) -> Result<crate::BackupReport> {
+        crate::tools::backup(self, path.as_ref(), options)
     }
 
     /// Makes the file smaller in place, and returns what it did; see
@@ -322,6 +336,33 @@ impl Database {
             key_block,
             self.shared.data_key.as_ref(),
         )
+    }
+
+    /// A new encrypted database in a file beside `path`, as
+    /// [`create_copy_beside`](Self::create_copy_beside) makes, but under a new
+    /// random data key that `secret` wraps. A copy of a plain file gets the
+    /// cipher this processor suits, as a new file would.
+    pub(crate) fn create_rekeyed_beside(
+        &self,
+        path: &Path,
+        secret: &Secret,
+        cost: crypto::PasswordCost,
+    ) -> Result<(PathBuf, Database)> {
+        let mut bytes = Zeroizing::new([0u8; 32]);
+
+        getrandom::fill(bytes.as_mut_slice())
+            .map_err(|error| io_error(path, io::Error::other(error)))?;
+
+        let data_key = DataKey::from_bytes(*bytes);
+        let mut header = self.shared.static_header;
+
+        if header.cipher == Cipher::Plain {
+            header.cipher = crypto::preferred_cipher();
+        }
+
+        let key_block = wrap_key(path, secret, cost, &data_key, &header.file_id)?.encode();
+
+        create_beside(path, header, key_block, Some(&data_key))
     }
 
     /// The instance behind this handle, for the tools and the engine's own

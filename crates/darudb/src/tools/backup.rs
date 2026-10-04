@@ -6,15 +6,94 @@
 //! which is therefore as small as the data allows. The new file stays under a
 //! temporary name until it is whole and durable, and then takes the path
 //! given, which it never takes from a file already there.
+//!
+//! Every page of the copy is written anew, so encrypting it under a data key
+//! of its own costs no more than copying it: [`BackupOptions`] gives it one.
 
 use std::fs;
 use std::ops::Bound;
 use std::path::Path;
 
+use zeroize::Zeroizing;
+
 use super::{COMMIT_BYTES, taken, write_new};
+use crate::crypto::{PasswordCost, Secret};
 use crate::database::Database;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::txn::ReadTransaction;
+
+/// How [`Database::backup_with`] writes its copy.
+///
+/// By default, the copy is what [`Database::backup`] writes: a copy of an
+/// encrypted file is encrypted under the same data key, so the same key or
+/// password opens it. A key or a password here gives the copy a new random
+/// data key, which it wraps instead. Changing the key or the password of a
+/// file only wraps its data key again, so this is the way to leave behind a
+/// data key that may have been exposed: back up under a new key, then put the
+/// copy in the old file's place. A copy of a plain database is encrypted the
+/// same way.
+///
+/// ```no_run
+/// use darudb::{BackupOptions, OpenOptions};
+///
+/// let db = OpenOptions::new().password("old password").open("app.darudb")?;
+///
+/// db.backup_with("new.darudb", BackupOptions::new().password("new password"))?;
+/// # Ok::<(), darudb::Error>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct BackupOptions {
+    secret: Option<Secret>,
+    password_cost: PasswordCost,
+}
+
+impl BackupOptions {
+    /// The defaults: the copy keeps the file's data key, if it has one.
+    pub fn new() -> Self {
+        Self {
+            secret: None,
+            password_cost: PasswordCost::DEFAULT,
+        }
+    }
+
+    /// Encrypts the copy under a new data key, which `key` wraps.
+    pub fn key(&mut self, key: [u8; 32]) -> &mut Self {
+        self.secret = Some(Secret::Key(Zeroizing::new(key)));
+        self
+    }
+
+    /// Encrypts the copy under a new data key, which a key derived from
+    /// `password` wraps, at the cost [`password_hashing`](Self::password_hashing)
+    /// sets.
+    pub fn password(&mut self, password: impl AsRef<[u8]>) -> &mut Self {
+        self.secret = Some(Secret::Password(Zeroizing::new(password.as_ref().to_vec())));
+        self
+    }
+
+    /// How much work hashing the copy's password takes: Argon2id memory in
+    /// KiB, iterations, and parallelism, as
+    /// [`OpenOptions::password_hashing`](crate::OpenOptions::password_hashing)
+    /// says. 19 MiB, 2 and 1 by default.
+    pub fn password_hashing(
+        &mut self,
+        memory_kib: u32,
+        iterations: u32,
+        parallelism: u32,
+    ) -> &mut Self {
+        self.password_cost = PasswordCost {
+            memory_kib,
+            iterations,
+            parallelism,
+        };
+        self
+    }
+}
+
+impl Default for BackupOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// What a backup wrote.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -32,8 +111,16 @@ pub struct BackupReport {
 }
 
 /// Copies the commit a new read transaction of `db` sees into a new file at
-/// `path`.
-pub(crate) fn backup(db: &Database, path: &Path) -> Result<BackupReport> {
+/// `path`, as `options` say.
+pub(crate) fn backup(db: &Database, path: &Path, options: &BackupOptions) -> Result<BackupReport> {
+    if let Some(Secret::Password(password)) = &options.secret
+        && password.is_empty()
+    {
+        return Err(Error::InvalidArgument {
+            message: "the password is empty".to_owned(),
+        });
+    }
+
     let read = db.begin_read()?;
     let record = *read.record();
 
@@ -41,7 +128,10 @@ pub(crate) fn backup(db: &Database, path: &Path) -> Result<BackupReport> {
         return Err(taken(path, "a backup"));
     }
 
-    let copy = db.create_copy_beside(path, record.key_block)?;
+    let copy = match &options.secret {
+        None => db.create_copy_beside(path, record.key_block)?,
+        Some(secret) => db.create_rekeyed_beside(path, secret, options.password_cost)?,
+    };
     let (mut report, bytes) = write_new(path, "a backup", copy, |copy| fill(&read, copy))?;
 
     report.commit_id = record.txn;
@@ -232,6 +322,75 @@ mod tests {
                 assert_eq!(bare.open(&target).unwrap_err().code(), "KEY_REQUIRED");
             }
         }
+    }
+
+    /// A backup under a new key or password holds the same data under a new
+    /// data key, and opens with it and not with the file's own secret. A plain
+    /// database's backup is encrypted the same way.
+    #[test]
+    fn a_backup_under_a_new_secret_has_a_data_key_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut keyed = OpenOptions::new();
+
+        keyed.key([4; 32]);
+
+        for (at, mut options) in [OpenOptions::new(), keyed].into_iter().enumerate() {
+            options.schema(schema());
+
+            let db = filled(&options, &dir.path().join(format!("source-{at}.darudb")));
+            let target = dir.path().join(format!("backup-{at}.darudb"));
+
+            db.backup_with(
+                &target,
+                BackupOptions::new()
+                    .password("a new password")
+                    .password_hashing(8 * 1024, 1, 1),
+            )
+            .unwrap();
+
+            let mut new = OpenOptions::new();
+
+            new.schema(schema()).password("a new password");
+
+            let copy = new.open(&target).unwrap();
+
+            assert!(copy.is_encrypted(), "{at}");
+            assert_eq!(everything(&copy), everything(&db), "{at}");
+            assert!(copy.check().unwrap().is_ok(), "{at}");
+
+            if let Some(old) = &db.shared().data_key {
+                let new = copy.shared().data_key.as_ref().unwrap();
+
+                assert_ne!(old.bytes(), new.bytes(), "{at}");
+            }
+
+            drop(copy);
+
+            let refused = if db.is_encrypted() {
+                "WRONG_KEY"
+            } else {
+                "KEY_REQUIRED"
+            };
+
+            assert_eq!(options.open(&target).unwrap_err().code(), refused, "{at}");
+        }
+    }
+
+    #[test]
+    fn a_backup_under_an_empty_password_is_refused_before_it_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(schema());
+
+        let db = filled(&options, &dir.path().join("source.darudb"));
+        let target = dir.path().join("backup.darudb");
+        let refused = db
+            .backup_with(&target, BackupOptions::new().password(""))
+            .unwrap_err();
+
+        assert_eq!(refused.code(), "INVALID_ARGUMENT");
+        assert!(!target.exists());
     }
 
     /// A backup taken while another thread commits holds one of the commits

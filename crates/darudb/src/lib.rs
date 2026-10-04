@@ -98,7 +98,7 @@ pub use schema::{
 
 #[cfg(feature = "derive")]
 pub use darudb_derive::{Embedded, Object};
-pub use tools::{BackupReport, CheckReport, CompactReport, Problem, SalvageReport};
+pub use tools::{BackupOptions, BackupReport, CheckReport, CompactReport, Problem, SalvageReport};
 pub use txn::{Range, ReadTransaction, WriteTransaction};
 
 /// The version of this crate, as written in its `Cargo.toml`.

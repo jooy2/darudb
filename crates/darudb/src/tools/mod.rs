@@ -11,7 +11,7 @@ mod check;
 mod compact;
 mod salvage;
 
-pub use backup::BackupReport;
+pub use backup::{BackupOptions, BackupReport};
 pub use check::{CheckReport, Problem};
 pub use compact::CompactReport;
 pub use salvage::SalvageReport;
