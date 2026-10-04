@@ -20,7 +20,38 @@ The processes coordinate through the operating system's file locks and nothing e
 
 - **Local disks only.** The locks, and the syncs a commit waits for, work only on a local disk. A database on a network file system such as NFS or SMB is refused with `UNSUPPORTED_FILE_SYSTEM`.
 - **Do not open the file a second way.** Nothing else in a process that has a database open may open its file, not even to copy it: on Linux and macOS, closing that second handle drops the locks the database holds. To copy a database that is open, use a [backup](./tools.md#back-up-a-file).
-- **iOS App Group containers.** An app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there.
+- **iOS App Group containers.** An app whose database lives in an App Group container has to close it before the app is suspended, because iOS ends a suspended app that holds a lock there. A database open in the app's own container is not affected.
+
+::: lang dart
+
+In a Flutter app, close a database in an App Group container when the app goes to the background, and open it again when it is next used. Closing makes deferred commits durable first, and `closeAsync` waits for this isolate's asynchronous writes.
+
+```dart
+class SharedDatabase with WidgetsBindingObserver {
+  SharedDatabase(this.path) {
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  final String path;
+  Database? _db;
+
+  Database get db => _db ??= Database.open(path, schema: const Schema(1, [userSchema]));
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      final db = _db;
+
+      _db = null;
+      db?.closeAsync();
+    }
+  }
+}
+```
+
+iOS gives an app a few seconds in the background before it suspends it. A write that may take longer has to finish before the app leaves the foreground, or run in background time the app asks iOS for.
+
+:::
 
 ## Within one process
 

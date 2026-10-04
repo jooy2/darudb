@@ -20,7 +20,38 @@ order: 8
 
 - **로컬 디스크만.** 잠금과 커밋이 기다리는 동기화는 로컬 디스크에서만 제대로 동작합니다. NFS나 SMB 같은 네트워크 파일 시스템에 있는 데이터베이스는 `UNSUPPORTED_FILE_SYSTEM`으로 거부합니다.
 - **파일을 다른 경로로 열지 않기.** 데이터베이스를 연 프로세스 안에서는 복사하려는 목적이라도 그 파일을 따로 열면 안 됩니다. Linux와 macOS에서는 그렇게 연 핸들을 닫는 순간 데이터베이스가 쥔 잠금까지 풀립니다. 열려 있는 데이터베이스를 복사하려면 [백업](./tools.md#파일-백업하기)을 쓰세요.
-- **iOS App Group 컨테이너.** 앱이 App Group 컨테이너에 데이터베이스를 두었다면, 앱이 일시 중지되기 전에 닫아야 합니다. iOS는 그곳에 잠금을 쥔 채 일시 중지된 앱을 종료합니다.
+- **iOS App Group 컨테이너.** 앱이 App Group 컨테이너에 데이터베이스를 두었다면, 앱이 일시 중지되기 전에 닫아야 합니다. iOS는 그곳에 잠금을 쥔 채 일시 중지된 앱을 종료합니다. 앱 자신의 컨테이너에 연 데이터베이스는 상관없습니다.
+
+::: lang dart
+
+Flutter 앱에서는 앱이 백그라운드로 갈 때 App Group 컨테이너의 데이터베이스를 닫고, 다음에 쓸 때 다시 엽니다. 닫을 때 지연 커밋을 먼저 디스크에 기록하고, `closeAsync`는 이 isolate의 비동기 쓰기가 끝나기를 기다립니다.
+
+```dart
+class SharedDatabase with WidgetsBindingObserver {
+  SharedDatabase(this.path) {
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  final String path;
+  Database? _db;
+
+  Database get db => _db ??= Database.open(path, schema: const Schema(1, [userSchema]));
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      final db = _db;
+
+      _db = null;
+      db?.closeAsync();
+    }
+  }
+}
+```
+
+iOS는 백그라운드로 간 앱을 몇 초 뒤에 일시 중지합니다. 그보다 오래 걸릴 수 있는 쓰기는 앱이 포그라운드를 떠나기 전에 끝내거나, 앱이 iOS에 요청한 백그라운드 시간 안에서 해야 합니다.
+
+:::
 
 ## 한 프로세스 안에서
 
