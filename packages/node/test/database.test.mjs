@@ -415,6 +415,57 @@ describe('Database#backup', () => {
     assertCode(() => db.backup(''), 'INVALID_ARGUMENT');
     db.close();
   });
+
+  it('encrypts the copy under a new data key with a key or a password', async (context) => {
+    const dir = tempDir(context);
+    const key = new Uint8Array(32).fill(3);
+    const newKey = new Uint8Array(32).fill(5);
+    const cheap = { memoryKib: 8192, iterations: 1, parallelism: 1 };
+    const db = Database.open(join(dir, 'app.darudb'), { schema: people, key });
+    const plain = Database.open(join(dir, 'plain.darudb'), { schema: people });
+
+    for (const each of [db, plain]) {
+      each.write((txn) => txn.collection('people').insert({ name: 'a', email: 'a@x', age: 1 }));
+    }
+
+    db.backup(join(dir, 'password.darudb'), { password: 'new', passwordHashing: cheap });
+    await db.backupAsync(join(dir, 'key.darudb'), { key: newKey });
+    plain.backup(join(dir, 'encrypted.darudb'), { key: newKey });
+
+    for (const [name, secret] of [
+      ['password.darudb', { password: 'new' }],
+      ['key.darudb', { key: newKey }],
+      ['encrypted.darudb', { key: newKey }]
+    ]) {
+      const copy = Database.open(join(dir, name), { schema: people, ...secret });
+
+      assert.equal(copy.isEncrypted, true);
+      assert.deepEqual(
+        copy.read((txn) => txn.collection('people').find()),
+        db.read((txn) => txn.collection('people').find())
+      );
+      copy.close();
+    }
+
+    assert.deepEqual(newKey, new Uint8Array(32).fill(5), 'the caller wipes its own key');
+    assertCode(() => Database.open(join(dir, 'key.darudb'), { schema: people, key }), 'WRONG_KEY');
+    assertCode(
+      () => Database.open(join(dir, 'encrypted.darudb'), { schema: people }),
+      'KEY_REQUIRED'
+    );
+    assertCode(
+      () => db.backup(join(dir, 'both.darudb'), { key: newKey, password: 'x' }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(() => db.backup(join(dir, 'empty.darudb'), { password: '' }), 'INVALID_ARGUMENT');
+    assertCode(
+      () =>
+        db.backup(join(dir, 'cost.darudb'), { password: 'x', passwordHashing: { memoryKib: -1 } }),
+      'INVALID_ARGUMENT'
+    );
+    db.close();
+    plain.close();
+  });
 });
 
 describe('Database.salvage', () => {

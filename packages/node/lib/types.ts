@@ -630,13 +630,14 @@ export interface Database<S extends Schema<any> = Schema> {
   /**
    * Writes a copy of the published commit to a new file at `path`, while
    * other handles and processes may write. The copy holds no free space,
-   * has the file's page size, and opens with the same key or password. It
-   * never replaces a file: a path that is taken fails with
+   * has the file's page size, and opens with the same key or password, or
+   * with the `key` or `password` of `options`, which encrypt it under a new
+   * data key. It never replaces a file: a path that is taken fails with
    * `INVALID_ARGUMENT`.
    */
-  backup(path: string): BackupReport;
+  backup(path: string, options?: BackupOptions): BackupReport;
   /** `backup` on the thread pool. */
-  backupAsync(path: string): Promise<BackupReport>;
+  backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
   /**
    * Makes the file smaller in place: its end moves into free pages nearer
    * its start and goes back to the file system. It writes, so it waits for
@@ -699,6 +700,23 @@ export interface CompactReport {
   bytesAfter: number;
   /** The pages moved out of the file's end. */
   pagesMoved: number;
+}
+
+/**
+ * Options for `Database.backup`. Without a key or password, a copy of an
+ * encrypted file keeps its data key. With one, the copy is encrypted under a
+ * new random data key, which the key or password wraps: changing a file's key
+ * or password only wraps its data key again, so a backup is the way to leave
+ * behind a data key that may have been exposed. A plain database's copy is
+ * encrypted the same way. Give a `key` or a `password`, not both.
+ */
+export interface BackupOptions {
+  /** A key of 32 bytes for the copy. The package copies it when the call is made. */
+  key?: Uint8Array;
+  /** A password for the copy, hashed with Argon2id into the key. */
+  password?: string | Uint8Array;
+  /** How much work hashing the copy's password takes, as `OpenOptions` says. */
+  passwordHashing?: PasswordHashing;
 }
 
 /** What `Database.backup` wrote. */

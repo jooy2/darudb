@@ -131,6 +131,16 @@ pub struct NativeSalvageOptions {
     pub password: Option<Buffer>,
 }
 
+/// What `Database.backup` passes down: a key or a password, with its
+/// hashing cost, that encrypts the copy under a new data key.
+#[napi(object)]
+pub struct NativeBackupOptions {
+    /// A key of 32 bytes, as in [`NativeOptions`].
+    pub key: Option<Buffer>,
+    pub password: Option<Buffer>,
+    pub password_hashing: Option<NativePasswordHashing>,
+}
+
 /// What the integrity check found, as `Database.check` gives it.
 #[napi(object)]
 pub struct NativeCheckReport {
@@ -289,6 +299,26 @@ fn salvage_options(salvage: &NativeSalvageOptions) -> Result<darudb::OpenOptions
 
     if let Some(password) = &salvage.password {
         options.password(&password[..]);
+    }
+
+    Ok(options)
+}
+
+/// The engine's backup options from `backup`'s, copying the secret, so that
+/// the JavaScript side may wipe its buffers once the call returns.
+fn backup_options(backup: &NativeBackupOptions) -> Result<darudb::BackupOptions> {
+    let mut options = darudb::BackupOptions::new();
+
+    if let Some(key) = &backup.key {
+        options.key(key_of(key)?);
+    }
+
+    if let Some(password) = &backup.password {
+        options.password(&password[..]);
+    }
+
+    if let Some(cost) = &backup.password_hashing {
+        options.password_hashing(cost.memory_kib, cost.iterations, cost.parallelism);
     }
 
     Ok(options)
@@ -663,19 +693,24 @@ impl NativeDatabase {
 
     /// A copy of the published commit in a new file at `path`.
     #[napi]
-    pub fn backup(&self, path: String) -> Result<NativeBackupReport> {
+    pub fn backup(&self, path: String, options: NativeBackupOptions) -> Result<NativeBackupReport> {
         self.database()?
-            .backup(path)
+            .backup_with(path, &backup_options(&options)?)
             .map_err(to_js_error)?
             .deliver()
     }
 
     #[napi(ts_return_type = "Promise<NativeBackupReport | NativeFailure>")]
-    pub fn backup_async(&self, path: String) -> Result<AsyncTask<Work<darudb::BackupReport>>> {
+    pub fn backup_async(
+        &self,
+        path: String,
+        options: NativeBackupOptions,
+    ) -> Result<AsyncTask<Work<darudb::BackupReport>>> {
         let database = self.database()?.clone();
+        let options = backup_options(&options)?;
 
         Ok(Work::task(move || {
-            database.backup(path).map_err(to_js_error)
+            database.backup_with(path, &options).map_err(to_js_error)
         }))
     }
 

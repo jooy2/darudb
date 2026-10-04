@@ -378,15 +378,7 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     throw invalid('`cacheSize` is a whole number of bytes from 0 up');
   }
 
-  if (passwordHashing !== undefined) {
-    const { memoryKib, iterations, parallelism } = passwordHashing ?? {};
-
-    if (![memoryKib, iterations, parallelism].every(isU32)) {
-      throw invalid(
-        '`passwordHashing` has `memoryKib`, `iterations` and `parallelism`, each a whole number from 0 up'
-      );
-    }
-  }
+  checkPasswordHashing(passwordHashing);
 
   const passed = {
     create,
@@ -400,6 +392,19 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
 
   // Last, so that nothing above throws with the copies not yet wiped.
   return { ...passed, ...secretOf(options) };
+}
+
+/** Refuses a `passwordHashing` option that is not three whole numbers. */
+function checkPasswordHashing(passwordHashing: OpenOptions<never>['passwordHashing']): void {
+  if (passwordHashing !== undefined) {
+    const { memoryKib, iterations, parallelism } = passwordHashing ?? {};
+
+    if (![memoryKib, iterations, parallelism].every(isU32)) {
+      throw invalid(
+        '`passwordHashing` has `memoryKib`, `iterations` and `parallelism`, each a whole number from 0 up'
+      );
+    }
+  }
 }
 
 /** Whether `value` fits an unsigned 32-bit integer. */
@@ -877,16 +882,32 @@ class Database {
 
   /**
    * Writes a copy of the published commit to a new file at `path`, which
-   * the same key or password opens, while other handles and processes may
+   * the same key or password opens, or under a new data key with a `key`
+   * or `password` in `options`, while other handles and processes may
    * write. It never replaces a file already at `path`.
    */
-  backup(path: string): BackupReport {
-    return this.#database().backup(pathOf(path));
+  backup(path: string, options: BackupOptions = {}): BackupReport {
+    const passed = backupOptionsOf(options);
+
+    try {
+      return this.#database().backup(pathOf(path), passed);
+    } finally {
+      wipe(passed);
+    }
   }
 
   /** `backup` on the thread pool. */
-  async backupAsync(path: string): Promise<BackupReport> {
-    return settle(await this.#database().backupAsync(pathOf(path)));
+  async backupAsync(path: string, options: BackupOptions = {}): Promise<BackupReport> {
+    const passed = backupOptionsOf(options);
+    let task: ReturnType<native.NativeDatabase['backupAsync']>;
+
+    try {
+      task = this.#database().backupAsync(pathOf(path), passed);
+    } finally {
+      wipe(passed);
+    }
+
+    return settle(await task);
   }
 
   /**
@@ -972,6 +993,19 @@ interface BackupReport {
   trees: number;
   entries: number;
   bytes: number;
+}
+
+/** The options `backup` and `backupAsync` take. */
+interface BackupOptions extends Secret {
+  passwordHashing?: OpenOptions<never>['passwordHashing'];
+}
+
+/** What `backup` and `backupAsync` pass to the native layer, checked. */
+function backupOptionsOf(options: BackupOptions): native.NativeBackupOptions {
+  checkPasswordHashing(options.passwordHashing);
+
+  // Last, so that nothing above throws with the copies not yet wiped.
+  return { passwordHashing: options.passwordHashing, ...secretOf(options) };
 }
 
 /** The options `salvage` and `salvageAsync` take. */
