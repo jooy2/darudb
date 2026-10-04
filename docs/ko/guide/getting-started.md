@@ -280,6 +280,8 @@ void main() {
 
 `dart run build_runner build`가 `main.g.dart`를 씁니다. 그 안에 `userSchema`와, 쿼리에서 쓴 `q.age`가 있는 쿼리 빌더가 들어 있습니다.
 
+Dart 3.10에서는 `build_runner`가 `'dart compile' does not support build hooks`라는 오류를 내고 멈춥니다. Dart 3.10에서 쓸 수 있는 가장 새 `build_runner`는 빌더를 `dart compile`로 미리 컴파일하는데, Dart 3.10은 `darudb`처럼 빌드 훅이 있는 패키지가 든 프로젝트를 이 방식으로 컴파일하지 않기 때문입니다. 이때는 `dart run build_runner build --force-jit`으로 실행하세요. 빌더를 미리 컴파일하지 않고 실행할 때 컴파일합니다.
+
 :::
 
 이 컬렉션에는 기본 키 필드가 없으므로 엔진이 객체마다 1부터 번호를 매긴 `id`를 줍니다. `age`에 인덱스가 있으므로 쿼리는 모든 객체를 읽지 않고 찾는 객체만 읽습니다.

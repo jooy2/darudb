@@ -280,6 +280,8 @@ void main() {
 
 `dart run build_runner build` writes `main.g.dart`, which holds `userSchema` and the query builder whose `q.age` the query uses.
 
+On Dart 3.10, `build_runner` stops with `'dart compile' does not support build hooks`. The newest `build_runner` that runs on Dart 3.10 compiles the builders ahead of time with `dart compile`, which Dart 3.10 refuses for a project whose packages have a build hook, as `darudb` has. Run `dart run build_runner build --force-jit` there, which compiles the builders as they run instead.
+
 :::
 
 The collection has no primary key field, so the engine gives each object an `id`, numbered from 1. The index on `age` lets the query read only the objects it finds rather than every object.
