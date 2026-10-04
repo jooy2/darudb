@@ -49,5 +49,4 @@ Phase 6 is done, and the maintainer accepted [design/tools.md](design/tools.md) 
 
 ## Open questions
 
-- **Rotating the data key.** Changing the key or the password rewraps the data key and re-encrypts nothing, so the data key is the same for the life of a file: compaction works in place, and backup and salvage copy the key block as it is. Writing a file under a new data key, as a backup or salvage option or as a tool of its own, is not decided.
 - **Publishing the Dart packages to pub.dev.** pub.dev takes automated publishing only from a workflow that a tag push started, and only for a package it already has, so the release workflow prepares `darudb` with its manifest and the maintainer publishes it by hand. Whether later releases publish from a workflow started by pushing a `dart-v<version>` tag, and how `darudb_generator`, which the workflow does not release yet, is released beside it, is open.
