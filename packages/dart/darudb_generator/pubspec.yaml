@@ -11,14 +11,20 @@ environment:
 # The oldest of each is the newest that runs on Dart 3.10, the package's
 # minimum; the generator is checked against both ends.
 dependencies:
-  analyzer: ">=13.0.0 <15.0.0"
+  analyzer: ">=12.1.0 <15.0.0"
   build: ^4.0.7
   source_gen: ">=4.2.4 <5.0.0"
 
+# The tests' oldest: `build_test` 3.5.16, the newest on Dart 3.10, whose
+# `TestReaderWriter` takes `flattenOutput` as 3.5.12's does not, with the
+# `build_runner` it asks for; and `frontend_server_client` 4, since the 3.x
+# line that `test_core` would otherwise go down to runs a compiler snapshot
+# the current SDK no longer has.
 dev_dependencies:
-  build_runner: ^2.10.0
-  build_test: ^3.5.0
+  build_runner: ^2.15.1
+  build_test: ^3.5.16
   darudb:
     path: ../darudb
+  frontend_server_client: ^4.0.0
   lints: ^6.1.0
   test: ^1.30.0
