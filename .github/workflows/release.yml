@@ -4,6 +4,12 @@ name: release
 # `publish`, it builds and tests everything that would be published, checks
 # what each package would contain, and publishes nothing: that is the dry run
 # to make before every release. CONTRIBUTING.md has the whole procedure.
+#
+# A Dart package's first version is published by hand from what a run started
+# here prepares, since pub.dev takes automated publishing only for a package it
+# has. After that, pushing the tag of a Dart package's version starts a run
+# that publishes it: pub.dev takes a package only from a run a tag push
+# started, so for those packages the push is the request to publish.
 on:
   workflow_dispatch:
     inputs:
@@ -14,10 +20,15 @@ on:
           - npm
           - crate
           - dart
+          - dart-generator
       publish:
         description: Publish it. Off, the run publishes nothing.
         type: boolean
         default: false
+  push:
+    tags:
+      - 'dart-v*'
+      - 'dart-generator-v*'
 
 concurrency:
   group: release
@@ -34,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Check the version
     outputs:
+      package: ${{ steps.package.outputs.package }}
+      publish: ${{ steps.package.outputs.publish }}
       version: ${{ steps.package.outputs.version }}
       changelog: ${{ steps.package.outputs.changelog }}
       tag: ${{ steps.package.outputs.tag }}
@@ -43,11 +56,27 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # A tag push names the package by its tag, and always publishes.
       - name: Read the package's version
         id: package
         env:
-          PACKAGE: ${{ inputs.package }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
         run: |
+          if [ "$EVENT" = push ]; then
+            case "$REF_NAME" in
+              dart-generator-v*) PACKAGE=dart-generator ;;
+              dart-v*) PACKAGE=dart ;;
+              *) echo "::error::$REF_NAME is not the tag of a package"; exit 1 ;;
+            esac
+            publish=true
+          else
+            PACKAGE=$INPUT_PACKAGE
+            publish=$INPUT_PUBLISH
+          fi
+
           if [ "$PACKAGE" = npm ]; then
             version=$(node -p "require('./packages/node/package.json').version")
             echo "changelog=packages/node/CHANGELOG.md" >> "$GITHUB_OUTPUT"
@@ -58,6 +87,11 @@ jobs:
             echo "changelog=packages/dart/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
             echo "tag=dart-v$version" >> "$GITHUB_OUTPUT"
             echo "title=darudb $version for Dart" >> "$GITHUB_OUTPUT"
+          elif [ "$PACKAGE" = dart-generator ]; then
+            version=$(sed -n 's/^version: \(.*\)$/\1/p' packages/dart/darudb_generator/pubspec.yaml)
+            echo "changelog=packages/dart/darudb_generator/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "tag=dart-generator-v$version" >> "$GITHUB_OUTPUT"
+            echo "title=darudb_generator $version" >> "$GITHUB_OUTPUT"
           else
             version=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/darudb/Cargo.toml | head -n 1)
             echo "changelog=crates/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
@@ -65,11 +99,18 @@ jobs:
             echo "title=darudb $version for Rust" >> "$GITHUB_OUTPUT"
           fi
 
+          if [ "$EVENT" = push ] && ! grep -Fqx "tag=$REF_NAME" "$GITHUB_OUTPUT"; then
+            echo "::error::$REF_NAME does not name the version the package has, $version"
+            exit 1
+          fi
+
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
       # A release renames the changelog's `vNext` section to the version and
       # its date. Publishing without that would ship an entry-less release.
       - name: Check that the changelog names the version
-        if: inputs.publish
+        if: steps.package.outputs.publish == 'true'
         env:
           VERSION: ${{ steps.package.outputs.version }}
           CHANGELOG: ${{ steps.package.outputs.changelog }}
@@ -82,7 +123,7 @@ jobs:
           fi
 
   crate:
-    if: inputs.package == 'crate'
+    if: needs.version.outputs.package == 'crate'
     needs: version
     runs-on: ubuntu-latest
     name: Package the crate
@@ -100,13 +141,13 @@ jobs:
       - name: Package
         run: cargo publish -p darudb-derive -p darudb --dry-run
       - name: Publish
-        if: inputs.publish
+        if: needs.version.outputs.publish == 'true'
         run: cargo publish -p darudb-derive -p darudb
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   build:
-    if: inputs.package == 'npm'
+    if: needs.version.outputs.package == 'npm'
     needs: version
     runs-on: ${{ matrix.host }}
     name: Build ${{ matrix.target }}
@@ -193,7 +234,7 @@ jobs:
           if-no-files-found: error
 
   build-freebsd:
-    if: inputs.package == 'npm'
+    if: needs.version.outputs.package == 'npm'
     needs: version
     runs-on: ubuntu-latest
     name: Build x86_64-unknown-freebsd
@@ -227,8 +268,8 @@ jobs:
           if-no-files-found: error
 
   npm:
-    if: inputs.package == 'npm'
-    needs: [build, build-freebsd]
+    if: needs.version.outputs.package == 'npm'
+    needs: [version, build, build-freebsd]
     runs-on: ubuntu-latest
     name: Package for npm
     permissions:
@@ -280,14 +321,14 @@ jobs:
       # `prepublishOnly` publishes every platform package first and adds them
       # to this one's optional dependencies.
       - name: Publish
-        if: inputs.publish
+        if: needs.version.outputs.publish == 'true'
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
   build-dart:
-    if: inputs.package == 'dart'
+    if: needs.version.outputs.package == 'dart'
     needs: version
     runs-on: ${{ matrix.host }}
     name: Build the Dart library for ${{ matrix.target }}
@@ -426,7 +467,7 @@ jobs:
           if-no-files-found: error
 
   dart:
-    if: inputs.package == 'dart'
+    if: needs.version.outputs.package == 'dart'
     needs: [version, build-dart]
     runs-on: ubuntu-latest
     name: Package for pub.dev
@@ -471,8 +512,11 @@ jobs:
           fi
 
           rm publish.log
-      # The package as it is published, for the maintainer to publish with
-      # `dart pub publish` once the GitHub release holds its libraries.
+      # The package as it is published: by the `pub-dev` job after a tag
+      # push, or by the maintainer with `dart pub publish`, once the GitHub
+      # release holds its libraries.
+      # Hidden files included: `.pubignore` is what leaves the Rust crate,
+      # the tests and the tooling out of the published package.
       - uses: actions/upload-artifact@v7
         with:
           name: dart-package
@@ -480,13 +524,53 @@ jobs:
             packages/dart/darudb
             !packages/dart/darudb/.dart_tool
             !packages/dart/darudb/pubspec.lock
+          include-hidden-files: true
+          if-no-files-found: error
+
+  dart-generator:
+    if: needs.version.outputs.package == 'dart-generator'
+    needs: version
+    runs-on: ubuntu-latest
+    name: Package the generator for pub.dev
+
+    defaults:
+      run:
+        working-directory: ./packages/dart/darudb_generator
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@v1
+      # The tests use the runtime package, whose build hook compiles the
+      # engine with the toolchain its `rust-toolchain.toml` pins.
+      - run: dart pub get
+      - run: dart analyze --fatal-infos
+      - run: dart test
+      - name: List what the package would contain
+        run: |
+          sed -i '/^publish_to: none$/d' pubspec.yaml
+          dart pub publish --dry-run 2>&1 | tee publish.log || true
+
+          if grep -q 'found the following .*error' publish.log; then
+            exit 1
+          fi
+
+          rm publish.log
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dart-generator-package
+          path: |
+            packages/dart/darudb_generator
+            !packages/dart/darudb_generator/.dart_tool
+            !packages/dart/darudb_generator/pubspec.lock
           if-no-files-found: error
 
   # Its own job, so that the jobs that install and build third-party code
   # never hold a token that can write to the repository.
   github-release:
-    if: inputs.publish && !cancelled() && !failure()
-    needs: [version, crate, npm, dart]
+    if: needs.version.outputs.publish == 'true' && !cancelled() && !failure()
+    needs: [version, crate, npm, dart, dart-generator]
     runs-on: ubuntu-latest
     name: Tag and release on GitHub
     permissions:
@@ -499,7 +583,7 @@ jobs:
       # A Dart release holds the native libraries that the published package
       # downloads, under the names its manifest gives them.
       - uses: actions/download-artifact@v8
-        if: inputs.package == 'dart'
+        if: needs.version.outputs.package == 'dart'
         with:
           pattern: dart-library-*
           merge-multiple: true
@@ -525,3 +609,26 @@ jobs:
           fi
 
           gh release create "$TAG" --target "$GITHUB_SHA" --title "$TITLE" --notes-file notes.md "${files[@]}"
+
+  # After the GitHub release, whose libraries the published `darudb`
+  # downloads. pub.dev takes the run's OIDC token, which `setup-dart` sets up,
+  # only from a run a tag push started, and only for a package whose admin
+  # page names this repository, the tag pattern and the `pub.dev` environment.
+  pub-dev:
+    if: github.event_name == 'push' && !cancelled() && !failure()
+    needs: [version, github-release]
+    runs-on: ubuntu-latest
+    name: Publish to pub.dev
+    environment: pub.dev
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: dart-lang/setup-dart@v1
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.version.outputs.package == 'dart' && 'dart-package' || 'dart-generator-package' }}
+          path: package
+      - name: Publish
+        working-directory: package
+        run: dart pub publish --force
