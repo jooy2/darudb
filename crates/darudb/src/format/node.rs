@@ -455,9 +455,7 @@ pub(crate) fn encode_branch<K: AsRef<[u8]>>(
     children: &[Pointer],
     page: &mut [u8],
 ) {
-    for (index, child) in children.iter().enumerate() {
-        child.write(&mut page[CONTENT_OFFSET + POINTER_LEN * index..]);
-    }
+    write_branch_children(children, page);
 
     let slots = CONTENT_OFFSET + POINTER_LEN * children.len();
     let mut cursor = check_offset(page.len());
@@ -478,6 +476,14 @@ pub(crate) fn encode_branch<K: AsRef<[u8]>>(
 
     debug_assert_eq!(children.len(), count + 1);
     debug_assert!(cursor >= slots + 2 * count);
+}
+
+/// Writes the pointers to a branch's children into `page`, which holds the
+/// branch's keys already, or is about to.
+pub(crate) fn write_branch_children(children: &[Pointer], page: &mut [u8]) {
+    for (index, child) in children.iter().enumerate() {
+        child.write(&mut page[CONTENT_OFFSET + POINTER_LEN * index..]);
+    }
 }
 
 /// Checks the children, the key offsets and lengths of a branch with

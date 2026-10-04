@@ -8,7 +8,7 @@ use super::leaf::LeafParts;
 use super::node::{Branch, Child, LoadedNode, Node};
 use super::read::internal;
 use crate::error::Result;
-use crate::format::{PageHeader, PageKind, Pointer, encode_branch};
+use crate::format::{PageHeader, PageKind, Pointer, encode_branch, write_branch_children};
 use crate::storage::Pager;
 
 /// One encoded page of a commit, ready to write.
@@ -71,14 +71,25 @@ pub(crate) fn finish(
                 pointers.push(finish(pager, txn, tree, child, out)?);
             }
 
-            let mut bytes = vec![0u8; pager.page_size()];
-
-            encode_branch(keys.iter(), &pointers, &mut bytes);
-
             let header = header(PageKind::Branch, level, keys.len(), txn, tree)?;
             let size = keys.branch_len();
 
-            (header, bytes, keys.into_heads(), size, 0)
+            // A branch whose keys are those of the page it was read from
+            // keeps the page, whose children are all that changed.
+            let (bytes, heads) = match keys.into_page() {
+                Ok((mut page, heads)) => {
+                    write_branch_children(&pointers, &mut page);
+                    (page, heads)
+                }
+                Err(keys) => {
+                    let mut bytes = vec![0u8; pager.page_size()];
+
+                    encode_branch(keys.iter(), &pointers, &mut bytes);
+                    (bytes, keys.into_heads())
+                }
+            };
+
+            (header, bytes, heads, size, 0)
         }
     };
 

@@ -222,19 +222,31 @@ impl Heads {
 /// branch, both when a transaction first changed the branch and when it let
 /// it go, and a small transaction changes a branch on every level of every
 /// tree it writes: that took a tenth of a deferred commit of one object.
+///
+/// Keys taken from a committed page no one else holds stay in that page
+/// until one of them changes, and are read from it in place; only then are
+/// they copied into the buffer. A small transaction nearly always changes
+/// only the pointer to the child it changed, so the keys of most branches it
+/// changes are never copied, and the commit writes the children into the
+/// page rather than encoding every key again: copying the keys out and
+/// encoding them back took a sixth of the processor time of a deferred
+/// commit of one object.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Keys {
     bytes: Vec<u8>,
     /// Where each key ends in `bytes`.
     ends: Vec<usize>,
     heads: Heads,
+    /// The committed page the keys are still those of, and the bytes they
+    /// take there. While it is here, `bytes` and `ends` are empty.
+    page: Option<(Vec<u8>, usize)>,
 }
 
 /// Keys are equal when they hold the same keys, whatever prefix their heads
-/// follow.
+/// follow and wherever they are kept.
 impl PartialEq for Keys {
     fn eq(&self, other: &Self) -> bool {
-        self.bytes == other.bytes && self.ends == other.ends
+        self.len() == other.len() && self.iter().eq(other.iter())
     }
 }
 
@@ -250,7 +262,7 @@ impl Keys {
             all.ends.push(all.bytes.len());
         }
 
-        all.heads = Heads::of(all.len(), |index| all.get(index));
+        all.heads = Heads::of(all.ends.len(), |index| all.get(index));
         all
     }
 
@@ -270,7 +282,50 @@ impl Keys {
             ends.push(bytes.len());
         }
 
-        Self { bytes, ends, heads }
+        Self {
+            bytes,
+            ends,
+            heads,
+            page: None,
+        }
+    }
+
+    /// The keys of the committed branch `page`, which take `total` bytes
+    /// there and whose heads are `heads`, read from the page until one
+    /// changes.
+    fn in_page(page: Vec<u8>, total: usize, heads: Heads) -> Self {
+        Self {
+            bytes: Vec::new(),
+            ends: Vec::new(),
+            heads,
+            page: Some((page, total)),
+        }
+    }
+
+    /// The page these keys are still those of, and their heads; or the keys
+    /// themselves, when one of them changed.
+    pub(crate) fn into_page(self) -> std::result::Result<(Vec<u8>, Heads), Keys> {
+        match self.page {
+            Some((page, _)) => Ok((page, self.heads)),
+            None => Err(self),
+        }
+    }
+
+    /// Copies the keys out of the page they were read from, before one of
+    /// them changes.
+    fn own(&mut self) {
+        if let Some((page, total)) = self.page.take() {
+            let count = self.len();
+
+            self.bytes.reserve(total);
+            self.ends.reserve(count);
+
+            for index in 0..count {
+                self.bytes
+                    .extend_from_slice(branch_key(&page, count, index));
+                self.ends.push(self.bytes.len());
+            }
+        }
     }
 
     /// The heads, for the node the commit caches.
@@ -279,11 +334,11 @@ impl Keys {
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.ends.len()
+        self.heads.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.ends.is_empty()
+        self.len() == 0
     }
 
     /// Where key `index` starts in `bytes`.
@@ -293,7 +348,10 @@ impl Keys {
 
     /// Key `index`.
     pub(crate) fn get(&self, index: usize) -> &[u8] {
-        key_in(&self.bytes, &self.ends, index)
+        match &self.page {
+            Some((page, _)) => branch_key(page, self.len(), index),
+            None => key_in(&self.bytes, &self.ends, index),
+        }
     }
 
     pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = &[u8]> + '_ {
@@ -306,6 +364,8 @@ impl Keys {
 
     /// Puts `key` in place `index`, before the key there.
     pub(crate) fn insert(&mut self, index: usize, key: &[u8]) {
+        self.own();
+
         let at = self.start(index);
 
         self.heads
@@ -321,6 +381,8 @@ impl Keys {
 
     /// Takes key `index` out.
     pub(crate) fn remove(&mut self, index: usize) {
+        self.own();
+
         let (start, end) = (self.start(index), self.ends[index]);
 
         self.bytes.drain(start..end);
@@ -341,16 +403,23 @@ impl Keys {
     /// Adds `other`'s keys after these. Merging branches is rare, so the
     /// heads are worked out again.
     pub(crate) fn append(&mut self, other: &Keys) {
-        let base = self.bytes.len();
+        self.own();
 
-        self.bytes.extend_from_slice(&other.bytes);
-        self.ends.extend(other.ends.iter().map(|end| end + base));
-        self.heads = Heads::of(self.len(), |index| key_in(&self.bytes, &self.ends, index));
+        for key in other.iter() {
+            self.bytes.extend_from_slice(key);
+            self.ends.push(self.bytes.len());
+        }
+
+        self.heads = Heads::of(self.ends.len(), |index| {
+            key_in(&self.bytes, &self.ends, index)
+        });
     }
 
     /// Takes the keys from `at` on out, and returns them. Each part's heads
     /// are worked out again, after the longer prefix its keys may share.
     pub(crate) fn split_off(&mut self, at: usize) -> Keys {
+        self.own();
+
         let start = self.start(at);
         let bytes = self.bytes.split_off(start);
         let ends: Vec<usize> = self
@@ -361,9 +430,16 @@ impl Keys {
             .collect();
         let heads = Heads::of(ends.len(), |index| key_in(&bytes, &ends, index));
 
-        self.heads = Heads::of(self.len(), |index| key_in(&self.bytes, &self.ends, index));
+        self.heads = Heads::of(self.ends.len(), |index| {
+            key_in(&self.bytes, &self.ends, index)
+        });
 
-        Keys { bytes, ends, heads }
+        Keys {
+            bytes,
+            ends,
+            heads,
+            page: None,
+        }
     }
 
     /// Takes the last key out, and returns it.
@@ -371,6 +447,7 @@ impl Keys {
         let last = self.len().checked_sub(1)?;
         let key = self.get(last).to_vec();
 
+        self.own();
         self.bytes.truncate(self.start(last));
         self.ends.pop();
         self.heads.pop();
@@ -386,14 +463,32 @@ impl Keys {
     /// How many keys are below `key`, or at or below it with `or_equal`.
     #[inline(always)]
     pub(crate) fn rank(&self, key: &[u8], or_equal: bool) -> usize {
-        self.heads.rank(&self.bytes, key, or_equal, |index| {
-            key_in(&self.bytes, &self.ends, index)
-        })
+        match &self.page {
+            Some((page, _)) => {
+                let count = self.len();
+                let first = if count == 0 {
+                    &[][..]
+                } else {
+                    branch_key(page, count, 0)
+                };
+
+                self.heads
+                    .rank(first, key, or_equal, |index| branch_key(page, count, index))
+            }
+            None => self.heads.rank(&self.bytes, key, or_equal, |index| {
+                key_in(&self.bytes, &self.ends, index)
+            }),
+        }
     }
 
     /// The bytes of a page's content a branch with these keys takes.
     pub(crate) fn branch_len(&self) -> usize {
-        POINTER_LEN + self.len() * branch_key_len(0) + self.bytes.len()
+        let bytes = match &self.page {
+            Some((_, total)) => *total,
+            None => self.bytes.len(),
+        };
+
+        POINTER_LEN + self.len() * branch_key_len(0) + bytes
     }
 }
 
@@ -621,7 +716,8 @@ impl LoadedNode {
     }
 
     /// [`to_node`](Self::to_node) for a node no one else holds: a leaf
-    /// takes the page and the heads as they are, and a branch the heads.
+    /// takes the page and the heads as they are, and a branch the heads, and
+    /// its page for as long as its keys stay as they are.
     pub(crate) fn into_node(self) -> Node {
         let count = self.count();
         let heads = Heads {
@@ -639,21 +735,16 @@ impl LoadedNode {
             ));
         }
 
-        let page = &self.page;
         let key_bytes =
             usize::from(self.size).saturating_sub(POINTER_LEN + count * branch_key_len(0));
+        let children = (0..=count)
+            .map(|index| Child::Clean(branch_child(&self.page, index)))
+            .collect();
 
         Node::Branch(Branch {
             level: self.level,
-            keys: Keys::with_heads(
-                count,
-                key_bytes,
-                |index| branch_key(page, count, index),
-                heads,
-            ),
-            children: (0..=count)
-                .map(|index| Child::Clean(branch_child(page, index)))
-                .collect(),
+            keys: Keys::in_page(self.page.into_vec(), key_bytes, heads),
+            children,
         })
     }
 
@@ -1301,6 +1392,104 @@ mod tests {
     /// A search of keys a transaction changes, inserted and removed in order
     /// and around a shared prefix, finds what a search of a sorted vector of
     /// the same keys finds, and their heads follow them.
+    /// Keys taken from a committed branch read as the page holds them,
+    /// until one changes, and then change as keys copied out of it do; the
+    /// commit takes the page back only while none has changed.
+    #[test]
+    fn keys_read_from_their_page_change_as_copied_keys_do() {
+        const PAGE: usize = 4096;
+
+        let mut rng = Rng::new(33);
+
+        for round in 0..400 {
+            let shared: Vec<u8> = match round % 3 {
+                0 => Vec::new(),
+                1 => b"\x04\x80\0\0\0\0\0\x01".to_vec(),
+                _ => rng.bytes(10),
+            };
+            let mut model = node_keys(&mut rng, &shared, PAGE);
+            let mut page = vec![0u8; PAGE];
+            let children: Vec<Pointer> = (0..=model.len() as u64)
+                .map(|page| Pointer {
+                    page: page + 1,
+                    txn: 1,
+                    check: Check::ZERO,
+                })
+                .collect();
+
+            encode_branch(&model, &children, &mut page);
+
+            let NodeRef::Loaded(node) = loaded(page, PageKind::Branch, model.len()) else {
+                unreachable!("a loaded node");
+            };
+            let Node::Branch(branch) = Arc::try_unwrap(node).unwrap().into_node() else {
+                panic!("a branch");
+            };
+            let mut keys = branch.keys;
+
+            assert!(keys.page.is_some());
+            assert_eq!(keys.iter().collect::<Vec<_>>(), model);
+            assert_eq!(keys.branch_len(), branch_len(&model));
+            assert_eq!(keys, Keys::of(model.iter().map(Vec::as_slice)));
+            keys.heads
+                .assert_follow(keys.len(), |index| keys.get(index));
+
+            for probe in probes(&mut rng, &model, &shared) {
+                assert_eq!(
+                    keys.rank(&probe, false),
+                    model.partition_point(|key| key < &probe)
+                );
+                assert_eq!(
+                    keys.child_index(&probe),
+                    model.partition_point(|key| key <= &probe)
+                );
+            }
+
+            if round % 4 == 0 {
+                assert!(keys.into_page().is_ok());
+
+                continue;
+            }
+
+            let key = key_after(&mut rng, &shared);
+
+            match rng.below(5) {
+                0 => {
+                    let at = rng.index(model.len() + 1);
+
+                    keys.insert(at, &key);
+                    model.insert(at, key);
+                }
+                1 => {
+                    let at = rng.index(model.len());
+
+                    keys.remove(at);
+                    model.remove(at);
+                }
+                2 => {
+                    let at = rng.index(model.len());
+
+                    keys.set(at, &key);
+                    model[at] = key;
+                }
+                3 => {
+                    let at = rng.index(model.len() + 1);
+                    let tail = keys.split_off(at);
+
+                    assert_eq!(tail.iter().collect::<Vec<_>>(), model.split_off(at));
+                }
+                _ => assert_eq!(keys.pop(), model.pop()),
+            }
+
+            assert!(keys.page.is_none());
+            assert_eq!(keys.iter().collect::<Vec<_>>(), model);
+            assert_eq!(keys.branch_len(), branch_len(&model));
+            keys.heads
+                .assert_follow(keys.len(), |index| keys.get(index));
+            assert!(keys.into_page().is_err());
+        }
+    }
+
     #[test]
     fn a_search_of_changed_keys_finds_what_the_keys_say() {
         let mut rng = Rng::new(9);

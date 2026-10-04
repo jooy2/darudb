@@ -35,7 +35,7 @@ pub(crate) use node::{
     LeafEntry, OverflowRef, StoredRef, StoredValue, branch_child, branch_key, branch_key_len,
     branch_size, cell_len, check_branch, check_leaf, encode_branch, encode_leaf, inline_entry_len,
     inline_limit, leaf_cell, leaf_entry, leaf_extent, leaf_inline, leaf_key, leaf_low, leaf_value,
-    max_key_len, overflow_pages, set_slot, write_cell,
+    max_key_len, overflow_pages, set_slot, write_branch_children, write_cell,
 };
 #[cfg(test)]
 pub(crate) use node::{branch_len, decode_leaf};
