@@ -313,7 +313,9 @@ final class _Collection {
   ];
 }
 
-/// The options of `Database.open` as the record the library reads.
+/// The options of `Database.open` as the record the library reads. A key and
+/// a password together are refused here: the engine takes whichever comes
+/// last, and which one opened the file would depend on the record's order.
 Uint8List _options({
   required bool create,
   required int? pageSize,
@@ -325,6 +327,10 @@ Uint8List _options({
   required PasswordHashing? passwordHashing,
   required List<Migration> migrations,
 }) {
+  if (key != null && password != null) {
+    throw invalidArgument('give a key or a password, not both');
+  }
+
   final writer = Writer(256);
   final entries = [
     (1, (Writer w) => w.byte(create ? Tag.trueValue : Tag.falseValue)),

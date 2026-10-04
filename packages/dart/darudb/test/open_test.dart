@@ -170,6 +170,25 @@ void main() {
     withKey.close();
   });
 
+  test('a key and a password together are refused', () async {
+    final key = Uint8List(32);
+    const schema = Schema(1, [noteV1Schema]);
+
+    expect(
+      () => Database.open(path, schema: schema, key: key, password: 'p'),
+      failsWith('INVALID_ARGUMENT'),
+    );
+    await expectLater(
+      Database.openAsync(path, schema: schema, key: key, password: 'p'),
+      failsWith('INVALID_ARGUMENT'),
+    );
+    expect(
+      () => Database.salvage(path, '$path.rescued', key: key, password: 'p'),
+      failsWith('INVALID_ARGUMENT'),
+    );
+    expect(File(path).existsSync(), isFalse, reason: 'refused before it opens');
+  });
+
   test('a transaction function that returns a Future is refused', () {
     final db = Database.open(path, schema: const Schema(1, [noteV1Schema]));
 

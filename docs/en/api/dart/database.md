@@ -99,7 +99,7 @@ static SalvageReport salvage(
 Rescues what it can of the damaged database at `from` into a new database at `into`, and reports what it rescued and what it could not. It reads the file page by page, so it works on a file that does not open. It starts from the newest commit the file records, takes what that commit cannot read from older versions of the same pages, and builds every index again, so the new file passes the integrity check. An encrypted file needs its `key` or `password`, and the new file opens with the same one. `busyTimeout` is how long it waits for other processes to close the file. [SalvageReport](../../types/dart/salvage-report.md) describes the result, and [Tools](../../guide/tools.md) explains when to use it.
 
 - `BUSY`: the file is open in this process or another. Opening the file while salvage runs fails with `BUSY` too.
-- `INVALID_ARGUMENT`: something already exists at `into`, or a path is empty. Salvage never replaces a file.
+- `INVALID_ARGUMENT`: something already exists at `into`, a path is empty, or both a key and a password were given. Salvage never replaces a file.
 - `NOT_FOUND`: nothing exists at `from`.
 - `KEY_REQUIRED`: the file is encrypted and neither a key nor a password was given.
 
