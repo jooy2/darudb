@@ -15,12 +15,13 @@ use crate::btree::{Load, Loader, NodeRef};
 use crate::database::Database;
 use crate::error::Result;
 use crate::format::object::codec;
+use crate::format::object::names::{META, SCHEMA_KEY, counter, index_tree, records};
 use crate::format::object::schema::StoredSchema;
 use crate::format::{
     CATALOG_TREE, CommitRecord, FIRST_USER_TREE, FREE_TREE, Pointer, RETAINED_TREE, StoredRef,
     TreeDescriptor, decode_free_key, decode_free_value, decode_retained_key, decode_runs,
 };
-use crate::schema::objects::{META, SCHEMA_KEY, counter, index_entries, index_tree, records};
+use crate::schema::objects::index_entries;
 use crate::storage::Pager;
 use crate::txn::ReadTransaction;
 

@@ -13,14 +13,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::declare::{Migration, MigrationFn, Schema};
-use super::objects::{
-    self, CollectionWriter, META, SCHEMA_KEY, Source, counter, index_entries, index_tree, internal,
-    records,
-};
+use super::objects::{self, CollectionWriter, Source, index_entries, internal};
 use super::resolve::{Resolution, resolve};
 use super::typed::{CollectionType, TypedWriter};
 use crate::error::{Error, Result};
 use crate::format::object::key;
+use crate::format::object::names::{META, SCHEMA_KEY, counter, index_tree, records};
 use crate::format::object::schema::{
     Fields, IndexDef, Kind, OBJECT_FORMAT, OpenSchema, StoredSchema,
 };
@@ -426,7 +424,13 @@ impl Migrating<'_> {
     pub fn previous(&self, collection: &str, key: impl Into<Value>) -> Result<Option<Object>> {
         let definition = &self.previous.collections[objects::position(self.previous, collection)?];
 
-        objects::get(&*self.txn, definition, None, &key.into())
+        objects::get(
+            &*self.txn,
+            definition,
+            &records(definition.id),
+            None,
+            &key.into(),
+        )
     }
 
     /// The record of the object [`previous`](Self::previous) reads, as the

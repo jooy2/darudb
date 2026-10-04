@@ -35,13 +35,12 @@ use crate::format::object::Value;
 use crate::format::object::codec::{
     self, BYTES, FALSE, FLOAT, INT, LINK, LIST, OBJECT, STRING, TRUE,
 };
+use crate::format::object::names::records;
 use crate::format::object::schema::{Fields, Kind, OpenSchema, StoredSchema};
 use crate::txn::{ReadTransaction, WriteTransaction, kept};
 
 use super::declare::{Collection, Embedded, Field, Type};
-use super::objects::{
-    CollectionReader, CollectionWriter, Source, checked_schema, position, records,
-};
+use super::objects::{CollectionReader, CollectionWriter, Source, checked_schema, position};
 
 /// A Rust type whose values are the objects of a collection.
 ///

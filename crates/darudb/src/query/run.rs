@@ -12,9 +12,10 @@ use super::ir::{Expr, Ir, Op, Operand};
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
 use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, NameOrder};
+use crate::format::object::names::{index_tree, records};
 use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind};
 use crate::format::object::{Object, Value, key};
-use crate::schema::objects::{self, Source, index_tree, records};
+use crate::schema::objects::{self, Source};
 use crate::txn::Seeker;
 
 /// How many linked objects a query keeps once read, so that a filter or a
@@ -135,7 +136,7 @@ impl Reader<'_> {
             return Ok(object.clone());
         }
 
-        let object = objects::get(self.source, target, None, key)?;
+        let object = objects::get(self.source, target, &records(target.id), None, key)?;
         let mut links = self.links.borrow_mut();
 
         if links.len() >= LINK_CACHE {

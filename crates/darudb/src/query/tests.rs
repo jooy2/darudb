@@ -964,7 +964,7 @@ fn text_that_does_not_parse_names_where() {
 fn a_link_holding_a_key_of_another_type_is_damage() {
     use crate::format::object::codec::{self, Raw};
     use crate::format::object::key;
-    use crate::schema::objects::records;
+    use crate::format::object::names::records;
 
     let dir = tempfile::tempdir().unwrap();
     let db = database(&dir);

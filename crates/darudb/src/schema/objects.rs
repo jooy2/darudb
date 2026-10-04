@@ -17,93 +17,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, Placed};
 use crate::format::object::key;
+use crate::format::object::names::{META, SCHEMA_KEY, records};
 use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
 };
 use crate::format::object::{Object, Value};
 use crate::txn::{EntryBuffers, Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
-
-/// The tree of the object layer's own records: the stored schema and the
-/// auto-increment counters.
-pub(crate) const META: &str = "\0meta";
-
-/// The key of the stored schema in [`META`].
-pub(crate) const SCHEMA_KEY: &[u8] = b"schema";
-
-/// What the name of every tree of a collection's objects begins with.
-pub(crate) const RECORDS_PREFIX: &str = "\0rec/";
-
-/// What the name of every tree of an index begins with.
-pub(crate) const INDEX_PREFIX: &str = "\0idx/";
-
-/// The tree of collection `id`'s objects.
-pub(crate) fn records(id: u64) -> IdName {
-    IdName::new(RECORDS_PREFIX, id)
-}
-
-/// The tree of index `id`.
-pub(crate) fn index_tree(id: u64) -> IdName {
-    IdName::new(INDEX_PREFIX, id)
-}
-
-/// A name made of a prefix and an id, kept inline: the name of a tree of the
-/// object layer, or the key of a counter in [`META`]. Every read and write of
-/// an object names a tree or two, and an insert reads and stores its
-/// collection's counter; a name formatted on the heap each time cost more
-/// than the lookup it served.
-#[derive(Clone, Copy)]
-pub(crate) struct IdName {
-    bytes: [u8; 32],
-    len: usize,
-}
-
-impl IdName {
-    fn new(prefix: &str, id: u64) -> Self {
-        let mut digits = [0u8; 20];
-        let mut start = digits.len();
-        let mut rest = id;
-
-        loop {
-            start -= 1;
-            // A remainder of a division by ten is a digit.
-            digits[start] = b'0' + (rest % 10) as u8;
-            rest /= 10;
-
-            if rest == 0 {
-                break;
-            }
-        }
-
-        let digits = &digits[start..];
-        let len = prefix.len() + digits.len();
-        let mut bytes = [0u8; 32];
-
-        bytes[..prefix.len()].copy_from_slice(prefix.as_bytes());
-        bytes[prefix.len()..len].copy_from_slice(digits);
-
-        Self { bytes, len }
-    }
-}
-
-impl std::ops::Deref for IdName {
-    type Target = str;
-
-    fn deref(&self) -> &str {
-        // A prefix and digits, both ASCII, so this never fails.
-        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
-    }
-}
-
-impl std::fmt::Debug for IdName {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&**self, formatter)
-    }
-}
-
-/// The key of collection `id`'s next auto-increment number in [`META`].
-pub(crate) fn counter(id: u64) -> IdName {
-    IdName::new("next/", id)
-}
 
 /// What reading objects needs of a transaction, read or write.
 pub(crate) trait Source {
@@ -386,24 +305,21 @@ impl<'a> Decoder<'a> {
 pub(crate) fn get(
     source: &dyn Source,
     collection: &CollectionDef,
+    records: &str,
     order: Option<&codec::NameOrder>,
     key: &Value,
 ) -> Result<Option<Object>> {
     let mut object = None;
 
-    source.get_in_with(
-        &records(collection.id),
-        &key_bytes(collection, key)?,
-        &mut |bytes| {
-            object = Some(match order {
-                Some(order) => codec::object_in_order(bytes, &collection.fields, order)
-                    .map_err(|reason| damaged(source, collection, reason))?,
-                None => decode(source, collection, bytes)?,
-            });
+    source.get_in_with(records, &key_bytes(collection, key)?, &mut |bytes| {
+        object = Some(match order {
+            Some(order) => codec::object_in_order(bytes, &collection.fields, order)
+                .map_err(|reason| damaged(source, collection, reason))?,
+            None => decode(source, collection, bytes)?,
+        });
 
-            Ok(())
-        },
-    )?;
+        Ok(())
+    })?;
 
     Ok(object)
 }
@@ -412,9 +328,10 @@ pub(crate) fn get(
 fn get_record(
     source: &dyn Source,
     collection: &CollectionDef,
+    records: &str,
     key: &Value,
 ) -> Result<Option<Vec<u8>>> {
-    source.get_in(&records(collection.id), &key_bytes(collection, key)?)
+    source.get_in(records, &key_bytes(collection, key)?)
 }
 
 /// Gives `visit` the record of the object of `collection` whose primary key
@@ -422,10 +339,11 @@ fn get_record(
 fn get_record_with(
     source: &dyn Source,
     collection: &CollectionDef,
+    records: &str,
     key: &Value,
     visit: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<bool> {
-    source.get_in_with(&records(collection.id), &key_bytes(collection, key)?, visit)
+    source.get_in_with(records, &key_bytes(collection, key)?, visit)
 }
 
 /// Every object of `collection`, in primary key order or its reverse, with
@@ -927,6 +845,7 @@ impl<'a> CollectionReader<'a> {
         get(
             self.txn,
             self.definition(),
+            &self.schema.names(self.position).records,
             self.schema.order(self.position),
             &key.into(),
         )
@@ -936,7 +855,12 @@ impl<'a> CollectionReader<'a> {
     /// it, for a language binding that decodes records itself; see
     /// [`get_record`](CollectionWriter::get_record).
     pub fn get_record(&self, key: impl Into<Value>) -> Result<Option<Vec<u8>>> {
-        get_record(self.txn, self.definition(), &key.into())
+        get_record(
+            self.txn,
+            self.definition(),
+            &self.schema.names(self.position).records,
+            &key.into(),
+        )
     }
 
     /// Gives `visit` the record of the object whose primary key is `key`,
@@ -949,7 +873,13 @@ impl<'a> CollectionReader<'a> {
         key: impl Into<Value>,
         mut visit: impl FnMut(&[u8]) -> Result<()>,
     ) -> Result<bool> {
-        get_record_with(self.txn, self.definition(), &key.into(), &mut visit)
+        get_record_with(
+            self.txn,
+            self.definition(),
+            &self.schema.names(self.position).records,
+            &key.into(),
+            &mut visit,
+        )
     }
 
     /// Every object, in primary key order.
@@ -964,7 +894,7 @@ impl<'a> CollectionReader<'a> {
 
     /// The number of objects.
     pub fn len(&self) -> Result<u64> {
-        self.txn.len_in(&records(self.definition().id))
+        self.txn.len_in(&self.schema.names(self.position).records)
     }
 
     /// Whether the collection holds no object.
@@ -1319,18 +1249,18 @@ impl<'a> CollectionWriter<'a> {
         let key = bytes.as_slice();
         let mut damage = None;
         // The object goes first, read on its way out for its entries.
-        let found = self
-            .txn
-            .remove_in_with(&records(collection.id), key, &mut |stored| {
-                record_entries(&mut entries, collection, stored, key, &mut damage)
-            });
+        let found =
+            self.txn
+                .remove_in_with(&schema.names(self.position).records, key, &mut |stored| {
+                    record_entries(&mut entries, collection, stored, key, &mut damage)
+                });
         let found = released(&*self.txn, collection, found, damage)?;
 
         // Its entries, which it has just been read for.
         for (position, entry) in entries.iter() {
-            let tree = index_tree(collection.indexes[position].id);
+            let tree = &schema.names(self.position).indexes[position];
 
-            self.txn.remove_present_in(&tree, entry)?;
+            self.txn.remove_present_in(tree, entry)?;
         }
 
         let spare = self.txn.spare();
@@ -1346,6 +1276,7 @@ impl<'a> CollectionWriter<'a> {
         get(
             &*self.txn,
             self.definition(),
+            &self.schema.names(self.position).records,
             self.schema.order(self.position),
             &key.into(),
         )
@@ -1360,7 +1291,12 @@ impl<'a> CollectionWriter<'a> {
     /// its default or null, and one may hold ids of fields the schema no
     /// longer has, which are skipped.
     pub fn get_record(&self, key: impl Into<Value>) -> Result<Option<Vec<u8>>> {
-        get_record(&*self.txn, self.definition(), &key.into())
+        get_record(
+            &*self.txn,
+            self.definition(),
+            &self.schema.names(self.position).records,
+            &key.into(),
+        )
     }
 
     /// Gives `visit` the record of the object whose primary key is `key`,
@@ -1371,7 +1307,13 @@ impl<'a> CollectionWriter<'a> {
         key: impl Into<Value>,
         mut visit: impl FnMut(&[u8]) -> Result<()>,
     ) -> Result<bool> {
-        get_record_with(&*self.txn, self.definition(), &key.into(), &mut visit)
+        get_record_with(
+            &*self.txn,
+            self.definition(),
+            &self.schema.names(self.position).records,
+            &key.into(),
+            &mut visit,
+        )
     }
 
     /// Inserts the object whose record is `record`, as a language binding
@@ -1432,7 +1374,7 @@ impl<'a> CollectionWriter<'a> {
         let mut changes = Some(changes);
         let mut update = Update::default();
         let found = self.txn.update_in_with(
-            &records(collection.id),
+            &schema.names(self.position).records,
             key,
             record,
             &mut |stored, record| {
@@ -1487,7 +1429,7 @@ impl<'a> CollectionWriter<'a> {
         if let Err(error) = self.check_unique(collection, key, entries, old) {
             let previous = update.previous.map_or(Previous::Object, Previous::Record);
 
-            self.put_back(collection, key, previous)?;
+            self.put_back(key, previous)?;
 
             return Err(error);
         }
@@ -1561,7 +1503,7 @@ impl<'a> CollectionWriter<'a> {
         let max_key_len = self.txn.max_key_len();
         let mut update = Update::default();
         let found = self.txn.update_in_with(
-            &records(collection.id),
+            &schema.names(self.position).records,
             key,
             record,
             &mut |stored, record| {
@@ -1861,7 +1803,7 @@ impl<'a> CollectionWriter<'a> {
 
     /// The number of objects.
     pub fn len(&self) -> Result<u64> {
-        self.txn.len_in(&records(self.definition().id))
+        self.txn.len_in(&self.schema.names(self.position).records)
     }
 
     /// Whether the collection holds no object.
@@ -2015,7 +1957,7 @@ impl<'a> CollectionWriter<'a> {
             Ok(raised) => raised,
             Err(error) => {
                 if let Some(previous) = previous {
-                    self.put_back(collection, key, previous)?;
+                    self.put_back(key, previous)?;
                 }
 
                 return Err(error);
@@ -2027,7 +1969,7 @@ impl<'a> CollectionWriter<'a> {
         if !replace
             && !self
                 .txn
-                .insert_new_in(&records(collection.id), key, record)?
+                .insert_new_in(&self.schema.names(self.position).records, key, record)?
         {
             return Err(Error::DuplicateKey {
                 message: format!(
@@ -2043,26 +1985,28 @@ impl<'a> CollectionWriter<'a> {
         // it has just been read for.
         for (position, entry) in old.iter() {
             if !entries.contains(position, entry) {
-                let tree = index_tree(collection.indexes[position].id);
+                let tree = &self.schema.names(self.position).indexes[position];
 
-                self.txn.remove_present_in(&tree, entry)?;
+                self.txn.remove_present_in(tree, entry)?;
             }
         }
 
         for (position, entry) in entries.iter() {
             if !old.contains(position, entry) {
                 let index = &collection.indexes[position];
+                let tree = &self.schema.names(self.position).indexes[position];
 
-                self.txn
-                    .insert_in(&index_tree(index.id), entry, entry_value(index, key))?;
+                self.txn.insert_in(tree, entry, entry_value(index, key))?;
             }
         }
 
         // The counter is stored once, when the transaction commits, however
         // many objects it numbers.
         if let Some(next) = raised {
+            let counter = &self.schema.names(self.position).counter;
+
             self.txn
-                .insert_later(META, counter(collection.id).as_bytes(), &next.to_le_bytes())?;
+                .insert_later(META, counter.as_bytes(), &next.to_le_bytes())?;
         }
 
         if replace {
@@ -2086,18 +2030,18 @@ impl<'a> CollectionWriter<'a> {
     ) -> Result<()> {
         for (position, entry) in old.iter() {
             if !entries.contains(position, entry) {
-                let tree = index_tree(collection.indexes[position].id);
+                let tree = &self.schema.names(self.position).indexes[position];
 
-                self.txn.remove_present_in(&tree, entry)?;
+                self.txn.remove_present_in(tree, entry)?;
             }
         }
 
         for (position, entry) in entries.iter() {
             if !old.contains(position, entry) {
                 let index = &collection.indexes[position];
+                let tree = &self.schema.names(self.position).indexes[position];
 
-                self.txn
-                    .insert_in(&index_tree(index.id), entry, entry_value(index, key))?;
+                self.txn.insert_in(tree, entry, entry_value(index, key))?;
             }
         }
 
@@ -2118,9 +2062,11 @@ impl<'a> CollectionWriter<'a> {
     ) -> Result<Previous> {
         let mut damage = None;
         let mut previous = Previous::Nothing;
-        let result = self
-            .txn
-            .insert_in_with(&records(collection.id), key, record, &mut |stored| {
+        let result = self.txn.insert_in_with(
+            &self.schema.names(self.position).records,
+            key,
+            record,
+            &mut |stored| {
                 record_entries(old, collection, stored, key, &mut damage)?;
                 previous = if adds_unique(collection, entries, old) {
                     Previous::Record(stored.to_vec())
@@ -2129,7 +2075,8 @@ impl<'a> CollectionWriter<'a> {
                 };
 
                 Ok(())
-            });
+            },
+        );
 
         released(&*self.txn, collection, result, damage)?;
 
@@ -2137,17 +2084,12 @@ impl<'a> CollectionWriter<'a> {
     }
 
     /// Undoes [`replace_record`](Self::replace_record) after a refusal.
-    fn put_back(
-        &mut self,
-        collection: &CollectionDef,
-        key: &[u8],
-        previous: Previous,
-    ) -> Result<()> {
-        let tree = records(collection.id);
+    fn put_back(&mut self, key: &[u8], previous: Previous) -> Result<()> {
+        let tree = &self.schema.names(self.position).records;
 
         match previous {
-            Previous::Nothing => self.txn.remove_present_in(&tree, key).map(drop),
-            Previous::Record(record) => self.txn.insert_in(&tree, key, &record),
+            Previous::Nothing => self.txn.remove_present_in(tree, key).map(drop),
+            Previous::Record(record) => self.txn.insert_in(tree, key, &record),
             // Only a unique value the object did not hold can refuse it after
             // its record is stored, and the record replaced is kept then.
             Previous::Object => Err(internal(
@@ -2199,12 +2141,15 @@ impl<'a> CollectionWriter<'a> {
 
             let mut taken = false;
 
-            self.txn
-                .get_in_with(&index_tree(index.id), entry, &mut |holder| {
+            self.txn.get_in_with(
+                &self.schema.names(self.position).indexes[position],
+                entry,
+                &mut |holder| {
                     taken = holder != key;
 
                     Ok(())
-                })?;
+                },
+            )?;
 
             if taken {
                 let field = collection
@@ -2266,8 +2211,10 @@ impl<'a> CollectionWriter<'a> {
     fn next_number(&self, collection: &CollectionDef) -> Result<u64> {
         let mut next = 1;
 
-        self.txn
-            .get_in_with(META, counter(collection.id).as_bytes(), &mut |bytes| {
+        self.txn.get_in_with(
+            META,
+            self.schema.names(self.position).counter.as_bytes(),
+            &mut |bytes| {
                 next = u64::from_le_bytes(bytes.try_into().map_err(|_| {
                     self.txn.corrupted(format!(
                         "the auto-increment counter of `{}` is not 8 bytes long",
@@ -2276,7 +2223,8 @@ impl<'a> CollectionWriter<'a> {
                 })?);
 
                 Ok(())
-            })?;
+            },
+        )?;
 
         Ok(next)
     }
@@ -2286,6 +2234,8 @@ impl<'a> CollectionWriter<'a> {
 /// objects give it, for the engine's tests. The error says what differs.
 #[cfg(test)]
 pub(crate) fn check_indexes(source: &dyn Source, schema: &StoredSchema) -> Result<(), String> {
+    use crate::format::object::names::index_tree;
+
     for collection in &schema.collections {
         let mut objects = Vec::new();
 
@@ -2339,17 +2289,4 @@ pub(crate) fn check_indexes(source: &dyn Source, schema: &StoredSchema) -> Resul
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{index_tree, records};
-
-    #[test]
-    fn a_tree_name_is_its_prefix_and_its_id_in_decimal() {
-        for id in [0, 7, 10, 99, 4096, u64::MAX] {
-            assert_eq!(&*records(id), format!("\0rec/{id}"));
-            assert_eq!(&*index_tree(id), format!("\0idx/{id}"));
-        }
-    }
 }

@@ -3,10 +3,11 @@
 
 use std::ops::Bound;
 
-use super::objects::{Source, check_indexes, index_tree, records};
+use super::objects::{Source, check_indexes};
 use super::typed::{CollectionType, FieldReader, ValueWriter};
 use super::{Collection, Schema, Type};
 use crate::format::object::codec::Raw;
+use crate::format::object::names::{index_tree, records};
 use crate::format::object::schema::Kind;
 use crate::format::object::{Object, Value};
 use crate::testing::Rng;
@@ -691,7 +692,7 @@ fn random_values(rng: &mut Rng, kinds: &[&str], auto: bool) -> Vec<Option<Raw>> 
 #[test]
 fn a_typed_write_stores_what_a_binding_s_record_of_the_object_stores() {
     use crate::format::object::codec;
-    use crate::schema::objects::{META, counter};
+    use crate::format::object::names::{META, counter};
 
     for seed in 0..6 {
         let dir = tempfile::tempdir().unwrap();

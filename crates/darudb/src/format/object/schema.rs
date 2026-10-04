@@ -6,6 +6,7 @@ use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use super::codec::{self, NameOrder, Raw};
+use super::names::CollectionNames;
 use super::value::Value;
 
 /// The object layer's format, field 1 of the stored schema.
@@ -140,6 +141,9 @@ pub(crate) struct OpenSchema {
     /// opened a file with does not change while the handle lives, where the
     /// fields of a schema being migrated are renamed in place.
     orders: Vec<NameOrder>,
+    /// The names of each collection's trees, at its position, made once
+    /// here for the same reason.
+    names: Vec<CollectionNames>,
     /// How each Rust type a transaction of the handle reached its collection
     /// as lies in it, by the type's id: worked out from the type and the
     /// stored schema the first time, and kept for the life of the schema.
@@ -154,11 +158,13 @@ impl OpenSchema {
             .iter()
             .map(|collection| NameOrder::of(&collection.fields))
             .collect();
+        let names = schema.collections.iter().map(CollectionNames::of).collect();
 
         Self {
             schema,
             encoded,
             orders,
+            names,
             typed: Mutex::new(Vec::new()),
         }
     }
@@ -166,6 +172,12 @@ impl OpenSchema {
     /// The order of the fields by name of the collection at `position`.
     pub(crate) fn order(&self, position: usize) -> Option<&NameOrder> {
         self.orders.get(position)
+    }
+
+    /// The names of the trees of the collection at `position`, which is the
+    /// position of one of the schema's collections.
+    pub(crate) fn names(&self, position: usize) -> &CollectionNames {
+        &self.names[position]
     }
 
     /// What [`keep_typed`](Self::keep_typed) kept for the type `id`.

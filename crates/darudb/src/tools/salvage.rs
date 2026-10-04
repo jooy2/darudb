@@ -21,6 +21,9 @@ use crate::btree::{Load, LoadedNode, Loader, NodeRef};
 use crate::crypto::{DataKey, PageCipher, RecordAuth};
 use crate::database::{Database, Held, create_beside, header_error, hold_alone, unlock};
 use crate::error::{Error, Result};
+use crate::format::object::names::{
+    INDEX_PREFIX, META, RECORDS_PREFIX, SCHEMA_KEY, counter, index_tree, records,
+};
 use crate::format::object::schema::{CollectionDef, StoredSchema};
 use crate::format::object::{codec, key};
 use crate::format::{
@@ -29,9 +32,7 @@ use crate::format::{
     StoredRef, TreeDescriptor, page_check, slot_offset, stored_check,
 };
 use crate::options::OpenOptions;
-use crate::schema::objects::{
-    INDEX_PREFIX, META, RECORDS_PREFIX, SCHEMA_KEY, counter, index_entries, index_tree, records,
-};
+use crate::schema::objects::index_entries;
 use crate::storage::{Cache, FileIo, Pager};
 use crate::txn::WriteTransaction;
 
