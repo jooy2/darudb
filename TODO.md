@@ -47,12 +47,6 @@ Phase 5 is under way. The Node.js package is written, and `.github/workflows/rel
 
 Phase 6 is done, and the maintainer accepted [design/tools.md](design/tools.md) on 2026-09-29: the integrity check, backup, compaction and salvage, in Rust and in the Node.js package. Salvage's tests rescue files damaged on purpose, in leaves, overflow values, commit records and the static header, plain and encrypted, and one damages random pages of random files and checks that nothing in the result is a value no commit wrote. The crash suites run the integrity check after every cut.
 
-## Known gaps
-
-Confirmed by reading the code against the specification; no test reproduces them yet.
-
-- **The unsynced window is counted per process.** The page and time limits bound each process's own deferred commits, so the windows of several processes add up. A window whose process died is ended by a process that reads the file or opens it; one that only holds the file open does not notice.
-
 ## Open questions
 
 - **Keystores.** The bindings take a key or a password as Rust does. Whether they also offer helpers that keep a key in the operating system's keystore (Keychain, Android Keystore, DPAPI) is open.
