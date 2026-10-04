@@ -100,7 +100,7 @@ The operating system releases its locks, and that is all the cleanup there is:
 - **The open lock**: if it was the last process with the file open, the next one to open it runs recovery.
 - **The recovery lock**, if it was opening the file: the next process waiting for it takes it, and finds the open lock free if the dead one was recovering.
 - **The turn lock**: the other writers stop deferring to it.
-- **An unsynced window** it left open is ended by another process that notices it, a time limit later ([Commits and recovery](./commits-and-recovery.md#deferred-commits)).
+- **An unsynced window** it left open is ended by another process that notices it, once the window is past that process's time limit ([Commits and recovery](./commits-and-recovery.md#deferred-commits)).
 
 ## Platforms
 

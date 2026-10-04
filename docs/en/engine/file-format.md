@@ -7,7 +7,7 @@ order: 3
 
 This page summarises how a DaruDB database file is laid out: its pages, the header and its three commit slots, the pointers that verify every page, and how the format is versioned.
 
-The specification, with every offset and field, is [design/file-format.md](https://github.com/jooy2/darudb/blob/main/design/file-format.md) in the repository. It describes format version 4, the one this build reads and writes.
+The specification, with every offset and field, is [design/file-format.md](https://github.com/jooy2/darudb/blob/main/design/file-format.md) in the repository. It describes format version 5, the one this build reads and writes.
 
 ## Pages
 
@@ -37,7 +37,7 @@ One byte, rewritten on every commit. Two bits name the slot that holds the publi
 
 ### Three commit slots
 
-Each slot holds one commit record or nothing. A record holds the commit's transaction id, the transaction id of the newest commit known to be durable when it was written, the page count, the roots of the engine's three trees described below, the key block and a MAC in an encrypted file, and a check that mixes in the slot number, so that a record written into the wrong slot fails it.
+Each slot holds one commit record or nothing. A record holds the commit's transaction id, the transaction id of the newest commit known to be durable when it was written, the page count, the roots of the engine's three trees described below, the key block and a MAC in an encrypted file, for a deferred commit when its unsynced window opened and how many pages the window has written, and a check that mixes in the slot number, so that a record written into the wrong slot fails it.
 
 Three is the fewest that works. At any moment one slot holds the published commit and one holds the durable commit, which differ while deferred commits wait for the disk, and the writer needs a third place for the record it is writing. So a new record never overwrites one that a reader or a recovery may still need. [Commits and recovery](./commits-and-recovery.md) says how the writer chooses.
 
@@ -97,7 +97,7 @@ Checks that span several pages, such as whether every key under a branch lies be
 
 The header's format version names the layout of everything on disk, and any change to what is written changes it.
 
-- **This build reads and writes format version 4.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
+- **This build reads and writes format version 5.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
 - **Until the first release, there are no migrations.** Versions 1 to 3 never left development, so a file from an older build is refused, not upgraded.
 - **From the first release on**, the plan is that opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back to an older build, which then upgrades the file with an explicit call.
 

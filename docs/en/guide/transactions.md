@@ -112,7 +112,7 @@ Deferred commits become durable at the next sync commit, at <LangCode rust="Data
 
 ::: lang rust
 
-`OpenOptions::max_unsynced_time` sets how long a deferred commit may wait, one second by default, and `OpenOptions::max_unsynced_pages` how many pages the deferred commits may have written before the next commit syncs them, 16,384 by default.
+`OpenOptions::max_unsynced_time` sets how long a deferred commit may wait, one second by default, and `OpenOptions::max_unsynced_pages` how many pages the deferred commits may have written before the next commit syncs them, 16,384 by default. Both count every process's deferred commits since the last barrier, not only this process's.
 
 :::
 

@@ -112,7 +112,7 @@ db.sync();
 
 ::: lang rust
 
-`OpenOptions::max_unsynced_time`은 지연 커밋이 기다릴 수 있는 시간이며 기본값은 1초입니다. `OpenOptions::max_unsynced_pages`는 지연 커밋이 쓴 페이지가 몇 개까지 쌓이면 다음 커밋에서 동기화할지 정하며 기본값은 16,384입니다.
+`OpenOptions::max_unsynced_time`은 지연 커밋이 기다릴 수 있는 시간이며 기본값은 1초입니다. `OpenOptions::max_unsynced_pages`는 지연 커밋이 쓴 페이지가 몇 개까지 쌓이면 다음 커밋에서 동기화할지 정하며 기본값은 16,384입니다. 두 제한 모두 이 프로세스만이 아니라 마지막 동기화 이후 모든 프로세스의 지연 커밋을 셉니다.
 
 :::
 
