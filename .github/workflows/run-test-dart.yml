@@ -47,9 +47,12 @@ jobs:
           sdk: ${{ matrix.sdk }}
       - run: dart pub get
       # The tests' models are annotated classes, whose parts the generator
-      # writes; they are not committed.
+      # writes; they are not committed. The newest `build_runner` on Dart
+      # 3.10 compiles the builders with `dart compile`, which Dart 3.10
+      # refuses for a package with a build hook, so that job compiles them
+      # as they run, as the documentation tells an application to.
       - name: Generate the tests' models
-        run: dart run build_runner build --delete-conflicting-outputs
+        run: dart run build_runner build --delete-conflicting-outputs ${{ matrix.sdk == '3.10.0' && '--force-jit' || '' }}
       - name: Analyze
         run: dart analyze --fatal-infos
       - name: Check formatting
