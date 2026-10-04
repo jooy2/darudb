@@ -15,4 +15,6 @@ dev_dependencies:
 dart run build_runner build
 ```
 
+On Dart 3.10, `build_runner` stops with `'dart compile' does not support build hooks`: the newest `build_runner` that runs on it compiles the builders with `dart compile`, which Dart 3.10 refuses for a project whose packages have a build hook, as `darudb` has. Add `--force-jit` there, which compiles the builders as they run instead.
+
 A class it reads has `final` fields of a type the database stores, `bool`, `int`, `double`, `String`, `Uint8List`, a `List` of those or of links, a `Link` to a collection or a class annotated `@Embedded()`, each nullable for an optional field, and an unnamed constructor that takes every field. A constructor parameter's default is the field's default in the schema. The `darudb` package documents the annotations.

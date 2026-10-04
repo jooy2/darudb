@@ -41,6 +41,8 @@ class User {
 }
 ```
 
+On Dart 3.10, run `dart run build_runner build --force-jit`: the newest `build_runner` there compiles its builders with `dart compile`, which Dart 3.10 refuses for a project with this package's build hook, and stops with `'dart compile' does not support build hooks`.
+
 Open a database with a schema of those constants, and read and write in transactions scoped to a function:
 
 ```dart
