@@ -880,21 +880,77 @@ fn search_heads<'k>(
         return heads.len();
     }
 
-    let (mut low, mut high) = (0, heads.len());
+    // The keys whose heads are below `key`'s are below it, and those whose
+    // heads are above are above it, so the search goes over the heads alone,
+    // which the standard library does without a branch to mispredict, and
+    // then over the keys with `key`'s head, next to one another, which it
+    // reads. A search that read a key whenever it met an equal head on the
+    // way decided each step by a branch, and made a read of a record by key
+    // about a fifth slower.
+    let mut at = heads.partition_point(|&other| other < head);
+
+    if heads.get(at) != Some(&head) {
+        return at;
+    }
+
+    // There is rarely more than one such key, and they are read one after
+    // another: a read of a key that is there stops at the first. Finding
+    // where a run of them ends first made a read by key 12% slower, and
+    // looking a few heads on before reading the first one 4%. Only a second
+    // key with the head is a run, and a long one, which keys sharing more
+    // than the prefix bring, is searched by halves.
+    loop {
+        if !below(compare(&key_at(at)[prefix..], rest), or_equal) {
+            return at;
+        }
+
+        at += 1;
+
+        if heads.get(at) != Some(&head) {
+            return at;
+        }
+
+        if heads.get(at + EQUAL_HEADS_READ) == Some(&head) {
+            return halve_equal_heads(heads, at, prefix, rest, or_equal, key_at);
+        }
+    }
+}
+
+/// How many keys with `key`'s head [`search_heads`] reads one after another
+/// at most, past the first: a longer run of them it searches by halves.
+const EQUAL_HEADS_READ: usize = 4;
+
+/// Whether a key that compares to the one searched for as `order` is
+/// counted below it, as a search with `or_equal` counts an equal one.
+#[inline(always)]
+fn below(order: Ordering, or_equal: bool) -> bool {
+    match order {
+        Ordering::Less => true,
+        Ordering::Equal => or_equal,
+        Ordering::Greater => false,
+    }
+}
+
+/// The rest of [`search_heads`] for a long run of keys with the head of the
+/// one searched for, which starts at `low`: where it goes among them, found
+/// by halves. Kept apart from the search, which seldom comes here.
+#[cold]
+#[inline(never)]
+fn halve_equal_heads<'k>(
+    heads: &[u32],
+    mut low: usize,
+    prefix: usize,
+    rest: &[u8],
+    or_equal: bool,
+    key_at: impl Fn(usize) -> &'k [u8],
+) -> usize {
+    let head = heads[low];
+    let mut high = low + heads[low..].partition_point(|&other| other == head);
 
     while low < high {
         let middle = low + (high - low) / 2;
-        let below = match heads[middle].cmp(&head) {
-            Ordering::Less => true,
-            Ordering::Greater => false,
-            Ordering::Equal => match compare(&key_at(middle)[prefix..], rest) {
-                Ordering::Less => true,
-                Ordering::Equal => or_equal,
-                Ordering::Greater => false,
-            },
-        };
 
-        if below {
+        if below(compare(&key_at(middle)[prefix..], rest), or_equal) {
             low = middle + 1;
         } else {
             high = middle;
@@ -1097,6 +1153,49 @@ mod tests {
     #[test]
     fn a_cached_node_keeps_to_one_cache_line() {
         assert!(size_of::<LoadedNode>() <= 64, "{}", size_of::<LoadedNode>());
+    }
+
+    /// Keys that share more than the prefix of their node, behind one that
+    /// does not, have one head between them: a search reads the first few of
+    /// them in turn, and halves a long run past them, and finds what the keys
+    /// say either way, after the last key too.
+    #[test]
+    fn a_long_run_of_equal_heads_is_searched_as_the_keys_say() {
+        for run in [1, 3, 4, 5, 9, 40, 200] {
+            let mut keys = vec![b"a".to_vec()];
+
+            keys.extend((0..run).map(|n: u32| {
+                let mut key = b"bcde".to_vec();
+
+                key.extend_from_slice(&n.to_be_bytes());
+                key
+            }));
+
+            let heads = Heads::of(keys.len(), |index| &keys[index]);
+            let mut probes = keys.clone();
+
+            probes.extend(keys.iter().map(|key| [key.as_slice(), b"\0"].concat()));
+            probes.extend([b"bcde".to_vec(), b"bcdf".to_vec(), b"bcdd\xFF".to_vec()]);
+
+            for probe in &probes {
+                for or_equal in [false, true] {
+                    let expected = keys
+                        .iter()
+                        .filter(|key| match key.as_slice().cmp(probe.as_slice()) {
+                            Ordering::Less => true,
+                            Ordering::Equal => or_equal,
+                            Ordering::Greater => false,
+                        })
+                        .count();
+
+                    assert_eq!(
+                        heads.rank(&keys[0], probe, or_equal, |index| &keys[index]),
+                        expected,
+                        "run {run}, {probe:?}, or_equal {or_equal}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
