@@ -65,6 +65,117 @@ void main() {
     copy.close();
   });
 
+  test('a backup under a new key or password opens only with it', () async {
+    final key = Uint8List(32)..fillRange(0, 32, 3);
+    final newKey = Uint8List(32)..fillRange(0, 32, 5);
+    const schema = Schema(1, [userSchema]);
+    final db = Database.open(path, schema: schema, key: key);
+
+    db.write((txn) {
+      txn
+          .collection(userSchema)
+          .insert(const User(name: 'one', email: 'one@example.com', age: 1));
+    });
+    db.backup(
+      '${directory.path}/password.darudb',
+      password: 'a new password',
+      passwordHashing: const PasswordHashing(
+        memoryKib: 8192,
+        iterations: 1,
+        parallelism: 1,
+      ),
+    );
+    await db.backupAsync('${directory.path}/key.darudb', key: newKey);
+    for (final refused in [
+      () => db.backup('${directory.path}/empty.darudb', password: ''),
+      () => db.backup(
+        '${directory.path}/both.darudb',
+        key: newKey,
+        password: 'x',
+      ),
+      () => db.backup('${directory.path}/short.darudb', key: Uint8List(16)),
+    ]) {
+      expect(
+        refused,
+        throwsA(
+          isA<DaruException>().having(
+            (e) => e.code,
+            'code',
+            'INVALID_ARGUMENT',
+          ),
+        ),
+      );
+    }
+    db.close();
+
+    final plain = Database.open(
+      '${directory.path}/plain.darudb',
+      schema: schema,
+    );
+
+    plain.write((txn) {
+      txn
+          .collection(userSchema)
+          .insert(const User(name: 'one', email: 'one@example.com', age: 1));
+    });
+    plain.backup('${directory.path}/encrypted.darudb', key: newKey);
+    plain.close();
+
+    expect(newKey, everyElement(5), reason: 'the caller wipes its own key');
+
+    for (final (name, copy) in [
+      (
+        'password.darudb',
+        () => Database.open(
+          '${directory.path}/password.darudb',
+          schema: schema,
+          password: 'a new password',
+        ),
+      ),
+      (
+        'key.darudb',
+        () => Database.open(
+          '${directory.path}/key.darudb',
+          schema: schema,
+          key: newKey,
+        ),
+      ),
+      (
+        'encrypted.darudb',
+        () => Database.open(
+          '${directory.path}/encrypted.darudb',
+          schema: schema,
+          key: newKey,
+        ),
+      ),
+    ]) {
+      final opened = copy();
+
+      expect(opened.isEncrypted, isTrue, reason: name);
+      expect(
+        opened.read((txn) => txn.collection(userSchema).count()),
+        1,
+        reason: name,
+      );
+      opened.close();
+    }
+
+    expect(
+      () => Database.open(
+        '${directory.path}/key.darudb',
+        schema: schema,
+        key: key,
+      ),
+      throwsA(isA<DaruException>().having((e) => e.code, 'code', 'WRONG_KEY')),
+    );
+    expect(
+      () => Database.open('${directory.path}/encrypted.darudb', schema: schema),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'KEY_REQUIRED'),
+      ),
+    );
+  });
+
   test('compaction makes the file smaller after deletes', () async {
     final db = filled();
 

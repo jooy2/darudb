@@ -662,12 +662,21 @@ external void darudb_migration_finish_async(
 external int darudb_check(Pointer<NativeDatabase> database, Pointer<Buf> out);
 
 @Native<
-  Int32 Function(Pointer<NativeDatabase>, Pointer<Uint8>, Size, Pointer<Buf>)
+  Int32 Function(
+    Pointer<NativeDatabase>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Buf>,
+  )
 >()
 external int darudb_backup(
   Pointer<NativeDatabase> database,
   Pointer<Uint8> path,
   int pathLength,
+  Pointer<Uint8> options,
+  int optionsLength,
   Pointer<Buf> out,
 );
 
@@ -726,6 +735,8 @@ external void darudb_compact_async(
     Pointer<NativeDatabase>,
     Pointer<Uint8>,
     Size,
+    Pointer<Uint8>,
+    Size,
     Int64,
     Pointer<NativeFunction<ResultCallback>>,
   )
@@ -734,6 +745,8 @@ external void darudb_backup_async(
   Pointer<NativeDatabase> database,
   Pointer<Uint8> path,
   int pathLength,
+  Pointer<Uint8> options,
+  int optionsLength,
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,
 );

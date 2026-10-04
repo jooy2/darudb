@@ -1081,18 +1081,21 @@ pub unsafe extern "C" fn darudb_check(database: *const Database, out: *mut Buf) 
     })
 }
 
-/// Writes a copy of the published commit to a new file at `path`: its
-/// report, as a record, in `out`.
+/// Writes a copy of the published commit to a new file at `path`, with the
+/// options in the record at `options`: its report, as a record, in `out`.
 ///
 /// # Safety
 ///
-/// `database` came from this library and has not been freed; `path` points
-/// to `path_len` readable bytes; `out` to a `Buf` the caller can write.
+/// `database` came from this library and has not been freed; `path` and
+/// `options` point to as many readable bytes as their lengths say; `out` to
+/// a `Buf` the caller can write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn darudb_backup(
     database: *const Database,
     path: *const u8,
     path_len: usize,
+    options: *const u8,
+    options_len: usize,
     out: *mut Buf,
 ) -> i32 {
     guard(|| {
@@ -1100,9 +1103,11 @@ pub unsafe extern "C" fn darudb_backup(
         let database = unsafe { at(database, closed) }?;
         // SAFETY: the caller's promise for `path`.
         let path = unsafe { text(path, path_len) }?;
+        // SAFETY: the caller's promise for `options`.
+        let options = unsafe { bytes(options, options_len) };
 
         // SAFETY: the caller's promise for `out`.
-        unsafe { hand_out(out, |bytes| ops::backup(database, path, bytes)) }
+        unsafe { hand_out(out, |bytes| ops::backup(database, path, options, bytes)) }
     })
 }
 

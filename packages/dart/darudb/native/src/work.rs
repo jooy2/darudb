@@ -849,15 +849,26 @@ pub unsafe extern "C" fn darudb_backup_async(
     database: *const Database,
     path: *const u8,
     path_len: usize,
+    options: *const u8,
+    options_len: usize,
     id: i64,
     callback: Callback,
 ) {
-    // SAFETY: the caller's promise for `path`.
-    match caught(|| unsafe { text(path, path_len) }.map(str::to_owned)) {
+    let copied = caught(|| {
+        // SAFETY: the caller's promise for `path`.
+        let path = unsafe { text(path, path_len) }?.to_owned();
+        // SAFETY: the caller's promise for `options`; the copy may hold a
+        // key or a password, and is wiped when dropped.
+        let options = Zeroizing::new(unsafe { bytes(options, options_len) }.to_vec());
+
+        Ok((path, options))
+    });
+
+    match copied {
         // SAFETY: the caller's promise for `database`.
-        Ok(path) => unsafe {
+        Ok((path, options)) => unsafe {
             reporting(database, id, callback, move |database, out| {
-                ops::backup(database, &path, out)
+                ops::backup(database, &path, &options, out)
             });
         },
         Err(failure) => refuse(id, callback, failure),

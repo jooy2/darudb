@@ -264,19 +264,7 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
                 options.password(value.bytes()?);
             }
             8 => {
-                let mut cost = [0u32; 3];
-
-                for field in value.object()?.fields()? {
-                    let (id, value) = field?;
-                    let slot = usize::try_from(id)
-                        .ok()
-                        .and_then(|id| id.checked_sub(1))
-                        .and_then(|at| cost.get_mut(at))
-                        .ok_or_else(|| invalid("password hashing has three fields"))?;
-
-                    *slot = u32::try_from(value.int()?)
-                        .map_err(|_| invalid("a password hashing cost beyond 32 bits"))?;
-                }
+                let cost = password_cost(value)?;
 
                 options.password_hashing(cost[0], cost[1], cost[2]);
             }
@@ -288,6 +276,66 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
             _ => {
                 return Err(invalid(format!(
                     "an option the library does not know, {id}"
+                )));
+            }
+        }
+    }
+
+    Ok(options)
+}
+
+/// A password hashing cost, from its record: fields 1 to 3 the memory in
+/// KiB, the iterations and the lanes.
+fn password_cost(value: record::Field<'_>) -> Result<[u32; 3]> {
+    let mut cost = [0u32; 3];
+
+    for field in value.object()?.fields()? {
+        let (id, value) = field?;
+        let slot = usize::try_from(id)
+            .ok()
+            .and_then(|id| id.checked_sub(1))
+            .and_then(|at| cost.get_mut(at))
+            .ok_or_else(|| invalid("password hashing has three fields"))?;
+
+        *slot = u32::try_from(value.int()?)
+            .map_err(|_| invalid("a password hashing cost beyond 32 bits"))?;
+    }
+
+    Ok(cost)
+}
+
+/// The options of a backup, from a record of [`open_options`] with the key
+/// (6), the password (7) and the password hashing (8), each of which is about
+/// the copy here: a key or a password encrypts it under a new data key. The
+/// Dart side writes the record as it writes the options of an open, which
+/// always hold `create` (1), and a backup has no use for it.
+fn backup_options(record: &[u8]) -> Result<darudb::BackupOptions> {
+    let mut options = darudb::BackupOptions::new();
+
+    for field in Reader::new(record).fields()? {
+        let (id, value) = field?;
+
+        match id {
+            1 => {}
+            6 => {
+                let key = Zeroizing::new(
+                    <[u8; 32]>::try_from(value.bytes()?)
+                        .map_err(|_| invalid("a key is 32 bytes long"))?,
+                );
+
+                options.key(*key);
+            }
+            7 => {
+                options.password(value.bytes()?);
+            }
+            8 => {
+                let cost = password_cost(value)?;
+
+                options.password_hashing(cost[0], cost[1], cost[2]);
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "a backup option the library does not know, {id}"
                 )));
             }
         }
@@ -607,10 +655,18 @@ pub(crate) fn check(database: &Database, out: &mut Vec<u8>) -> Result<i32> {
     Ok(i32::from(report.is_ok()))
 }
 
-/// A backup into `path`, and its report as a record: the commit id (1), the
-/// trees (2), the entries (3) and the bytes (4) of the copy.
-pub(crate) fn backup(database: &Database, path: &str, out: &mut Vec<u8>) -> Result<i32> {
-    let report = database.with(|database| database.backup(path).map_err(Failure::from))?;
+/// A backup into `path`, with the options of the record `options`, and its
+/// report as a record: the commit id (1), the trees (2), the entries (3) and
+/// the bytes (4) of the copy.
+pub(crate) fn backup(
+    database: &Database,
+    path: &str,
+    options: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<i32> {
+    let options = backup_options(options)?;
+    let report =
+        database.with(|database| database.backup_with(path, &options).map_err(Failure::from))?;
     let mut fields = Fields::new(out);
 
     fields

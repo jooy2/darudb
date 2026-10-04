@@ -932,28 +932,72 @@ final class Database implements Finalizable {
   /// other handles and processes may write. The copy holds no free space,
   /// has the file's page size, and opens with the same key or password. A
   /// path that is taken fails with `INVALID_ARGUMENT`.
-  BackupReport backup(String path) {
+  ///
+  /// A [key] or a [password] encrypts the copy under a new random data key,
+  /// which it wraps, at the cost [passwordHashing] sets for a password.
+  /// Changing a file's key or password only wraps its data key again, so a
+  /// backup is the way to leave behind a data key that may have been
+  /// exposed. A plain database's copy is encrypted the same way. The package
+  /// copies the key or password when the call is made.
+  BackupReport backup(
+    String path, {
+    Uint8List? key,
+    String? password,
+    PasswordHashing? passwordHashing,
+  }) {
+    final options = _backupOptions(key, password, passwordHashing);
     final bytes = utf8.encode(path);
+    final loaded = _io.load(bytes, options);
 
-    _check(darudb_backup(_live(), _io.load(bytes), bytes.length, _io.out));
+    try {
+      _check(
+        darudb_backup(
+          _live(),
+          loaded,
+          bytes.length,
+          loaded + bytes.length,
+          options.length,
+          _io.out,
+        ),
+      );
+    } finally {
+      _io.wipe(bytes.length + options.length);
+      options.fillRange(0, options.length, 0);
+    }
 
     return BackupReport._(_report(_io.outBytes()));
   }
 
   /// [backup] on a thread of the native library.
-  Future<BackupReport> backupAsync(String path) async {
+  Future<BackupReport> backupAsync(
+    String path, {
+    Uint8List? key,
+    String? password,
+    PasswordHashing? passwordHashing,
+  }) async {
+    final options = _backupOptions(key, password, passwordHashing);
     final bytes = utf8.encode(path);
-    final reply = await _call(
-      (id, callback) => darudb_backup_async(
-        _live(),
-        _io.load(bytes),
-        bytes.length,
-        id,
-        callback,
-      ),
-    );
+    final loaded = _io.load(bytes, options);
+    final Future<_Reply> backedUp;
 
-    return BackupReport._(_report(reply.bytes));
+    try {
+      backedUp = _call(
+        (id, callback) => darudb_backup_async(
+          _live(),
+          loaded,
+          bytes.length,
+          loaded + bytes.length,
+          options.length,
+          id,
+          callback,
+        ),
+      );
+    } finally {
+      _io.wipe(bytes.length + options.length);
+      options.fillRange(0, options.length, 0);
+    }
+
+    return BackupReport._(_report((await backedUp).bytes));
   }
 
   /// Makes the file smaller in place, moving the pages at its end into free
