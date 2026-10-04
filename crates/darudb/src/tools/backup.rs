@@ -113,9 +113,7 @@ pub struct BackupReport {
 /// Copies the commit a new read transaction of `db` sees into a new file at
 /// `path`, as `options` say.
 pub(crate) fn backup(db: &Database, path: &Path, options: &BackupOptions) -> Result<BackupReport> {
-    if let Some(Secret::Password(password)) = &options.secret
-        && password.is_empty()
-    {
+    if matches!(&options.secret, Some(Secret::Password(password)) if password.is_empty()) {
         return Err(Error::InvalidArgument {
             message: "the password is empty".to_owned(),
         });
