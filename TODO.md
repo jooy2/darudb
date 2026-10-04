@@ -49,4 +49,4 @@ Phase 6 is done, and the maintainer accepted [design/tools.md](design/tools.md) 
 
 ## Open questions
 
-- **Publishing the Dart packages to pub.dev.** pub.dev takes automated publishing only from a workflow that a tag push started, and only for a package it already has, so the release workflow prepares `darudb` with its manifest and the maintainer publishes it by hand. Whether later releases publish from a workflow started by pushing a `dart-v<version>` tag, and how `darudb_generator`, which the workflow does not release yet, is released beside it, is open.
+No question is open. One the maintainer has not decided goes here until it is, and then moves into CLAUDE.md.
