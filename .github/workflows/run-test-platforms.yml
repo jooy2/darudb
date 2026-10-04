@@ -43,7 +43,7 @@ jobs:
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
             quay.io/pypa/manylinux2014_x86_64 bash -euo pipefail -c '
-              ldd --version | head -n 1
+              ldd --version | sed -n 1p
               curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
                 | sh -s -- -y --default-toolchain none --profile minimal
               source "$HOME/.cargo/env"
@@ -80,21 +80,27 @@ jobs:
           xargs -a executables.txt cp -t android-tests
           ls -l android-tests
       # `adb shell` passes on a command's exit status only from API 24 on, so
-      # each run prints its own and the script reads it. The tests write
-      # under `TMPDIR`, the one place a shell may write to on the device.
+      # each run prints its own and the script reads it, and runs every test
+      # binary before it fails. The tests write under `TMPDIR`, the one place
+      # a shell may write to on the device.
       - name: Write the script that runs them
         run: |
           cat > run-android-tests.sh <<'SCRIPT'
           set -eu
           dir=/data/local/tmp/darudb
+          failed=
           adb shell mkdir -p "$dir"
           for test in android-tests/*; do
             name=$(basename "$test")
             adb push "$test" "$dir/$name" > /dev/null
             adb shell "cd $dir && TMPDIR=$dir RUST_BACKTRACE=1 ./$name; echo status=\$?" \
               | tr -d '\r' | tee output.txt
-            tail -n 1 output.txt | grep -qx 'status=0'
+            tail -n 1 output.txt | grep -qx 'status=0' || failed="$failed $name"
           done
+          if [ -n "$failed" ]; then
+            echo "Failed:$failed"
+            exit 1
+          fi
           SCRIPT
       - uses: reactivecircus/android-emulator-runner@v2
         with:
