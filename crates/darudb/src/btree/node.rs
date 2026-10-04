@@ -190,6 +190,12 @@ impl Heads {
     /// How many of the ascending keys are below `key`, or at or below it
     /// with `or_equal`. `first` begins with the prefix: key 0, or anything
     /// when there is no key.
+    ///
+    /// A key whose head is above the last key's goes after every key, which
+    /// is told before the search: the keys of an auto-increment, which only
+    /// grow, then find their place in the leaf and in every branch above it
+    /// with one comparison rather than a search. This is for the nodes a
+    /// write transaction changes; a read of a committed node searches.
     #[inline(always)]
     pub(crate) fn rank<'k>(
         &self,
@@ -198,7 +204,14 @@ impl Heads {
         or_equal: bool,
         key_at: impl Fn(usize) -> &'k [u8],
     ) -> usize {
-        search_heads(&self.heads, &first[..self.prefix], key, or_equal, key_at)
+        search_heads(
+            &self.heads,
+            &first[..self.prefix],
+            key,
+            or_equal,
+            true,
+            key_at,
+        )
     }
 }
 
@@ -761,14 +774,14 @@ impl NodeRef<'_> {
             NodeRef::Loaded(loaded) if loaded.leaf => {
                 let page = &loaded.page;
 
-                search_heads(&loaded.heads, loaded.prefix(), key, or_equal, |at| {
+                search_heads(&loaded.heads, loaded.prefix(), key, or_equal, false, |at| {
                     leaf_key(page, at)
                 })
             }
             NodeRef::Loaded(loaded) => {
                 let (page, count) = (&loaded.page, loaded.count());
 
-                search_heads(&loaded.heads, loaded.prefix(), key, or_equal, |at| {
+                search_heads(&loaded.heads, loaded.prefix(), key, or_equal, false, |at| {
                     branch_key(page, count, at)
                 })
             }
@@ -843,13 +856,15 @@ fn shared_prefix(a: &[u8], b: &[u8]) -> usize {
 /// How many of the ascending keys of a node, whose heads are `heads`, are
 /// below `key`, or at or below it with `or_equal`: a binary search over the
 /// heads, which reads a key through `key_at` only where its head equals
-/// `key`'s. Every key begins with `shared`.
+/// `key`'s. Every key begins with `shared`. With `after_last`, a key whose
+/// head is above the last one's is placed after every key first.
 #[inline(always)]
 fn search_heads<'k>(
     heads: &[u32],
     shared: &[u8],
     key: &[u8],
     or_equal: bool,
+    after_last: bool,
     key_at: impl Fn(usize) -> &'k [u8],
 ) -> usize {
     // A key that does not begin with the prefix is below every key of the
@@ -860,6 +875,11 @@ fn search_heads<'k>(
 
     let prefix = shared.len();
     let (head, rest) = (key_head(key, prefix), &key[prefix..]);
+
+    if after_last && heads.last().is_some_and(|&last| head > last) {
+        return heads.len();
+    }
+
     let (mut low, mut high) = (0, heads.len());
 
     while low < high {

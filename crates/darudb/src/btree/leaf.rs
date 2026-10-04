@@ -219,7 +219,13 @@ impl Leaf {
         let slots_end = CONTENT_OFFSET + 2 * self.count;
 
         self.heads.insert(index, key, |at| leaf_key(&self.page, at));
-        self.page.copy_within(slots..slots_end, slots + 2);
+
+        // An entry after every other, as keys that only grow bring, moves
+        // no slot, and a call to move none is left out.
+        if index < self.count {
+            self.page.copy_within(slots..slots_end, slots + 2);
+        }
+
         self.low -= len;
         write_cell(&mut self.page, self.low, key, value);
         set_slot(&mut self.page, index, self.low);
@@ -272,8 +278,16 @@ impl Leaf {
     /// Moves the entries from `at` on into a new leaf, which it returns, and
     /// zeroes their cells here, as removed ones are. Each part's heads are
     /// worked out again, after the longer prefix its keys may share.
+    ///
+    /// With `at` past the last entry, as a split for keys that only grow
+    /// makes it, nothing moves, and this leaf and its heads stay as they
+    /// are: working them out again read every key of a full leaf.
     pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
         let mut right = Leaf::new(self.page.len());
+
+        if at >= self.count {
+            return right;
+        }
 
         for index in at..self.count {
             let (cell, len) = leaf_cell(&self.page, index);

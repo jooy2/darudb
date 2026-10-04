@@ -241,20 +241,19 @@ fn insert_into<L: Load, S: Store>(
             }
 
             // The page is full: its entries and the new one are shared out
-            // between it and a new leaf, as evenly as their sizes allow.
-            let mut sizes: Vec<usize> = (0..leaf.len())
-                .map(|index| leaf.entry_size(index))
-                .collect();
-
-            sizes.insert(at, cell_len(key.len(), value) + 2);
-
-            // An entry after every other, as keys that only grow bring, goes
+            // between it and a new leaf, as evenly as their sizes allow. An
+            // entry after every other, as keys that only grow bring, goes
             // alone into the new leaf: the full one stays as it is, and a run
             // of such inserts fills its leaves rather than leaving each half
-            // empty.
+            // empty. The sizes are read only for the other splits.
             let middle = if at == leaf.len() {
                 at
             } else {
+                let mut sizes: Vec<usize> = (0..leaf.len())
+                    .map(|index| leaf.entry_size(index))
+                    .collect();
+
+                sizes.insert(at, cell_len(key.len(), value) + 2);
                 split_point(&sizes, capacity)
                     .ok_or_else(|| internal("a leaf that cannot be split"))?
             };
