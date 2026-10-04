@@ -1,0 +1,118 @@
+name: run-test-platforms
+
+# The engine on the oldest systems the project supports, as near as GitHub's
+# runners come to them (CLAUDE.md, "Platform baseline"). No hosted runner is
+# that old, so each job takes the closest way there:
+#
+# - Linux: the tests built and run in a container whose userland is glibc
+#   2.17, the oldest Rust supports. The kernel stays the runner's, since no
+#   container can bring back an older one.
+# - Android: the tests built for API level 21 and run in an emulator of
+#   Android 5.0, API 21.
+# - Windows and macOS: the tests on the oldest runner of each, Windows Server
+#   2022 and an Intel Mac on macOS 15. What the releases ship declares the
+#   oldest versions it supports, and the release workflow checks that.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/run-test-platforms.yml
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  glibc:
+    runs-on: ubuntu-latest
+    name: Test on glibc 2.17
+
+    # The image the Python packaging authority keeps for building against
+    # glibc 2.17, which is CentOS 7's. Actions written in JavaScript cannot
+    # run inside it, since the Node.js they bring needs a newer glibc, so the
+    # build and the tests run in it through `docker run`.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test in a container with glibc 2.17
+        run: |
+          docker run --rm --volume "$PWD:/work" --workdir /work \
+            quay.io/pypa/manylinux2014_x86_64 bash -euo pipefail -c '
+              ldd --version | head -n 1
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --default-toolchain none --profile minimal
+              source "$HOME/.cargo/env"
+              cargo test -p darudb
+            '
+
+  android:
+    runs-on: ubuntu-latest
+    name: Test on Android 5.0 (API 21)
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-21
+      # Linking against API 21's libraries fails on any function a newer
+      # Android added, so a successful build is half the check; the run in
+      # the emulator is the other half.
+      - name: Build the tests for API 21
+        run: |
+          rustup target add x86_64-linux-android
+          tools="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$tools/x86_64-linux-android21-clang"
+          cargo test -p darudb --target x86_64-linux-android --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .executable != null) | .executable' \
+            > executables.txt
+          mkdir android-tests
+          xargs -a executables.txt cp -t android-tests
+          ls -l android-tests
+      # `adb shell` passes on a command's exit status only from API 24 on, so
+      # each run prints its own and the script reads it. The tests write
+      # under `TMPDIR`, the one place a shell may write to on the device.
+      - name: Write the script that runs them
+        run: |
+          cat > run-android-tests.sh <<'SCRIPT'
+          set -eu
+          dir=/data/local/tmp/darudb
+          adb shell mkdir -p "$dir"
+          for test in android-tests/*; do
+            name=$(basename "$test")
+            adb push "$test" "$dir/$name" > /dev/null
+            adb shell "cd $dir && TMPDIR=$dir RUST_BACKTRACE=1 ./$name; echo status=\$?" \
+              | tr -d '\r' | tee output.txt
+            tail -n 1 output.txt | grep -qx 'status=0'
+          done
+          SCRIPT
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 21
+          target: default
+          arch: x86_64
+          script: bash run-android-tests.sh
+
+  oldest-runners:
+    runs-on: ${{ matrix.os }}
+    name: Test on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-15-intel]
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test -p darudb

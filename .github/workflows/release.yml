@@ -214,6 +214,17 @@ jobs:
       - run: npm ci
       - name: Build
         run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts
+      # The addon is meant to load on glibc 2.17; a symbol versioned for a
+      # newer glibc would keep it from loading there.
+      - name: Check the newest glibc the addon needs
+        if: contains(matrix.target, 'linux-gnu')
+        run: |
+          newest=$(readelf --version-info --wide darudb.*.node | grep -o 'GLIBC_[0-9.]*' | cut -c7- | sort -V | tail -n 1)
+          echo "The addon needs glibc $newest"
+          if [ "$(printf '%s\n' "$newest" 2.17 | sort -V | tail -n 1)" != 2.17 ]; then
+            echo "::error::The addon needs glibc $newest, newer than 2.17"
+            exit 1
+          fi
       - name: Test
         if: matrix.test
         run: npm test
@@ -426,6 +437,41 @@ jobs:
 
           mkdir -p libraries
           cp "target/$TARGET/release/$FILE" "libraries/darudb_dart-$TARGET.${FILE##*.}"
+      # The oldest system each library loads on, as it declares it: glibc
+      # 2.17 on Linux, and on Apple systems the deployment targets above, or
+      # the first release of the system on Apple silicon where that is later.
+      # The run-test-platforms workflow runs the engine on the oldest systems
+      # it can reach.
+      - name: Check the oldest system the library supports
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          library=$(ls libraries/*)
+
+          case "$TARGET" in
+            *-linux-gnu)
+              newest=$(readelf --version-info --wide "$library" | grep -o 'GLIBC_[0-9.]*' | cut -c7- | sort -V | tail -n 1)
+              echo "The library needs glibc $newest"
+              if [ "$(printf '%s\n' "$newest" 2.17 | sort -V | tail -n 1)" != 2.17 ]; then
+                echo "::error::The library needs glibc $newest, newer than 2.17"
+                exit 1
+              fi
+              ;;
+            *-apple-*)
+              case "$TARGET" in
+                x86_64-apple-darwin) expected=10.14 ;;
+                aarch64-apple-darwin) expected=11.0 ;;
+                aarch64-apple-ios-sim) expected=14.0 ;;
+                *) expected=13.0 ;;
+              esac
+              minos=$(vtool -show-build "$library" | awk '/minos/ { print $2 }')
+              echo "The library declares $minos as the oldest system it supports"
+              if [ "$minos" != "$expected" ]; then
+                echo "::error::The library declares $minos, not $expected"
+                exit 1
+              fi
+              ;;
+          esac
       - uses: actions/setup-python@v6
         if: matrix.test
         with:
