@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
-use crate::format::object::codec::{self, FieldRef};
+use crate::format::object::codec::{self, FieldRef, Placed};
 use crate::format::object::key;
 use crate::format::object::schema::{
     CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
@@ -801,38 +801,28 @@ fn field_position(collection: &CollectionDef, id: u64) -> Result<usize> {
         .ok_or_else(|| internal("an index is on a field its collection does not have"))
 }
 
-/// Adds the entries of `index`, at `index_position`, for the object of a
-/// collection whose fields all hold scalars and whose values an update made
-/// `present`, each read as its field's already: the indexed field's value
-/// where `present` holds it, or else the value the object is stored with, as
-/// [`object_entries`] finds it in the object. `stored_key` is the position
-/// of the key field and the key.
-///
-/// [`CollectionWriter::write_record`] does the same for a binding's record,
-/// and keeps its own copy: calling this from there made puts through a
-/// binding 2% slower, measured on separately built binaries.
-fn present_entries(
+/// Adds the entries of `index`, at `index_position` in `collection`, for the
+/// object whose record, in the form the file holds, is `record` and whose
+/// primary key encodes as `key`. Such a record holds the key and every
+/// required field, so a field it leaves out is optional, and null.
+fn placed_entries(
     entries: &mut IndexKeys,
-    (index_position, index): (usize, &IndexDef),
+    index_position: usize,
+    index: &IndexDef,
     collection: &CollectionDef,
-    present: &[(usize, FieldRef<'_>)],
-    (key_position, key_value): (usize, &Value),
+    record: Placed<'_>,
     key: &[u8],
 ) -> Result<()> {
     let position = field_position(collection, index.field)?;
     let field = &collection.fields.list[position];
-    let found = present.iter().find(|(at, _)| *at == position);
+    let value = match record.value(position, &field.kind).map_err(internal)? {
+        Some(found) => {
+            if scalar_entry(entries, index_position, index, found, &field.kind, key)? {
+                return Ok(());
+            }
 
-    if let Some((_, found)) = found {
-        if scalar_entry(entries, index_position, index, *found, &field.kind, key)? {
-            return Ok(());
+            codec::field_value(found, &field.kind).map_err(internal)?
         }
-    }
-
-    let value = match found {
-        Some((_, found)) => codec::field_value(*found, &field.kind).map_err(internal)?,
-        None if position == key_position => key_value.clone(),
-        None if !field.optional => field.default.clone().unwrap_or(Value::Null),
         None => Value::Null,
     };
 
@@ -1054,10 +1044,23 @@ impl Update {
 }
 
 /// The buffers an update takes from the transaction: the object's key, its
-/// new record, and its entries and those it had.
+/// new record, where each change of a binding's update lies, and what
+/// [`changed`] writes.
 struct Lent {
     key: Vec<u8>,
     record: Vec<u8>,
+    given: Vec<(usize, usize)>,
+    changing: Changing,
+}
+
+/// What an update of an object of a collection whose fields all hold
+/// scalars writes besides its new record, in buffers the transaction lends:
+/// where each field of the stored record and of the new one lies, and the
+/// object's entries and those it had. An update through objects uses the
+/// entries alone.
+struct Changing {
+    replaced: Vec<(usize, usize)>,
+    placed: Vec<(usize, usize)>,
     entries: IndexKeys,
     old: IndexKeys,
 }
@@ -1067,16 +1070,31 @@ impl Lent {
         Self {
             key: std::mem::take(&mut spare.key),
             record: std::mem::take(&mut spare.record),
-            entries: IndexKeys::lent(&mut spare.entries, 0),
-            old: IndexKeys::lent(&mut spare.old, 0),
+            given: std::mem::take(&mut spare.given),
+            changing: Changing {
+                replaced: std::mem::take(&mut spare.replaced),
+                placed: std::mem::take(&mut spare.placed),
+                entries: IndexKeys::lent(&mut spare.entries, 0),
+                old: IndexKeys::lent(&mut spare.old, 0),
+            },
         }
     }
 
     fn give_back(self, spare: &mut Spare) {
+        let Changing {
+            replaced,
+            placed,
+            entries,
+            old,
+        } = self.changing;
+
         spare.key = kept(self.key);
         spare.record = kept(self.record);
-        self.entries.give_back(&mut spare.entries);
-        self.old.give_back(&mut spare.old);
+        spare.given = kept(self.given);
+        spare.replaced = kept(replaced);
+        spare.placed = kept(placed);
+        entries.give_back(&mut spare.entries);
+        old.give_back(&mut spare.old);
     }
 }
 
@@ -1124,77 +1142,74 @@ fn object_written(
     Ok(())
 }
 
-/// Writes what the update `changes`, which [`codec::flat_changes`] read,
+/// Writes what the update `changes`, which [`codec::flat_changes`] placed,
 /// makes of the object of `collection` whose record is `stored` and whose
-/// key encodes as `key`: the new record into `record`, and the entries of
-/// the indexes on the fields it changes into `entries`, and those the object
-/// had into `old`. `stored_key` is the position of the key field and the
-/// key. Returns false when the record stays as it is. What is wrong with a
-/// damaged record is told apart, for the caller to make the error for once
-/// the tree it reads the record from is free.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "three of them are buffers the transaction lends, which a struct would only rename"
-)]
+/// key encodes as `key`: the new record into `record`, and in `buffers`
+/// where its fields lie and those of the stored one, the entries of the
+/// indexes on the fields it changes, and those the object had. Returns
+/// false when the record stays as it is. What is wrong with a damaged
+/// record is told apart, for the caller to make the error for once the tree
+/// it reads the record from is free.
 fn changed(
     collection: &CollectionDef,
     stored: &[u8],
-    changes: &[(usize, Option<FieldRef<'_>>)],
-    stored_key: (usize, &Value),
+    changes: Placed<'_>,
     key: &[u8],
     record: &mut Vec<u8>,
-    entries: &mut IndexKeys,
-    old: &mut IndexKeys,
+    buffers: &mut Changing,
 ) -> Result<bool, Unread> {
     let fields = &collection.fields;
-    let mut present = codec::stored_flat_fields(stored, fields).map_err(Unread::Damaged)?;
+    let first = codec::stored_flat_fields(stored, fields, &mut buffers.replaced)
+        .map_err(Unread::Damaged)?;
+    let stored = Placed {
+        bytes: stored,
+        first,
+        placed: &buffers.replaced,
+    };
 
     // Every record holds the required fields without a default, and one
     // that lacks one is damaged, as reading the object finds it.
     if fields.list.iter().enumerate().any(|(position, field)| {
-        !field.optional && field.default.is_none() && !present.iter().any(|(at, _)| *at == position)
+        !field.optional && field.default.is_none() && !stored.holds(position)
     }) {
         return Err(Unread::Damaged("a record lacks a required field"));
     }
 
-    for &(position, value) in changes {
-        let at = present.iter().position(|(at, _)| *at == position);
-
-        match (at, value) {
-            (Some(at), Some(value)) => present[at].1 = value,
-            (Some(at), None) => {
-                present.swap_remove(at);
-            }
-            (None, Some(value)) => present.push((position, value)),
-            (None, None) => {}
-        }
-    }
-
     // Only a change can leave out a required field now: one made null.
-    codec::flat_record(&present, fields, None, record).map_err(|message| {
-        Error::InvalidArgument {
+    let first = codec::flat_record(fields, changes, stored, None, record, &mut buffers.placed)
+        .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
-        }
-    })?;
+        })?;
 
-    if record.as_slice() == stored {
+    if record.as_slice() == stored.bytes {
         return Ok(false);
     }
 
-    for (index_position, index) in collection.indexes.iter().enumerate() {
-        let position = field_position(collection, index.field)?;
+    let new = Placed {
+        bytes: record,
+        first,
+        placed: &buffers.placed,
+    };
 
-        if !changes.iter().any(|(at, _)| *at == position) {
+    for (index_position, index) in collection.indexes.iter().enumerate() {
+        if !changes.holds(field_position(collection, index.field)?) {
             continue;
         }
 
-        stored_entries(old, index_position, index, collection, stored, key)?;
-        present_entries(
-            entries,
-            (index_position, index),
+        stored_entries(
+            &mut buffers.old,
+            index_position,
+            index,
             collection,
-            &present,
-            stored_key,
+            stored.bytes,
+            key,
+        )?;
+        placed_entries(
+            &mut buffers.entries,
+            index_position,
+            index,
+            collection,
+            new,
             key,
         )?;
     }
@@ -1411,8 +1426,8 @@ impl<'a> CollectionWriter<'a> {
         let Lent {
             key,
             record,
-            entries,
-            old,
+            changing: Changing { entries, old, .. },
+            ..
         } = &mut lent;
         let mut changes = Some(changes);
         let mut update = Update::default();
@@ -1514,12 +1529,27 @@ impl<'a> CollectionWriter<'a> {
 
         key_bytes_into(collection, &key_value, &mut lent.key)?;
 
-        let changes = codec::flat_changes(changes, &collection.fields).map_err(refused)?;
+        let first =
+            codec::flat_changes(changes, &collection.fields, &mut lent.given).map_err(refused)?;
+        let Lent {
+            key,
+            record,
+            given,
+            changing,
+        } = &mut lent;
+        let changes = Placed {
+            bytes: changes,
+            first,
+            placed: given,
+        };
         let key_position = field_position(collection, collection.key)?;
 
-        if changes.iter().any(|&(position, value)| {
-            position == key_position && !value.is_some_and(|value| is_key(value, &key_value))
-        }) {
+        if changes.holds(key_position)
+            && !changes
+                .value(key_position, &collection.fields.list[key_position].kind)
+                .map_err(internal)?
+                .is_some_and(|value| is_key(value, &key_value))
+        {
             return Err(changes_key(collection));
         }
 
@@ -1529,48 +1559,41 @@ impl<'a> CollectionWriter<'a> {
         // that may refuse a value the object did not hold, and the record
         // replaced is kept aside then, to go back.
         let max_key_len = self.txn.max_key_len();
-        let Lent {
-            key,
-            record,
-            entries,
-            old,
-        } = &mut lent;
         let mut update = Update::default();
         let found = self.txn.update_in_with(
             &records(collection.id),
             key,
             record,
             &mut |stored, record| {
-                let changed = changed(
-                    collection,
-                    stored,
-                    &changes,
-                    (key_position, &key_value),
-                    key,
-                    record,
-                    entries,
-                    old,
-                )
-                .map_err(|unread| match unread {
-                    Unread::Damaged(reason) => {
-                        update.damage = Some(reason);
+                let changed = changed(collection, stored, changes, key, record, changing).map_err(
+                    |unread| match unread {
+                        Unread::Damaged(reason) => {
+                            update.damage = Some(reason);
 
-                        internal(reason)
-                    }
-                    Unread::Failed(error) => error,
-                })?;
+                            internal(reason)
+                        }
+                        Unread::Failed(error) => error,
+                    },
+                )?;
 
                 if !changed {
                     return Ok(false);
                 }
 
-                check_lengths(collection, max_key_len, record, entries)?;
-                update.made(collection, stored, entries, old);
+                check_lengths(collection, max_key_len, record, &changing.entries)?;
+                update.made(collection, stored, &changing.entries, &changing.old);
 
                 Ok(true)
             },
         );
-        let updated = self.finish_update(collection, key, found, update, entries, old);
+        let updated = self.finish_update(
+            collection,
+            key,
+            found,
+            update,
+            &changing.entries,
+            &changing.old,
+        );
 
         lent.give_back(self.txn.spare());
         updated
@@ -1595,94 +1618,69 @@ impl<'a> CollectionWriter<'a> {
         let refused = |reason: &str| Error::InvalidArgument {
             message: format!("a record for `{}`: {reason}", collection.name),
         };
-        let present = codec::flat_fields(record, &collection.fields).map_err(refused)?;
-        let (key_position, key_field) = collection
-            .fields
-            .list
+        let spare = self.txn.spare();
+        let mut given = std::mem::take(&mut spare.given);
+        let mut placed = std::mem::take(&mut spare.placed);
+        let mut stored = std::mem::take(&mut spare.record);
+        let mut key = std::mem::take(&mut spare.key);
+        let list = &collection.fields.list;
+        let first = codec::flat_fields(record, &collection.fields, &mut given).map_err(refused)?;
+        let sent = Placed {
+            bytes: record,
+            first,
+            placed: &given,
+        };
+        let (key_position, key_field) = list
             .iter()
             .enumerate()
             .find(|(_, field)| field.id == collection.key)
             .ok_or_else(|| internal("a collection has no key field"))?;
-        let given = present
-            .iter()
-            .find(|(position, _)| *position == key_position)
-            .map(|(_, found)| codec::field_value(*found, &key_field.kind))
+        let given_key = sent
+            .value(key_position, &key_field.kind)
+            .map_err(refused)?
+            .map(|found| codec::field_value(found, &key_field.kind))
             .transpose()
             .map_err(refused)?;
         let (assigned, numbering) = if collection.auto {
-            self.number(collection, given.as_ref())?
+            self.number(collection, given_key.as_ref())?
         } else {
             (None, Numbering::Kept)
         };
         let key_value = match assigned {
             Some(number) => Value::Int(number),
-            None => given.unwrap_or(Value::Null),
+            None => given_key.unwrap_or(Value::Null),
         };
-        let spare = self.txn.spare();
-        let mut key = std::mem::take(&mut spare.key);
-        let mut stored = std::mem::take(&mut spare.record);
-        let mut entries = IndexKeys::lent(&mut spare.entries, collection.indexes.len());
 
         key_bytes_into(collection, &key_value, &mut key)?;
-        codec::flat_record(
-            &present,
+
+        let first = codec::flat_record(
             &collection.fields,
+            sent,
+            Placed::default(),
             assigned.map(|number| (key_position, number)),
             &mut stored,
+            &mut placed,
         )
         .map_err(|message| Error::InvalidArgument {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
-
-        for (index_position, index) in collection.indexes.iter().enumerate() {
-            let (position, field) = collection
-                .fields
-                .list
-                .iter()
-                .enumerate()
-                .find(|(_, field)| field.id == index.field)
-                .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
-            let found = present.iter().find(|(at, _)| *at == position);
-
-            if let Some((_, found)) = found {
-                if scalar_entry(
-                    &mut entries,
-                    index_position,
-                    index,
-                    *found,
-                    &field.kind,
-                    &key,
-                )? {
-                    continue;
-                }
-            }
-
-            // The value the object is stored with, as `object_entries` finds
-            // it in the object.
-            let value = match found {
-                Some((_, found)) => codec::field_value(*found, &field.kind).map_err(refused)?,
-                None if position == key_position => key_value.clone(),
-                None if !field.optional => field.default.clone().unwrap_or(Value::Null),
-                None => Value::Null,
-            };
-
-            value_entries(&mut entries, index_position, index, &value, &key)?;
-        }
-
-        let stored_key = self.store(
+        let stored_key = self.store_record(
             collection,
-            Written {
-                key: &key,
-                key_value,
-                record: &stored,
-                entries: &entries,
-                numbering,
+            Placed {
+                bytes: &stored,
+                first,
+                placed: &placed,
             },
+            key,
+            key_value,
+            numbering,
             replace,
         );
+        let spare = self.txn.spare();
 
-        self.txn.spare().record = kept(stored);
-        self.give_back(key, entries);
+        spare.given = kept(given);
+        spare.placed = kept(placed);
+        spare.record = kept(stored);
         stored_key
     }
 
@@ -1735,13 +1733,10 @@ impl<'a> CollectionWriter<'a> {
             return self.write_record(record, replace);
         }
 
-        let found = |position: usize| {
-            placed
-                .iter()
-                .find(|(at, _)| *at == position)
-                .map(|&(_, start)| codec::scalar_at(record, first + start, &list[position].kind))
-                .transpose()
-                .map_err(internal)
+        let typed = Placed {
+            bytes: record,
+            first,
+            placed,
         };
         let key_position = list
             .iter()
@@ -1754,8 +1749,11 @@ impl<'a> CollectionWriter<'a> {
                 Numbering::Raised(number.unsigned_abs() + 1),
             ),
             None => {
-                let given = found(key_position)?
-                    .map(|found| codec::field_value(found, &list[key_position].kind))
+                let kind = &list[key_position].kind;
+                let given = typed
+                    .value(key_position, kind)
+                    .map_err(internal)?
+                    .map(|found| codec::field_value(found, kind))
                     .transpose()
                     .map_err(internal)?;
                 let numbering = if collection.auto {
@@ -1771,46 +1769,49 @@ impl<'a> CollectionWriter<'a> {
                 (given.unwrap_or(Value::Null), numbering)
             }
         };
-        let spare = self.txn.spare();
-        let mut key = std::mem::take(&mut spare.key);
-        let mut entries = IndexKeys::lent(&mut spare.entries, collection.indexes.len());
+        let mut key = std::mem::take(&mut self.txn.spare().key);
 
         key_bytes_into(collection, &key_value, &mut key)?;
 
-        for (index_position, index) in collection.indexes.iter().enumerate() {
-            let position = field_position(collection, index.field)?;
-            let field = &list[position];
-            // A field left out is optional, so null; the key never is.
-            let value = match found(position)? {
-                Some(found) => {
-                    if scalar_entry(
-                        &mut entries,
-                        index_position,
-                        index,
-                        found,
-                        &field.kind,
-                        &key,
-                    )? {
-                        continue;
-                    }
-
-                    codec::field_value(found, &field.kind).map_err(internal)?
-                }
-                None => Value::Null,
-            };
-
-            value_entries(&mut entries, index_position, index, &value, &key)?;
-        }
-
         #[cfg(test)]
         crate::testing::TYPED_AS_ENCODED.set(crate::testing::TYPED_AS_ENCODED.get() + 1);
+
+        self.store_record(collection, typed, key, key_value, numbering, replace)
+    }
+
+    /// Stores the object of `collection` whose record, in the form the file
+    /// holds, is `record`, and whose primary key is `key_value`, encoded in
+    /// `key`, with its entries in every index, read from the record. A
+    /// binding's record and a typed writer's both end here, once they are
+    /// in that form.
+    fn store_record(
+        &mut self,
+        collection: &CollectionDef,
+        record: Placed<'_>,
+        key: Vec<u8>,
+        key_value: Value,
+        numbering: Numbering,
+        replace: bool,
+    ) -> Result<Value> {
+        let mut entries = IndexKeys::lent(&mut self.txn.spare().entries, collection.indexes.len());
+
+        for (index_position, index) in collection.indexes.iter().enumerate() {
+            placed_entries(
+                &mut entries,
+                index_position,
+                index,
+                collection,
+                record,
+                &key,
+            )?;
+        }
 
         let stored_key = self.store(
             collection,
             Written {
                 key: &key,
                 key_value,
-                record,
+                record: record.bytes,
                 entries: &entries,
                 numbering,
             },

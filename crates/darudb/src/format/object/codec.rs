@@ -1221,19 +1221,25 @@ pub(crate) fn is_flat(fields: &Fields) -> bool {
     })
 }
 
-/// The fields the record `bytes` from outside the engine holds, under
-/// `fields`, which [`is_flat`] accepts: each as the position of its field in
-/// the list and its value, borrowed from the record. The record is checked as
-/// [`partial_object_of`] checks it, and refused for the same reasons, in the
-/// same order.
-pub(crate) fn flat_fields<'a>(
-    bytes: &'a [u8],
+/// Checks the record `bytes` from outside the engine under `fields`, which
+/// [`is_flat`] accepts, and puts each field it holds in `placed`: the
+/// field's position in the list, and where its value starts, counted from
+/// the first field. Returns where the first field starts. The record is
+/// checked as [`partial_object_of`] checks it, and refused for the same
+/// reasons, in the same order.
+///
+/// The fields' places go in a buffer the caller lends, rather than their
+/// values in a vector of their own, which borrowed from the record and so
+/// could not be kept for the next record: allocating and freeing it took a
+/// fortieth of a binding's insert. [`Placed::value`] reads a value again.
+pub(crate) fn flat_fields(
+    bytes: &[u8],
     fields: &Fields,
-) -> Result<Vec<(usize, FieldRef<'a>)>, &'static str> {
+    placed: &mut Vec<(usize, usize)>,
+) -> Result<usize, &'static str> {
     let mut reader = Reader { bytes, at: 0 };
     let count = reader.count(2)?;
-    // Ids in order and all of them the schema's: no more than it has.
-    let mut present = Vec::with_capacity(count.min(fields.list.len()));
+    let first = reader.at;
     let mut last = None;
 
     for _ in 0..count {
@@ -1250,15 +1256,17 @@ pub(crate) fn flat_fields<'a>(
             .iter()
             .position(|field| field.id == id)
             .ok_or("a record holds a field id its collection does not have")?;
+        let start = reader.at - first;
 
-        present.push((position, reader.scalar_as(&fields.list[position].kind)?));
+        reader.scalar_as(&fields.list[position].kind)?;
+        placed.push((position, start));
     }
 
     if reader.at != bytes.len() {
         return Err("a record has bytes after its last field");
     }
 
-    Ok(present)
+    Ok(first)
 }
 
 /// Whether a value whose tag is `tag` is of kind `kind`, a scalar.
@@ -1273,27 +1281,85 @@ pub(crate) fn holds(tag: u8, kind: &Kind) -> bool {
     )
 }
 
-/// The scalar of kind `kind` whose value starts at `at` of the record
-/// `bytes`, read and checked as [`flat_fields`] reads one.
-pub(crate) fn scalar_at<'a>(
+/// A record whose fields' places are known: `bytes`, and in `placed` each
+/// field's position in its collection's list and where its value starts,
+/// counted from `first`, where the first field does, as [`flat_fields`],
+/// [`flat_changes`] and [`stored_flat_fields`] find them and
+/// [`flat_record`] writes them. They come in the order of the list. The
+/// default is a record with no field.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Placed<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) first: usize,
+    pub(crate) placed: &'a [(usize, usize)],
+}
+
+impl<'a> Placed<'a> {
+    /// Whether the record holds the field at `position`, or a change of it.
+    pub(crate) fn holds(&self, position: usize) -> bool {
+        self.placed.iter().any(|(at, _)| *at == position)
+    }
+
+    /// The value of the field at `position`, of kind `kind`: `None` for a
+    /// field the record leaves out, and for the null of a change. The
+    /// function that placed the value checked it, so a string's text is not
+    /// checked again; a typed writer's string, which comes from a `&str`,
+    /// needs no check either.
+    pub(crate) fn value(
+        &self,
+        position: usize,
+        kind: &Kind,
+    ) -> Result<Option<FieldRef<'a>>, &'static str> {
+        match self.placed.iter().find(|(at, _)| *at == position) {
+            Some(&(_, start)) => placed_at(self.bytes, self.first + start, kind),
+            None => Ok(None),
+        }
+    }
+}
+
+/// [`Placed::value`] for the value at `at` of `bytes`, read in the caller,
+/// since [`flat_record`] reads every field of a record this way.
+#[inline(always)]
+fn placed_at<'a>(
     bytes: &'a [u8],
     at: usize,
     kind: &Kind,
-) -> Result<FieldRef<'a>, &'static str> {
-    Reader { bytes, at }.scalar_as(kind)
+) -> Result<Option<FieldRef<'a>>, &'static str> {
+    let mut reader = Reader { bytes, at };
+
+    Ok(Some(match (kind, reader.byte()?) {
+        (_, NULL) => return Ok(None),
+        (Kind::Bool, FALSE) => FieldRef::Bool(false),
+        (Kind::Bool, TRUE) => FieldRef::Bool(true),
+        (Kind::Int, INT) => FieldRef::Int(unzigzag(reader.varint()?)),
+        (Kind::Float, FLOAT) => FieldRef::Float(reader.float()?),
+        (Kind::String, STRING) => {
+            let len = reader.varint()?;
+
+            FieldRef::String(reader.take(len)?)
+        }
+        (Kind::Bytes, BYTES) => {
+            let len = reader.varint()?;
+
+            FieldRef::Bytes(reader.take(len)?)
+        }
+        _ => return Err("a record holds a value of another type than its field"),
+    }))
 }
 
-/// The changes the record `bytes` from outside the engine holds for an
-/// update of an object under `fields`, which [`is_flat`] accepts: each as the
-/// position of its field and its new value, `None` for [`NULL`]. The record
-/// is checked as [`flat_fields`] checks it.
-pub(crate) fn flat_changes<'a>(
-    bytes: &'a [u8],
+/// Checks the changes the record `bytes` from outside the engine holds for
+/// an update of an object under `fields`, which [`is_flat`] accepts, and
+/// puts each one in `placed`, as [`flat_fields`] puts a field: a change to
+/// null starts at its [`NULL`]. The record is checked as `flat_fields`
+/// checks one.
+pub(crate) fn flat_changes(
+    bytes: &[u8],
     fields: &Fields,
-) -> Result<Vec<(usize, Option<FieldRef<'a>>)>, &'static str> {
+    placed: &mut Vec<(usize, usize)>,
+) -> Result<usize, &'static str> {
     let mut reader = Reader { bytes, at: 0 };
     let count = reader.count(2)?;
-    let mut changes = Vec::with_capacity(count.min(fields.list.len()));
+    let first = reader.at;
     let mut last = None;
 
     for _ in 0..count {
@@ -1310,35 +1376,35 @@ pub(crate) fn flat_changes<'a>(
             .iter()
             .position(|field| field.id == id)
             .ok_or("a record holds a field id its collection does not have")?;
-        let value = if reader.null() {
-            None
-        } else {
-            Some(reader.scalar_as(&fields.list[position].kind)?)
-        };
+        let start = reader.at - first;
 
-        changes.push((position, value));
+        if !reader.null() {
+            reader.scalar_as(&fields.list[position].kind)?;
+        }
+
+        placed.push((position, start));
     }
 
     if reader.at != bytes.len() {
         return Err("a record has bytes after its last field");
     }
 
-    Ok(changes)
+    Ok(first)
 }
 
-/// The fields the record `bytes` from the file holds, under `fields`, which
-/// [`is_flat`] accepts: each as the position of its field and its value,
-/// borrowed from the record, as [`flat_fields`] gives a binding's. A field id
-/// `fields` does not have belongs to a field that was removed, and is
-/// stepped over; a value that does not fit its field makes the record
-/// damaged, as it does for [`object_of`].
-pub(crate) fn stored_flat_fields<'a>(
-    bytes: &'a [u8],
+/// Checks the record `bytes` from the file under `fields`, which [`is_flat`]
+/// accepts, and puts each field it holds in `placed`, as [`flat_fields`]
+/// puts a binding's. A field id `fields` does not have belongs to a field
+/// that was removed, and is stepped over; a value that does not fit its
+/// field makes the record damaged, as it does for [`object_of`].
+pub(crate) fn stored_flat_fields(
+    bytes: &[u8],
     fields: &Fields,
-) -> Result<Vec<(usize, FieldRef<'a>)>, &'static str> {
+    placed: &mut Vec<(usize, usize)>,
+) -> Result<usize, &'static str> {
     let mut reader = Reader { bytes, at: 0 };
     let count = reader.count(2)?;
-    let mut present = Vec::with_capacity(fields.list.len());
+    let first = reader.at;
     let mut last = None;
 
     for _ in 0..count {
@@ -1352,7 +1418,10 @@ pub(crate) fn stored_flat_fields<'a>(
 
         match fields.list.iter().position(|field| field.id == id) {
             Some(position) => {
-                present.push((position, reader.scalar_as(&fields.list[position].kind)?));
+                let start = reader.at - first;
+
+                reader.scalar_as(&fields.list[position].kind)?;
+                placed.push((position, start));
             }
             None => reader.skip(0)?,
         }
@@ -1362,69 +1431,82 @@ pub(crate) fn stored_flat_fields<'a>(
         return Err("a record has bytes after its last field");
     }
 
-    Ok(present)
+    Ok(first)
 }
 
-/// Writes into `out` the record the file holds for the fields `present`
-/// that [`flat_fields`] read, under the same `fields`: the bytes
-/// [`record_of`] writes for the object they make. A required field left out is written with its default,
-/// and an optional one is not written. `assigned` is the position in the
-/// list of the auto-increment key the record left out, and the number it
-/// gets.
+/// Writes into `out` the record the file holds for an object under
+/// `fields`, which [`is_flat`] accepts, whose fields are those `given`
+/// holds, over those `beneath` holds: a binding's record over none, or an
+/// update's changes over the record stored, where a change to null leaves
+/// the field out. Puts each field it writes in `placed`, as [`flat_fields`]
+/// puts one. The record is the bytes [`record_of`] writes for that object:
+/// a required field left out is written with its default, and an optional
+/// one is not written. `assigned` is the position in the list of the
+/// auto-increment key both leave out, and the number it gets. Returns where
+/// the first field starts.
+///
+/// The two lists of places are walked side by side with the collection's,
+/// since all three are in its order. Looking each field up in them made a
+/// binding's insert about 7% slower than this, and merging them through
+/// iterators an update of one field about 9%.
 ///
 /// The error says what is wrong, as [`record_of`] says it.
 pub(crate) fn flat_record(
-    present: &[(usize, FieldRef<'_>)],
     fields: &Fields,
+    given: Placed<'_>,
+    beneath: Placed<'_>,
     assigned: Option<(usize, i64)>,
     out: &mut Vec<u8>,
-) -> Result<(), String> {
-    let given = |position: usize| {
-        present
-            .iter()
-            .find(|(at, _)| *at == position)
-            .map(|(_, value)| *value)
-            .or_else(|| {
-                assigned
-                    .filter(|(at, _)| *at == position)
-                    .map(|(_, number)| FieldRef::Int(number))
-            })
-    };
-    let mut count = 0u64;
-
-    // The count comes first: work it out, and refuse a required field left
-    // out, before writing anything.
-    for (position, field) in fields.list.iter().enumerate() {
-        if given(position).is_some() || (!field.optional && field.default.is_some()) {
-            count += 1;
-        } else if !field.optional {
-            return Err(format!("`{}` is required", field.name));
-        }
-    }
-
+    placed: &mut Vec<(usize, usize)>,
+) -> Result<usize, String> {
     out.reserve(16 * (fields.list.len() + 1));
-    write_varint(count, out);
+
+    let start = out.len();
+    let reserved = reserve_count(fields, out);
+    let first = out.len();
+    let mut count = 0u64;
+    let (mut over, mut under) = (
+        given.placed.iter().peekable(),
+        beneath.placed.iter().peekable(),
+    );
 
     for (position, field) in fields.list.iter().enumerate() {
-        match (given(position), &field.default) {
+        let from_given = over.next_if(|(at, _)| *at == position);
+        let from_beneath = under.next_if(|(at, _)| *at == position);
+        let value = match (from_given, from_beneath) {
+            (Some(&(_, at)), _) => placed_at(given.bytes, given.first + at, &field.kind)?,
+            (None, Some(&(_, at))) => placed_at(beneath.bytes, beneath.first + at, &field.kind)?,
+            (None, None) => assigned
+                .filter(|(at, _)| *at == position)
+                .map(|(_, number)| FieldRef::Int(number)),
+        };
+
+        match (value, &field.default) {
             (Some(value), _) => {
                 write_varint(field.id, out);
+                placed.push((position, out.len() - first));
                 write_ref(value, out);
             }
             (None, Some(default)) if !field.optional => {
                 write_varint(field.id, out);
+                placed.push((position, out.len() - first));
                 encode_value(default, &field.kind, &|_| None, out)
                     .map_err(|expected| format!("`{}` holds {expected}", field.name))?;
             }
-            (None, _) => {}
+            (None, _) if field.optional => continue,
+            (None, _) => return Err(format!("`{}` is required", field.name)),
         }
+
+        count += 1;
     }
 
-    Ok(())
+    set_count(out, start, reserved, count, fields);
+
+    Ok(quick_varint(out, start)?.1)
 }
 
-/// Writes a value [`find_field`] or [`flat_fields`] read, as a record holds
-/// it.
+/// Writes a value [`find_field`] or [`Placed::value`] read, as a record
+/// holds it.
 fn write_ref(value: FieldRef<'_>, out: &mut Vec<u8>) {
     match value {
         FieldRef::Bool(false) => out.push(FALSE),
@@ -2007,8 +2089,24 @@ mod tests {
             (5, None),
         ]);
 
+        let mut placed = Vec::new();
+        let first = flat_changes(&changes, &fields, &mut placed).unwrap();
+        let record = Placed {
+            bytes: &changes,
+            first,
+            placed: &placed,
+        };
+        let read: Vec<_> = placed
+            .iter()
+            .map(|&(position, _)| {
+                let value = record.value(position, &fields.list[position].kind);
+
+                (position, value.unwrap())
+            })
+            .collect();
+
         assert_eq!(
-            flat_changes(&changes, &fields).unwrap(),
+            read,
             vec![(1, Some(FieldRef::String(b"Ann"))), (2, None), (4, None)]
         );
 
@@ -2019,9 +2117,9 @@ mod tests {
         assert_eq!(object.get("score"), Some(&Value::Null));
         assert_eq!(object.len(), 3);
 
-        assert!(flat_fields(&changes, &fields).is_err());
+        assert!(flat_fields(&changes, &fields, &mut Vec::new()).is_err());
         assert!(partial_object_of(&changes, &fields).is_err());
-        assert!(stored_flat_fields(&changes, &fields).is_err());
+        assert!(stored_flat_fields(&changes, &fields, &mut Vec::new()).is_err());
         assert!(object_of(&changes, &fields).is_err());
         assert!(find_field(&changes, 3).is_err());
 
@@ -2051,11 +2149,29 @@ mod tests {
             (9, Raw::Float(0.5)),
         ]);
 
-        assert_eq!(
-            stored_flat_fields(&record, &fields).unwrap(),
-            vec![(0, FieldRef::Int(7)), (1, FieldRef::String(b"Ann"))]
+        let mut placed = Vec::new();
+        let first = stored_flat_fields(&record, &fields, &mut placed).unwrap();
+        let stored = Placed {
+            bytes: &record,
+            first,
+            placed: &placed,
+        };
+        let read = |position: usize| stored.value(position, &fields.list[position].kind).unwrap();
+
+        assert_eq!(placed.len(), 2);
+        assert_eq!(read(0), Some(FieldRef::Int(7)));
+        assert_eq!(read(1), Some(FieldRef::String(b"Ann")));
+
+        let mut placed = Vec::new();
+
+        assert!(
+            stored_flat_fields(
+                &write(&[(1, Raw::String("7".to_owned()))]),
+                &fields,
+                &mut placed
+            )
+            .is_err()
         );
-        assert!(stored_flat_fields(&write(&[(1, Raw::String("7".to_owned()))]), &fields).is_err());
-        assert!(stored_flat_fields(&record[..record.len() - 1], &fields).is_err());
+        assert!(stored_flat_fields(&record[..record.len() - 1], &fields, &mut placed).is_err());
     }
 }

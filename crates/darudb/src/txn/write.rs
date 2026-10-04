@@ -37,10 +37,12 @@ pub(super) struct TreeState {
 /// Buffers the object layer lends itself between the objects a write
 /// transaction stores, changes and deletes: an object's record, its key,
 /// its index entries and those of the object it replaces, and where each
-/// field of a typed record lies. A write takes the ones it needs and gives
-/// them back cleared, so that a transaction writing many objects allocates
-/// them once rather than for each object: allocating and freeing them took
-/// about a tenth of an insert.
+/// field lies in the record being stored (`placed`), in a binding's record
+/// or changes (`given`), and in the record an update replaces
+/// (`replaced`). A write takes the ones it needs and gives them back
+/// cleared, so that a transaction writing many objects allocates them once
+/// rather than for each object: allocating and freeing them took about a
+/// tenth of an insert.
 #[derive(Debug, Default)]
 pub(crate) struct Spare {
     pub(crate) record: Vec<u8>,
@@ -48,6 +50,8 @@ pub(crate) struct Spare {
     pub(crate) entries: EntryBuffers,
     pub(crate) old: EntryBuffers,
     pub(crate) placed: Vec<(usize, usize)>,
+    pub(crate) given: Vec<(usize, usize)>,
+    pub(crate) replaced: Vec<(usize, usize)>,
 }
 
 /// The buffers of an object's index entries in [`Spare`]: the keys of the
