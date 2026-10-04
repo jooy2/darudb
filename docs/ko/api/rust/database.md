@@ -133,6 +133,14 @@ pub fn backup(&self, path: impl AsRef<Path>) -> Result<BackupReport>
 
 사본의 페이지 크기는 원본과 같고, 원본이 암호화돼 있으면 암호 방식과 키도 같으므로 같은 키나 비밀번호로 열립니다. 사본에는 빈 공간이 없습니다. 사본은 디스크에 기록될 때까지 `path` 옆에 임시 이름으로 있다가, 그 뒤에야 `path`로 옮겨집니다. `path`에 이미 있는 파일은 덮어쓰지 않고 `INVALID_ARGUMENT`로 실패합니다.
 
+### backup_with
+
+```rust
+pub fn backup_with(&self, path: impl AsRef<Path>, options: &BackupOptions) -> Result<BackupReport>
+```
+
+[`backup`](#backup)처럼 사본을 쓰되 [`BackupOptions`](./backup-options.md)를 따릅니다. 옵션에 키나 비밀번호가 있으면 사본은 무작위로 만든 새 데이터 키로 암호화되고, 그 키나 비밀번호가 새 데이터 키를 감싸며, 사본은 그것으로만 열립니다. 평문 데이터베이스의 사본도 같은 방식으로 암호화됩니다. 빈 비밀번호는 아무것도 쓰기 전에 `INVALID_ARGUMENT`로 실패합니다.
+
 ### compact
 
 ```rust

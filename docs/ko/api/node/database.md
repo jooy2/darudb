@@ -206,15 +206,15 @@ checkAsync(): Promise<CheckReport>;
 ### backup
 
 ```ts
-backup(path: string): BackupReport;
+backup(path: string, options?: BackupOptions): BackupReport;
 ```
 
-게시된 커밋을 `path`의 새 파일로 복사합니다. 그동안 다른 핸들과 프로세스는 계속 쓸 수 있습니다. 사본에는 빈 공간이 없고, 페이지 크기는 원본과 같으며, 같은 키나 비밀번호로 열립니다. 이미 있는 파일은 덮어쓰지 않습니다. 경로에 파일이 있거나 경로가 비었으면 `INVALID_ARGUMENT`로 실패합니다. 결과는 [BackupReport](../../types/node/backup-report.md)에 있습니다.
+게시된 커밋을 `path`의 새 파일로 복사합니다. 그동안 다른 핸들과 프로세스는 계속 쓸 수 있습니다. 사본에는 빈 공간이 없고, 페이지 크기는 원본과 같으며, 같은 키나 비밀번호로 열립니다. 다만 [`options`](../../types/node/backup-options.md)에 `key`나 `password`를 주면 사본은 새 데이터 키로 암호화됩니다. 이미 있는 파일은 덮어쓰지 않습니다. 경로에 파일이 있거나 경로가 비었으면 `INVALID_ARGUMENT`로 실패합니다. 결과는 [BackupReport](../../types/node/backup-report.md)에 있습니다.
 
 ### backupAsync
 
 ```ts
-backupAsync(path: string): Promise<BackupReport>;
+backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
 ```
 
 스레드 풀에서 실행하는 `backup`입니다.

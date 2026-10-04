@@ -249,15 +249,27 @@ Future<CheckReport> checkAsync();
 ### backup
 
 ```dart
-BackupReport backup(String path);
+BackupReport backup(
+  String path, {
+  Uint8List? key,
+  String? password,
+  PasswordHashing? passwordHashing,
+});
 ```
 
 Writes a copy of the published commit to a new file at `path`, while other handles and processes may write. The copy holds no free space, has the file's page size, and opens with the same key or password. It never replaces a file: a path that is taken, or an empty one, fails with `INVALID_ARGUMENT`. [BackupReport](../../types/dart/backup-report.md) describes the result.
 
+A `key` of 32 bytes or a `password` encrypts the copy under a new random data key, which it wraps, at the cost [`passwordHashing`](../../types/dart/password-hashing.md) sets for a password, and the copy opens only with it. Changing a file's key or password wraps its data key again and leaves it as it was, so a backup under a new key is the way to leave behind a data key that may have been exposed: back up, then put the copy in the old file's place. A plain database's copy is encrypted the same way. A key that is not 32 bytes, an empty password, or both together fail with `INVALID_ARGUMENT` before anything is written, and the package copies them when the call is made.
+
 ### backupAsync
 
 ```dart
-Future<BackupReport> backupAsync(String path);
+Future<BackupReport> backupAsync(
+  String path, {
+  Uint8List? key,
+  String? password,
+  PasswordHashing? passwordHashing,
+});
 ```
 
 `backup` on a thread of the native library.

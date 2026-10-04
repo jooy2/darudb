@@ -133,6 +133,14 @@ Writes a copy of the published commit to a new file at `path`, and returns a [`B
 
 The copy has this file's page size, and in an encrypted file its cipher and key, so the same key or password opens it. It holds no free space. It stays under a temporary name beside `path` until it is durable, and only then takes `path`. A file already at `path` is never replaced: that fails with `INVALID_ARGUMENT`.
 
+### backup_with
+
+```rust
+pub fn backup_with(&self, path: impl AsRef<Path>, options: &BackupOptions) -> Result<BackupReport>
+```
+
+Writes a copy as [`backup`](#backup) does, as [`BackupOptions`](./backup-options.md) say: with a key or a password there, the copy is encrypted under a new random data key, which it wraps, and opens only with it. A plain database's copy is encrypted the same way. An empty password fails with `INVALID_ARGUMENT` before anything is written.
+
 ### compact
 
 ```rust

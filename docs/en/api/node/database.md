@@ -206,15 +206,15 @@ checkAsync(): Promise<CheckReport>;
 ### backup
 
 ```ts
-backup(path: string): BackupReport;
+backup(path: string, options?: BackupOptions): BackupReport;
 ```
 
-Writes a copy of the published commit to a new file at `path`, while other handles and processes may write. The copy holds no free space, has the file's page size, and opens with the same key or password. It never replaces a file: a path that is taken, or an empty one, fails with `INVALID_ARGUMENT`. [BackupReport](../../types/node/backup-report.md) describes the result.
+Writes a copy of the published commit to a new file at `path`, while other handles and processes may write. The copy holds no free space, has the file's page size, and opens with the same key or password, unless [`options`](../../types/node/backup-options.md) give a `key` or a `password`, which encrypt it under a new data key. It never replaces a file: a path that is taken, or an empty one, fails with `INVALID_ARGUMENT`. [BackupReport](../../types/node/backup-report.md) describes the result.
 
 ### backupAsync
 
 ```ts
-backupAsync(path: string): Promise<BackupReport>;
+backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
 ```
 
 `backup` on the thread pool.

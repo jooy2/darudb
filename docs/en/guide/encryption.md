@@ -187,4 +187,4 @@ A Dart server or command-line tool keeps the key with its other secrets, such as
 
 ## Tools on an encrypted file
 
-A backup of an encrypted file is encrypted with the same key and opens with the same key or password. Salvage takes the key or the password of the damaged file, which then opens the new file too. See [Tools](./tools.md).
+A backup of an encrypted file is encrypted with the same key and opens with the same key or password, unless it is given a key or a password of its own, which encrypts it under a new data key: the way to change the data key itself, which changing the key or the password does not ([Back up under a new key](./tools.md#back-up-under-a-new-key)). Salvage takes the key or the password of the damaged file, which then opens the new file too. See [Tools](./tools.md).

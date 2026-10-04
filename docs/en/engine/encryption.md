@@ -47,7 +47,7 @@ The pages are encrypted under a data key: 32 random bytes, generated when the fi
 
 Changing the key or the password writes a new key block and re-encrypts no page, so it takes the same time whatever the size of the file. It is a sync commit with the new key block, followed by empty sync commits until no slot holds the old one: three commits in all when nothing else commits in between. Every commit copies the key block of the one before it, which is how the new one reaches the other slots. Until then, the old key still opens the file; once the call returns, it no longer does. In Rust the calls are `Database::set_key` and `Database::set_password`, and in Node.js `setKey` and `setPassword`.
 
-The data key itself stays the same for the life of the file. A backup and a salvage keep it too, since the new file takes the old one's key block, so the key or password that opens the file opens the copy.
+The data key itself stays the same for the life of the file. A backup and a salvage keep it too, since the new file takes the old one's key block, so the key or password that opens the file opens the copy. A backup given a key or a password of its own is the exception: its copy gets a new random data key, which that key or password wraps, and every page of the copy is written under it, as every page of a backup is written anew anyway.
 
 ## Passwords
 

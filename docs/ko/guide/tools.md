@@ -104,6 +104,39 @@ print('${report.entries} entries of commit ${report.commitId}');
 - 사본은 대상 경로 옆에 임시 이름으로 쓰고, 온전하고 디스크에 기록된 뒤에야 대상 경로로 옮깁니다. 백업은 이미 있는 파일을 덮어쓰지 않습니다. 경로에 파일이 있으면 `INVALID_ARGUMENT`로 실패합니다.
 - 백업은 도는 동안 복사하는 커밋을 읽기 트랜잭션처럼 붙잡고 있습니다. 그래서 그동안 다른 쪽이 쓰면 파일이 커질 수 있습니다.
 
+### 새 키로 백업하기
+
+암호화한 파일의 키나 비밀번호를 바꾸면 데이터 키를 다시 감쌀 뿐, 모든 페이지를 암호화한 데이터 키 자체는 그대로입니다. 백업에 키나 비밀번호를 따로 주면 사본을 무작위로 만든 새 데이터 키로 씁니다. 그래서 노출됐을 수 있는 데이터 키는 옛 파일과 함께 남습니다. 옛 파일의 핸들을 모두 닫은 뒤 사본을 옛 파일 자리에 두세요. 평문 데이터베이스의 사본도 같은 방식으로 암호화되므로, 평문 데이터베이스를 암호화할 때도 이 방법을 씁니다.
+
+::: lang rust
+
+```rust
+use darudb::{BackupOptions, Database};
+
+fn rekey(db: &Database) -> Result<(), darudb::Error> {
+    db.backup_with("app.rekeyed.darudb", BackupOptions::new().password("a new password"))?;
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+await db.backupAsync('app.rekeyed.darudb', { password: 'a new password' }); // 또는 `db.backup(path, options)`
+```
+
+:::
+
+::: lang dart
+
+```dart
+await db.backupAsync('app.rekeyed.darudb', password: 'a new password'); // 또는 `db.backup(path, ...)`
+```
+
+:::
+
 ## 파일 압축하기
 
 파일은 한때 필요했던 페이지를 계속 갖고 있습니다. 객체를 지우면 파일 안에 빈 페이지가 생기고 이후 쓰기가 그 페이지를 다시 쓰지만, 파일이 저절로 줄지는 않습니다. 압축은 파일 끝쪽 페이지를 앞쪽 빈 페이지로 옮기고, 비게 된 끝을 파일 시스템에 돌려줍니다. 파일을 그 자리에서 줄이므로 다른 핸들과 프로세스는 그동안 계속 읽고 씁니다.

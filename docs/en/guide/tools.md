@@ -105,6 +105,39 @@ print('${report.entries} entries of commit ${report.commitId}');
 - The copy is written under a temporary name beside the path and takes the path only once it is whole and durable. A backup never replaces a file: when the path is taken, it fails with `INVALID_ARGUMENT`.
 - The backup holds the commit it copies for as long as it runs, as a read transaction does, so the file may grow meanwhile if others write.
 
+### Back up under a new key
+
+Changing the key or the password of an encrypted file wraps its data key again, and leaves the data key, which encrypts every page, as it was. A backup given a key or a password of its own writes its copy under a new random data key instead, so a data key that may have been exposed stays behind with the old file. Put the copy in the old file's place once every handle to the old file is closed. A plain database's copy is encrypted the same way, which is how a plain database becomes an encrypted one.
+
+::: lang rust
+
+```rust
+use darudb::{BackupOptions, Database};
+
+fn rekey(db: &Database) -> Result<(), darudb::Error> {
+    db.backup_with("app.rekeyed.darudb", BackupOptions::new().password("a new password"))?;
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+await db.backupAsync('app.rekeyed.darudb', { password: 'a new password' }); // or `db.backup(path, options)`
+```
+
+:::
+
+::: lang dart
+
+```dart
+await db.backupAsync('app.rekeyed.darudb', password: 'a new password'); // or `db.backup(path, ...)`
+```
+
+:::
+
 ## Compact a file
 
 A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. It works in place, while other handles and processes keep reading and writing.

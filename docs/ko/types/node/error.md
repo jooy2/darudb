@@ -1,6 +1,6 @@
 ---
 title: Error
-order: 15
+order: 16
 counterpart: /types/rust/error
 ---
 
