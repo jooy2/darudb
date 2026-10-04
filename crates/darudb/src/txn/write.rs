@@ -34,6 +34,45 @@ pub(super) struct TreeState {
     pub(super) changed: bool,
 }
 
+/// The trees a write transaction has opened. Their states stay where they
+/// were put, in the order they were opened, and the map of names leads to
+/// each one's position, so that reaching an open tree goes down the map
+/// once and leaves it. A map from names to the states themselves was gone
+/// down twice for each change of an open tree, once to tell whether it was
+/// open and once to reach its state, since a borrow of the state that the
+/// caller keeps cannot come out of a lookup that may insert; that took
+/// about a fortieth of an insert.
+#[derive(Debug, Default)]
+pub(super) struct Trees {
+    states: Vec<TreeState>,
+    positions: BTreeMap<String, usize>,
+}
+
+impl Trees {
+    /// The state of tree `name`, if it is open.
+    fn get(&self, name: &str) -> Option<&TreeState> {
+        self.positions
+            .get(name)
+            .map(|&position| &self.states[position])
+    }
+
+    /// Every open tree, in byte order of the names.
+    fn iter(&self) -> impl Iterator<Item = (&String, &TreeState)> {
+        self.positions
+            .iter()
+            .map(|(name, &position)| (name, &self.states[position]))
+    }
+
+    /// Every open tree, taken out, in byte order of the names.
+    pub(super) fn into_sorted(self) -> impl Iterator<Item = (String, TreeState)> {
+        let mut states: Vec<_> = self.states.into_iter().map(Some).collect();
+
+        self.positions
+            .into_iter()
+            .filter_map(move |(name, position)| Some((name, states[position].take()?)))
+    }
+}
+
 /// Buffers the object layer lends itself between the objects a write
 /// transaction stores, changes and deletes: an object's record, its key,
 /// its index entries and those of the object it replaces, and where each
@@ -117,7 +156,7 @@ pub struct WriteTransaction {
     /// The young part of this commit's retained group, once the commit has
     /// written the group.
     pub(super) young_part: Option<YoungPart>,
-    pub(super) trees: BTreeMap<String, TreeState>,
+    pub(super) trees: Trees,
     /// The trees looked up in the catalog without being changed.
     pub(super) descriptors: Descriptors,
     /// Values waiting to be stored in the engine's trees before the commit,
@@ -294,7 +333,7 @@ impl WriteTransaction {
             young: Some(young),
             young_reclaimed,
             young_part: None,
-            trees: BTreeMap::new(),
+            trees: Trees::default(),
             descriptors: Descriptors::default(),
             later: BTreeMap::new(),
             next_tree_id: base.next_tree_id,
@@ -889,12 +928,15 @@ impl WriteTransaction {
         }
 
         let loader = &self.shared.loader;
-        let name = tree_key(tree, loader.page_size())?;
 
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(None),
             Some(state) => btree::get(loader, state.id, state.root.as_ref(), key),
-            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(
+                loader,
+                self.catalog.as_ref(),
+                tree_key(tree, loader.page_size())?,
+            )? {
                 Some(descriptor) => btree::get(
                     loader,
                     descriptor.id,
@@ -923,12 +965,15 @@ impl WriteTransaction {
         }
 
         let loader = &self.shared.loader;
-        let name = tree_key(tree, loader.page_size())?;
 
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(false),
             Some(state) => btree::get_with(loader, state.id, state.root.as_ref(), key, visit),
-            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(
+                loader,
+                self.catalog.as_ref(),
+                tree_key(tree, loader.page_size())?,
+            )? {
                 Some(descriptor) => btree::get_with(
                     loader,
                     descriptor.id,
@@ -981,12 +1026,15 @@ impl WriteTransaction {
         self.check_not_waiting(tree)?;
 
         let loader = &self.shared.loader;
-        let name = tree_key(tree, loader.page_size())?;
 
         match self.trees.get(tree) {
             Some(state) if state.deleted => Ok(Range::empty()),
             Some(state) => Range::over(loader, state.id, state.root.as_ref(), range, backward),
-            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(
+                loader,
+                self.catalog.as_ref(),
+                tree_key(tree, loader.page_size())?,
+            )? {
                 Some(descriptor) if !descriptor.root.is_null() => {
                     Range::over_committed(loader, descriptor.id, descriptor.root, range, backward)
                 }
@@ -1004,12 +1052,15 @@ impl WriteTransaction {
         self.check_not_waiting(tree)?;
 
         let loader = &self.shared.loader;
-        let name = tree_key(tree, loader.page_size())?;
 
         match self.trees.get(tree) {
             Some(state) if state.deleted => Seeker::new(loader, state.id, None),
             Some(state) => Seeker::new(loader, state.id, state.root.as_ref()),
-            None => match self.descriptors.find(loader, self.catalog.as_ref(), name)? {
+            None => match self.descriptors.find(
+                loader,
+                self.catalog.as_ref(),
+                tree_key(tree, loader.page_size())?,
+            )? {
                 Some(descriptor) => Seeker::from_pointer(loader, descriptor.id, descriptor.root),
                 None => Seeker::new(loader, 0, None),
             },
@@ -1029,13 +1080,16 @@ impl WriteTransaction {
         self.check_not_waiting(tree)?;
 
         let loader = &self.shared.loader;
-        let name = tree_key(tree, loader.page_size())?;
 
         match self.trees.get(tree) {
             Some(state) => Ok(state.entries),
             None => Ok(self
                 .descriptors
-                .find(loader, self.catalog.as_ref(), name)?
+                .find(
+                    loader,
+                    self.catalog.as_ref(),
+                    tree_key(tree, loader.page_size())?,
+                )?
                 .map_or(0, |descriptor| descriptor.entries)),
         }
     }
@@ -1048,7 +1102,7 @@ impl WriteTransaction {
 
         let mut names = catalog_names(&self.shared.loader, self.catalog.as_ref())?;
 
-        for (name, state) in &self.trees {
+        for (name, state) in self.trees.iter() {
             if state.deleted {
                 names.retain(|existing| existing != name);
             } else if !state.existed && !names.contains(name) {
@@ -1155,50 +1209,54 @@ enum Removal<'v> {
 }
 
 /// The state of tree `name` in this transaction, loaded from the catalog on
-/// first use. With `create`, a tree that does not exist is created.
+/// first use, when its name is checked. With `create`, a tree that does not
+/// exist is created.
 fn open_tree<'t>(
     loader: &crate::btree::Loader,
     catalog: Option<&Child>,
-    trees: &'t mut BTreeMap<String, TreeState>,
+    trees: &'t mut Trees,
     next_tree_id: &mut u64,
     name: &str,
     create: bool,
 ) -> Result<Option<&'t mut TreeState>> {
-    let key = tree_key(name, loader.page_size())?;
-
-    if !trees.contains_key(name) {
-        let state = match find_tree(loader, catalog, key)? {
-            Some(descriptor) => TreeState {
-                id: descriptor.id,
-                root: root_child(descriptor.root),
-                entries: descriptor.entries,
-                existed: true,
-                deleted: false,
-                changed: false,
-            },
-            None if create => {
-                let id = *next_tree_id;
-
-                *next_tree_id += 1;
-
-                TreeState {
-                    id,
-                    root: None,
-                    entries: 0,
-                    existed: false,
+    let position = match trees.positions.get(name) {
+        Some(&position) => position,
+        None => {
+            let key = tree_key(name, loader.page_size())?;
+            let state = match find_tree(loader, catalog, key)? {
+                Some(descriptor) => TreeState {
+                    id: descriptor.id,
+                    root: root_child(descriptor.root),
+                    entries: descriptor.entries,
+                    existed: true,
                     deleted: false,
-                    changed: true,
+                    changed: false,
+                },
+                None if create => {
+                    let id = *next_tree_id;
+
+                    *next_tree_id += 1;
+
+                    TreeState {
+                        id,
+                        root: None,
+                        entries: 0,
+                        existed: false,
+                        deleted: false,
+                        changed: true,
+                    }
                 }
-            }
-            None => return Ok(None),
-        };
+                None => return Ok(None),
+            };
 
-        trees.insert(name.to_owned(), state);
-    }
-
-    let Some(state) = trees.get_mut(name) else {
-        return Ok(None);
+            trees.states.push(state);
+            trees
+                .positions
+                .insert(name.to_owned(), trees.states.len() - 1);
+            trees.states.len() - 1
+        }
     };
+    let state = &mut trees.states[position];
 
     if state.deleted {
         if !create {

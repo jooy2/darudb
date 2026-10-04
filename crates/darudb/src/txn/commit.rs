@@ -42,7 +42,7 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
     let mut pages = Vec::new();
 
     // The user trees first: each root pointer goes into the catalog.
-    for (name, state) in std::mem::take(&mut txn.trees) {
+    for (name, state) in std::mem::take(&mut txn.trees).into_sorted() {
         if !state.changed {
             continue;
         }
