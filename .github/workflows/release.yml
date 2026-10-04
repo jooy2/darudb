@@ -124,7 +124,12 @@ jobs:
           - { host: windows-latest, target: aarch64-pc-windows-msvc }
           # napi-rs's cross toolchain builds against glibc 2.17, so the addon
           # loads on old Linux systems too.
-          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, flags: --use-napi-cross, test: true }
+          - {
+              host: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              flags: --use-napi-cross,
+              test: true
+            }
           - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: --use-napi-cross }
           - { host: ubuntu-latest, target: armv7-unknown-linux-gnueabihf, flags: --use-napi-cross }
           - { host: ubuntu-latest, target: x86_64-unknown-linux-musl, flags: -x }
@@ -281,7 +286,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
-
   build-dart:
     if: inputs.package == 'dart'
     needs: version
@@ -295,14 +299,29 @@ jobs:
         # runs the package's tests on the library built, where the runner
         # can load it.
         include:
-          - { host: macos-latest, target: aarch64-apple-darwin, file: libdarudb_dart.dylib, test: true }
+          - {
+              host: macos-latest,
+              target: aarch64-apple-darwin,
+              file: libdarudb_dart.dylib,
+              test: true
+            }
           - { host: macos-latest, target: x86_64-apple-darwin, file: libdarudb_dart.dylib }
           - { host: macos-latest, target: aarch64-apple-ios, file: libdarudb_dart.dylib }
           - { host: macos-latest, target: aarch64-apple-ios-sim, file: libdarudb_dart.dylib }
           - { host: macos-latest, target: x86_64-apple-ios, file: libdarudb_dart.dylib }
-          - { host: windows-latest, target: x86_64-pc-windows-msvc, file: darudb_dart.dll, test: true }
+          - {
+              host: windows-latest,
+              target: x86_64-pc-windows-msvc,
+              file: darudb_dart.dll,
+              test: true
+            }
           - { host: windows-latest, target: aarch64-pc-windows-msvc, file: darudb_dart.dll }
-          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, file: libdarudb_dart.so, test: true }
+          - {
+              host: ubuntu-latest,
+              target: x86_64-unknown-linux-gnu,
+              file: libdarudb_dart.so,
+              test: true
+            }
           - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, file: libdarudb_dart.so }
           - { host: ubuntu-latest, target: aarch64-linux-android, file: libdarudb_dart.so }
           - { host: ubuntu-latest, target: armv7-linux-androideabi, file: libdarudb_dart.so }

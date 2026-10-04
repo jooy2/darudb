@@ -31,7 +31,7 @@ jobs:
         # `packages/dart/darudb/native/rust-toolchain.toml` pins, which rustup
         # installs on the first build.
         include:
-          - { os: ubuntu-latest, sdk: "3.10.0" }
+          - { os: ubuntu-latest, sdk: '3.10.0' }
           - { os: ubuntu-latest, sdk: stable }
           - { os: macos-latest, sdk: stable }
           - { os: windows-latest, sdk: stable }
@@ -71,7 +71,7 @@ jobs:
         # oldest, which is what an application on Dart 3.10 resolves.
         include:
           - { dependencies: newest, sdk: stable, resolve: upgrade }
-          - { dependencies: oldest, sdk: "3.10.0", resolve: downgrade }
+          - { dependencies: oldest, sdk: '3.10.0', resolve: downgrade }
 
     defaults:
       run:
