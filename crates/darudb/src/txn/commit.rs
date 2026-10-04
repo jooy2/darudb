@@ -14,8 +14,8 @@ use crate::btree::{self, FinishedPage, Load};
 use crate::error::{Error, Result};
 use crate::format::{
     CATALOG_TREE, CommitRecord, FREE_TREE, Pointer, RECORD_MAC_LEN, RETAINED_TREE, SELECTOR_OFFSET,
-    Selector, TreeDescriptor, encode_runs, free_key, free_value, retained_key, runs_per_value,
-    slot_offset,
+    Selector, TreeDescriptor, WindowMark, encode_runs, free_key, free_value, retained_key,
+    runs_per_value, slot_offset,
 };
 use crate::instance::Header;
 use crate::space::YoungPart;
@@ -99,11 +99,12 @@ pub(super) fn commit(mut txn: WriteTransaction, durability: Durability) -> Resul
         retained,
         key_block: txn.key_block,
         mac: [0; RECORD_MAC_LEN],
+        window: WindowMark::default(),
     };
 
     txn.shared.sign_record(txn.slot, &mut record);
 
-    write_and_publish(&mut txn, pages, &record, durability)
+    write_and_publish(&mut txn, pages, record, durability)
 }
 
 /// Brings the free tree and the retained tree in line with the transaction's
@@ -247,15 +248,22 @@ fn finish_root(
 fn write_and_publish(
     txn: &mut WriteTransaction,
     mut pages: Vec<FinishedPage>,
-    record: &CommitRecord,
+    mut record: CommitRecord,
     durability: Durability,
 ) -> Result<()> {
     let shared = Arc::clone(&txn.shared);
     let pager = &shared.pager;
     // A deferred commit that would take the window past its limits is made
     // durable instead. What the transaction allocated is what it wrote: its
-    // tree pages, and the overflow runs it wrote along the way.
-    let deferred = durability == Durability::Deferred && shared.may_defer(txn.space.fresh());
+    // tree pages, and the overflow runs it wrote along the way. The record
+    // MAC leaves the window out, so it is filled in after signing.
+    let window = match durability {
+        Durability::Deferred => shared.may_defer(&txn.header, txn.space.fresh())?,
+        Durability::Sync => None,
+    };
+    let deferred = window.is_some();
+
+    record.window = window.unwrap_or_default();
 
     pages.sort_unstable_by_key(|page| page.page);
 
@@ -309,8 +317,8 @@ fn write_and_publish(
         return Err(error);
     }
 
-    if deferred {
-        shared.extend_window(txn.space.fresh());
+    if let Some(window) = window {
+        shared.extend_window(window, record.txn, txn.space.fresh());
     } else {
         shared.close_window();
 
@@ -325,7 +333,7 @@ fn write_and_publish(
 
     let mut records = txn.header.records;
 
-    records[txn.slot] = Some(*record);
+    records[txn.slot] = Some(record);
     shared.set_header(Header { selector, records });
     shared.leave_free_runs(record.txn, txn.space.take_free());
 

@@ -113,10 +113,14 @@ A commit record is 512 bytes:
 | 96     | 32   | Pointer to the root of the [retained tree](#the-retained-tree)                             |
 | 128    | 128  | [Key block](#the-key-block), all zeros in a plain file                                     |
 | 256    | 16   | [Record MAC](#the-record-mac), all zeros in a plain file                                   |
-| 272    | 224  | Reserved                                                                                   |
+| 272    | 8    | Window opened: when the commit's unsynced window opened, in microseconds since the epoch   |
+| 280    | 8    | Window pages: the pages the commits of that window wrote                                   |
+| 288    | 208  | Reserved                                                                                   |
 | 496    | 16   | Record check: XXH3-128 of one byte holding the slot number, followed by bytes 0 to 495     |
 
 Mixing the slot number into the record check means a record copied or written into the wrong slot fails its check.
+
+The two window fields are zero in the record of a sync commit. A deferred commit fills them, so that a writer in another process goes on counting the window's limits where this one left off ([Commits and recovery](commits-and-recovery.md#durability)). The epoch is the Unix epoch, by the system clock. Nothing about a record's validity depends on them, and the record MAC does not cover them: a writer that cannot believe them ends the window sooner.
 
 A record is **valid** when its check matches, in an encrypted file its [record MAC](#the-record-mac) matches too, and its fields are consistent: the transaction id is at least 1 and below 2^62 − 64, the limit that keeps every snapshot's lock byte within a signed 64-bit offset ([Locking](locking.md#the-lock-bytes)), the durable transaction id is smaller than the transaction id, the page count is at least 1, the next tree id is at least 16, and every root pointer is either null or names a page below the page count, written by a transaction no newer than the record's own.
 
@@ -331,6 +335,7 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | 1       | The skeleton: magic, format version and page size, with page sizes from 512 bytes. Nothing could be stored. |
 | 2       | Commits, trees and encryption.                                                                              |
 | 3       | Version 2 with the [record MAC](#the-record-mac) in encrypted files, and XAES-256-GCM pages.                |
-| 4       | This document: version 3 with ints in [object keys](objects.md#keys) in the fewest bytes that hold them.    |
+| 4       | Version 3 with ints in [object keys](objects.md#keys) in the fewest bytes that hold them.                   |
+| 5       | This document: version 4 with the unsynced window in each [commit record](#commit-slots).                   |
 
-A build that writes version 4 refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 and 3 never left development.
+A build that writes version 5 refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 to 4 never left development.

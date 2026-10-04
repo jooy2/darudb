@@ -712,7 +712,7 @@ fn open_io(
 
             // Another process may have died with a window open.
             if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| selector.unsynced) {
-                shared.notice_unsynced(record.txn);
+                shared.notice_unsynced(&record);
             }
 
             return Ok(shared);

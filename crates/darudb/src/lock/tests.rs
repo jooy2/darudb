@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{LockError, Locks, last_unreached, on_network_file_system};
-use crate::format::{SELECTOR_OFFSET, Selector};
+use crate::format::{CommitRecord, SELECTOR_OFFSET, Selector, slot_offset};
 use crate::storage::DbFile;
 use crate::sys::lock::{is_network_name, is_network_type};
 use crate::testing::{HELPER_PATH, Helper, wait_to_be_told};
@@ -36,7 +36,7 @@ fn options_for(path: &Path) -> OpenOptions {
 /// - `put <key> <value>` commits `value` under `key` in tree `t`.
 /// - `defer <key> <value>` does the same with a deferred commit.
 /// - `fill <byte>` sets the 300 keys of tree `r` to a value of that byte, in
-///   one sync commit.
+///   one sync commit, and `defer-fill <byte>` does the same in a deferred one.
 /// - `snapshot` begins a read transaction and keeps it.
 /// - `get <key>` reads through the kept read transaction, or a new one.
 /// - `read-id` begins and ends a read transaction, and answers with the
@@ -81,14 +81,18 @@ fn helper_running_commands() {
 
                 Ok("done".to_owned())
             }),
-            ["fill", byte] => db.begin_write().and_then(|mut txn| {
+            [fill @ ("fill" | "defer-fill"), byte] => db.begin_write().and_then(|mut txn| {
                 let byte: u8 = byte.parse().unwrap();
 
                 for key in 0..300u32 {
                     txn.insert("r", &key.to_be_bytes(), &[byte; 100])?;
                 }
 
-                txn.commit()?;
+                if *fill == "fill" {
+                    txn.commit()?;
+                } else {
+                    txn.commit_deferred()?;
+                }
 
                 Ok("done".to_owned())
             }),
@@ -360,6 +364,92 @@ fn a_window_a_dead_process_left_open_is_ended_by_a_reader() {
             assert!(Instant::now() < deadline, "{name}: the window stayed open");
             thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+/// The time limit holds for the window, whichever process commits in it. A
+/// writer that takes over a window another process opened longer ago than
+/// its own limit makes its commit durable, where it once opened a window of
+/// its own and counted from its own commit.
+#[test]
+fn a_window_another_process_opened_is_timed_from_its_first_commit() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for name in ["plain.darudb", "encrypted.darudb"] {
+        let path = dir.path().join(name);
+        let mut options = options_for(&path);
+
+        options.max_unsynced_time(Duration::from_millis(200));
+
+        let db = options.open(&path).unwrap();
+        let mut other = helper(&path);
+
+        // The helper's own time limit is an hour: its window stays open.
+        assert_eq!(other.ask("defer k first"), "done");
+        assert!(selector(&db).unsynced);
+        thread::sleep(Duration::from_millis(300));
+
+        let mut txn = db.begin_write().unwrap();
+
+        txn.insert("t", b"k", b"second").unwrap();
+        txn.commit_deferred().unwrap();
+
+        assert!(
+            !selector(&db).unsynced,
+            "{name}: the window outlived the limit"
+        );
+    }
+}
+
+/// The page limit holds for the window, whichever processes write its pages.
+/// A writer that takes over a window counts the pages another process's
+/// commits wrote in it, as their record says.
+#[test]
+fn a_window_counts_the_pages_every_process_wrote_in_it() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for name in ["plain.darudb", "encrypted.darudb"] {
+        let path = dir.path().join(name);
+        let mut other = helper(&path);
+
+        assert_eq!(other.ask("defer-fill 7"), "done");
+
+        // Read before this process opens the file, which it may not open
+        // twice.
+        let header = std::fs::read(&path).unwrap();
+        let published = Selector::decode(header[SELECTOR_OFFSET]).unwrap();
+        let record = CommitRecord::decode(published.slot, &header[slot_offset(published.slot)..])
+            .unwrap()
+            .unwrap();
+        let written = record.window.pages;
+
+        assert!(published.unsynced && written > 0, "{name}");
+
+        // A limit that the helper's pages fill, and that this process's own
+        // commit fits by itself, as the second commit below shows.
+        let mut options = options_for(&path);
+
+        options.max_unsynced_pages(written);
+
+        let db = options.open(&path).unwrap();
+        let commit = |value: &[u8]| {
+            let mut txn = db.begin_write().unwrap();
+
+            txn.insert("t", b"k", value).unwrap();
+            txn.commit_deferred().unwrap();
+        };
+
+        commit(b"over");
+        assert!(
+            !selector(&db).unsynced,
+            "{name}: the window passed its limit"
+        );
+
+        commit(b"within");
+        assert!(
+            selector(&db).unsynced,
+            "{name}: a commit alone fits the limit"
+        );
     }
 }
 

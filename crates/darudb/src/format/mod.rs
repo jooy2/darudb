@@ -44,7 +44,9 @@ pub(crate) use page::{
     page_check, seal, stored_check,
 };
 pub(crate) use pointer::{POINTER_LEN, Pointer};
-pub(crate) use record::{CommitRecord, KEY_BLOCK_LEN, RECORD_LEN, RECORD_MAC_LEN, TXN_LIMIT};
+pub(crate) use record::{
+    CommitRecord, KEY_BLOCK_LEN, RECORD_LEN, RECORD_MAC_LEN, TXN_LIMIT, WindowMark,
+};
 pub(crate) use system::{
     CATALOG_TREE, FREE_TREE, RETAINED_TREE, TreeDescriptor, decode_free_key, decode_free_value,
     decode_retained_key, decode_runs, encode_runs, free_key, free_value, retained_key,
@@ -55,7 +57,7 @@ pub(crate) use system::{
 ///
 /// It is recorded in every file's header. A file with another version is
 /// refused with [`Error::UnsupportedFormatVersion`](crate::Error::UnsupportedFormatVersion).
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 
 /// The first eight bytes of every DaruDB file.
 ///

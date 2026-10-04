@@ -12,11 +12,15 @@
 //! | 96     | 32   | Retained tree root                      |
 //! | 128    | 128  | Key block, zeros in a plain file        |
 //! | 256    | 16   | Record MAC, zeros in a plain file       |
-//! | 272    | 224  | Reserved                                |
+//! | 272    | 8    | When the unsynced window opened         |
+//! | 280    | 8    | Pages the unsynced window wrote         |
+//! | 288    | 208  | Reserved                                |
 //! | 496    | 16   | Record check                            |
 //!
 //! The record MAC covers bytes 0 to 255 under a key only the data key's
-//! holder has; `crypto` computes it, and this module only places it.
+//! holder has; `crypto` computes it, and this module only places it. The
+//! window's two fields lie outside it: they only tell a writer when to issue
+//! a barrier, and a writer that cannot believe them issues one sooner.
 
 use super::check::{CHECK_LEN, Check};
 use super::pointer::{POINTER_LEN, Pointer};
@@ -45,6 +49,7 @@ const FREE_OFFSET: usize = CATALOG_OFFSET + POINTER_LEN;
 const RETAINED_OFFSET: usize = FREE_OFFSET + POINTER_LEN;
 const KEY_BLOCK_OFFSET: usize = 128;
 const RECORD_MAC_OFFSET: usize = AUTHENTICATED_LEN;
+const WINDOW_OFFSET: usize = RECORD_MAC_OFFSET + RECORD_MAC_LEN;
 const RECORD_CHECK_OFFSET: usize = RECORD_LEN - CHECK_LEN;
 
 /// One commit, as a slot records it.
@@ -68,6 +73,23 @@ pub(crate) struct CommitRecord {
     pub(crate) key_block: [u8; KEY_BLOCK_LEN],
     /// The record MAC of an encrypted file; zeros in a plain one.
     pub(crate) mac: [u8; RECORD_MAC_LEN],
+    /// The unsynced window of a deferred commit, as far as it reached with
+    /// this commit; zeros for a sync commit.
+    pub(crate) window: WindowMark,
+}
+
+/// The unsynced window a deferred commit belongs to, recorded so that a
+/// writer in another process goes on counting it where this one left off
+/// (`design/commits-and-recovery.md`, "The unsynced window is kept short").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct WindowMark {
+    /// When the window's first deferred commit was made, in microseconds since
+    /// the Unix epoch by the system clock; 0 when that is not known.
+    pub(crate) opened_at: u64,
+    /// The pages the window's commits wrote, each once as far as the writer
+    /// could tell: a writer counts a page again when another process's commit
+    /// wrote it first.
+    pub(crate) pages: u64,
 }
 
 impl CommitRecord {
@@ -83,6 +105,7 @@ impl CommitRecord {
             retained: Pointer::NULL,
             key_block: [0; KEY_BLOCK_LEN],
             mac: [0; RECORD_MAC_LEN],
+            window: WindowMark::default(),
         }
     }
 
@@ -109,6 +132,10 @@ impl CommitRecord {
 
         bytes[..AUTHENTICATED_LEN].copy_from_slice(&self.authenticated());
         bytes[RECORD_MAC_OFFSET..RECORD_MAC_OFFSET + RECORD_MAC_LEN].copy_from_slice(&self.mac);
+        bytes[WINDOW_OFFSET..WINDOW_OFFSET + 8]
+            .copy_from_slice(&self.window.opened_at.to_le_bytes());
+        bytes[WINDOW_OFFSET + 8..WINDOW_OFFSET + 16]
+            .copy_from_slice(&self.window.pages.to_le_bytes());
         record_check(slot, &bytes).write(&mut bytes[RECORD_CHECK_OFFSET..]);
 
         bytes
@@ -145,6 +172,10 @@ impl CommitRecord {
             retained: Pointer::read(&bytes[RETAINED_OFFSET..]),
             key_block,
             mac,
+            window: WindowMark {
+                opened_at: le_u64(bytes, WINDOW_OFFSET),
+                pages: le_u64(bytes, WINDOW_OFFSET + 8),
+            },
         };
 
         record.validate()?;
@@ -221,6 +252,10 @@ mod tests {
             },
             key_block: [0; KEY_BLOCK_LEN],
             mac: [0; RECORD_MAC_LEN],
+            window: WindowMark {
+                opened_at: 1_800_000_000_000_000,
+                pages: 31,
+            },
         }
     }
 
@@ -245,7 +280,10 @@ mod tests {
         assert_eq!(Pointer::read(&bytes[32..]), record().catalog);
         assert_eq!(Pointer::read(&bytes[64..]), Pointer::NULL);
         assert_eq!(Pointer::read(&bytes[96..]), record().retained);
-        assert_eq!(&bytes[128..496], &[0; 368]);
+        assert_eq!(&bytes[128..272], &[0; 144]);
+        assert_eq!(&bytes[272..280], &1_800_000_000_000_000u64.to_le_bytes());
+        assert_eq!(&bytes[280..288], &31u64.to_le_bytes());
+        assert_eq!(&bytes[288..496], &[0; 208]);
 
         let mut signed = record();
 
@@ -255,6 +293,13 @@ mod tests {
 
         assert_eq!(&bytes[256..272], &[5; 16], "the record MAC");
         assert_eq!(&bytes[..256], &signed.authenticated());
+        signed.window = WindowMark::default();
+        assert_eq!(
+            signed.authenticated(),
+            record().authenticated(),
+            "the window lies outside the MAC"
+        );
+        signed.window = record().window;
         assert_eq!(CommitRecord::decode(1, &bytes), Ok(Some(signed)));
     }
 

@@ -12,14 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::btree::{LoadedNode, Loader};
 use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
     CommitRecord, HEADER_LEN, KeyBlock, RECORD_LEN, SELECTOR_OFFSET, SLOT_COUNT, Selector,
-    StaticHeader, TreeDescriptor, slot_offset,
+    StaticHeader, TreeDescriptor, WindowMark, slot_offset,
 };
 use crate::lock::{LockError, Locks};
 use crate::space::YoungParts;
@@ -50,15 +50,68 @@ pub(crate) struct Settings {
     pub(crate) password_cost: PasswordCost,
 }
 
-/// The deferred commits since the last barrier.
+/// The deferred commits since the last barrier, as far as this process knows
+/// them.
 #[derive(Debug)]
 struct Window {
-    opened: Instant,
-    /// Every page they wrote, once however often they wrote it: what the
-    /// next barrier has to make durable and recovery may have to check.
-    /// Pages written in the window are reused in it, so the same pages are
-    /// written again and again.
+    /// When the window has to end by this process's time limit, on its own
+    /// clock. `None` for a time limit too long to reach.
+    due: Option<Instant>,
+    /// When the window opened by the system clock, which its commit records
+    /// carry for the other processes.
+    opened_at: u64,
+    /// The pages that commits of other processes wrote in the window, as their
+    /// records counted them. This process cannot tell which they were, so a
+    /// page it writes again is counted twice, which only brings the barrier
+    /// sooner.
+    carried: u64,
+    /// Every page this process's commits wrote in the window, once however
+    /// often they wrote it: what the next barrier has to make durable and
+    /// recovery may have to check. Pages written in the window are reused in
+    /// it, so the same pages are written again and again.
     pages: HashSet<u64>,
+    /// The window's last commit that this process made. A writer that starts
+    /// from another commit, still unsynced, takes the window over from that
+    /// commit's record, since another process committed in it since.
+    last: u64,
+}
+
+impl Window {
+    /// The window of `record`, an unsynced commit another process made, as
+    /// its record tells it.
+    fn taken_over(record: &CommitRecord, limit: Duration) -> Self {
+        Self {
+            due: due_after(record.window.opened_at, limit),
+            opened_at: record.window.opened_at,
+            carried: record.window.pages,
+            pages: HashSet::new(),
+            last: record.txn,
+        }
+    }
+}
+
+/// When a window that opened at `opened_at` by the system clock has to end
+/// by `limit`, on this process's clock. The clock may have been set back or
+/// forward since, and in an encrypted file the record's window lies outside
+/// its MAC; a time that is unknown, or later than now, counts as a window
+/// already due, so that a doubt brings the barrier sooner and never later.
+fn due_after(opened_at: u64, limit: Duration) -> Option<Instant> {
+    let age = system_micros()
+        .checked_sub(opened_at)
+        .filter(|_| opened_at != 0)
+        .map_or(limit, Duration::from_micros);
+
+    Instant::now().checked_add(limit.saturating_sub(age))
+}
+
+/// The system clock, in microseconds since the Unix epoch, which is the one
+/// clock the processes on a machine share; 0 for a clock set before it.
+fn system_micros() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_micros()).unwrap_or(u64::MAX)
+        })
 }
 
 /// The unsynced window, and the thread that ends it when it is due.
@@ -67,16 +120,35 @@ struct Unsynced {
     window: Option<Window>,
     /// A commit another process published without a barrier, while this
     /// process has no window of its own: a window that process may have died
-    /// with. The thread ends it when it is still unsynced a time limit later.
+    /// with. The thread ends it when it is still unsynced at the window's due
+    /// time by this process's limit.
     foreign: Option<Foreign>,
     flusher: Option<Thread>,
 }
 
-/// An unsynced commit of another process, and when this one first saw it.
+impl Unsynced {
+    /// When the open window, if any, has to end, or the watch of another
+    /// process's window, when this process has none. `None` also for a time
+    /// limit too long to reach.
+    fn due(&self) -> Option<Instant> {
+        match (&self.window, &self.foreign) {
+            (Some(window), _) => window.due,
+            (None, Some(foreign)) => foreign.due,
+            (None, None) => None,
+        }
+    }
+}
+
+/// An unsynced commit of another process: when its window is due by this
+/// process's time limit.
 #[derive(Debug)]
 struct Foreign {
-    txn: u64,
-    seen: Instant,
+    due: Option<Instant>,
+}
+
+/// A number of pages as the records count them.
+fn count(pages: usize) -> u64 {
+    u64::try_from(pages).unwrap_or(u64::MAX)
 }
 
 /// What the read transactions that see one commit have found out about it,
@@ -365,7 +437,7 @@ impl Shared {
             let (bytes, slot, record) = self.read_published()?;
 
             if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| selector.unsynced) {
-                self.notice_unsynced(record.txn);
+                self.notice_unsynced(&record);
             }
 
             if registry.join(record.txn) {
@@ -697,69 +769,109 @@ impl Shared {
         self.sync_published()
     }
 
-    /// Whether a deferred commit writing `pages` pages may stay deferred, or
-    /// has to be made durable because the window would pass its limits.
-    pub(crate) fn may_defer(&self, pages: &HashSet<u64>) -> bool {
+    /// The window as a deferred commit writing `pages` would leave it, or
+    /// `None` when the commit has to be made durable instead because the
+    /// window would pass this process's limits.
+    ///
+    /// `header` is the one the write transaction began from, under the writer
+    /// lock. A window whose published commit is another process's is taken
+    /// over from that commit's record, so that the limits hold for the window
+    /// whichever processes commit in it, and a window that a barrier ended
+    /// since is over.
+    pub(crate) fn may_defer(
+        &self,
+        header: &Header,
+        pages: &HashSet<u64>,
+    ) -> Result<Option<WindowMark>> {
+        let base = header.published()?;
         let limits = &self.settings;
-        let unsynced = lock(&self.unsynced);
-        let (held, fresh) = match &unsynced.window {
-            None => (0, pages.len()),
+        let mut unsynced = lock(&self.unsynced);
+
+        if !header.selector.unsynced {
+            unsynced.window = None;
+        } else if unsynced
+            .window
+            .as_ref()
+            .is_none_or(|window| window.last != base.txn)
+        {
+            unsynced.window = Some(Window::taken_over(&base, limits.max_unsynced_time));
+        }
+
+        let mark = match &unsynced.window {
+            None => WindowMark {
+                opened_at: system_micros(),
+                pages: count(pages.len()),
+            },
             Some(window) => {
-                if window.opened.elapsed() >= limits.max_unsynced_time {
-                    return false;
+                if window.due.is_some_and(|due| Instant::now() >= due) {
+                    return Ok(None);
                 }
 
-                (
-                    window.pages.len(),
-                    pages
-                        .iter()
-                        .filter(|page| !window.pages.contains(page))
-                        .count(),
-                )
+                let fresh = pages
+                    .iter()
+                    .filter(|page| !window.pages.contains(page))
+                    .count();
+
+                WindowMark {
+                    opened_at: window.opened_at,
+                    pages: window
+                        .carried
+                        .saturating_add(count(window.pages.len() + fresh)),
+                }
             }
         };
 
-        u64::try_from(held + fresh).is_ok_and(|total| total <= limits.max_unsynced_pages)
+        Ok((mark.pages <= limits.max_unsynced_pages).then_some(mark))
     }
 
-    /// Records a deferred commit that wrote `pages` in the window, and makes
-    /// sure a thread will end the window when it is due.
-    pub(crate) fn extend_window(self: &Arc<Self>, pages: &HashSet<u64>) {
+    /// Records the deferred commit `txn`, which wrote `pages` and left the
+    /// window as `mark` says, and makes sure a thread will end the window
+    /// when it is due.
+    pub(crate) fn extend_window(
+        self: &Arc<Self>,
+        mark: WindowMark,
+        txn: u64,
+        pages: &HashSet<u64>,
+    ) {
+        let limit = self.settings.max_unsynced_time;
         let mut unsynced = lock(&self.unsynced);
         let window = unsynced.window.get_or_insert_with(|| Window {
-            opened: Instant::now(),
+            due: Instant::now().checked_add(limit),
+            opened_at: mark.opened_at,
+            carried: 0,
             pages: HashSet::new(),
+            last: txn,
         });
 
         window.pages.extend(pages);
+        window.last = txn;
         // Whatever another process left unsynced is this window's now.
         unsynced.foreign = None;
         self.start_flusher(&mut unsynced);
     }
 
-    /// Notes that the published commit `txn` was found unsynced, by a read
+    /// Notes that the published commit `record` was found unsynced, by a read
     /// or when the file was opened. With no window of this process open, it
     /// is another process's, which ends it within its own time limit if it
-    /// is alive; the thread ends it if that commit is still published and
-    /// unsynced once this process's time limit has passed.
-    pub(crate) fn notice_unsynced(self: &Arc<Self>, txn: u64) {
+    /// is alive; the thread ends it if it is still unsynced when its window,
+    /// which the record says when it opened, is due by this process's limit.
+    pub(crate) fn notice_unsynced(self: &Arc<Self>, record: &CommitRecord) {
         // Every read finds the same commit until the next one: a load, which
         // writes nothing the other readers' caches would have to fetch again.
-        if self.noticed.load(Ordering::Relaxed) == txn {
+        if self.noticed.load(Ordering::Relaxed) == record.txn {
             return;
         }
 
         let mut unsynced = lock(&self.unsynced);
 
-        self.noticed.store(txn, Ordering::Relaxed);
+        self.noticed.store(record.txn, Ordering::Relaxed);
 
         if unsynced.window.is_some() {
             return;
         }
 
         unsynced.foreign = Some(Foreign {
-            txn,
-            seen: Instant::now(),
+            due: due_after(record.window.opened_at, self.settings.max_unsynced_time),
         });
         self.start_flusher(&mut unsynced);
     }
@@ -767,7 +879,7 @@ impl Shared {
     /// Starts the thread that ends the window when it is due, unless it runs
     /// already or nothing is due.
     fn start_flusher(self: &Arc<Self>, unsynced: &mut Unsynced) {
-        if unsynced.flusher.is_some() || self.window_due(unsynced).is_none() {
+        if unsynced.flusher.is_some() || unsynced.due().is_none() {
             return;
         }
 
@@ -795,39 +907,29 @@ impl Shared {
         }
     }
 
-    /// When the open window, if any, has to end, or the watch of another
-    /// process's window, when this process has none. `None` also for a time
-    /// limit too long to reach.
-    fn window_due(&self, unsynced: &Unsynced) -> Option<Instant> {
-        let opened = match (&unsynced.window, &unsynced.foreign) {
-            (Some(window), _) => window.opened,
-            (None, Some(foreign)) => foreign.seen,
-            (None, None) => return None,
+    /// Ends the window another process left unsynced, if it is still open and
+    /// due by this process's time limit: that process may have died with it,
+    /// or keeps a longer limit. The caller holds the writer lock. A window
+    /// still open and not yet due is watched again, as its newest record says,
+    /// since a process may have committed in it since.
+    fn end_foreign_window(&self) -> Result<()> {
+        let header = self.refresh_header()?;
+        let due = if header.selector.unsynced {
+            let published = header.published()?;
+
+            due_after(published.window.opened_at, self.settings.max_unsynced_time)
+        } else {
+            None
         };
 
-        opened.checked_add(self.settings.max_unsynced_time)
-    }
-
-    /// Ends the window of commit `txn`, which another process published
-    /// without a barrier and left unsynced for this process's time limit: it
-    /// may have died with it. The caller holds the writer lock. A commit
-    /// published since is watched afresh instead, since its process was alive
-    /// to make it.
-    fn end_foreign_window(&self, txn: u64) -> Result<()> {
-        let header = self.refresh_header()?;
-        let published = header.published()?.txn;
-
-        if header.selector.unsynced && published == txn {
+        if header.selector.unsynced && due.is_some_and(|due| Instant::now() >= due) {
             return self.sync_published();
         }
 
         let mut unsynced = lock(&self.unsynced);
 
         unsynced.foreign =
-            (header.selector.unsynced && unsynced.window.is_none()).then(|| Foreign {
-                txn: published,
-                seen: Instant::now(),
-            });
+            (header.selector.unsynced && unsynced.window.is_none()).then_some(Foreign { due });
 
         Ok(())
     }
@@ -939,15 +1041,8 @@ fn flush_when_due(shared: &Weak<Shared>) {
         let (due, foreign) = {
             let mut unsynced = lock(&instance.unsynced);
 
-            match instance.window_due(&unsynced) {
-                Some(due) => (
-                    due,
-                    unsynced
-                        .foreign
-                        .as_ref()
-                        .filter(|_| unsynced.window.is_none())
-                        .map(|foreign| foreign.txn),
-                ),
+            match unsynced.due() {
+                Some(due) => (due, unsynced.window.is_none()),
                 None => {
                     unsynced.flusher = None;
 
@@ -965,10 +1060,8 @@ fn flush_when_due(shared: &Weak<Shared>) {
         }
 
         let ended = match instance.acquire_writer_within(FLUSH_WAIT) {
-            Ok(_writer) => match foreign {
-                Some(txn) => instance.end_foreign_window(txn),
-                None => instance.sync_published(),
-            },
+            Ok(_writer) if foreign => instance.end_foreign_window(),
+            Ok(_writer) => instance.sync_published(),
             // A writer is still running. Its own commit may end the window;
             // otherwise the next round tries again.
             Err(Error::Busy { .. }) => Ok(()),
@@ -1266,10 +1359,36 @@ pub(crate) fn find(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> Option
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
-    use super::MIN_CACHE_PAGES;
+    use super::{MIN_CACHE_PAGES, due_after, system_micros};
     use crate::storage::sim::SimDisk;
     use crate::{Database, OpenOptions};
+
+    #[test]
+    fn a_window_is_due_by_the_time_its_record_says_it_opened() {
+        let limit = Duration::from_secs(10);
+        let now = system_micros();
+        let due = due_after(now - 4_000_000, limit).unwrap();
+
+        assert!(due > Instant::now() + Duration::from_secs(5));
+        assert!(due <= Instant::now() + Duration::from_secs(6));
+        assert!(due_after(now - 20_000_000, limit).unwrap() <= Instant::now());
+        assert_eq!(due_after(now, Duration::MAX), None);
+    }
+
+    #[test]
+    fn a_window_whose_opening_is_in_doubt_is_due_at_once() {
+        let limit = Duration::from_secs(10);
+
+        // Not known, and later than now, which a clock set back or a record
+        // no writer wrote gives.
+        for opened_at in [0, system_micros() + 60_000_000] {
+            let due = due_after(opened_at, limit).unwrap();
+
+            assert!(due <= Instant::now(), "{opened_at}");
+        }
+    }
 
     #[test]
     fn the_cache_holds_what_its_size_fits_and_never_fewer_than_the_least_pages() {
