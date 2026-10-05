@@ -4,22 +4,20 @@
 
 The Dart package of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file, for Flutter apps and Dart servers and command-line tools.
 
-> DaruDB is in early development. The package is not published yet, and the file format will change without a migration path until the first release. Until then, the build hook compiles the engine from source, so building an application needs [rustup](https://rustup.rs).
-
 ## Usage
 
 Add the package, and `darudb_generator` with `build_runner` for the code they generate:
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator:
-    path: ../darudb/packages/dart/darudb_generator
+  darudb_generator: ^1.0.0
 ```
+
+The package needs Dart 3.10 or later, or Flutter 3.38 or later, the first releases with build hooks. Its build hook downloads the engine prebuilt for the application's target, so building an application needs no Rust toolchain; [the native library](#the-native-library) says how.
 
 Declare each collection as an immutable class, and run `dart run build_runner build`, which writes its schema constant, its query builder and a `copyWith` into the `.g.dart` part:
 

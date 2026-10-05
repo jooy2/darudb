@@ -1,6 +1,6 @@
 name: darudb
 description: An embedded database that keeps an application's data in one local file. The Dart binding of the DaruDB engine.
-version: 0.1.0
+version: 1.0.0
 repository: https://github.com/jooy2/darudb
 homepage: https://darudb.cdget.com
 publish_to: none

@@ -2,7 +2,7 @@
 
 > This package's history. It generates code for the `darudb` package, whose changelog says what that code lets an application do.
 
-## vNext (2026--)
+## v1.0.0 (2026-10-05)
 
 ### Added
 
