@@ -325,10 +325,6 @@ jobs:
     needs: [version, build, build-freebsd]
     runs-on: ubuntu-latest
     name: Package for npm
-    permissions:
-      contents: read
-      # npm's provenance statement, which ties each package to this run.
-      id-token: write
 
     defaults:
       run:
@@ -343,7 +339,6 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: packages/node/package-lock.json
-          registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - uses: actions/download-artifact@v8
         with:
@@ -365,20 +360,84 @@ jobs:
       # Fails if any platform package lacks its addon.
       - name: Check every package is complete
         run: npx napi pre-publish -t npm --no-gh-release --dry-run
-      - name: List what each package would contain
+      # The tarballs `npm-publish` publishes, which list what each package
+      # contains: one per platform, and this package, with every platform
+      # package at this version as an optional dependency, as napi's
+      # `pre-publish` would add them.
+      - name: Pack every package
         run: |
+          node -e "
+            const fs = require('node:fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const names = fs.readdirSync('npm').sort().map((dir) => require('./npm/' + dir + '/package.json').name);
+            pkg.optionalDependencies = Object.fromEntries(names.map((name) => [name, pkg.version]));
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\\n');
+          "
+          mkdir tarballs
+
           for dir in npm/*/; do
-            (cd "$dir" && npm pack --dry-run)
+            (cd "$dir" && npm pack --pack-destination ../../tarballs)
           done
-          npm pack --dry-run
-      # `prepublishOnly` publishes every platform package first and adds them
-      # to this one's optional dependencies.
+
+          npm pack --ignore-scripts --pack-destination tarballs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-packages
+          path: packages/node/tarballs/*.tgz
+          if-no-files-found: error
+
+  # Publishes through npm's trusted publishing: each package trusts this
+  # workflow of this repository, so npm takes the run's OIDC token in place of
+  # a secret, and signs a provenance statement that ties each package to this
+  # run. Its own job, so that the job that installs and builds third-party
+  # code never holds the permission to ask for that token; this one only
+  # publishes the tarballs `npm` packed. A package version npm has already is
+  # skipped, so a run that failed part of the way can run again.
+  npm-publish:
+    if: needs.version.outputs.package == 'npm' && needs.version.outputs.publish == 'true'
+    needs: [version, npm]
+    runs-on: ubuntu-latest
+    name: Publish to npm
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: ./tarballs
+
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: Update npm
+        working-directory: .
+        run: npm install --global npm@11
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-packages
+          path: tarballs
+      # The platform packages first, so that `darudb` never names a package
+      # npm does not have yet.
       - name: Publish
-        if: needs.version.outputs.publish == 'true'
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          publish() {
+            spec=$(tar -xOzf "$1" package/package.json | node -p "const p = JSON.parse(require('fs').readFileSync(0, 'utf8')); p.name + '@' + p.version")
+
+            if npm view "$spec" version > /dev/null 2>&1; then
+              echo "$spec is on npm already"
+            else
+              npm publish "$1" --access public --provenance
+            fi
+          }
+
+          for tarball in darudb-darudb-*.tgz; do
+            publish "$tarball"
+          done
+
+          publish darudb-[0-9]*.tgz
 
   build-dart:
     if: needs.version.outputs.package == 'dart'
@@ -661,7 +720,7 @@ jobs:
   # never hold a token that can write to the repository.
   github-release:
     if: needs.version.outputs.publish == 'true' && !cancelled() && !failure()
-    needs: [version, crate, crate-publish, npm, dart, dart-generator]
+    needs: [version, crate, crate-publish, npm, npm-publish, dart, dart-generator]
     runs-on: ubuntu-latest
     name: Tag and release on GitHub
     permissions:
