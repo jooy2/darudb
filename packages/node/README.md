@@ -4,7 +4,11 @@
 
 The Node.js package of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file. It is a native addon over the DaruDB engine, which is written in Rust, so the same file reads the same from Node.js, Rust and Dart.
 
-> DaruDB is in early development. The package is not published yet, and the file format will change without a migration path until the first release.
+## Installation
+
+```bash
+npm install darudb
+```
 
 ## Usage
 
@@ -74,7 +78,7 @@ Node.js 20 or later. The package ships prebuilt binaries for macOS, Windows, Lin
 
 ## Building from source
 
-The addon is built from the Rust source in this folder and the engine in `crates/darudb`. You need Rust (the version in the repository's `rust-toolchain.toml` is installed automatically by `rustup`) and Node.js.
+An application never needs this; it is for working on the package itself. The addon is built from the Rust source in this folder and the engine in `crates/darudb`. You need Rust (the version in the repository's `rust-toolchain.toml` is installed automatically by `rustup`) and Node.js.
 
 ```bash
 npm install
