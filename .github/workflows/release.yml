@@ -564,15 +564,13 @@ jobs:
           dart --packages=.dart_tool/package_config.json tool/prebuilt_manifest.dart \
             "$GITHUB_WORKSPACE/libraries" "https://github.com/$REPOSITORY/releases/download/$TAG/"
           cat hook/prebuilt.json
-      # `publish_to: none` keeps the repository's copy, whose manifest lists
-      # no library, from being published by accident. The tests' dependency on
-      # the generator is a path into the repository, which the copy that is
-      # published, away from the repository, could not resolve. Pub reports
-      # warnings, such as a changelog that does not name the version yet, with
-      # the same exit code as errors, so only an error fails the run.
+      # The tests' dependency on the generator is a path into the repository,
+      # which the copy that is published, away from the repository, could not
+      # resolve. Pub reports warnings, such as a changelog that does not name
+      # the version yet, with the same exit code as errors, so only an error
+      # fails the run.
       - name: List what the package would contain
         run: |
-          sed -i '/^publish_to: none$/d' pubspec.yaml
           dart pub remove darudb_generator
           dart pub publish --dry-run 2>&1 | tee publish.log || true
 
@@ -620,7 +618,6 @@ jobs:
       # repository, as the runtime package's on this one is.
       - name: List what the package would contain
         run: |
-          sed -i '/^publish_to: none$/d' pubspec.yaml
           dart pub remove darudb
           dart pub publish --dry-run 2>&1 | tee publish.log || true
 

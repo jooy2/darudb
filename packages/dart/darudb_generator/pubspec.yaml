@@ -3,7 +3,6 @@ description: Generates the schema, the query builder and copyWith of a class ann
 version: 1.0.0
 repository: https://github.com/jooy2/darudb
 homepage: https://darudb.cdget.com
-publish_to: none
 
 environment:
   sdk: ^3.10.0

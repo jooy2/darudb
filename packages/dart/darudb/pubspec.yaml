@@ -3,7 +3,6 @@ description: An embedded database that keeps an application's data in one local 
 version: 1.0.0
 repository: https://github.com/jooy2/darudb
 homepage: https://darudb.cdget.com
-publish_to: none
 
 environment:
   sdk: ^3.10.0
