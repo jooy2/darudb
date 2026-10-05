@@ -11,8 +11,7 @@
 //! created with a key or a password ([`OpenOptions::key`],
 //! [`OpenOptions::password`]) is encrypted and authenticated, every page of
 //! it. Several processes may have one file open at once: one writes at a
-//! time, and readers never wait for it. The file format will change without a
-//! migration until the first release.
+//! time, and readers never wait for it.
 //!
 //! A database opened with a [`Schema`] ([`OpenOptions::schema`]) also holds
 //! collections of typed [`Object`]s, with indexes kept in step with them and

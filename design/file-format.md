@@ -338,4 +338,4 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | 4       | Version 3 with ints in [object keys](objects.md#keys) in the fewest bytes that hold them.                   |
 | 5       | This document: version 4 with the unsynced window in each [commit record](#commit-slots).                   |
 
-A build that writes version 5 refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 to 4 never left development.
+Version 5 is the format of the first release. A build that writes it refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 to 4 never left development.

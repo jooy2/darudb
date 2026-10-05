@@ -53,6 +53,6 @@ Nothing else is assumed. Between two barriers, writes may reach the disk in any 
 
 ## Changing a specification
 
-- **A change to what is written to disk changes `FORMAT_VERSION`** in `crates/darudb/src/format/mod.rs`, and the version history at the end of [File format](file-format.md) gains a line. Until the first release there are no migrations between versions; after it, every version change comes with one.
+- **A change to what is written to disk changes `FORMAT_VERSION`** in `crates/darudb/src/format/mod.rs`, and the version history at the end of [File format](file-format.md) gains a line. Version 5 is the format of the first release, version 1.0.0 of the npm and Dart packages, and every version change after it comes with a migration from the one before.
 - **The code and the document change in the same commit.** The `format` module's tests pin the documented offsets, so a layout change that skips the document fails a test.
 - **A new document is added when a new layer gets an on-disk shape.** The key encoding and the record layout of the object layer come with phase 4.

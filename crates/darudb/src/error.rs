@@ -40,8 +40,8 @@ pub enum Error {
     /// The file is a DaruDB database in a format this build of the library
     /// cannot read: a file format version, or an object format version of
     /// the schema stored in it, other than the one this build reads and
-    /// writes. Until the first release a build reads only its own, so a file
-    /// an older build wrote is refused as well as one a newer build wrote.
+    /// writes. That is a file a newer build wrote, or one a development build
+    /// wrote before the first release.
     UnsupportedFormatVersion {
         /// The file that was opened.
         path: PathBuf,

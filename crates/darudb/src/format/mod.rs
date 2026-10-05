@@ -7,9 +7,10 @@
 //! specification this module implements, and its tests pin the offsets the
 //! specification documents.
 //!
-//! Any change to what is written to disk changes [`FORMAT_VERSION`]. Until the
-//! first release there are no migrations between versions: a file in another
-//! version is refused when it is opened.
+//! Any change to what is written to disk changes [`FORMAT_VERSION`]. Version 5
+//! is the first released one, so every later version has to come with a
+//! migration from the one before. Until one does, a file in another version is
+//! refused when it is opened.
 //!
 //! `object` holds the object layer's encodings of `design/objects.md`, kept in
 //! the kernel's trees. They change nothing the kernel reads, and the stored

@@ -4,7 +4,7 @@
 
 The engine of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file, and its Rust API.
 
-> DaruDB is in early development. The crate is not published yet, and the file format will change without a migration path until the first release.
+> The crate is not published yet. Until it is, add it by path from a checkout of the repository, as [Getting started](https://darudb.cdget.com/guide/getting-started) shows.
 
 ## Usage
 
