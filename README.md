@@ -14,8 +14,6 @@ Guides and the full API. This README covers the essentials.
 
 DaruDB is a database that runs inside your application rather than beside it. There is no server to start and nothing to configure: a program opens a file, reads and writes objects in it, and closes it. The engine is written once, in Rust, and each language reaches the same engine through a thin binding, so a file written from Node.js reads the same from Rust or Dart.
 
-> The Node.js and Dart packages are released. The Rust crate is not published yet; until it is, a Rust program adds it by path from a checkout of this repository.
-
 ## Why DaruDB
 
 These are the goals the design is built around, in order of priority. They are goals rather than claims until the benchmarks and the test suites that prove each one are in this repository.
@@ -31,7 +29,7 @@ These are the goals the design is built around, in order of priority. They are g
 
 | Package                                                            | Registry                                                                 | Requires                  | Status      |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------- | ----------- |
-| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later        | Unpublished |
+| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later        | Released    |
 | [`packages/node`](packages/node)                                   | [npm: `darudb`](https://www.npmjs.com/package/darudb)                    | Node.js 20 or later       | Released    |
 | [`packages/dart/darudb`](packages/dart/darudb)                     | [pub.dev: `darudb`](https://pub.dev/packages/darudb)                     | Dart 3.10 or Flutter 3.38 | Released    |
 | [`packages/dart/darudb_generator`](packages/dart/darudb_generator) | [pub.dev: `darudb_generator`](https://pub.dev/packages/darudb_generator) | Dart 3.10 or Flutter 3.38 | Released    |

@@ -13,8 +13,6 @@ Only the **latest release** of each package receives security fixes; there are n
 | `darudb` (pub.dev)   | Latest release | Yes       |
 | `darudb` (pub.dev)   | Anything older | No        |
 
-The crate has not been released yet. Until it is, the `main` branch is its only version, and a report against it is welcome.
-
 If a release line is ever maintained on its own, this table will name it.
 
 ## Reporting a vulnerability
