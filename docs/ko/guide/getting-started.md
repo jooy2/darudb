@@ -5,81 +5,45 @@ order: 2
 
 # 시작하기
 
-DaruDB는 아직 배포 전이므로, 지금은 소스에서 빌드하고 경로로 프로젝트에 추가한 뒤 첫 데이터베이스를 열어 봅니다.
+DaruDB를 프로젝트에 추가하고 첫 데이터베이스를 열어 봅니다. Node.js와 Dart 패키지는 각 레지스트리에서 설치하고, 아직 배포하지 않은 Rust 크레이트는 저장소를 내려받아 씁니다.
 
 ## 요구 사항
 
 ::: lang rust
 
 - [rustup](https://rustup.rs)으로 설치한 **Rust**. 저장소가 `rust-toolchain.toml`에 컴파일러 버전을 고정해 두었으므로, 처음 빌드할 때 `rustup`이 그 버전을 설치합니다. `darudb` 크레이트를 의존성으로 쓰는 프로그램에는 Rust 1.85 이상이 필요합니다.
+- 저장소를 내려받을 **Git**.
 
 :::
 
 ::: lang node
 
-- **Node.js 20 이상**. 소스에서 빌드할 때는 빌드 도구 때문에 조금 더 높은 버전이 필요합니다. 20 버전대에서는 20.17 이상, 그 밖에는 22.13 이상입니다.
-- [rustup](https://rustup.rs)으로 설치한 **Rust**. 패키지의 네이티브 애드온을 엔진에서 컴파일하기 때문입니다. 저장소가 `rust-toolchain.toml`에 컴파일러 버전을 고정해 두었으므로, 처음 빌드할 때 `rustup`이 그 버전을 설치합니다.
+- **Node.js 20 이상**. macOS, Windows, Linux(glibc와 musl), FreeBSD, Android용 애드온을 미리 빌드해 패키지에 담았으므로, 설치할 때 컴파일하는 것이 없습니다.
 
 :::
 
 ::: lang dart
 
 - **Dart 3.10 이상**, 또는 Flutter 3.38 이상. 패키지가 빌드 훅으로 네이티브 라이브러리를 마련하는데, 빌드 훅은 이 버전부터 정식 기능입니다.
-- [rustup](https://rustup.rs)으로 설치한 **Rust**. 미리 빌드한 라이브러리와 함께 패키지를 배포하기 전까지는 빌드 훅이 엔진을 컴파일합니다. 컴파일러 버전은 `packages/dart/darudb/native/rust-toolchain.toml`에 고정되어 있고, 처음 빌드할 때 `rustup`이 그 버전을 거기 적힌 타깃과 함께 설치합니다.
+- 애플리케이션을 어떤 대상으로 처음 빌드할 때의 **네트워크 연결**. 빌드 훅이 그 대상용으로 미리 빌드한 엔진을 패키지의 GitHub 릴리스에서 내려받아 SHA-256 해시를 확인하고 캐시에 두므로, 빌드에 Rust 툴체인이 필요 없습니다. 라이브러리는 Android, iOS, macOS, Windows, Linux용이 있습니다. 정적 라이브러리가 필요하거나 미리 빌드한 라이브러리가 없는 대상이라면 git으로 패키지를 의존합니다. 그러면 빌드 훅이 [rustup](https://rustup.rs)으로 엔진을 소스에서 빌드합니다.
 
 :::
-
-- 저장소를 내려받을 **Git**.
 
 DaruDB는 유닉스 계열 시스템과 Windows에서 동작합니다. NFS나 SMB 같은 네트워크 파일 시스템은 지원하지 않습니다. 그런 파일 시스템의 잠금과 동기화는 데이터베이스가 기대하는 보장을 지키지 않기 때문입니다.
-
-## 소스에서 빌드하기
-
-```bash
-git clone https://github.com/jooy2/darudb.git
-cd darudb
-```
-
-::: lang rust
-
-```bash
-cargo test -p darudb
-```
-
-`cargo test`는 엔진을 빌드하고 테스트를 돌립니다. 툴체인이 제대로 설치됐는지 가장 빨리 확인하는 방법입니다.
-
-:::
-
-::: lang node
-
-```bash
-cd packages/node
-npm install
-npm run build
-```
-
-`npm run build`는 엔진과 바인딩을 지금 플랫폼용 애드온 하나로 컴파일하고, 애드온을 불러오는 파일을 만들고, TypeScript API를 `dist/`로 컴파일합니다. 그다음 `npm test`를 실행하면 방금 빌드한 결과로 패키지 테스트를 돌립니다.
-
-:::
-
-::: lang dart
-
-```bash
-cd packages/dart/darudb
-dart pub get
-dart run build_runner build
-dart test
-```
-
-`dart test`는 먼저 패키지의 빌드 훅을 실행해 지금 플랫폼용 엔진을 컴파일하므로, 처음에는 1~2분이 걸립니다. `build_runner`는 애플리케이션에서 하는 것처럼 테스트 모델의 코드를 씁니다.
-
-:::
 
 ## 프로젝트에 추가하기
 
 ::: lang rust
 
-배포 전까지는 경로로 크레이트를 추가합니다.
+크레이트는 아직 배포 전이라 먼저 저장소를 내려받습니다. 엔진 테스트를 돌려 보면 툴체인이 제대로 설치됐는지 가장 빨리 확인할 수 있습니다.
+
+```bash
+git clone https://github.com/jooy2/darudb.git
+cd darudb
+cargo test -p darudb
+```
+
+그다음 경로로 크레이트를 프로젝트에 추가합니다.
 
 ```toml
 [dependencies]
@@ -92,10 +56,8 @@ darudb = { path = "../darudb/crates/darudb" }
 
 ::: lang node
 
-빌드한 폴더를 설치하면 프로젝트에 링크로 연결됩니다.
-
 ```bash
-npm install ../darudb/packages/node
+npm install darudb
 ```
 
 패키지는 TypeScript를 먼저 생각해 만들었습니다. 타입 선언이 함께 들어 있고, 객체의 타입은 선언한 스키마에서 나옵니다. JavaScript에서도 그대로 쓸 수 있습니다.
@@ -104,17 +66,15 @@ npm install ../darudb/packages/node
 
 ::: lang dart
 
-배포 전까지는 경로로 패키지를 추가하고, 클래스의 코드를 써 주는 생성기도 함께 추가합니다.
+패키지를 추가하고, 클래스의 코드를 써 주는 생성기도 함께 추가합니다.
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator:
-    path: ../darudb/packages/dart/darudb_generator
+  darudb_generator: ^1.0.0
 ```
 
 Flutter 앱과 Dart 서버, 명령줄 도구에서 똑같이 쓸 수 있습니다. 생성기가 읽는 클래스는 [컬렉션과 객체](./objects.md)에 있습니다.

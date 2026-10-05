@@ -76,7 +76,7 @@ A program can rely on the code, where the message is meant for a person and may 
 | --- | --- |
 | `NOT_FOUND` | Nothing exists at the path, and creating a database was not allowed. |
 | `NOT_A_DATABASE` | The file exists but is not a DaruDB database. |
-| `UNSUPPORTED_FORMAT_VERSION` | The file is a DaruDB database in a format version this build cannot read. Until the first release, that is every format but this build's own, older or newer. |
+| `UNSUPPORTED_FORMAT_VERSION` | The file is a DaruDB database in a format version this build cannot read: one a newer build wrote, or one a development build wrote before the first release. |
 | `CORRUPTED` | The file is a DaruDB database, but part of it has been damaged. |
 | `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two, or an object does not fit the schema. |
 | `CLOSED` | A database, a transaction or a collection was used after it was closed or after its transaction ended. |

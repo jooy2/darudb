@@ -23,7 +23,7 @@ pub const FORMAT_VERSION: u32
 
 The file format version this build reads and writes. Every file records its format version in its header, and a file in any other version is refused with [`UNSUPPORTED_FORMAT_VERSION`](./error.md#unsupportedformatversion), whose `found` field is the file's version. [`Database::format_version`](../../api/rust/database.md) returns the same number.
 
-Any change to what is written to disk changes this number, and until the first release there are no migrations between format versions: a file written by a build with another format version does not open. The objects of a database are encoded in a format of their own, which the stored schema records; this constant does not cover it. [The file format](../../engine/file-format.md) describes what the version covers.
+Any change to what is written to disk changes this number. Version 5 is the format of the first release: a file a development build wrote before it does not open, and every later format version will come with a migration from the one before. The objects of a database are encoded in a format of their own, which the stored schema records; this constant does not cover it. [The file format](../../engine/file-format.md) describes what the version covers.
 
 ```rust
 fn main() {

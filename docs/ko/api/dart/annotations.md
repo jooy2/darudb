@@ -10,13 +10,11 @@ counterpart: /api/rust/derive
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator:
-    path: ../darudb/packages/dart/darudb_generator
+  darudb_generator: ^1.0.0
 ```
 
 어노테이션을 붙인 클래스가 있는 라이브러리는 자기 이름을 딴 파트를 선언하고, `dart run build_runner build`가 그 파트를 씁니다. 생성기는 어노테이션만 읽으며, 실행 중인 프로그램이 생성기를 부르는 일은 없습니다.

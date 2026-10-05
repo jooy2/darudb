@@ -19,7 +19,7 @@ console.log(`DaruDB engine ${engineVersion()}, file format ${FORMAT_VERSION}`);
 const FORMAT_VERSION: number;
 ```
 
-The file format version this build of the engine reads and writes. Every file records the version it was written in, which [`Database.formatVersion`](../../api/node/database.md) reads, and opening a file with another version fails with `UNSUPPORTED_FORMAT_VERSION`. The format is not stable before the first release, so a file that an older build wrote can fail this way after an upgrade. [File format](../../engine/file-format.md) describes what the version covers.
+The file format version this build of the engine reads and writes. Every file records the version it was written in, which [`Database.formatVersion`](../../api/node/database.md) reads, and opening a file with another version fails with `UNSUPPORTED_FORMAT_VERSION`. Version 5 is the format of the first release: a file a development build wrote before it fails this way, and every later format version will come with a migration from the one before. [File format](../../engine/file-format.md) describes what the version covers.
 
 ## engineVersion
 

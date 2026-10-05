@@ -98,7 +98,7 @@ Checks that span several pages, such as whether every key under a branch lies be
 The header's format version names the layout of everything on disk, and any change to what is written changes it.
 
 - **This build reads and writes format version 5.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
-- **Until the first release, there are no migrations.** Versions 1 to 3 never left development, so a file from an older build is refused, not upgraded.
-- **From the first release on**, the plan is that opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back to an older build, which then upgrades the file with an explicit call.
+- **Version 5 is the format of the first release**, version 1.0.0 of the Node.js and Dart packages. Versions 1 to 4 never left development, so a file one of their builds wrote is refused, not upgraded.
+- **Every later format version comes with a migration from the one before.** The plan is that opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back to an older build, which then upgrades the file with an explicit call.
 
 In Rust, `darudb::FORMAT_VERSION` is the version a build reads and writes ([constants](../types/rust/constants.md)), and in Node.js, the package exports it as `FORMAT_VERSION`.

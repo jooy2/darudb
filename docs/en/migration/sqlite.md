@@ -331,8 +331,7 @@ The script reads the old file with the `sqlite3` package, whose build hook bring
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
   sqlite3: ^3.7.0
 ```
 

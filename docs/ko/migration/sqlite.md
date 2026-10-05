@@ -331,8 +331,7 @@ sqlite.close();
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
   sqlite3: ^3.7.0
 ```
 

@@ -21,7 +21,7 @@ void main() {
 int get formatVersion;
 ```
 
-이 빌드의 엔진이 읽고 쓰는 파일 포맷 버전입니다. 파일마다 자신을 쓴 포맷 버전을 기록하고, 그 값은 [`Database.formatVersion`](../../api/dart/database.md#formatversion)으로 읽습니다. 버전이 다른 파일을 열면 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 첫 릴리스 전까지는 포맷이 고정되지 않았으므로, 예전 빌드가 쓴 파일이 업그레이드 뒤에 이렇게 실패할 수 있습니다. 이 버전이 무엇을 정하는지는 [파일 포맷](../../engine/file-format.md)에 있습니다.
+이 빌드의 엔진이 읽고 쓰는 파일 포맷 버전입니다. 파일마다 자신을 쓴 포맷 버전을 기록하고, 그 값은 [`Database.formatVersion`](../../api/dart/database.md#formatversion)으로 읽습니다. 버전이 다른 파일을 열면 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 첫 릴리스의 포맷은 버전 5입니다. 그전의 개발 빌드가 쓴 파일은 이렇게 실패하고, 이후의 포맷 버전은 모두 바로 앞 버전에서 옮겨 오는 마이그레이션과 함께 나옵니다. 이 버전이 무엇을 정하는지는 [파일 포맷](../../engine/file-format.md)에 있습니다.
 
 ## engineVersion
 

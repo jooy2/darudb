@@ -5,81 +5,45 @@ order: 2
 
 # Getting started
 
-DaruDB is not published yet, so for now you build it from source, add it to your project by path, and open a first database.
+This page adds DaruDB to a project and opens a first database: the Node.js and Dart packages from their registries, and the Rust crate, which is not published yet, from a checkout of the repository.
 
 ## Requirements
 
 ::: lang rust
 
 - **Rust**, installed with [rustup](https://rustup.rs). The repository pins its compiler in `rust-toolchain.toml`, and `rustup` installs that version on the first build. A program that depends on the `darudb` crate needs Rust 1.85 or later.
+- **Git**, to clone the repository.
 
 :::
 
 ::: lang node
 
-- **Node.js 20 or later.** Building the package from source needs a little more, because of its build tool: 20.17 or later on the 20 line, or 22.13 or later.
-- **Rust**, installed with [rustup](https://rustup.rs), since the package's native addon is compiled from the engine. The repository pins the compiler in `rust-toolchain.toml`, and `rustup` installs it on the first build.
+- **Node.js 20 or later.** The package ships prebuilt addons for macOS, Windows, Linux (glibc and musl), FreeBSD and Android, so installing it compiles nothing.
 
 :::
 
 ::: lang dart
 
 - **Dart 3.10 or later**, or Flutter 3.38 or later: the package provides its native library through a build hook, which those releases made stable.
-- **Rust**, installed with [rustup](https://rustup.rs). Until the package is published with prebuilt libraries, its build hook compiles the engine, with the compiler `packages/dart/darudb/native/rust-toolchain.toml` pins, which `rustup` installs on the first build with the targets it lists.
+- **Network access the first time an application builds for a target.** The build hook downloads the engine prebuilt for that target from the package's GitHub release, checks its SHA-256 hash and keeps it in its cache, so building needs no Rust toolchain. Libraries ship for Android, iOS, macOS, Windows and Linux. An application that needs a static library, or a target without a prebuilt one, depends on the package through git instead, which builds the engine from source with [rustup](https://rustup.rs).
 
 :::
-
-- **Git**, to clone the repository.
 
 DaruDB runs on Unix-like systems and on Windows. Network file systems such as NFS and SMB are not supported, because their file locks and syncs do not keep the promises a database relies on.
-
-## Build from source
-
-```bash
-git clone https://github.com/jooy2/darudb.git
-cd darudb
-```
-
-::: lang rust
-
-```bash
-cargo test -p darudb
-```
-
-`cargo test` builds the engine and runs its tests, which is the quickest way to know your toolchain works.
-
-:::
-
-::: lang node
-
-```bash
-cd packages/node
-npm install
-npm run build
-```
-
-`npm run build` compiles the engine and the binding into one addon for your platform, writes the files that load it, and compiles the TypeScript API into `dist/`. `npm test` then runs the package's tests against that build.
-
-:::
-
-::: lang dart
-
-```bash
-cd packages/dart/darudb
-dart pub get
-dart run build_runner build
-dart test
-```
-
-`dart test` runs the package's build hook first, which compiles the engine for your platform, so the first run takes a minute or two. `build_runner` writes the code of the tests' models, as it does for an application's.
-
-:::
 
 ## Add it to a project
 
 ::: lang rust
 
-Add the crate by path until it is published:
+The crate is not published yet, so clone the repository first. Running the engine's tests is the quickest way to know your toolchain works:
+
+```bash
+git clone https://github.com/jooy2/darudb.git
+cd darudb
+cargo test -p darudb
+```
+
+Then add the crate to your project by path:
 
 ```toml
 [dependencies]
@@ -92,10 +56,8 @@ The `derive` feature adds `#[derive(Object)]`, which makes a struct the objects 
 
 ::: lang node
 
-Install the folder you built, which links it into your project:
-
 ```bash
-npm install ../darudb/packages/node
+npm install darudb
 ```
 
 The package is TypeScript-first: its declarations ship with it, and the types of your objects follow from the schema you declare. It works from JavaScript as well.
@@ -104,17 +66,15 @@ The package is TypeScript-first: its declarations ship with it, and the types of
 
 ::: lang dart
 
-Add the package by path until it is published, with the generator that writes the code for your classes:
+Add the package, with the generator that writes the code for your classes:
 
 ```yaml
 dependencies:
-  darudb:
-    path: ../darudb/packages/dart/darudb
+  darudb: ^1.0.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator:
-    path: ../darudb/packages/dart/darudb_generator
+  darudb_generator: ^1.0.0
 ```
 
 The package works in Flutter apps, Dart servers and command-line tools alike. [Collections and objects](./objects.md) shows the classes the generator reads.

@@ -45,6 +45,6 @@ The engine is written once, in Rust, and the Node.js and Dart packages are thin 
 - **Objects.** Schemas, collections, indexes, links and embedded objects, queries built in code or written as text, and migrations from one schema version to the next.
 - **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
 - **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
-- **Packages.** The Rust crate, the Node.js package and the Dart package have all of the above. Nothing is published yet: each is built from source.
+- **Packages.** The Rust crate, the Node.js package and the Dart package have all of the above. The Node.js and Dart packages are released, with the engine prebuilt for every platform they support, so installing them needs no Rust compiler.
 
-Still to come: prebuilt binaries for every supported platform, so that no package needs a Rust compiler to install.
+Still to come: the Rust crate on crates.io. Until then, a Rust program builds it from a checkout of the repository.
