@@ -2,6 +2,12 @@
 
 > This crate's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Fixed
+
+- A process forked while another of its threads was opening a database, or while the engine was releasing the snapshot locks it keeps for a moment, no longer hangs when it opens the file itself or ends a read transaction. The child keeps that state apart from its parent's, for up to 16 generations of processes forked one from another.
+
 ## v1.0.0 (2026-10-05)
 
 ### Added

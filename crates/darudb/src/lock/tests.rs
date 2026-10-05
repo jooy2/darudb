@@ -52,6 +52,9 @@ fn options_for(path: &Path) -> OpenOptions {
 ///   would keep for a moment, as a write transaction beginning would.
 /// - `fork <marker>` forks and answers `forked`; see [`forked_child`] for
 ///   what the child does and answers.
+/// - `fork-holding <lock>` forks while another thread holds one of the
+///   engine's process-wide locks, `registry` or `keeper`, and answers
+///   `forked`; see [`forked_child_reading`] for what the child does.
 /// - `reap` waits for the forked child and answers with its exit code.
 #[test]
 fn helper_running_commands() {
@@ -188,6 +191,37 @@ fn helper_running_commands() {
                 }
             },
             #[cfg(unix)]
+            ["fork-holding", held] => {
+                let (holding, held_now) = std::sync::mpsc::channel();
+                let (release, released) = std::sync::mpsc::channel::<()>();
+                let hold = move || {
+                    holding.send(()).unwrap();
+                    released.recv().unwrap();
+                };
+                let holder = match *held {
+                    "registry" => thread::spawn(move || {
+                        let _registry = crate::instance::registry();
+
+                        hold();
+                    }),
+                    "keeper" => thread::spawn(move || crate::instance::holding_keeper(hold)),
+                    _ => panic!("an unknown lock: {held}"),
+                };
+
+                held_now.recv().unwrap();
+
+                match crate::sys::lock::fork().unwrap() {
+                    None => forked_child_reading(path.as_ref()),
+                    Some(forked) => {
+                        release.send(()).unwrap();
+                        holder.join().unwrap();
+                        child = Some(forked);
+
+                        Ok("forked".to_owned())
+                    }
+                }
+            }
+            #[cfg(unix)]
             ["reap"] => Ok(format!(
                 "child {}",
                 crate::sys::lock::wait_for(child.take().unwrap()).unwrap()
@@ -253,6 +287,45 @@ fn forked_child(
     }
 
     exit(15)
+}
+
+/// A child forked from the helper while another of the helper's threads held
+/// one of the engine's process-wide locks. The child inherits the lock held,
+/// and the thread that would release it does not exist in the child. It
+/// opens the file through its own handle, reads `k`, and ends the read
+/// transaction, which keeps the snapshot's lock for a moment. A watchdog
+/// ends it if it is still at it after ten seconds, with an exit code that
+/// says where it stopped: 21 opening, 22 reading, 23 ending the read.
+#[cfg(unix)]
+fn forked_child_reading(path: &Path) -> ! {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    let exit = crate::sys::lock::exit_now;
+    let step = Arc::new(AtomicI32::new(1));
+    let watched = Arc::clone(&step);
+
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(10));
+        exit(20 + watched.load(Ordering::SeqCst));
+    });
+
+    let Ok(own) = options_for(path).open(path) else {
+        exit(13);
+    };
+
+    step.store(2, Ordering::SeqCst);
+
+    let Ok(read) = own.begin_read() else {
+        exit(14);
+    };
+
+    if !matches!(read.get("t", b"k"), Ok(Some(value)) if value == b"1") {
+        exit(15);
+    }
+
+    step.store(3, Ordering::SeqCst);
+    drop(read);
+    exit(0)
 }
 
 fn helper(path: &Path) -> Helper {
@@ -758,6 +831,29 @@ fn a_forked_child_uses_its_own_handle_and_keeps_its_own_locks() {
     assert_eq!(other.ask("reap"), "child 0");
     assert!(!locks.snapshot_below(snapshot + 1).unwrap());
     assert_eq!(other.ask("get k"), "1", "the parent's handle still works");
+}
+
+/// A process may fork at any moment, while another of its threads opens a
+/// file or the engine's own thread releases kept snapshot locks. The child
+/// inherits whatever lock that thread held at that moment, held, and has to
+/// open the file and read all the same. Each answer is the child's exit
+/// code; [`forked_child_reading`] says what the others mean.
+#[cfg(unix)]
+#[test]
+fn a_child_forked_while_another_thread_holds_an_engine_lock_opens_and_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("put k 1"), "done");
+
+    let reaped = ["registry", "keeper"].map(|held| {
+        assert_eq!(other.ask(&format!("fork-holding {held}")), "forked");
+
+        format!("{held}: {}", other.ask("reap"))
+    });
+
+    assert_eq!(reaped, ["registry: child 0", "keeper: child 0"]);
 }
 
 /// The helper: says whether any process holds the open lock of the file,

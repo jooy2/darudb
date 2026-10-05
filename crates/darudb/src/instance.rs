@@ -7,10 +7,10 @@
 //! second open file: closing a second descriptor of the file would release
 //! every lock the process holds on it (`design/locking.md`).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1087,14 +1087,74 @@ pub(crate) const KEEP_SNAPSHOT_LOCK: Duration = Duration::from_millis(20);
 /// before it ends.
 const KEEPER_IDLE: Duration = Duration::from_secs(10);
 
+/// How many generations of processes get the engine's process-wide state to
+/// themselves: the first process to use the engine, a process forked from it,
+/// one forked from that, and so on. Further generations share the last one's,
+/// and with it the hang that a slot of their own avoids.
+const GENERATIONS: usize = 16;
+
+/// One process's share of the engine's process-wide state: the registry of
+/// open files, and the keeper.
+///
+/// A process forked while another of its threads held the lock of such state
+/// inherits the lock held, and the thread that would release it exists only
+/// in the parent, so the child would wait for it forever. A process therefore
+/// never takes the lock of a slot its parent claimed: it claims the first slot
+/// that no process before it in its line has, with one atomic exchange, and a
+/// slot's lock is never taken before the slot is claimed. What the parent
+/// left in its own slot is of no use to the child anyway, since a forked
+/// process holds none of the locks of the files its parent has open.
+struct Slot<T> {
+    /// The process that claimed the slot, or 0 while it is free: no process
+    /// an application runs in has the id 0.
+    owner: AtomicU32,
+    state: Mutex<T>,
+}
+
+impl<T> Slot<T> {
+    const fn new(state: T) -> Self {
+        Self {
+            owner: AtomicU32::new(0),
+            state: Mutex::new(state),
+        }
+    }
+}
+
+/// The state among `slots` that belongs to the process `me`: the slot it
+/// claimed, or else the first free one, which it claims. A thread that loses
+/// the race for a free slot to another thread of its process takes the slot
+/// all the same.
+fn own<T>(slots: &[Slot<T>; GENERATIONS], me: u32) -> &Mutex<T> {
+    for slot in slots {
+        let mut owner = slot.owner.load(Ordering::Acquire);
+
+        if owner == 0 {
+            owner = match slot
+                .owner
+                .compare_exchange(0, me, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => me,
+                Err(owner) => owner,
+            };
+        }
+
+        if owner == me {
+            return &slot.state;
+        }
+    }
+
+    &slots[GENERATIONS - 1].state
+}
+
 /// The instances that keep idle snapshot locks, and the one thread in the
 /// process that releases them once they have been kept long enough.
 #[derive(Debug, Default)]
 struct Keeper {
     /// Every instance that has kept a lock, until it closes.
     instances: Vec<Weak<Shared>>,
-    /// The thread, and the process it runs in: a forked process inherits the
-    /// record of it, but not the thread.
+    /// The thread, and the process it runs in: a forked process that shares
+    /// its parent's slot, past the last generation, inherits the record of
+    /// it, but not the thread.
     thread: Option<(u32, Thread)>,
     /// Whether a lock was kept since the thread last looked, which keeps it
     /// from ending.
@@ -1104,16 +1164,30 @@ struct Keeper {
     awake_by: Option<Instant>,
 }
 
-static KEEPER: Mutex<Keeper> = Mutex::new(Keeper {
-    instances: Vec::new(),
-    thread: None,
-    pending: false,
-    awake_by: None,
-});
+/// The keeper of each process, in a slot of its own.
+static KEEPERS: [Slot<Keeper>; GENERATIONS] = [const {
+    Slot::new(Keeper {
+        instances: Vec::new(),
+        thread: None,
+        pending: false,
+        awake_by: None,
+    })
+}; GENERATIONS];
+
+/// Runs `f` while this thread holds the keeper's lock, for the test of a
+/// process forked while another of its threads holds it.
+#[cfg(all(test, unix))]
+pub(crate) fn holding_keeper<T>(f: impl FnOnce() -> T) -> T {
+    let _keeper = lock(own(&KEEPERS, std::process::id()));
+
+    f()
+}
 
 /// Makes sure the idle snapshot locks of `shared` are released in a moment.
 fn keep_for_a_moment(shared: &Arc<Shared>) {
-    let mut keeper = lock(&KEEPER);
+    let me = std::process::id();
+    let state = own(&KEEPERS, me);
+    let mut keeper = lock(state);
 
     keeper.pending = true;
 
@@ -1130,34 +1204,33 @@ fn keep_for_a_moment(shared: &Arc<Shared>) {
         // for every read transaction that ends cost a signal to the system
         // each, a tenth of a read transaction begun for one lookup.
         Some((owner, _))
-            if *owner == std::process::id()
+            if *owner == me
                 && keeper
                     .awake_by
                     .is_some_and(|by| by <= Instant::now() + KEEP_SNAPSHOT_LOCK) => {}
-        Some((owner, thread)) if *owner == std::process::id() => thread.unpark(),
+        Some((owner, thread)) if *owner == me => thread.unpark(),
         _ => {
             let spawned = thread::Builder::new()
                 .name("darudb-keeper".to_owned())
-                .spawn(release_kept_locks);
+                .spawn(move || release_kept_locks(state));
 
             // Without the thread, the locks go at the next registration of a
             // newer snapshot, the next write transaction, or closing.
-            keeper.thread = spawned
-                .ok()
-                .map(|handle| (std::process::id(), handle.thread().clone()));
+            keeper.thread = spawned.ok().map(|handle| (me, handle.thread().clone()));
         }
     }
 }
 
-/// The body of the thread that releases kept snapshot locks. It holds an
-/// instance only while it works on it, never while it holds the list, and
-/// ends once it has had nothing to do for [`KEEPER_IDLE`].
-fn release_kept_locks() {
+/// The body of the thread that releases kept snapshot locks, those of the
+/// keeper `state` of its process. It holds an instance only while it works on
+/// it, never while it holds the list, and ends once it has had nothing to do
+/// for [`KEEPER_IDLE`].
+fn release_kept_locks(state: &Mutex<Keeper>) {
     let mut quiet_since = Instant::now();
 
     loop {
         let instances = {
-            let mut keeper = lock(&KEEPER);
+            let mut keeper = lock(state);
 
             keeper.pending = false;
             keeper.awake_by = None;
@@ -1185,7 +1258,7 @@ fn release_kept_locks() {
         if next.is_some() {
             quiet_since = now;
         } else {
-            let mut keeper = lock(&KEEPER);
+            let mut keeper = lock(state);
 
             // A lock kept since this pass began sets `pending`, and the next
             // pass sees it.
@@ -1202,7 +1275,7 @@ fn release_kept_locks() {
             })
             .max(Duration::from_millis(1));
 
-        lock(&KEEPER).awake_by = Instant::now().checked_add(wait);
+        lock(state).awake_by = Instant::now().checked_add(wait);
         thread::park_timeout(wait);
     }
 }
@@ -1229,7 +1302,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// What identifies a file: the same file reached through another path, a
 /// link or a different spelling, has the same key. Device and inode on
 /// Unix-like systems, and volume serial number and file index on Windows.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct FileKey((u64, u64));
 
 impl FileKey {
@@ -1312,21 +1385,23 @@ impl Entry {
 /// closing.
 const CLOSING_PAUSE: Duration = Duration::from_millis(1);
 
-/// The instances open in this process.
-pub(crate) static REGISTRY: LazyLock<Mutex<HashMap<FileKey, Entry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The instances open in each process, in a slot of its own. A `BTreeMap`,
+/// since every slot's state is made at compile time, which a `HashMap` with
+/// its random hasher cannot be.
+static REGISTRIES: [Slot<BTreeMap<FileKey, Entry>>; GENERATIONS] =
+    [const { Slot::new(BTreeMap::new()) }; GENERATIONS];
 
-/// Locks the registry. Opening holds it from the lookup to the insertion, so
-/// two threads opening one file end up with one instance.
-pub(crate) fn registry() -> MutexGuard<'static, HashMap<FileKey, Entry>> {
-    lock(&REGISTRY)
+/// Locks this process's registry. Opening holds it from the lookup to the
+/// insertion, so two threads opening one file end up with one instance.
+pub(crate) fn registry() -> MutexGuard<'static, BTreeMap<FileKey, Entry>> {
+    lock(own(&REGISTRIES, std::process::id()))
 }
 
 /// Whether a tool holds the file `key` names, as salvage does while it
 /// reads it. Opening the file fails with `BUSY` then, rather than waiting as
 /// it waits for an instance that is closing: the wait holds the registry, and
 /// a tool may hold a file for minutes.
-pub(crate) fn held_by_tool(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> bool {
+pub(crate) fn held_by_tool(instances: &BTreeMap<FileKey, Entry>, key: &FileKey) -> bool {
     instances
         .get(key)
         .is_some_and(|entry| entry.tool && entry.holds())
@@ -1342,7 +1417,7 @@ pub(crate) fn held_by_tool(instances: &HashMap<FileKey, Entry>, key: &FileKey) -
 /// system the first one's unlock and close would release them all. So this
 /// waits for the closing to finish, and then there is no instance. The
 /// closing never needs the registry, so it cannot wait for the caller.
-pub(crate) fn find(instances: &HashMap<FileKey, Entry>, key: &FileKey) -> Option<Arc<Shared>> {
+pub(crate) fn find(instances: &BTreeMap<FileKey, Entry>, key: &FileKey) -> Option<Arc<Shared>> {
     let entry = instances.get(key)?;
 
     if let Some(shared) = entry.instance.upgrade() {
