@@ -46,20 +46,29 @@ jobs:
         with:
           sdk: ${{ matrix.sdk }}
       - run: dart pub get
-      # The tests' models are annotated classes, whose parts the generator
-      # writes; they are not committed. The newest `build_runner` on Dart
-      # 3.10 compiles the builders with `dart compile`, which Dart 3.10
-      # refuses for a package with a build hook, so that job compiles them
-      # as they run, as the documentation tells an application to.
-      - name: Generate the tests' models
+      # The tests' models and the example are annotated classes, whose parts
+      # the generator writes. The tests' parts are not committed; the
+      # example's is, since the published package ships it. The newest
+      # `build_runner` on Dart 3.10 compiles the builders with `dart compile`,
+      # which Dart 3.10 refuses for a package with a build hook, so that job
+      # compiles them as they run, as the documentation tells an application
+      # to.
+      - name: Generate the annotated classes' parts
         run: dart run build_runner build --delete-conflicting-outputs ${{ matrix.sdk == '3.10.0' && '--force-jit' || '' }}
+      # The example's part is committed, so the generator has to write the
+      # same one. The newest SDK's formatter decides its layout.
+      - name: Check the example's part is current
+        if: matrix.sdk == 'stable' && matrix.os == 'ubuntu-latest'
+        run: git diff --exit-code -- example
       - name: Analyze
         run: dart analyze --fatal-infos
       - name: Check formatting
         if: matrix.sdk == 'stable'
-        run: dart format --output=none --set-exit-if-changed lib test hook tool
+        run: dart format --output=none --set-exit-if-changed lib test hook tool example
       - name: Test
         run: dart test
+      - name: Run the example
+        run: dart run example/main.dart
 
   run-test-generator:
     runs-on: ubuntu-latest
