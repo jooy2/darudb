@@ -8,7 +8,7 @@ Use them through the `darudb` crate, with its `derive` feature, rather than depe
 
 ```toml
 [dependencies]
-darudb = { version = "0.1", features = ["derive"] }
+darudb = { version = "1.0", features = ["derive"] }
 ```
 
 The `darudb` crate documents both macros and the attributes they read.

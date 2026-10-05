@@ -4,7 +4,13 @@
 
 The engine of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file, and its Rust API.
 
-> The crate is not published yet. Until it is, add it by path from a checkout of the repository, as [Getting started](https://darudb.cdget.com/guide/getting-started) shows.
+## Installation
+
+```bash
+cargo add darudb
+```
+
+Add `--features derive` for `#[derive(Object)]` and `#[derive(Embedded)]`, which make structs the objects of a collection ([below](#objects-as-rust-types)).
 
 ## Usage
 
@@ -84,7 +90,7 @@ With the `derive` feature, `#[derive(Object)]` makes a struct the objects of a c
 
 ```toml
 [dependencies]
-darudb = { version = "0.1", features = ["derive"] }
+darudb = { version = "1.0", features = ["derive"] }
 ```
 
 ```rust
