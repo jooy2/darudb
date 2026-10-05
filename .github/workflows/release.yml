@@ -164,15 +164,28 @@ jobs:
           - { host: windows-latest, target: i686-pc-windows-msvc }
           - { host: windows-latest, target: aarch64-pc-windows-msvc }
           # napi-rs's cross toolchain builds against glibc 2.17, so the addon
-          # loads on old Linux systems too.
+          # loads on old Linux systems too. Its GCC for arm64 and armv7 is
+          # older than an option mimalloc's build passes, so those two compile
+          # C with the runner's clang, against the toolchain's glibc 2.17
+          # headers, which the napi CLI hands clang when `TARGET_CC` names it.
           - {
               host: ubuntu-latest,
               target: x86_64-unknown-linux-gnu,
               flags: --use-napi-cross,
               test: true
             }
-          - { host: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: --use-napi-cross }
-          - { host: ubuntu-latest, target: armv7-unknown-linux-gnueabihf, flags: --use-napi-cross }
+          - {
+              host: ubuntu-latest,
+              target: aarch64-unknown-linux-gnu,
+              flags: --use-napi-cross,
+              cc: clang
+            }
+          - {
+              host: ubuntu-latest,
+              target: armv7-unknown-linux-gnueabihf,
+              flags: --use-napi-cross,
+              cc: clang
+            }
           - { host: ubuntu-latest, target: x86_64-unknown-linux-musl, flags: -x }
           - { host: ubuntu-latest, target: aarch64-unknown-linux-musl, flags: -x }
           # The runner's Android NDK, which the napi CLI finds by itself.
@@ -213,7 +226,14 @@ jobs:
           tool: cargo-zigbuild
       - run: npm ci
       - name: Build
-        run: npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts
+        env:
+          CC_OF_TARGET: ${{ matrix.cc }}
+        run: |
+          if [ -n "$CC_OF_TARGET" ]; then
+            export TARGET_CC="$CC_OF_TARGET"
+          fi
+
+          npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts
       # The addon is meant to load on glibc 2.17; a symbol versioned for a
       # newer glibc would keep it from loading there.
       - name: Check the newest glibc the addon needs
