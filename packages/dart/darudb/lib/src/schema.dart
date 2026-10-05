@@ -230,7 +230,7 @@ final class CollectionSchema<T, Q extends QueryBuilder<T>, K extends Object> {
   T decode(Uint8List bytes, int start, int end, Layout layout) =>
       _read(FieldSource(Reader(bytes, start, end), layout));
 
-  /// The primary key of [key], checked to be of the collection's key type.
+  /// [value] as a primary key, checked to be of the collection's key type.
   K keyOf(Object? value) {
     if (value is K) {
       return value;
