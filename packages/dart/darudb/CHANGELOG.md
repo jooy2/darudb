@@ -2,6 +2,12 @@
 
 > This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Added
+
+- An example, `example/main.dart`, which stores a few objects, finds them by an index in code and as text, changes one, and opens the file again. pub.dev shows it on the package's Example tab.
+
 ## v1.0.0 (2026-10-05)
 
 ### Added

@@ -2,6 +2,12 @@
 
 > This package's history. It generates code for the `darudb` package, whose changelog says what that code lets an application do.
 
+## vNext (2026--)
+
+### Added
+
+- An example, `example/README.md`, of a class the generator reads and the code an application writes with what it generates.
+
 ## v1.0.0 (2026-10-05)
 
 ### Added
