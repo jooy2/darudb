@@ -8,6 +8,37 @@ languages: [node, dart]
 
 Every method of `Database` that uses the file has a twin whose name ends in `Async`, which does the engine's work off the thread that runs your code, so that it keeps running while the engine waits.
 
+## Which one to use
+
+Both forms do the same work. They differ in where it runs, and that decides what each costs.
+
+- **The synchronous form costs less per call.** The engine works on the calling thread and the call returns its result, with no trip to another thread and back. A read by key, or a deferred commit of a few objects, finishes sooner than that trip would.
+- **The synchronous form holds the calling thread until it returns.** Nothing else runs on that thread in the meantime.
+
+Most calls return in microseconds, but some can hold the thread for much longer:
+
+- A sync commit waits for the disk.
+- A write, and opening a file, wait for another process's writer, up to the busy timeout: 5 seconds by default.
+- Opening a file may run recovery or migrations, and opening an encrypted file with a password spends tens of milliseconds turning it into a key.
+- A query that returns many objects takes as long as reading them, and the tools, which check, back up, compact or salvage, read the whole file.
+
+::: lang node
+
+- **A server, or Electron's main process**: use the asynchronous form for writes, for opening and for the tools. While a synchronous call waits, a server answers no other request, and an Electron app's windows get no answer to what they ask the main process for. Reads by key and small queries can stay synchronous.
+- **A script or a command-line tool** that does one thing at a time: use the synchronous form. Nothing else is waiting for the thread, so it is simpler and faster.
+
+:::
+
+::: lang dart
+
+- **A Flutter app's UI isolate**: use the `Future` form for writes, for opening and for the tools. While a synchronous call runs, the isolate draws no frame, and a frame at 60 Hz has about 16 milliseconds: opening with a password takes longer than that, and a write that waits for another process can take seconds. Reads by key and small queries can stay synchronous.
+- **A background isolate of your own** can use the synchronous form for heavy work without holding the UI. It opens its own `Database` on the file, as [Several processes](./processes.md) describes, and its results reach the UI isolate as messages.
+- **A Dart server or command-line tool**: a server that handles several requests at once uses the `Future` form, and a tool that does one thing at a time uses the synchronous form.
+
+:::
+
+Both forms can be used on one file in one process. A synchronous write is refused while an asynchronous one holds the file, as [Writes take turns](#writes-take-turns) explains.
+
 ## Use it
 
 ::: lang node

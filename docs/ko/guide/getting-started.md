@@ -157,6 +157,8 @@ db.close();
 Database.open('app.darudb', { create: false }).close();
 ```
 
+이 페이지의 예제는 `await` 없이 결과를 바로 돌려주는 동기 API를 씁니다. 파일을 쓰는 호출마다 이름이 `Async`로 끝나고 promise를 돌려주는 짝도 있습니다. 서버나 Electron의 메인 프로세스에서는 디스크를 기다리는 동안 이벤트 루프가 멈추지 않도록 쓰기와 파일 열기에 이쪽을 쓰세요. 어디에 무엇을 쓸지는 [동기와 비동기 고르기](./async.md#동기와-비동기-고르기)에 있습니다.
+
 :::
 
 ::: lang dart
@@ -174,6 +176,8 @@ void main() {
   Database.open('app.darudb', create: false).close();
 }
 ```
+
+이 페이지의 예제는 `await` 없이 결과를 바로 돌려주는 동기 API를 씁니다. 파일을 쓰는 호출마다 이름이 `Async`로 끝나고 `Future`를 돌려주는 짝도 있습니다. Flutter 앱의 UI isolate에서는 디스크를 기다리는 동안 프레임이 밀리지 않도록 쓰기와 파일 열기에 이쪽을 쓰세요. 어디에 무엇을 쓸지는 [동기와 비동기 고르기](./async.md#동기와-비동기-고르기)에 있습니다.
 
 :::
 

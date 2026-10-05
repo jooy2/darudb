@@ -157,6 +157,8 @@ db.close();
 Database.open('app.darudb', { create: false }).close();
 ```
 
+The examples on this page use the synchronous API, which returns its result without `await`. Every call that uses the file also has a twin whose name ends in `Async` and returns a promise. A server or Electron's main process should use it for writes and for opening, so that a wait for the disk does not hold up the event loop. [Which one to use](./async.md#which-one-to-use) says where each belongs.
+
 :::
 
 ::: lang dart
@@ -174,6 +176,8 @@ void main() {
   Database.open('app.darudb', create: false).close();
 }
 ```
+
+The examples on this page use the synchronous API, which returns its result without `await`. Every call that uses the file also has a twin whose name ends in `Async` and returns a `Future`. A Flutter app's UI isolate should use it for writes and for opening, so that a wait for the disk does not hold up its frames. [Which one to use](./async.md#which-one-to-use) says where each belongs.
 
 :::
 
