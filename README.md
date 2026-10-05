@@ -14,7 +14,7 @@ Guides and the full API. This README covers the essentials.
 
 DaruDB is a database that runs inside your application rather than beside it. There is no server to start and nothing to configure: a program opens a file, reads and writes objects in it, and closes it. The engine is written once, in Rust, and each language reaches the same engine through a thin binding, so a file written from Node.js reads the same from Rust or Dart.
 
-> DaruDB is in early development. Nothing is published yet, the API is incomplete, and the file format will change without a migration path until the first release. Do not keep data you need in it yet.
+> The Node.js and Dart packages are released. The Rust crate is not published yet; until it is, a Rust program adds it by path from a checkout of this repository.
 
 ## Why DaruDB
 
@@ -29,11 +29,12 @@ These are the goals the design is built around, in order of priority. They are g
 
 ## Packages
 
-| Package                          | Registry                                               | Requires                  | Status      |
-| -------------------------------- | ------------------------------------------------------ | ------------------------- | ----------- |
-| [`crates/darudb`](crates/darudb) | [crates.io: `darudb`](https://crates.io/crates/darudb) | Rust 1.85 or later        | Unpublished |
-| [`packages/node`](packages/node) | [npm: `darudb`](https://www.npmjs.com/package/darudb)  | Node.js 20 or later       | Unpublished |
-| `packages/dart`                  | pub.dev: `darudb`                                      | Dart 3.10 or Flutter 3.38 | Planned     |
+| Package                                                            | Registry                                                                 | Requires                  | Status      |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------- | ----------- |
+| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later        | Unpublished |
+| [`packages/node`](packages/node)                                   | [npm: `darudb`](https://www.npmjs.com/package/darudb)                    | Node.js 20 or later       | Released    |
+| [`packages/dart/darudb`](packages/dart/darudb)                     | [pub.dev: `darudb`](https://pub.dev/packages/darudb)                     | Dart 3.10 or Flutter 3.38 | Released    |
+| [`packages/dart/darudb_generator`](packages/dart/darudb_generator) | [pub.dev: `darudb_generator`](https://pub.dev/packages/darudb_generator) | Dart 3.10 or Flutter 3.38 | Released    |
 
 The Rust crate is the engine itself. The other packages bind it to their language and add nothing to what it does, so every language reads and writes the same file in the same way. Each package **versions independently and keeps its own changelog** beside its own manifest.
 
@@ -53,7 +54,7 @@ The root holds the Cargo workspace and no JavaScript manifest. Each JavaScript f
 | Page                                                                  | What you will find                                       |
 | --------------------------------------------------------------------- | -------------------------------------------------------- |
 | [**Introduction**](https://darudb.cdget.com/guide/introduction)       | What DaruDB is, what it is for, and how far along it is. |
-| [**Getting started**](https://darudb.cdget.com/guide/getting-started) | Building from source and opening a first database.       |
+| [**Getting started**](https://darudb.cdget.com/guide/getting-started) | Installing a package and opening a first database.       |
 | [**Collections and objects**](https://darudb.cdget.com/guide/objects) | Schemas, objects, queries and migrations, in Rust.       |
 | [**Node.js**](https://darudb.cdget.com/guide/nodejs)                  | The same in JavaScript and TypeScript.                   |
 | [**Changelog**](https://darudb.cdget.com/changelog)                   | What changed in each package.                            |

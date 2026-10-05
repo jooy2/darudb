@@ -10,8 +10,10 @@ Only the **latest release** of each package receives security fixes; there are n
 | `darudb` (crates.io) | Anything older | No        |
 | `darudb` (npm)       | Latest release | Yes       |
 | `darudb` (npm)       | Anything older | No        |
+| `darudb` (pub.dev)   | Latest release | Yes       |
+| `darudb` (pub.dev)   | Anything older | No        |
 
-Nothing has been released yet. Until the first release, the `main` branch is the only version there is, and a report against it is welcome.
+The crate has not been released yet. Until it is, the `main` branch is its only version, and a report against it is welcome.
 
 If a release line is ever maintained on its own, this table will name it.
 
