@@ -140,11 +140,33 @@ jobs:
       # so the two are packaged and published together, the macros first.
       - name: Package
         run: cargo publish -p darudb-derive -p darudb --dry-run
+
+  # Publishes through crates.io's trusted publishing: crates.io trusts this
+  # workflow of this repository, and gives the run a token that lasts minutes
+  # and is revoked when the job ends, so the repository keeps no crates.io
+  # secret. Its own job, so that the job that builds third-party code never
+  # holds the permission to ask for that token, and `--no-verify`, because
+  # `crate` built the packaged crates already, and building them again here
+  # would run build scripts with the token at hand.
+  crate-publish:
+    if: needs.version.outputs.package == 'crate' && needs.version.outputs.publish == 'true'
+    needs: [version, crate]
+    runs-on: ubuntu-latest
+    name: Publish the crates
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - name: Publish
-        if: needs.version.outputs.publish == 'true'
-        run: cargo publish -p darudb-derive -p darudb
+        run: cargo publish -p darudb-derive -p darudb --no-verify
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   build:
     if: needs.version.outputs.package == 'npm'
@@ -639,7 +661,7 @@ jobs:
   # never hold a token that can write to the repository.
   github-release:
     if: needs.version.outputs.publish == 'true' && !cancelled() && !failure()
-    needs: [version, crate, npm, dart, dart-generator]
+    needs: [version, crate, crate-publish, npm, dart, dart-generator]
     runs-on: ubuntu-latest
     name: Tag and release on GitHub
     permissions:
