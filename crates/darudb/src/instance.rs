@@ -1098,12 +1098,14 @@ const GENERATIONS: usize = 16;
 ///
 /// A process forked while another of its threads held the lock of such state
 /// inherits the lock held, and the thread that would release it exists only
-/// in the parent, so the child would wait for it forever. A process therefore
-/// never takes the lock of a slot its parent claimed: it claims the first slot
-/// that no process before it in its line has, with one atomic exchange, and a
-/// slot's lock is never taken before the slot is claimed. What the parent
-/// left in its own slot is of no use to the child anyway, since a forked
-/// process holds none of the locks of the files its parent has open.
+/// in the parent, so the child would wait for it forever. It would wait the
+/// same for an instance the parent was closing at that moment to finish
+/// closing. A process therefore never takes the lock of a slot its parent
+/// claimed: it claims the first slot that no process before it in its line
+/// has, with one atomic exchange, and a slot's lock is never taken before the
+/// slot is claimed. What the parent left in its own slot is of no use to the
+/// child anyway, since a forked process holds none of the locks of the files
+/// its parent has open.
 struct Slot<T> {
     /// The process that claimed the slot, or 0 while it is free: no process
     /// an application runs in has the id 0.

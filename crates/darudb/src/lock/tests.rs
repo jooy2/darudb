@@ -55,6 +55,10 @@ fn options_for(path: &Path) -> OpenOptions {
 /// - `fork-holding <lock>` forks while another thread holds one of the
 ///   engine's process-wide locks, `registry` or `keeper`, and answers
 ///   `forked`; see [`forked_child_reading`] for what the child does.
+/// - `fork-closing` drops the handle on another thread, where closing waits
+///   for the writer lock while another process holds it, forks meanwhile,
+///   and answers with the child's exit code, as `reap` does. No command may
+///   follow it, since the helper has no handle left.
 /// - `reap` waits for the forked child and answers with its exit code.
 #[test]
 fn helper_running_commands() {
@@ -222,6 +226,27 @@ fn helper_running_commands() {
                 }
             }
             #[cfg(unix)]
+            ["fork-closing"] => {
+                let last = handle.take().unwrap();
+                let closing = Arc::downgrade(last.shared());
+
+                thread::spawn(move || drop(last));
+
+                // Closing begins once nothing refers to the instance, and
+                // then waits for the writer lock.
+                while closing.strong_count() > 0 {
+                    thread::sleep(Duration::from_millis(1));
+                }
+
+                match crate::sys::lock::fork().unwrap() {
+                    None => forked_child_reading(path.as_ref()),
+                    Some(forked) => Ok(format!(
+                        "child {}",
+                        crate::sys::lock::wait_for(forked).unwrap()
+                    )),
+                }
+            }
+            #[cfg(unix)]
             ["reap"] => Ok(format!(
                 "child {}",
                 crate::sys::lock::wait_for(child.take().unwrap()).unwrap()
@@ -290,9 +315,10 @@ fn forked_child(
 }
 
 /// A child forked from the helper while another of the helper's threads held
-/// one of the engine's process-wide locks. The child inherits the lock held,
-/// and the thread that would release it does not exist in the child. It
-/// opens the file through its own handle, reads `k`, and ends the read
+/// one of the engine's process-wide locks, or was closing the file. The child
+/// inherits that state as it was, and the thread that would have moved it on
+/// does not exist in the child. It opens the file through its own handle,
+/// reads `k`, and ends the read
 /// transaction, which keeps the snapshot's lock for a moment. A watchdog
 /// ends it if it is still at it after ten seconds, with an exit code that
 /// says where it stopped: 21 opening, 22 reading, 23 ending the read.
@@ -854,6 +880,28 @@ fn a_child_forked_while_another_thread_holds_an_engine_lock_opens_and_reads() {
     });
 
     assert_eq!(reaped, ["registry: child 0", "keeper: child 0"]);
+}
+
+/// A process may fork while another of its threads closes a file, waiting for
+/// the writer lock to make its deferred commits durable. The child inherits
+/// the instance half closed, and has to open the file and read all the same,
+/// rather than wait for a closing that no thread of its own will finish. The
+/// answer is the child's exit code; [`forked_child_reading`] says what the
+/// others mean.
+#[cfg(unix)]
+#[test]
+fn a_child_forked_while_another_thread_closes_the_file_opens_and_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("defer k 1"), "done");
+
+    // Closing waits for the writer lock, which a third process holds.
+    let mut writer = helper(&path);
+
+    assert_eq!(writer.ask("hold-writer"), "done");
+    assert_eq!(other.ask("fork-closing"), "child 0");
 }
 
 /// The helper: says whether any process holds the open lock of the file,
