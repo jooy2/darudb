@@ -4,9 +4,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:darudb/src/prebuilt.dart';
 import 'package:test/test.dart';
-
-import '../hook/prebuilt.dart';
 
 void main() {
   // The release workflow runs the tests with a manifest that lists the

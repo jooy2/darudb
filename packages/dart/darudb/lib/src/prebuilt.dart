@@ -8,6 +8,10 @@
 // with any other hash is refused, wherever it came from. In this repository
 // the manifest lists no library, and the hook builds the engine from source;
 // the release workflow fills it in the copy it publishes.
+//
+// Only the build hook and its tests use this file. It lives in `lib/src`
+// rather than beside the hook because pub.dev accepts no Dart file in `hook/`
+// but `build.dart` and `link.dart`.
 import 'dart:convert';
 import 'dart:io';
 

@@ -3,18 +3,17 @@
 //
 // A published copy of the package downloads the library built for the
 // application's target from the package's GitHub release, and uses it only
-// if its SHA-256 hash is the one `hook/prebuilt.json` names, as `prebuilt.dart`
-// explains. A checkout of the repository, which an application gets by
-// depending on the package through git or a path, lists no library there,
-// and builds the engine from the Rust crate in `native/` for the target
-// instead, with the toolchain `native/rust-toolchain.toml` pins.
+// if its SHA-256 hash is the one `hook/prebuilt.json` names, as
+// `lib/src/prebuilt.dart` explains. A checkout of the repository, which an
+// application gets by depending on the package through git or a path, lists
+// no library there, and builds the engine from the Rust crate in `native/` for
+// the target instead, with the toolchain `native/rust-toolchain.toml` pins.
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
+import 'package:darudb/src/prebuilt.dart';
 import 'package:hooks/hooks.dart';
 import 'package:native_toolchain_rust/native_toolchain_rust.dart';
-
-import 'prebuilt.dart';
 
 const _asset = 'src/native.dart';
 
