@@ -216,7 +216,7 @@ The rest of this section is **[Tentative]**.
 
 ### Bindings and distribution **[Tentative]**
 
-- **Node.js**: napi-rs. Node-API is ABI-stable, so a binary does not need rebuilding per Node.js version. Prebuilt binaries ship as per-platform optional npm packages.
+- **Node.js**: napi-rs. Node-API is ABI-stable, so a binary does not need rebuilding per Node.js version. Prebuilt binaries ship as per-platform optional npm packages, under the scope `@darudb` (`napi.packageName`, such as `@darudb/darudb-linux-x64-gnu`), while the package itself stays `darudb`. When the first release published them unscoped, npm's spam detection refused `darudb-win32-x64-msvc`, and a scoped name is not held to that check.
 - **Dart**: `dart:ffi` with Dart build hooks (native assets), official from Dart 3.10 and Flutter 3.38, which are therefore the package's minimum versions. The hook downloads the library for its target from the GitHub release of the package's version and checks it against SHA-256 hashes that ship in the package, so an application's developers need no Rust toolchain; it builds the Rust code from source only inside this repository, or when the application asks for it by depending on the package through git or a path, which gives it a checkout. The hook's imports belong in `dependencies`, not `dev_dependencies`, or the hook does not compile in consumer apps.
 - **Toolchain**: the Rust version is pinned in `rust-toolchain.toml` for reproducible builds, which `native_toolchain_rust` requires. `rust-version` in the workspace `Cargo.toml` is a separate promise: the oldest compiler a crate consumer may use. It stays at 1.85, the first release with the 2024 edition, and rises only when a feature needs it, with a changelog entry.
 
