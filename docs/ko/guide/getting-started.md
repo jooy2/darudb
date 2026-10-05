@@ -5,14 +5,13 @@ order: 2
 
 # 시작하기
 
-DaruDB를 프로젝트에 추가하고 첫 데이터베이스를 열어 봅니다. Node.js와 Dart 패키지는 각 레지스트리에서 설치하고, 아직 배포하지 않은 Rust 크레이트는 저장소를 내려받아 씁니다.
+언어별 레지스트리(crates.io, npm, pub.dev)에서 DaruDB를 프로젝트에 추가하고 첫 데이터베이스를 열어 봅니다.
 
 ## 요구 사항
 
 ::: lang rust
 
-- [rustup](https://rustup.rs)으로 설치한 **Rust**. 저장소가 `rust-toolchain.toml`에 컴파일러 버전을 고정해 두었으므로, 처음 빌드할 때 `rustup`이 그 버전을 설치합니다. `darudb` 크레이트를 의존성으로 쓰는 프로그램에는 Rust 1.85 이상이 필요합니다.
-- 저장소를 내려받을 **Git**.
+- [rustup](https://rustup.rs)으로 설치한 **Rust 1.85 이상**.
 
 :::
 
@@ -35,22 +34,15 @@ DaruDB는 유닉스 계열 시스템과 Windows에서 동작합니다. NFS나 SM
 
 ::: lang rust
 
-크레이트는 아직 배포 전이라 먼저 저장소를 내려받습니다. 엔진 테스트를 돌려 보면 툴체인이 제대로 설치됐는지 가장 빨리 확인할 수 있습니다.
+```bash
+cargo add darudb
+```
+
+`derive` 기능을 켜면 구조체를 컬렉션의 객체로 만드는 `#[derive(Object)]`를 쓸 수 있습니다. [컬렉션과 객체](./objects.md#객체를-rust-타입으로)를 보세요. 이 기능을 켜려면 이렇게 추가합니다.
 
 ```bash
-git clone https://github.com/jooy2/darudb.git
-cd darudb
-cargo test -p darudb
+cargo add darudb --features derive
 ```
-
-그다음 경로로 크레이트를 프로젝트에 추가합니다.
-
-```toml
-[dependencies]
-darudb = { path = "../darudb/crates/darudb" }
-```
-
-`derive` 기능을 켜면 구조체를 컬렉션의 객체로 만드는 `#[derive(Object)]`를 쓸 수 있습니다. [컬렉션과 객체](./objects.md#객체를-rust-타입으로)를 보세요.
 
 :::
 

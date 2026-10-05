@@ -10,7 +10,7 @@ counterpart: /api/node/schema
 
 ```toml
 [dependencies]
-darudb = { path = "../darudb/crates/darudb", features = ["derive"] }
+darudb = { version = "1.0", features = ["derive"] }
 ```
 
 The macros come with the crate's `derive` feature, which is off by default so that a program that does not use them does not build a Rust parser. Without it, the [`CollectionType`](../../types/rust/collection-type.md) and [`FieldType`](../../types/rust/field-type.md) traits can be implemented by hand.

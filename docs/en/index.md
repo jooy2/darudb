@@ -38,6 +38,6 @@ features:
 
 ::: info Status
 
-The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Node.js and Dart packages are released; the Rust crate is not published yet. [Where it stands](/guide/introduction#where-it-stands) says what works today.
+The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Rust crate, the Node.js package and the Dart package are released. [Where it stands](/guide/introduction#where-it-stands) says what works today.
 
 :::

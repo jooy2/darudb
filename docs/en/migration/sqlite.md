@@ -170,7 +170,7 @@ The script reads the old file with the `rusqlite` crate, whose `bundled` feature
 
 ```toml
 [dependencies]
-darudb = { path = "../darudb/crates/darudb" }
+darudb = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ```
 

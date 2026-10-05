@@ -10,7 +10,7 @@ counterpart: /api/node/schema
 
 ```toml
 [dependencies]
-darudb = { path = "../darudb/crates/darudb", features = ["derive"] }
+darudb = { version = "1.0", features = ["derive"] }
 ```
 
 두 매크로는 크레이트의 `derive` 기능을 켜야 쓸 수 있습니다. 매크로를 쓰지 않는 프로그램이 Rust 파서까지 빌드하지 않도록 기본으로는 꺼 두었습니다. 기능을 켜지 않아도 [`CollectionType`](../../types/rust/collection-type.md)과 [`FieldType`](../../types/rust/field-type.md) 트레이트는 직접 구현할 수 있습니다.

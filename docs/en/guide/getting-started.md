@@ -5,14 +5,13 @@ order: 2
 
 # Getting started
 
-This page adds DaruDB to a project and opens a first database: the Node.js and Dart packages from their registries, and the Rust crate, which is not published yet, from a checkout of the repository.
+This page adds DaruDB to a project from its language's registry, crates.io, npm or pub.dev, and opens a first database.
 
 ## Requirements
 
 ::: lang rust
 
-- **Rust**, installed with [rustup](https://rustup.rs). The repository pins its compiler in `rust-toolchain.toml`, and `rustup` installs that version on the first build. A program that depends on the `darudb` crate needs Rust 1.85 or later.
-- **Git**, to clone the repository.
+- **Rust 1.85 or later**, installed with [rustup](https://rustup.rs).
 
 :::
 
@@ -35,22 +34,15 @@ DaruDB runs on Unix-like systems and on Windows. Network file systems such as NF
 
 ::: lang rust
 
-The crate is not published yet, so clone the repository first. Running the engine's tests is the quickest way to know your toolchain works:
+```bash
+cargo add darudb
+```
+
+The `derive` feature adds `#[derive(Object)]`, which makes a struct the objects of a collection; see [Collections and objects](./objects.md#objects-as-rust-types). Add the crate with it instead:
 
 ```bash
-git clone https://github.com/jooy2/darudb.git
-cd darudb
-cargo test -p darudb
+cargo add darudb --features derive
 ```
-
-Then add the crate to your project by path:
-
-```toml
-[dependencies]
-darudb = { path = "../darudb/crates/darudb" }
-```
-
-The `derive` feature adds `#[derive(Object)]`, which makes a struct the objects of a collection; see [Collections and objects](./objects.md#objects-as-rust-types).
 
 :::
 

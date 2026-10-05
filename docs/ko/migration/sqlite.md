@@ -170,7 +170,7 @@ const app = Schema(1, [userSchema, postSchema]);
 
 ```toml
 [dependencies]
-darudb = { path = "../darudb/crates/darudb" }
+darudb = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ```
 
