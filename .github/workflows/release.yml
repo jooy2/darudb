@@ -735,7 +735,9 @@ jobs:
         # ABI's wheel, for every CPython from 3.11, and the free-threaded
         # 3.14's, which the stable ABI does not cover; 32-bit Windows gets
         # the stable ABI's alone. Linux builds in the PyPA's containers:
-        # manylinux2014 is glibc 2.17, the oldest the engine supports.
+        # manylinux2014 is glibc 2.17, the oldest the engine supports. The
+        # musllinux ones are named, since maturin-action's own choice for musl
+        # is a cross-compiling image without the PyPA's interpreters.
         include:
           - {
               host: ubuntu-latest,
@@ -754,6 +756,7 @@ jobs:
               platform: musllinux-x86_64,
               target: x86_64-unknown-linux-musl,
               manylinux: musllinux_1_2,
+              container: 'quay.io/pypa/musllinux_1_2_x86_64:latest',
               musl: true
             }
           - {
@@ -761,6 +764,7 @@ jobs:
               platform: musllinux-aarch64,
               target: aarch64-unknown-linux-musl,
               manylinux: musllinux_1_2,
+              container: 'quay.io/pypa/musllinux_1_2_aarch64:latest',
               musl: true
             }
           - {
@@ -840,6 +844,7 @@ jobs:
           working-directory: packages/python
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
+          container: ${{ matrix.container }}
           args: --release --out dist --interpreter ${{ steps.interpreters.outputs.list }}
       - name: List the wheels
         run: ls -l dist
