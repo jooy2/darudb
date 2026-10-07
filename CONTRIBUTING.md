@@ -35,6 +35,7 @@ The repository holds one database engine, written in Rust, the bindings that shi
 | `packages/python`                | The Python binding, the PyPI package `darudb`                   | `cd packages/python`, then `maturin develop` and `pytest` in a venv    |
 | `docs`                           | The documentation site, shared by every language                | `cd docs && npm install`, then `npm run dev`                           |
 | `design`                         | The engine's specifications, in English only                    | Read before changing the file format, commits, recovery or locking     |
+| `samples`                        | Sample apps in Node.js and Flutter, with end-to-end tests       | [samples/README.md](samples/README.md)                                 |
 
 The repository root holds the Cargo workspace (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`) and nothing for JavaScript. There is no root `package.json` and no npm workspace: each JavaScript folder is entered and installed on its own.
 
@@ -125,6 +126,28 @@ mypy                               # the package, strict, and tests/typing
 
 `maturin develop --release` builds the module as a wheel is built, which is what to measure speed with. `tests/typing/check_types.py` is never run: mypy checks it, and fails when what a type checker infers through the API changes.
 
+For the sample apps, which run the packages in this checkout through a scenario from the user's side, in Electron, in Chromium and in a Flutter app on a desktop. Build `packages/node` first, and again after a change to Rust code:
+
+```bash
+cd samples/node
+npm ci
+npx playwright install chromium
+npm test             # the screens, then the scenario in Electron and in Chromium
+npm run typecheck
+npm run format
+```
+
+```bash
+cd samples/flutter
+flutter pub get
+dart run build_runner build
+flutter analyze
+flutter test                              # the sample data and the store
+flutter test integration_test -d macos    # the app itself; or -d windows, -d linux
+```
+
+The Flutter end-to-end test drives a window, so it needs a display and a session that is not locked. [samples/README.md](samples/README.md) says what the apps do and how their sample data is made.
+
 For the documentation site:
 
 ```bash
@@ -208,6 +231,7 @@ The scope names the part of the repository that changed, since one repository ho
 - `[dart]`: `packages/dart`, the Dart package, its native library and its code generator
 - `[python]`: `packages/python`, the Python package and its native module
 - `[docs]`: `docs`, the documentation site
+- `[samples]`: `samples`, the sample apps and their end-to-end tests
 - `[common]`: anything shared by all of them, such as the repository files, the Cargo workspace or CI
 
 Then the tag, followed by `: ` and the summary. The tags follow the [Udacity Git Commit Message Style Guide](https://udacity.github.io/git-styleguide). You may use a tag outside this list where none of them fits.

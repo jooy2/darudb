@@ -46,6 +46,7 @@ The Rust crate is the engine itself. The other packages bind it to their languag
 | `packages/python` | The Python binding                              | `cd packages/python`, then `maturin develop` and `pytest` in a venv    |
 | `docs`            | The documentation site, shared by every package | `cd docs && npm install`, then `npm run dev`                           |
 | `design`          | The engine's specifications                     | Read, in English                                                       |
+| `samples`         | Sample apps with end-to-end tests, not released | [samples/README.md](samples/README.md)                                 |
 
 The root holds the Cargo workspace and no JavaScript or Python manifest. Each JavaScript and Python folder is entered and run on its own. [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
