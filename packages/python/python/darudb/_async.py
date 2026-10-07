@@ -352,7 +352,11 @@ class AsyncMigrating(AsyncWriteTransaction):
     """The write transaction of a migration, as a migration's ``run`` gets it
     from ``Database.open_async``."""
 
-    __slots__ = ()
+    __slots__ = ("_step",)
+
+    def __init__(self, native: _native.NativeTransaction, schema: Schema | None) -> None:
+        super().__init__(native, schema)
+        self._step = 0
 
     @property
     def previous_version(self) -> int:
@@ -361,8 +365,8 @@ class AsyncMigrating(AsyncWriteTransaction):
 
     @property
     def version(self) -> int:
-        """The version the migration leads to."""
-        return self._native.version
+        """The version this step migrates to."""
+        return self._step
 
     async def previous(self, collection: str, key: Key) -> dict[str, Any] | None:
         """``Migrating.previous``, awaited."""
@@ -486,6 +490,7 @@ async def _migrate(
     try:
         while (version := await run(native.next_step)) is not None:
             step = steps.get(version)
+            migrating._step = version
 
             if step is not None and step.run is not None:
                 result: object = step.run(migrating)  # type: ignore[arg-type]

@@ -230,3 +230,24 @@ def test_a_schema_lists_its_classes() -> None:
     assert schema.version == 3
     assert schema.collections == (Note,)
     assert repr(schema) == "Schema(3, [Note])"
+
+
+def test_values_outside_what_the_api_takes_are_daru_errors() -> None:
+    for refuse in (
+        lambda: darudb.embedded("x"),  # type: ignore[type-var]
+        lambda: darudb.collection(5),  # type: ignore[call-overload]
+        lambda: darudb.Schema(0, []),
+        lambda: darudb.Schema(-1, []),
+        lambda: darudb.PasswordHashing(memory_kib=-1),
+        lambda: darudb.PasswordHashing(iterations=1.5),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(DaruError) as error:
+            refuse()
+
+        assert error.value.code == "INVALID_ARGUMENT"
+
+    for index in (-1, 65536, 1.5):
+        with pytest.raises(DaruError) as error:
+            darudb.param(index)  # type: ignore[arg-type]
+
+        assert error.value.code == "INVALID_QUERY"

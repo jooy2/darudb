@@ -212,3 +212,65 @@ def test_migrations_are_checked(path: Path) -> None:
         darudb.Database.open(path, migrations=[Migration(2)])
 
     assert error.value.code == "INVALID_ARGUMENT"
+
+
+def test_each_step_knows_its_own_version(path: Path) -> None:
+    @darudb.collection("notes")
+    class First:
+        id: int | None = None
+        text: str
+
+    @darudb.collection("notes")
+    class Third:
+        id: int | None = None
+        text: str
+        stars: int = 0
+
+    with darudb.Database.open(path, schema=darudb.Schema(1, [First])) as db:
+        with db.write() as txn:
+            txn.collection(First).insert(First(text="hi"))
+
+    seen: list[tuple[int, int]] = []
+
+    def step(migrating: darudb.Migrating) -> None:
+        seen.append((migrating.previous_version, migrating.version))
+
+    with darudb.Database.open(
+        path,
+        schema=darudb.Schema(3, [Third]),
+        migrations=[Migration(2, run=step), Migration(3, run=step)],
+    ):
+        pass
+
+    assert seen == [(1, 2), (1, 3)]
+
+
+def test_a_query_reused_with_another_class_of_its_collection_compiles_for_it(
+    path: Path,
+) -> None:
+    @darudb.collection("people")
+    class Before:
+        id: int | None = None
+        nick: str = field(name="nickname")
+
+    @darudb.collection("people")
+    class After:
+        id: int | None = None
+        nick: str
+
+    query = darudb.where(darudb.F.nick == "al")
+
+    with darudb.Database.open(path, schema=darudb.Schema(1, [Before])) as db:
+        with db.write() as txn:
+            txn.collection(Before).insert(Before(nick="al"))
+
+        with db.read() as txn:
+            assert len(txn.collection(Before).find(query)) == 1
+
+    with darudb.Database.open(
+        path,
+        schema=darudb.Schema(2, [After]),
+        migrations=[Migration(2, rename_fields=[("people", "nickname", "nick")])],
+    ) as db:
+        with db.read() as txn:
+            assert len(txn.collection(After).find(query)) == 1

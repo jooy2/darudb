@@ -54,6 +54,9 @@ _NOT: Final = 3
 def param(index: int) -> Param:
     """A parameter in place of a value, in a query that ``Database.prepare``
     prepares: each run gives its value. ``param(0)`` is the first."""
+    if type(index) is not int or not 0 <= index < 65536:
+        raise _invalid_query(f"a parameter's number is from 0 to 65535, not {index!r}")
+
     return _native.Param(index)
 
 
@@ -239,7 +242,9 @@ class Query:
         self._sort: tuple[tuple[tuple[str, ...], bool], ...] = ()
         self._offset = 0
         self._limit: int | None = None
-        self._compiled: dict[str, _native.NativeQuery] = {}
+        # By class and schema rather than by name: two classes of one collection,
+        # an old schema's and a new one's, may store their fields differently.
+        self._compiled: dict[tuple[type, Schema | None], _native.NativeQuery] = {}
 
     def _with(self, **changes: Any) -> Query:
         query = Query()
@@ -286,7 +291,7 @@ class Query:
 
     def compile(self, resolved: Resolved, schema: Schema | None) -> _native.NativeQuery:
         """The query on ``resolved``'s collection, compiled once."""
-        compiled = self._compiled.get(resolved.name)
+        compiled = self._compiled.get((resolved.cls, schema))
 
         if compiled is None:
             translate = _Translator(resolved, schema)
@@ -297,7 +302,7 @@ class Query:
                 self._offset,
                 self._limit,
             )
-            self._compiled[resolved.name] = compiled
+            self._compiled[(resolved.cls, schema)] = compiled
 
         return compiled
 

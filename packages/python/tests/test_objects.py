@@ -291,14 +291,21 @@ def test_a_deferred_commit_is_seen_at_once_and_made_durable_by_sync(db: darudb.D
 
 
 def test_write_transactions_on_one_file_do_not_nest(db: darudb.Database, path: Path) -> None:
+    other = open_db(path)
+
     with db.write():
         with pytest.raises(DaruError) as error, db.write():
             pass
 
         assert error.value.code == "INVALID_ARGUMENT"
 
-        with open_db(path) as other, pytest.raises(DaruError), other.write():
+        # Another handle to the file is the same file.
+        with pytest.raises(DaruError) as error, other.write():
             pass
+
+        assert error.value.code == "INVALID_ARGUMENT"
+
+    other.close()
 
     with db.write() as txn:
         txn.collection(User).insert(User(name="Alice"))
@@ -349,3 +356,38 @@ def test_a_link_holds_the_key_and_a_list_of_links_the_keys(db: darudb.Database) 
 
     with db.read() as txn:
         assert txn.collection(Post).get("hi") == Post(slug="hi", author=1, readers=[1, 2])
+
+
+def test_a_batch_that_is_not_iterable_is_invalid(db: darudb.Database) -> None:
+    with db.write() as txn, pytest.raises(DaruError) as error:
+        txn.collection(User).insert_many(5)  # type: ignore[arg-type]
+
+    assert error.value.code == "INVALID_ARGUMENT"
+
+
+def test_calls_that_wait_for_the_writer_are_refused_inside_a_write(db: darudb.Database) -> None:
+    with db.write():
+        for refused in (
+            db.sync,
+            db.compact,
+            db.close,
+            lambda: db.set_key(bytes(32)),
+            lambda: db.set_password("x"),
+        ):
+            with pytest.raises(DaruError) as error:
+                refused()
+
+            assert error.value.code == "INVALID_ARGUMENT"
+
+    db.sync()
+    assert db.is_open
+
+
+def test_prepare_on_a_closed_database_is_closed(path: Path) -> None:
+    db = open_db(path)
+    db.close()
+
+    with pytest.raises(DaruError) as error:
+        db.prepare(User, "age > $0")
+
+    assert error.value.code == "CLOSED"

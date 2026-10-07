@@ -18,7 +18,7 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use crate::database::NativeDatabase;
 use crate::query::{NativeQuery, parameters_of};
 use crate::values::{Layout, dict_of, key, to_python};
-use crate::{OrRaise, failure};
+use crate::{OrRaise, failure, invalid};
 
 /// The engine's transaction: a read, a write, or the write transaction of a
 /// migration under way.
@@ -408,7 +408,13 @@ impl NativeTransaction {
         replace: bool,
     ) -> PyResult<Bound<'py, PyList>> {
         let objects = objects
-            .try_iter()?
+            .try_iter()
+            .map_err(|_| {
+                invalid(
+                    py,
+                    format!("a batch is an iterable of objects, not {objects}"),
+                )
+            })?
             .map(|object| layout.get().to_object(&object?))
             .collect::<PyResult<Vec<_>>>()?;
         let keys = self.with(py, |txn| {

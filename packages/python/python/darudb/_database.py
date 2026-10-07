@@ -69,6 +69,15 @@ class PasswordHashing:
     iterations: int = 2
     parallelism: int = 1
 
+    def __post_init__(self) -> None:
+        # The engine checks the ranges; a value that is not a whole number
+        # from 0 up never reaches it.
+        for name in ("memory_kib", "iterations", "parallelism"):
+            value = getattr(self, name)
+
+            if type(value) is not int or not 0 <= value < 2**32:
+                raise invalid(f"{name} is a whole number from 0 up, not {value!r}")
+
     def spec(self) -> tuple[int, int, int]:
         return (self.memory_kib, self.iterations, self.parallelism)
 
@@ -371,7 +380,11 @@ class Migrating(WriteTransaction):
     the collections of the new schema, and the objects as the schema before
     the migration read them."""
 
-    __slots__ = ()
+    __slots__ = ("_step",)
+
+    def __init__(self, native: _native.NativeTransaction, schema: Schema | None) -> None:
+        super().__init__(native, schema)
+        self._step = 0
 
     @property
     def previous_version(self) -> int:
@@ -380,8 +393,8 @@ class Migrating(WriteTransaction):
 
     @property
     def version(self) -> int:
-        """The version the migration leads to."""
-        return self._native.version
+        """The version this step migrates to."""
+        return self._step
 
     def previous(self, collection: str, key: Key) -> dict[str, Any] | None:
         """The object of ``collection``, named as before the migration, as the
@@ -484,6 +497,7 @@ def _run_migrations(
     try:
         while (version := native.next_step()) is not None:
             step = steps.get(version)
+            migrating._step = version
 
             if step is not None and step.run is not None:
                 result = step.run(migrating)  # type: ignore[arg-type]
@@ -684,7 +698,15 @@ class Database:
         return self._native
 
     def _refuse_while_async_writes(self, what: str) -> None:
+        """Refuses ``what``, which waits for the writer, where the writer it
+        would wait for is one this thread or this event loop holds."""
         from ._async import refuse_on_loop
+
+        if self._file_key in _held(self._file_key):
+            raise invalid(
+                f"{what} would wait for the write transaction this thread holds on the file: "
+                "call it after the write block"
+            )
 
         refuse_on_loop(self._file_key, what)
 
@@ -745,6 +767,9 @@ class Database:
         ``$0``, ``$1`` and on, or a query built with ``param`` in place of
         values. It is compiled once here, and each ``find``, ``find_one`` or
         ``count`` gives its parameters' values."""
+        if not self.is_open:
+            raise DaruError("CLOSED", "the database is closed")
+
         if self.schema is None:
             raise invalid("the database was opened without a schema, so it has no collections")
 

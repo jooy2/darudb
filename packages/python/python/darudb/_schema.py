@@ -125,9 +125,6 @@ def field(
 
 
 def _decorate(cls: type[T], info: _Info) -> type[T]:
-    if not isinstance(cls, type):
-        raise invalid(f"@{info.kind} decorates a class, not {cls!r}")
-
     if "__dataclass_fields__" not in cls.__dict__:
         cls = dataclasses.dataclass(frozen=True, kw_only=True)(cls)
 
@@ -157,7 +154,12 @@ def collection(arg: Any = None, /) -> Any:
     if isinstance(arg, type):
         return _decorate(arg, _Info("collection", arg.__name__))
 
+    if arg is not None and not isinstance(arg, str):
+        raise invalid(f"@collection takes a collection's name, not {arg!r}")
+
     def decorate(cls: type[T]) -> type[T]:
+        _check_class(cls, "collection")
+
         return _decorate(cls, _Info("collection", arg if arg is not None else cls.__name__))
 
     return decorate
@@ -167,7 +169,14 @@ def collection(arg: Any = None, /) -> Any:
 def embedded(cls: type[T], /) -> type[T]:
     """Makes a class an embedded object, which a field of another object holds.
     An embedded object has no key, and none of its fields can be indexed."""
+    _check_class(cls, "embedded")
+
     return _decorate(cls, _Info("embedded", cls.__name__))
+
+
+def _check_class(cls: object, kind: str) -> None:
+    if not isinstance(cls, type):
+        raise invalid(f"@{kind} decorates a class, not {cls!r}")
 
 
 def info_of(cls: type) -> _Info | None:
@@ -415,6 +424,9 @@ class Schema:
     collections: tuple[type, ...]
 
     def __init__(self, version: int, collections: Sequence[type]) -> None:
+        if type(version) is not int or not 1 <= version < 2**63:
+            raise invalid(f"a schema's version is a whole number from 1 up, not {version!r}")
+
         self.version = version
         self.collections = tuple(collections)
         self._by_class: dict[type, Resolved] = {}
