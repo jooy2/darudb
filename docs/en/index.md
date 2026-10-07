@@ -38,6 +38,6 @@ features:
 
 ::: info Status
 
-The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Rust crate, the Node.js package and the Dart package are released, and the Python package is still to have its first release. [Where it stands](/guide/introduction#where-it-stands) says what works today.
+The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Rust crate and the Node.js, Dart and Python packages are released. [Where it stands](/guide/introduction#where-it-stands) says what works today.
 
 :::
