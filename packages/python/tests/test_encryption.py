@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import darudb
 from darudb import DaruError, PasswordHashing
 from models import User, open_db
 
@@ -99,3 +100,23 @@ def test_a_plain_file_has_no_key_to_change(path: Path) -> None:
             db.set_key(KEY)
 
         assert error.value.code == "INVALID_ARGUMENT"
+
+
+def test_a_key_and_a_password_together_are_refused(path: Path, tmp_path: Path) -> None:
+    with pytest.raises(DaruError) as error:
+        open_db(path, key=KEY, password="both", password_hashing=CHEAP)
+
+    assert error.value.code == "INVALID_ARGUMENT"
+    assert not path.exists()
+
+    fill(path, key=KEY)
+
+    with open_db(path, key=KEY) as db, pytest.raises(DaruError) as error:
+        db.backup(tmp_path / "copy.darudb", key=OTHER, password="both")
+
+    assert error.value.code == "INVALID_ARGUMENT"
+
+    with pytest.raises(DaruError) as error:
+        darudb.Database.salvage(path, tmp_path / "saved.darudb", key=KEY, password="both")
+
+    assert error.value.code == "INVALID_ARGUMENT"

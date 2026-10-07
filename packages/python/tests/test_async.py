@@ -184,3 +184,67 @@ def test_errors_of_async_calls_are_daru_errors(path: Path) -> None:
                 assert error.value.code == "DUPLICATE_KEY"
 
     run(main())
+
+
+def test_a_write_awaited_inside_a_write_on_the_file_is_refused(path: Path) -> None:
+    async def main() -> None:
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            async with db.write_async() as txn:
+                await txn.collection(User).insert(User(name="Alice"))
+
+                for nested in (
+                    lambda: db.write_async().__aenter__(),
+                    db.sync_async,
+                    db.compact_async,
+                    db.close_async,
+                ):
+                    with pytest.raises(DaruError) as error:
+                        await nested()
+
+                    assert error.value.code == "INVALID_ARGUMENT"
+
+                # A task made inside the write inherits what it holds.
+                async def inner() -> None:
+                    async with db.write_async():
+                        pass
+
+                with pytest.raises(DaruError) as error:
+                    await asyncio.gather(asyncio.create_task(inner()))
+
+                assert error.value.code == "INVALID_ARGUMENT"
+
+            # Once the write is over, the same calls take their turn.
+            async with db.write_async() as txn:
+                assert await txn.collection(User).count() == 1
+
+            await db.sync_async()
+
+    run(main())
+
+
+def test_a_task_made_outside_a_write_waits_for_its_turn(path: Path) -> None:
+    async def main() -> list[str]:
+        order: list[str] = []
+
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            started = asyncio.Event()
+
+            async def first() -> None:
+                async with db.write_async() as txn:
+                    started.set()
+                    await asyncio.sleep(0.05)
+                    await txn.collection(User).insert(User(name="first"))
+                    order.append("first")
+
+            async def second() -> None:
+                await started.wait()
+
+                async with db.write_async() as txn:
+                    await txn.collection(User).insert(User(name="second"))
+                    order.append("second")
+
+            await asyncio.gather(first(), second())
+
+        return order
+
+    assert run(main()) == ["first", "second"]

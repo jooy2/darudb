@@ -6,11 +6,14 @@ event loop never waits for the disk or for another process's writer.
 
 Two rules keep the pool from waiting for itself:
 
-- This process's asynchronous writes on one file run one after another,
-  queued here on the event loop rather than on the pool: a write waiting
-  there for another one of this process could take every thread while the
-  one it waits for needs a thread to go on. ``sync_async``, ``close_async``,
-  ``compact_async`` and the key changes queue with them.
+- An event loop's asynchronous writes on one file run one after another,
+  queued here on the loop rather than on the pool: a write waiting there for
+  another one of this process could take every thread while the one it waits
+  for needs a thread to go on. ``sync_async``, ``close_async``,
+  ``compact_async`` and the key changes queue with them. One of them awaited
+  inside a write on the file, or in a task made inside it, would wait for the
+  write it is part of, so it is refused with ``INVALID_ARGUMENT``: a context
+  variable carries the files a write holds into every task made inside it.
 - A synchronous ``write``, ``sync``, ``close``, ``compact`` or key change on
   the thread of an event loop whose asynchronous write holds the file would
   wait for a write that needs that loop, so it is refused with
@@ -23,6 +26,7 @@ a time.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import os
 import threading
@@ -42,6 +46,7 @@ from ._database import (
     QueryInput,
     _held,
     check_migrations,
+    file_key_of,
     native_query,
 )
 from ._errors import invalid
@@ -90,6 +95,11 @@ async def run(work: Callable[[], R]) -> R:
 _queues: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[FileKey, asyncio.Lock]] = (
     weakref.WeakKeyDictionary()
 )
+# The files the asynchronous writes around the running code hold. Each task
+# made inside a write starts with a copy, so a task of its own sees them too.
+_inside: contextvars.ContextVar[frozenset[FileKey]] = contextvars.ContextVar(
+    "darudb_inside", default=frozenset()
+)
 # The threads whose event loop holds a file for an asynchronous write.
 _holders: Counter[tuple[FileKey, int]] = Counter()
 _holders_lock = threading.Lock()
@@ -117,6 +127,12 @@ class _Hold:
         self._thread = threading.get_ident()
 
     async def take(self) -> None:
+        if self._file_key in _inside.get():
+            raise invalid(
+                "the asynchronous write that holds the file is waiting for this call to finish: "
+                "write transactions on one file do not nest"
+            )
+
         await self._lock.acquire()
 
         with _holders_lock:
@@ -397,7 +413,7 @@ class AsyncReadScope:
 class AsyncWriteScope:
     """``async with db.write_async() as txn``."""
 
-    __slots__ = ("_db", "_deferred", "_hold", "_txn")
+    __slots__ = ("_db", "_deferred", "_hold", "_token", "_txn")
 
     def __init__(self, db: Database, durability: Durability) -> None:
         if durability not in ("sync", "deferred"):
@@ -406,6 +422,7 @@ class AsyncWriteScope:
         self._db = db
         self._deferred = durability == "deferred"
         self._hold: _Hold | None = None
+        self._token: contextvars.Token[frozenset[FileKey]] | None = None
         self._txn: AsyncWriteTransaction | None = None
 
     async def __aenter__(self) -> AsyncWriteTransaction:
@@ -425,6 +442,7 @@ class AsyncWriteScope:
             raise
 
         self._hold = hold
+        self._token = _inside.set(_inside.get() | {db._file_key})
         self._txn = AsyncWriteTransaction(native, db.schema)
 
         return self._txn
@@ -435,11 +453,14 @@ class AsyncWriteScope:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        txn, hold = self._txn, self._hold
-        self._txn = self._hold = None
+        txn, hold, token = self._txn, self._hold, self._token
+        self._txn = self._hold = self._token = None
 
         if txn is None or hold is None:
             return
+
+        if token is not None:
+            _inside.reset(token)
 
         try:
             await txn._drain()
@@ -512,6 +533,12 @@ async def open_async(
     )
 
     if isinstance(native, _native.NativeTransaction):
-        native = await _migrate(native, schema, migrations)
+        # The migration holds the file as a write does.
+        token = _inside.set(_inside.get() | {file_key_of(location)})
+
+        try:
+            native = await _migrate(native, schema, migrations)
+        finally:
+            _inside.reset(token)
 
     return cls._of(native, location, schema)

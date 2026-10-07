@@ -122,6 +122,27 @@ def test_open_async_awaits_a_migration_function(path: Path) -> None:
     assert [user.age for user in asyncio.run(main())] == [31, 17]
 
 
+def test_an_async_migration_refuses_a_write_on_its_own_file(path: Path) -> None:
+    fill_v1(path)
+
+    async def run(migrating: darudb.AsyncMigrating) -> None:
+        other = await darudb.Database.open_async(path)
+
+        try:
+            async with other.write_async():
+                pass
+        finally:
+            other.close()
+
+    async def main() -> None:
+        await darudb.Database.open_async(path, schema=V2, migrations=[renames(run)])
+
+    with pytest.raises(DaruError) as error:
+        asyncio.run(main())
+
+    assert error.value.code == "INVALID_ARGUMENT"
+
+
 def test_open_async_runs_a_plain_function_too(path: Path) -> None:
     fill_v1(path)
 

@@ -132,6 +132,8 @@ impl NativeDatabase {
         password: Option<&Bound<'py, PyAny>>,
         password_hashing: Option<(u32, u32, u32)>,
     ) -> PyResult<Bound<'py, PyDict>> {
+        one_secret(py, key, password)?;
+
         let mut options = BackupOptions::new();
 
         if let Some(key) = key {
@@ -186,6 +188,20 @@ impl NativeDatabase {
             None => Ok(()),
         }
     }
+}
+
+/// Refuses a key and a password together, which would leave the caller
+/// unsure which of the two opens the file.
+fn one_secret(
+    py: Python<'_>,
+    key: Option<&Bound<'_, PyAny>>,
+    password: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    if key.is_some() && password.is_some() {
+        return Err(invalid(py, "give a key or a password, not both"));
+    }
+
+    Ok(())
 }
 
 /// A key of 32 bytes.
@@ -281,6 +297,8 @@ fn open<'py>(
     password: Option<&Bound<'py, PyAny>>,
     password_hashing: Option<(u32, u32, u32)>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    one_secret(py, key, password)?;
+
     let mut options = OpenOptions::new();
 
     if let Some(create) = create {
@@ -343,6 +361,8 @@ fn salvage<'py>(
     password: Option<&Bound<'py, PyAny>>,
     busy_timeout: Option<f64>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    one_secret(py, key, password)?;
+
     let mut options = OpenOptions::new();
 
     if let Some(key) = key {

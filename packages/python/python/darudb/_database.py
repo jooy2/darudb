@@ -878,17 +878,15 @@ class Database:
         """``set_key`` on the package's thread pool, after this process's writes on the file."""
         from ._async import after_writes
 
-        secret_key = bytes(key)
-
-        await after_writes(self, lambda: self._native.set_key(secret_key))
+        # The caller's buffer, which it can wipe once this returns: the native
+        # module copies it when the call runs, into memory it wipes itself.
+        await after_writes(self, lambda: self._native.set_key(key))
 
     async def set_password_async(self, password: str | bytes | bytearray) -> None:
         """``set_password`` on the package's thread pool, after this process's writes."""
         from ._async import after_writes
 
-        secret_password = password if isinstance(password, str) else bytes(password)
-
-        await after_writes(self, lambda: self._native.set_password(secret_password))
+        await after_writes(self, lambda: self._native.set_password(password))
 
     async def sync_async(self) -> None:
         """``sync`` on the package's thread pool, after this process's writes on the file."""
