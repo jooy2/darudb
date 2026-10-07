@@ -294,7 +294,7 @@ fn salvage_options(salvage: &NativeSalvageOptions) -> Result<darudb::OpenOptions
     }
 
     if let Some(key) = &salvage.key {
-        options.key(key_of(key)?);
+        options.key(*Zeroizing::new(key_of(key)?));
     }
 
     if let Some(password) = &salvage.password {
@@ -310,7 +310,7 @@ fn backup_options(backup: &NativeBackupOptions) -> Result<darudb::BackupOptions>
     let mut options = darudb::BackupOptions::new();
 
     if let Some(key) = &backup.key {
-        options.key(key_of(key)?);
+        options.key(*Zeroizing::new(key_of(key)?));
     }
 
     if let Some(password) = &backup.password {
@@ -462,7 +462,7 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
     }
 
     if let Some(key) = &options.key {
-        open_options.key(key_of(key)?);
+        open_options.key(*Zeroizing::new(key_of(key)?));
     }
 
     if let Some(password) = &options.password {

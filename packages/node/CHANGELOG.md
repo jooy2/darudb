@@ -2,6 +2,12 @@
 
 > This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Fixed
+
+- The copy of a key that `open`, `openAsync`, `salvage` and `backup` make on the way to the engine is kept in memory the package wipes, as `setKey` already did.
+
 ## v1.0.0 (2026-10-05)
 
 ### Added
