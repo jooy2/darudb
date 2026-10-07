@@ -148,6 +148,52 @@ A field's Dart type is its type: `bool`, `int` (64-bit), `double`, `String`, `Ui
 
 :::
 
+::: lang python
+
+Each collection is a class decorated with `@darudb.collection`, which makes it a frozen, keyword-only dataclass. Its annotations are the types of its fields, and `field` adds what an annotation cannot say: a default, an index, a primary key, a link or a stored name.
+
+```python
+import darudb
+from darudb import field
+
+
+@darudb.collection("teams")
+class Team:
+    name: str = field(primary_key=True)
+    city: str | None = None
+
+
+@darudb.embedded
+class Address:
+    city: str
+    zip: int | None = None
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    email: str | None = field(default=None, unique=True)
+    age: int = field(default=0, index=True)
+    tags: list[str] | None = field(default=None, index=True)
+    team: str | None = field(default=None, link=Team)
+    address: Address | None = None
+
+
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [Team, User]))
+```
+
+A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes`, a `list` of those or of links, and a class decorated with `@darudb.embedded` for an embedded object. The classes are read when the `Schema` is made, so an annotation may name a class declared after it.
+
+- **Required and optional fields.** A field without a default whose type is not `X | None` is required, and writing an object without it fails. An `X | None` field is optional, `None` when it is left out, and takes no default but `None`. A default, given as `= value`, `field(default=...)` or `field(default_factory=...)`, keeps the field required and fills it in when it is left out, in an object you make and in one the file holds from before the field existed.
+- **Primary keys.** `field(primary_key=True)` makes an `int`, `str` or `bytes` field the key, which is required and has no default. Without one, the class has the field `id: int | None = None`, which is `None` until the object is inserted.
+- **Links.** `field(link=Team)` makes an `int`, `str` or `bytes` field, or a list of them, hold primary keys of another collection, named by its class or by its name.
+- **Indexes.** `field(index=True)` keeps an index on a field, and `field(unique=True)` an index that also refuses two objects with the same value. `field(name="...")` gives a field another name in the file than in Python. An embedded object's fields have no index.
+- **Objects are values.** The class is frozen, and a changed object is a copy, made with `dataclasses.replace`, written back with `put`. An object read from the file is made without calling the class's `__init__`, so a `__post_init__` does not run for it.
+- **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A list holds no `None`, and a list of lists or of embedded objects is refused.
+
+:::
+
 The rules the engine keeps are the same in every language:
 
 - **The automatic key.** A collection that names no primary key gets an integer field called `id`, and an object written without an `id` gets the next number, from 1 up. A number is never given twice in one file, even after its object is deleted.
@@ -265,6 +311,34 @@ final alice = db.read((txn) => txn.collection(userSchema).get(1));
 - `insert` returns the new object's key, and `insertMany` the keys of a batch, which crosses into the engine as one buffer in one call. `put` and `putMany` insert or replace. `delete` says whether there was an object.
 - `update` takes a key and a function that gives the changes, each made by a field's `set`, and says whether there was an object. `set(null)` makes an optional field null and gives a field with a default its default.
 - `copyWith` keeps every field it is not given. It cannot make a field null: construct the object for that.
+
+:::
+
+::: lang python
+
+`txn.collection(User)` gives a collection's objects as instances of the class, and the calls that change them. `txn.collection("users")` reaches the same collection by its name.
+
+```python
+with db.write() as txn:
+    txn.collection(Team).insert(Team(name="north", city="Seoul"))
+
+    users = txn.collection(User)
+    alice = users.insert(User(name="Alice", email="alice@example.com", age=31, team="north"))
+
+    users.insert_many([User(name="Bob", tags=["new"])])
+    # `put` replaces the object with the same key.
+    users.put(User(id=alice, name="Alice", age=32, team="north"))
+    # `update` sets the fields it is given and keeps the rest.
+    users.update(alice, email=None, tags=["admin"])
+    users.delete(2)
+
+with db.read() as txn:
+    alice = txn.collection(User).get(1)
+```
+
+- `insert` returns the new object's key, and `insert_many` the keys of a batch, which crosses into the engine in one call. `put` and `put_many` insert or replace. `delete` says whether there was an object.
+- `update(key, **changes)` sets the fields it names, by their Python names, keeps the rest, and says whether there was an object. `None` makes an optional field `None` and gives a field with a default its default.
+- A batch stops at the first object the engine refuses, with its error, and the objects before it stay inserted in the transaction. An object the package cannot convert, such as one of another class, refuses the whole batch before any of it is written.
 
 :::
 

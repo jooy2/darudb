@@ -68,3 +68,11 @@ In Electron, several instances of the app, or the main process and a utility pro
 In a Flutter app, several isolates share a file the same way: each opens its own `Database`, and the handles share the process's page cache and writer. An isolate's asynchronous writes take turns with each other; another isolate's write waits for them in the engine, as another process's would.
 
 :::
+
+::: lang python
+
+Threads can share one `Database`: each handle and transaction keeps its engine object behind a lock, and the native module releases the GIL while the engine works, so other threads run while one waits for the disk or for the writer. A thread's write waits for another thread's, as another process's would, and the package declares itself safe for the free-threaded build of Python.
+
+A child process, whether started with `multiprocessing` or made with `os.fork`, opens the file itself. A handle a forked child inherits from its parent fails there with `CLOSED`, since the child holds none of the locks that handle took.
+
+:::

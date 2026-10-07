@@ -25,4 +25,10 @@ The package `darudb` exports everything from one library: `import 'package:darud
 
 :::
 
+::: lang python
+
+The package `darudb` exports everything from its root: `import darudb`, or `from darudb import Database, Schema, collection`. The types these calls take and return are in [Types](../types/index.md).
+
+:::
+
 <PageList section="api" />

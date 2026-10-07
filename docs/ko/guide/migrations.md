@@ -148,6 +148,51 @@ final db = Database.open(
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import Migration, field
+
+
+@darudb.collection("people")
+class Person:
+    id: int | None = None
+    full_name: str
+    email: str | None = field(default=None, unique=True)
+    age: str = ""
+
+
+def to_v2(m: darudb.Migrating) -> None:
+    people = m.collection(Person)
+
+    for key in m.previous_keys("users"):
+        before = m.previous("users", key)
+
+        if before is not None:
+            people.update(key, age=f"{before['age']} years")
+
+
+db = darudb.Database.open(
+    "app.darudb",
+    schema=darudb.Schema(2, [Person]),
+    migrations=[
+        Migration(
+            2,
+            rename_collections=[("users", "people")],
+            rename_fields=[("users", "name", "full_name")],
+            replace_fields=[("users", "age")],
+            delete_collections=["teams"],
+            run=to_v2,
+        )
+    ],
+)
+```
+
+`previous`는 객체를 예전 스키마대로 읽어, 필드를 예전 이름으로 담은 `dict`로 돌려줍니다. 예전 스키마의 클래스는 보통 프로그램에 남아 있지 않기 때문입니다. `run`이 예외를 일으키면 `open`도 같은 예외를 일으킵니다. `Database.open_async`에서는 `run`이 코루틴 함수여도 되고, 이 함수가 받는 `AsyncMigrating`의 호출은 await로 기다립니다.
+
+:::
+
 - **이름 바꾸기**는 데이터를 옮기지 않으므로 객체가 아무리 많아도 비용이 없습니다. 컬렉션은 마이그레이션 전의 이름으로 적습니다.
 - **필드 교체**는 타입을 바꿀 때 씁니다. 같은 이름으로 새 필드를 만드는 것과 같습니다. **컬렉션 삭제**는 그 객체와 인덱스를 함께 지웁니다.
 - **마이그레이션 함수**는 이름 바꾸기가 끝난 뒤 마이그레이션의 쓰기 트랜잭션 안에서 새 스키마로 실행됩니다. `previous`로 읽으면 예전 이름과, 지우거나 교체한 필드의 값까지 예전 스키마대로 읽을 수 있습니다. 쓴 객체에는 새 스키마의 필드만 남으니, 객체를 쓰기 전에 이렇게 읽어 두세요. 지울 컬렉션도 마이그레이션이 커밋되기 전까지는 이렇게 읽을 수 있습니다.

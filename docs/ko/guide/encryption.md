@@ -73,12 +73,37 @@ Database.open('secret.darudb', schema: const Schema(1, [userSchema])); // KEY_RE
 
 :::
 
+::: lang python
+
+```python
+import darudb
+
+db = darudb.Database.open(
+    "secret.darudb",
+    schema=darudb.Schema(1, [User]),
+    password="correct horse battery staple",
+)
+
+print(db.is_encrypted)  # True
+db.set_password("a new password")  # 또는 `await db.set_password_async(...)`
+db.close()
+
+darudb.Database.open("secret.darudb", schema=darudb.Schema(1, [User]))  # KEY_REQUIRED를 일으킵니다
+```
+
+- `key`는 32바이트이고 `bytes`나 `bytearray`, `memoryview`로 주며, `set_key`로 바꿉니다. `key`와 `password` 중 하나만 줍니다.
+- `password`는 `str`이나 바이트입니다.
+- 네이티브 모듈은 키나 비밀번호를 자기 버퍼로 복사하고, 엔진이 제 사본을 가져가면 그 버퍼를 지웁니다. 넘긴 `bytearray`는 호출이 반환된 뒤에, `_async` 짝이라면 await가 끝난 뒤에 `key[:] = bytes(len(key))`로 지워도 됩니다. `bytes`와 `str`은 지울 수 없어서 Python이 메모리를 해제할 때까지 남습니다.
+- `set_key`와 `set_password`는 커밋을 하므로 쓰기의 규칙을 따릅니다. `_async` 짝은 이 이벤트 루프가 같은 파일에 하는 다른 비동기 쓰기가 끝난 뒤 차례를 기다리고, 동기 버전은 비동기 쓰기가 파일을 쥐고 있는 동안 루프의 스레드에서 거부됩니다.
+
+:::
+
 페이지 안의 모든 것이 암호화됩니다. 키와 값, 컬렉션과 트리의 이름도 마찬가지입니다. 모든 페이지와 헤더에 기록된 커밋 정보도 인증되므로, 바이트 하나라도 바뀌면 그대로 읽지 않고 `CORRUPTED`로 알립니다. 키 없이 열면 `KEY_REQUIRED`, 틀린 키로 열면 `WRONG_KEY`로 실패합니다.
 
 ## 키와 비밀번호
 
 - **키**는 무작위 32바이트입니다. [아래](#운영체제-키-저장소에-키-보관하기)처럼 운영체제의 키 저장소에 보관한 키가 그런 예입니다.
-- **비밀번호**는 Argon2id로 키를 만듭니다. 기본 비용은 19 MiB, 반복 2회, 병렬 1이고 수십 밀리초가 걸립니다. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" />으로 새 파일과 비밀번호 변경에 쓸 비용을 올리거나 내립니다. 파일은 만들 때의 비용을 기록해 두므로, 열 때는 옵션과 관계없이 그 비용이 듭니다.
+- **비밀번호**는 Argon2id로 키를 만듭니다. 기본 비용은 19 MiB, 반복 2회, 병렬 1이고 수십 밀리초가 걸립니다. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" />으로 새 파일과 비밀번호 변경에 쓸 비용을 올리거나 내립니다. 파일은 만들 때의 비용을 기록해 두므로, 열 때는 옵션과 관계없이 그 비용이 듭니다.
 - **키나 비밀번호를 바꿔도** 페이지를 다시 암호화하지 않고, 바꾸기가 끝나면 이전 것으로는 파일을 열 수 없습니다.
 - 평문 데이터베이스는 평문으로 남고, 암호화한 데이터베이스는 키 없이 열 수 없습니다. 키나 비밀번호를 잃어버리지 않을 곳에 보관하세요. 잃어버리면 데이터를 읽을 방법이 없습니다.
 
@@ -182,6 +207,41 @@ final db = Database.open(
 ```
 
 Dart 서버나 명령줄 도구라면 다른 비밀 값과 같은 곳에 키를 둡니다. 배포 과정이 비밀 관리 서비스에서 채워 주는 환경 변수가 그런 예입니다.
+
+:::
+
+::: lang python
+
+`keyring` 패키지로 macOS의 키체인, Windows의 자격 증명 관리자, Linux의 Secret Service에 접근할 수 있습니다. 이 패키지는 텍스트를 저장하므로 키는 Base64로 바꿔 둡니다.
+
+```python
+import base64
+import secrets
+
+import darudb
+import keyring
+
+
+def database_key() -> bytes:
+    stored = keyring.get_password("my-app", "database-key")
+
+    if stored is not None:
+        return base64.b64decode(stored)
+
+    key = secrets.token_bytes(32)
+    keyring.set_password("my-app", "database-key", base64.b64encode(key).decode())
+
+    return key
+
+
+db = darudb.Database.open(
+    "secret.darudb",
+    schema=darudb.Schema(1, [User]),
+    key=database_key(),
+)
+```
+
+서버라면 다른 비밀 값과 같은 곳에 키를 둡니다. 배포 과정이 비밀 관리 서비스에서 채워 주는 환경 변수가 그런 예이고, 이때는 `base64.b64decode(os.environ["DATABASE_KEY"])`로 키를 읽습니다.
 
 :::
 

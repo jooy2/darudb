@@ -68,6 +68,24 @@ try {
 
 :::
 
+::: lang python
+
+데이터베이스 작업이 실패하면 패키지는 `darudb.DaruError`를 일으킵니다. `code`는 아래 코드 중 하나이고, `message`에는 무슨 일이 있었는지 적혀 있습니다. 비동기 API도 같은 오류를 일으킵니다.
+
+```python
+import darudb
+
+try:
+    darudb.Database.open("missing.darudb", create=False)
+except darudb.DaruError as error:
+    if error.code == "NOT_FOUND":
+        pass  # 경로에 아무것도 없습니다.
+```
+
+64비트를 넘는 `int`처럼 엔진이 담을 수 없는 Python 값도 `TypeError`가 아니라 `INVALID_ARGUMENT`로 실패하므로, `except` 하나로 모든 거부를 잡을 수 있습니다. `with` 블록이나 마이그레이션의 `run` 안에서 내 코드가 일으킨 예외는 그대로 다시 나갑니다. 자세한 내용은 타입 섹션의 [`DaruError`](../types/python/error.md)에 있습니다.
+
+:::
+
 메시지는 사람이 읽으라고 있는 것이고 바뀔 수 있으니, 프로그램은 코드로 판단하면 됩니다.
 
 ## 모든 코드

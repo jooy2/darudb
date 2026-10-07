@@ -9,7 +9,7 @@ DaruDB is one engine written in Rust, and this page explains how it is put toget
 
 ## One engine, thin bindings
 
-The engine is the Rust crate `darudb`. The Node.js package is a binding over that same engine, and a Dart package is planned the same way. A binding converts values between its language and the engine, and decides nothing about the file. Checking objects against the schema, keeping indexes in step, parsing, planning and running queries, migrating a schema, and giving every failure its error code all happen in the engine. That is why a file written from one language reads the same from every other, and why an error carries the same `code` in each.
+The engine is the Rust crate `darudb`. The Node.js, Dart and Python packages are bindings over that same engine. A binding converts values between its language and the engine, and decides nothing about the file. Checking objects against the schema, keeping indexes in step, parsing, planning and running queries, migrating a schema, and giving every failure its error code all happen in the engine. That is why a file written from one language reads the same from every other, and why an error carries the same `code` in each.
 
 ### What the Rust crate is
 
@@ -50,6 +50,8 @@ Each call from another language into Rust has to convert its arguments and its r
 
 The engine checks every buffer it is given before anything is stored: a record against the schema, a query against the collection it names. A binding cannot write what the schema does not allow. [Building a binding](./bindings.md) describes the formats and the calls that take them.
 
+The Node.js and Dart packages cross this way. The Python package crosses with the engine's own types instead: its native module, built with PyO3, turns each Python object into the engine's dynamic `Object`, which the engine checks against the schema by field name, and turns each `Object` read back into an instance of the application's class. It writes a query built in Python as the same IR, in its Rust half, and declares the schema through the engine's schema builder. A batch of objects is still one call into the module, and the module releases the GIL for as long as the engine works.
+
 ## Reading and writing the file
 
 The engine reads and writes the file at explicit offsets, with `pread` and `pwrite` on Unix-like systems and with reads and writes at an offset on Windows. A commit writes each run of consecutive pages with one call, `pwritev` where the system has it. The file is never mapped into memory.
@@ -66,7 +68,7 @@ The cost is the copy that a mapping would save, so the performance goal has to b
 Each process keeps the pages it reads in a cache, one for each open file, shared by every handle to that file in the process. A page is verified against its check, and decrypted in an encrypted file, once, when it is read. Reading it again from the cache costs neither a read nor a check.
 
 - **Keyed by page number and check.** A reader always knows the check it expects, from the pointer that led it to the page, so a cached copy of an older version of the page never matches. Nothing has to be invalidated when another process commits: entries that no longer match anything age out.
-- **Sized in bytes.** 32 MiB for each file by default, and never fewer than 16 pages. It fills only as pages are read, and lets the pages it took in first go first. In Rust, `OpenOptions::cache_size` sets the size; in Node.js, the `cacheSize` option. The handle that opens a file first in a process decides it for every handle.
+- **Sized in bytes.** 32 MiB for each file by default, and never fewer than 16 pages. It fills only as pages are read, and lets the pages it took in first go first. In Rust, `OpenOptions::cache_size` sets the size; in Node.js and Dart, the `cacheSize` option; in Python, the `cache_size` option. The handle that opens a file first in a process decides it for every handle.
 - **Tree nodes only.** A node in the cache also keeps a few bytes of each of its keys beside the page, in memory only, so that a search reads a whole key only where two of those agree; that memory counts against the size. A large value kept in pages of its own is not cached, and is read from the file each time.
 - **Commits fill it.** The nodes a commit writes go into the cache, so the next transaction finds them there.
 

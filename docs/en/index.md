@@ -3,11 +3,11 @@ layout: home
 
 title: DaruDB
 titleTemplate: An embedded database in one local file
-description: An embedded database that keeps an application's data in one local file, for Rust, Node.js and Dart. One engine written in Rust, with encryption, crash safety and several processes on one file designed in from the start.
+description: An embedded database that keeps an application's data in one local file, for Rust, Node.js, Dart and Python. One engine written in Rust, with encryption, crash safety and several processes on one file designed in from the start.
 
 hero:
   name: DaruDB
-  text: An embedded database for Rust, Node.js and Dart
+  text: An embedded database for Rust, Node.js, Dart and Python
   tagline: One engine, written in Rust, keeps your application's data in a single local file. Encryption, crash safety and several processes sharing one file are designed in from the start, not added later.
   image:
     src: /logo.webp
@@ -25,7 +25,7 @@ hero:
 
 features:
   - title: One engine in every language
-    details: The engine is written once, in Rust, and each language reaches it through a thin binding. A file written from Node.js reads the same from Rust or Dart, because every rule about the file lives in one place.
+    details: The engine is written once, in Rust, and each language reaches it through a thin binding. A file written from Node.js reads the same from Rust, Dart or Python, because every rule about the file lives in one place.
     link: /guide/introduction
     linkText: How it is built
   - title: Encryption of the whole file
@@ -38,6 +38,6 @@ features:
 
 ::: info Status
 
-The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Rust crate, the Node.js package and the Dart package are released. [Where it stands](/guide/introduction#where-it-stands) says what works today.
+The four cards above are the goals the design is built around, and each becomes a claim only when the tests and benchmarks that prove it are in the repository. The Rust crate, the Node.js package and the Dart package are released, and the Python package is still to have its first release. [Where it stands](/guide/introduction#where-it-stands) says what works today.
 
 :::

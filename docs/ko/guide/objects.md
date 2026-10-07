@@ -148,6 +148,52 @@ final db = Database.open(
 
 :::
 
+::: lang python
+
+컬렉션마다 `@darudb.collection`을 붙인 클래스를 하나 둡니다. 이 데코레이터는 클래스를 필드를 바꿀 수 없고 키워드 인자로만 만드는 데이터 클래스로 만듭니다. 어노테이션은 필드의 타입이 되고, 어노테이션으로 나타낼 수 없는 기본값과 인덱스, 기본 키, 링크, 파일에 저장할 이름은 `field`로 더합니다.
+
+```python
+import darudb
+from darudb import field
+
+
+@darudb.collection("teams")
+class Team:
+    name: str = field(primary_key=True)
+    city: str | None = None
+
+
+@darudb.embedded
+class Address:
+    city: str
+    zip: int | None = None
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    email: str | None = field(default=None, unique=True)
+    age: int = field(default=0, index=True)
+    tags: list[str] | None = field(default=None, index=True)
+    team: str | None = field(default=None, link=Team)
+    address: Address | None = None
+
+
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [Team, User]))
+```
+
+필드의 타입은 어노테이션 그대로입니다. `bool`, 64비트 `int`, `float`, `str`, `bytes`, 이들이나 링크의 `list`, 그리고 `@darudb.embedded`를 붙인 클래스로 만드는 내장 객체가 있습니다. 클래스는 `Schema`를 만들 때 읽으므로, 어노테이션에 뒤에서 선언한 클래스를 써도 됩니다.
+
+- **필수 필드와 선택 필드.** 기본값이 없고 타입이 `X | None`이 아닌 필드는 필수여서 빠진 객체는 쓸 수 없습니다. `X | None` 필드는 선택이고, 빠지면 `None`이 되며, `None` 말고는 기본값을 받지 않습니다. `= value`나 `field(default=...)`, `field(default_factory=...)`로 기본값을 준 필드는 필수로 남고, 빠지면 기본값이 들어갑니다. 내가 만든 객체에서도, 필드가 생기기 전에 파일에 들어간 객체에서도 그렇습니다.
+- **기본 키.** `field(primary_key=True)`는 `int`, `str`, `bytes` 필드를 키로 삼습니다. 키는 필수이고 기본값이 없습니다. 기본 키가 없는 클래스에는 `id: int | None = None` 필드를 두고, 이 필드는 객체를 넣기 전까지 `None`입니다.
+- **링크.** `field(link=Team)`을 붙인 `int`, `str`, `bytes` 필드나 그 목록에는 다른 컬렉션의 기본 키가 들어갑니다. 대상 컬렉션은 클래스로도, 이름으로도 가리킬 수 있습니다.
+- **인덱스.** `field(index=True)`는 필드에 인덱스를 두고, `field(unique=True)`는 값이 같은 객체 둘을 받지 않는 인덱스를 둡니다. `field(name="...")`를 주면 파일 안의 필드 이름을 Python의 이름과 다르게 정할 수 있습니다. 내장 객체의 필드에는 인덱스를 둘 수 없습니다.
+- **객체는 값입니다.** 클래스의 필드는 바꿀 수 없으므로, 바꾼 객체는 `dataclasses.replace`로 만든 사본이고 `put`으로 다시 씁니다. 파일에서 읽은 객체는 클래스의 `__init__`을 부르지 않고 만들기 때문에 `__post_init__`도 돌지 않습니다.
+- **값.** `float` 필드는 `int`도 받지만, `int` 필드는 `float`와 `bool`, 64비트를 넘는 `int`를 받지 않습니다. 바이트는 `bytes`나 `bytearray`, `memoryview`로 넣고 `bytes`로 읽습니다. 목록에는 `None`을 담을 수 없고, 목록의 목록이나 내장 객체의 목록은 선언할 수 없습니다.
+
+:::
+
 엔진이 지키는 규칙은 언어와 관계없이 같습니다.
 
 - **자동 키.** 기본 키를 지정하지 않은 컬렉션에는 `id`라는 정수 필드가 생기고, `id` 없이 쓴 객체는 1부터 차례로 다음 번호를 받습니다. 객체를 지워도 한 파일 안에서 같은 번호를 두 번 주지 않습니다.
@@ -265,6 +311,34 @@ final alice = db.read((txn) => txn.collection(userSchema).get(1));
 - `insert`는 새 객체의 키를, `insertMany`는 한 묶음의 키를 돌려줍니다. 묶음은 버퍼 하나에 담겨 엔진을 한 번만 부릅니다. `put`과 `putMany`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
 - `update`는 키와, 바꿀 내용을 돌려주는 함수를 받습니다. 바꿀 내용은 필드의 `set`으로 만들고, 객체가 있었는지 돌려줍니다. `set(null)`을 주면 선택 필드는 null이 되고 기본값이 있는 필드는 기본값이 됩니다.
 - `copyWith`는 받지 않은 필드를 모두 그대로 둡니다. 필드를 null로 만들 수는 없으므로, 그럴 때는 객체를 새로 만듭니다.
+
+:::
+
+::: lang python
+
+`txn.collection(User)`는 컬렉션의 객체를 클래스의 인스턴스로 돌려주고, 객체를 바꾸는 메서드도 줍니다. `txn.collection("users")`처럼 이름으로 같은 컬렉션을 가져올 수도 있습니다.
+
+```python
+with db.write() as txn:
+    txn.collection(Team).insert(Team(name="north", city="Seoul"))
+
+    users = txn.collection(User)
+    alice = users.insert(User(name="Alice", email="alice@example.com", age=31, team="north"))
+
+    users.insert_many([User(name="Bob", tags=["new"])])
+    # `put`은 키가 같은 객체를 바꿉니다.
+    users.put(User(id=alice, name="Alice", age=32, team="north"))
+    # `update`는 받은 필드만 바꾸고 나머지는 그대로 둡니다.
+    users.update(alice, email=None, tags=["admin"])
+    users.delete(2)
+
+with db.read() as txn:
+    alice = txn.collection(User).get(1)
+```
+
+- `insert`는 새 객체의 키를, `insert_many`는 한 묶음의 키를 돌려줍니다. 묶음은 엔진을 한 번만 부릅니다. `put`과 `put_many`는 없으면 넣고 있으면 바꿉니다. `delete`는 지운 객체가 있었는지 돌려줍니다.
+- `update(key, **changes)`는 Python 이름으로 지정한 필드만 바꾸고 나머지는 그대로 두며, 객체가 있었는지 돌려줍니다. `None`을 주면 선택 필드는 `None`이 되고 기본값이 있는 필드는 기본값이 됩니다.
+- 묶음은 엔진이 거부한 첫 객체에서 그 오류와 함께 멈추고, 그 앞의 객체는 트랜잭션에 넣은 채로 남습니다. 다른 클래스의 객체처럼 패키지가 변환할 수 없는 객체가 섞여 있으면, 아무것도 쓰기 전에 묶음 전체를 거부합니다.
 
 :::
 

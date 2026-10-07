@@ -73,12 +73,37 @@ Database.open('secret.darudb', schema: const Schema(1, [userSchema])); // throws
 
 :::
 
+::: lang python
+
+```python
+import darudb
+
+db = darudb.Database.open(
+    "secret.darudb",
+    schema=darudb.Schema(1, [User]),
+    password="correct horse battery staple",
+)
+
+print(db.is_encrypted)  # True
+db.set_password("a new password")  # or `await db.set_password_async(...)`
+db.close()
+
+darudb.Database.open("secret.darudb", schema=darudb.Schema(1, [User]))  # raises KEY_REQUIRED
+```
+
+- `key` is 32 bytes, as `bytes`, `bytearray` or `memoryview`, and `set_key` changes it. Give a `key` or a `password`, not both.
+- A `password` is a `str` or bytes.
+- The native module copies the key or the password into a buffer of its own, which is wiped once the engine has its copy. A `bytearray` you pass can be wiped with `key[:] = bytes(len(key))` once the call has returned, or once an `_async` twin has been awaited; `bytes` and `str` cannot be wiped, and stay in memory until Python frees them.
+- `set_key` and `set_password` commit, so they follow the rules of a write: their `_async` twins wait their turn after this event loop's other asynchronous writes on the file, and the synchronous forms are refused on the loop's thread while an asynchronous write holds it.
+
+:::
+
 Everything inside a page is encrypted: keys, values, collection and tree names included. Every page is authenticated, and so is the header's record of each commit, so a changed byte is reported as `CORRUPTED` rather than read. A file opened without its key fails with `KEY_REQUIRED`, and with the wrong one with `WRONG_KEY`.
 
 ## Keys and passwords
 
 - **A key** is 32 random bytes, such as one kept in the operating system's keystore, as [below](#keep-the-key-in-the-operating-system-s-keystore).
-- **A password** is turned into a key with Argon2id, which takes tens of milliseconds at the default cost of 19 MiB, 2 iterations and 1 lane. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" /> raises or lowers that cost for a new file and for a password change. A file records the cost it was made with, so opening it takes that cost whatever the option says.
+- **A password** is turned into a key with Argon2id, which takes tens of milliseconds at the default cost of 19 MiB, 2 iterations and 1 lane. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" /> raises or lowers that cost for a new file and for a password change. A file records the cost it was made with, so opening it takes that cost whatever the option says.
 - **Changing the key or the password** re-encrypts nothing, and once it returns, the old one no longer opens the file.
 - A plain database stays plain, and an encrypted one cannot be opened without its key. Keep the key, or the password, where it cannot be lost: without it, the data cannot be read.
 
@@ -182,6 +207,41 @@ final db = Database.open(
 ```
 
 A Dart server or command-line tool keeps the key with its other secrets, such as an environment variable its deployment fills from a secret manager.
+
+:::
+
+::: lang python
+
+The `keyring` package reaches the Keychain on macOS, the Credential Manager on Windows and the Secret Service on Linux. It stores text, so the key is kept in Base64.
+
+```python
+import base64
+import secrets
+
+import darudb
+import keyring
+
+
+def database_key() -> bytes:
+    stored = keyring.get_password("my-app", "database-key")
+
+    if stored is not None:
+        return base64.b64decode(stored)
+
+    key = secrets.token_bytes(32)
+    keyring.set_password("my-app", "database-key", base64.b64encode(key).decode())
+
+    return key
+
+
+db = darudb.Database.open(
+    "secret.darudb",
+    schema=darudb.Schema(1, [User]),
+    key=database_key(),
+)
+```
+
+A server keeps the key with its other secrets, such as an environment variable its deployment fills from a secret manager: `base64.b64decode(os.environ["DATABASE_KEY"])`.
 
 :::
 

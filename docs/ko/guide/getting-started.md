@@ -5,7 +5,7 @@ order: 2
 
 # 시작하기
 
-언어별 레지스트리(crates.io, npm, pub.dev)에서 DaruDB를 프로젝트에 추가하고 첫 데이터베이스를 열어 봅니다.
+언어별 레지스트리(crates.io, npm, pub.dev, PyPI)에서 DaruDB를 프로젝트에 추가하고 첫 데이터베이스를 열어 봅니다.
 
 ## 요구 사항
 
@@ -25,6 +25,12 @@ order: 2
 
 - **Dart 3.10 이상**, 또는 Flutter 3.38 이상. 패키지가 빌드 훅으로 네이티브 라이브러리를 마련하는데, 빌드 훅은 이 버전부터 정식 기능입니다.
 - 애플리케이션을 어떤 대상으로 처음 빌드할 때의 **네트워크 연결**. 빌드 훅이 그 대상용으로 미리 빌드한 엔진을 패키지의 GitHub 릴리스에서 내려받아 SHA-256 해시를 확인하고 캐시에 두므로, 빌드에 Rust 툴체인이 필요 없습니다. 라이브러리는 Android, iOS, macOS, Windows, Linux용이 있습니다. 정적 라이브러리가 필요하거나 미리 빌드한 라이브러리가 없는 대상이라면 git으로 패키지를 의존합니다. 그러면 빌드 훅이 [rustup](https://rustup.rs)으로 엔진을 소스에서 빌드합니다.
+
+:::
+
+::: lang python
+
+- **CPython 3.11 이상**. Linux(glibc 2.17 이상과 musl)와 macOS, Windows의 x86-64와 ARM64용 휠, 그리고 32비트 Windows용 휠을 미리 빌드해 두었습니다. 휠 하나가 3.11부터의 모든 CPython에서 돌고, GIL 없이 도는 Python 3.14 빌드에는 휠이 따로 있으므로 설치할 때 컴파일하는 것이 없습니다.
 
 :::
 
@@ -70,6 +76,16 @@ dev_dependencies:
 ```
 
 Flutter 앱과 Dart 서버, 명령줄 도구에서 똑같이 쓸 수 있습니다. 생성기가 읽는 클래스는 [컬렉션과 객체](./objects.md)에 있습니다.
+
+:::
+
+::: lang python
+
+```bash
+pip install darudb
+```
+
+패키지에는 타입 힌트가 함께 들어 있습니다. 컬렉션마다 데이터 클래스로 선언한 클래스가 있으므로, 타입 검사기는 읽어 온 객체의 필드를 모두 압니다.
 
 :::
 
@@ -130,6 +146,26 @@ void main() {
 ```
 
 이 페이지의 예제는 `await` 없이 결과를 바로 돌려주는 동기 API를 씁니다. 파일을 쓰는 호출마다 이름이 `Async`로 끝나고 `Future`를 돌려주는 짝도 있습니다. Flutter 앱의 UI isolate에서는 디스크를 기다리는 동안 프레임이 밀리지 않도록 쓰기와 파일 열기에 이쪽을 쓰세요. 어디에 무엇을 쓸지는 [동기와 비동기 고르기](./async.md#동기와-비동기-고르기)에 있습니다.
+
+:::
+
+::: lang python
+
+```python
+import darudb
+
+db = darudb.Database.open("app.darudb")
+
+print(f"page size: {db.page_size} bytes")
+db.close()
+
+# 파일이 이미 있을 때만 엽니다.
+darudb.Database.open("app.darudb", create=False).close()
+```
+
+데이터베이스는 컨텍스트 관리자이기도 합니다. `with darudb.Database.open("app.darudb") as db:`로 열면 블록이 끝날 때 닫힙니다.
+
+이 페이지의 예제는 동기 API를 씁니다. 파일을 쓰는 호출마다 이름이 `_async`로 끝나는 `asyncio`용 짝도 있습니다. `asyncio` 서버처럼 이벤트 루프에서 도는 프로그램에서는 디스크를 기다리는 동안 루프가 멈추지 않도록 쓰기와 파일 열기에 이쪽을 쓰세요. 어디에 무엇을 쓸지는 [동기와 비동기 고르기](./async.md#동기와-비동기-고르기)에 있습니다.
 
 :::
 
@@ -240,6 +276,39 @@ Dart 3.10에서는 `build_runner`가 `'dart compile' does not support build hook
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import F, field
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    age: int = field(default=0, index=True)
+
+
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User]))
+
+with db.write() as txn:
+    users = txn.collection(User)
+
+    users.insert(User(name="Alice", age=31))
+    users.insert(User(name="Bob", age=17))
+
+with db.read() as txn:
+    adults = txn.collection(User).find(F.age >= 18)
+
+print(adults)  # [User(id=1, name='Alice', age=31)]
+db.close()
+```
+
+`@darudb.collection`은 클래스를 필드를 바꿀 수 없는 데이터 클래스로 만들고, 클래스의 어노테이션이 곧 필드의 타입이 됩니다. `write` 블록은 끝날 때 커밋하고, 쿼리가 찾은 객체는 그 클래스의 인스턴스입니다.
+
+:::
+
 이 컬렉션에는 기본 키 필드가 없으므로 엔진이 객체마다 1부터 번호를 매긴 `id`를 줍니다. `age`에 인덱스가 있으므로 쿼리는 모든 객체를 읽지 않고 찾는 객체만 읽습니다.
 
 ## 옵션
@@ -287,6 +356,21 @@ Dart 3.10에서는 `build_runner`가 `'dart compile' does not support build hook
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/dart/database.md#open)에 있고, `Database.openAsync`도 같은 옵션을 받습니다.
+
+:::
+
+::: lang python
+
+`Database.open`은 키워드 인자로 옵션을 받습니다.
+
+- `create=False`를 주면 없는 파일을 만들지 않고 `NOT_FOUND`로 실패합니다.
+- `page_size`는 새 파일의 페이지 크기입니다. 4096부터 65536 사이의 2의 거듭제곱이며 기본값은 4096입니다.
+- `cache_size`는 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. 기본값은 32 MiB입니다.
+- `busy_timeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 초 단위로 정합니다. 기본값은 5입니다. `float`를 받으므로 `0.5`를 주면 0.5초입니다.
+- `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
+- `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
+
+옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/python/database.md#open)에 있고, `Database.open_async`도 같은 옵션을 받습니다.
 
 :::
 

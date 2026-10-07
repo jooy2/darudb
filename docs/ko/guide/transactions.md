@@ -60,7 +60,24 @@ final count = db.read((txn) => txn.collection(userSchema).count());
 
 :::
 
-읽기 트랜잭션은 시작한 뒤에 무엇이 커밋되든 살아 있는 동안 커밋 하나만 보고, 쓰기를 기다리지 않습니다. 쓰기 트랜잭션은 모든 핸들과 프로세스를 통틀어 파일마다 한 번에 하나입니다. 쓰기는 이미 실행 중인 트랜잭션을 바쁨 대기 시간만큼 기다리고, 그래도 끝나지 않으면 `BUSY`로 실패합니다. 바쁨 대기 시간은 <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" />으로 바꾸지 않으면 5초입니다.
+::: lang python
+
+`db.write()`와 `db.read()`는 컨텍스트 관리자입니다. `with db.write() as txn:` 블록은 끝날 때 커밋합니다. 블록에서 예외가 나면 그 안에서 한 일은 남지 않고, 예외는 그대로 블록 밖으로 나갑니다. `with db.read() as txn:` 블록은 읽기 트랜잭션입니다. 어느 쪽이든 트랜잭션이 블록보다 오래 남지 않으며, 블록이 끝난 뒤에 트랜잭션이나 컬렉션을 쓰면 `CLOSED`가 납니다.
+
+```python
+with db.write() as txn:
+    key = txn.collection(User).insert(User(name="Alice"))
+
+with db.read() as txn:
+    count = txn.collection(User).count()
+```
+
+- 블록은 동기입니다. [비동기 API](./async.md)에는 `async with db.write_async()`와 `async with db.read_async()`가 있습니다.
+- 쓰기 트랜잭션은 겹칠 수 없습니다. 같은 스레드의 쓰기 블록 안에서 같은 파일에 `db.write()`를 부르면 자기 자신을 기다리는 대신 곧바로 `INVALID_ARGUMENT`로 실패합니다. `sync`, `close`, `compact`, `set_key`, `set_password`도 그 블록을 기다리게 되므로 같은 오류로 실패합니다. 다른 스레드의 쓰기는 다른 프로세스의 쓰기처럼 이 쓰기가 끝나기를 기다립니다.
+
+:::
+
+읽기 트랜잭션은 시작한 뒤에 무엇이 커밋되든 살아 있는 동안 커밋 하나만 보고, 쓰기를 기다리지 않습니다. 쓰기 트랜잭션은 모든 핸들과 프로세스를 통틀어 파일마다 한 번에 하나입니다. 쓰기는 이미 실행 중인 트랜잭션을 바쁨 대기 시간만큼 기다리고, 그래도 끝나지 않으면 `BUSY`로 실패합니다. 바쁨 대기 시간은 <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" python="busy_timeout" />으로 바꾸지 않으면 5초입니다.
 
 ## 동기 커밋과 지연 커밋
 
@@ -108,7 +125,19 @@ db.sync();
 
 :::
 
-지연 커밋은 다음 동기 커밋이나 <LangCode rust="Database::sync" node="db.sync()" dart="db.sync()" />, 데이터베이스를 닫을 때, 또는 1초를 기다린 뒤에 디스크에 기록됩니다. 이미 파일에 들어가 있으므로 프로세스가 비정상 종료돼도 하나도 잃지 않습니다. 정전이 나면 가장 최근 것부터 되돌려질 수 있지만, 중간이 빠지거나 파일이 손상되지는 않습니다. 되돌아온 상태는 실제로 있었던 커밋과 그 앞의 모든 커밋입니다.
+::: lang python
+
+```python
+with db.write(durability="deferred") as txn:
+    txn.collection(Event).insert(Event(kind="click"))
+
+# 이 호출이 반환되면 지금까지 커밋한 것은 모두 디스크에 있습니다.
+db.sync()
+```
+
+:::
+
+지연 커밋은 다음 동기 커밋이나 <LangCode rust="Database::sync" node="db.sync()" dart="db.sync()" python="db.sync()" />, 데이터베이스를 닫을 때, 또는 1초를 기다린 뒤에 디스크에 기록됩니다. 이미 파일에 들어가 있으므로 프로세스가 비정상 종료돼도 하나도 잃지 않습니다. 정전이 나면 가장 최근 것부터 되돌려질 수 있지만, 중간이 빠지거나 파일이 손상되지는 않습니다. 되돌아온 상태는 실제로 있었던 커밋과 그 앞의 모든 커밋입니다.
 
 ::: lang rust
 
@@ -120,6 +149,6 @@ db.sync();
 
 ## 페이지 캐시
 
-프로세스는 읽은 페이지를 캐시에 두므로, 같은 페이지를 다시 읽을 때는 파일을 읽지도 검사하지도 않습니다. 캐시는 열린 파일마다 기본 32 MiB까지 쓰며 페이지를 읽는 만큼만 차므로, 그보다 작은 데이터베이스는 그만큼을 다 쓰지 않습니다. 크기는 <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" />에 바이트 단위로 정합니다. 자주 읽는 큰 데이터베이스라면 늘리고, 모바일 앱 확장처럼 메모리가 적은 프로세스라면 줄이세요.
+프로세스는 읽은 페이지를 캐시에 두므로, 같은 페이지를 다시 읽을 때는 파일을 읽지도 검사하지도 않습니다. 캐시는 열린 파일마다 기본 32 MiB까지 쓰며 페이지를 읽는 만큼만 차므로, 그보다 작은 데이터베이스는 그만큼을 다 쓰지 않습니다. 크기는 <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" python="cache_size" />에 바이트 단위로 정합니다. 자주 읽는 큰 데이터베이스라면 늘리고, 모바일 앱 확장처럼 메모리가 적은 프로세스라면 줄이세요.
 
 프로세스 안에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 두 핸들은 캐시와 쓰기를 함께 씁니다.

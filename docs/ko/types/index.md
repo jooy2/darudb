@@ -25,4 +25,10 @@ TypeScript용 타입은 패키지 최상위에서 `import type { OpenOptions } f
 
 :::
 
+::: lang python
+
+타입은 패키지 최상위에서 `darudb.Key`처럼 쓰거나 `from darudb import CheckReport`처럼 가져옵니다. 패키지에 타입 힌트가 함께 들어 있습니다. 이 타입을 받고 돌려주는 호출은 [API](../api/index.md)에 있습니다.
+
+:::
+
 <PageList section="types" />

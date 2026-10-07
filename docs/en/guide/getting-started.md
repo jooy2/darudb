@@ -5,7 +5,7 @@ order: 2
 
 # Getting started
 
-This page adds DaruDB to a project from its language's registry, crates.io, npm or pub.dev, and opens a first database.
+This page adds DaruDB to a project from its language's registry, crates.io, npm, pub.dev or PyPI, and opens a first database.
 
 ## Requirements
 
@@ -25,6 +25,12 @@ This page adds DaruDB to a project from its language's registry, crates.io, npm 
 
 - **Dart 3.10 or later**, or Flutter 3.38 or later: the package provides its native library through a build hook, which those releases made stable.
 - **Network access the first time an application builds for a target.** The build hook downloads the engine prebuilt for that target from the package's GitHub release, checks its SHA-256 hash and keeps it in its cache, so building needs no Rust toolchain. Libraries ship for Android, iOS, macOS, Windows and Linux. An application that needs a static library, or a target without a prebuilt one, depends on the package through git instead, which builds the engine from source with [rustup](https://rustup.rs).
+
+:::
+
+::: lang python
+
+- **CPython 3.11 or later.** The package ships prebuilt wheels for Linux (glibc 2.17 or later, and musl), macOS and Windows, on x86-64 and ARM64, and for 32-bit Windows. One wheel serves every CPython from 3.11, and the free-threaded build of Python 3.14 has wheels of its own, so installing the package compiles nothing.
 
 :::
 
@@ -70,6 +76,16 @@ dev_dependencies:
 ```
 
 The package works in Flutter apps, Dart servers and command-line tools alike. [Collections and objects](./objects.md) shows the classes the generator reads.
+
+:::
+
+::: lang python
+
+```bash
+pip install darudb
+```
+
+The package ships its type hints, and each collection is a class you declare as a dataclass, so a type checker knows the fields of every object you read.
 
 :::
 
@@ -130,6 +146,26 @@ void main() {
 ```
 
 The examples on this page use the synchronous API, which returns its result without `await`. Every call that uses the file also has a twin whose name ends in `Async` and returns a `Future`. A Flutter app's UI isolate should use it for writes and for opening, so that a wait for the disk does not hold up its frames. [Which one to use](./async.md#which-one-to-use) says where each belongs.
+
+:::
+
+::: lang python
+
+```python
+import darudb
+
+db = darudb.Database.open("app.darudb")
+
+print(f"page size: {db.page_size} bytes")
+db.close()
+
+# Open only if the file is already there.
+darudb.Database.open("app.darudb", create=False).close()
+```
+
+A database is also a context manager: `with darudb.Database.open("app.darudb") as db:` closes it when the block ends.
+
+The examples on this page use the synchronous API. Every call that uses the file also has a twin whose name ends in `_async`, for `asyncio`. A program that runs on an event loop, such as an `asyncio` server, should use it for writes and for opening, so that a wait for the disk does not hold up the loop. [Which one to use](./async.md#which-one-to-use) says where each belongs.
 
 :::
 
@@ -240,6 +276,39 @@ On Dart 3.10, `build_runner` stops with `'dart compile' does not support build h
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import F, field
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    age: int = field(default=0, index=True)
+
+
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User]))
+
+with db.write() as txn:
+    users = txn.collection(User)
+
+    users.insert(User(name="Alice", age=31))
+    users.insert(User(name="Bob", age=17))
+
+with db.read() as txn:
+    adults = txn.collection(User).find(F.age >= 18)
+
+print(adults)  # [User(id=1, name='Alice', age=31)]
+db.close()
+```
+
+`@darudb.collection` makes the class a frozen dataclass whose annotations are the types of its fields. The `write` block commits when it ends, and the objects a query finds are instances of the class.
+
+:::
+
 The collection has no primary key field, so the engine gives each object an `id`, numbered from 1. The index on `age` lets the query read only the objects it finds rather than every object.
 
 ## Options
@@ -287,6 +356,21 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 
 [`Database.open`](../api/dart/database.md#open) in the API section has each of them in full, and `Database.openAsync` takes the same.
+
+:::
+
+::: lang python
+
+`Database.open` takes keyword options:
+
+- `create=False` refuses to create a missing file, which then fails with `NOT_FOUND`.
+- `page_size` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
+- `cache_size` sets how much memory, in bytes, the page cache may take: 32 MiB by default.
+- `busy_timeout` sets how long, in seconds, a write waits for another writer before failing with `BUSY`: 5 by default. It takes a `float`, so `0.5` is half a second.
+- `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
+- `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+
+[`Database.open`](../api/python/database.md#open) in the API section has each of them in full, and `Database.open_async` takes the same.
 
 :::
 

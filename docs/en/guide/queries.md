@@ -92,6 +92,34 @@ The types check every condition: `q.age.atLeast('18')` does not compile.
 
 :::
 
+::: lang python
+
+`find`, `find_one` and `count` take a condition or a `Query`. `F` names a field, as `F.age`, and comparing it makes a condition; conditions combine with `&` (both), `|` (either) and `~` (not). `where` makes a condition a `Query`, which adds a sort, an offset and a limit. `find_one` stops at the first object.
+
+```python
+from darudb import F, where
+
+with db.read() as txn:
+    users = txn.collection(User)
+
+    adults = users.find(where(F.age >= 18).sort_by(F.age, descending=True).limit(10))
+
+    users.find(F.email.is_null())
+    users.find(F.tags.contains("new") & F.age.between(18, 30))
+    users.find(F.team.city == "Seoul")
+    users.find((F.name == "Alice") | F.email.is_null())
+    users.count(~F.name.startswith("A"))
+```
+
+The tests are `==`, `!=`, `<`, `<=`, `>` and `>=`, and the methods `between`, `is_in`, `contains`, `startswith`, `endswith`, `is_null` and `is_not_null`; `== None` and `!= None` test for null too. Calling `where` on a query again adds a condition with AND, and `sort_by` again sorts the objects the first leaves equal. A path goes through an embedded object or a link by attribute, `F.address.city`, and `F["name"]` names a field whose name is also a method's.
+
+- **Parentheses.** `&` and `|` bind more tightly than `==` or `>=` in Python, so a comparison combined with another goes in parentheses. A condition has no truth value, so `and`, `or` and `not` raise `TypeError`.
+- **Python names.** A path names a field by its Python attribute, and the package gives the engine the name the file stores, which `field(name=...)` may have changed.
+- **Reuse.** Every method returns a new query, and a query is compiled once for each collection it runs on, so a query kept in a variable is not compiled again on its next run.
+- **Checks.** `F` is not typed, so a field the collection does not have, or a value of another type, fails with `INVALID_QUERY` when the query runs.
+
+:::
+
 What a condition means is the same in every language:
 
 - **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
@@ -138,6 +166,16 @@ users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [1
 ```
 
 The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
+
+:::
+
+::: lang python
+
+```python
+users.find("age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10", 18, "A")
+```
+
+The values follow the text as positional arguments. The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A text names fields as the file stores them, where a path built with `F` names their Python attributes.
 
 :::
 
@@ -203,6 +241,27 @@ db.read((txn) {
 ```
 
 A prepared query runs only on the collection it was prepared on.
+
+:::
+
+::: lang python
+
+`db.prepare` takes the class and the query, as text or built with `param` in place of the values that change. `find`, `find_one` and `count` take the prepared query and the values after it, in any transaction, synchronous or asynchronous.
+
+```python
+from darudb import F, param
+
+by_email = db.prepare(User, F.email == param(0))
+in_ages = db.prepare(User, "age BETWEEN $0 AND $1 SORT BY age")
+
+with db.read() as txn:
+    users = txn.collection(User)
+
+    users.find_one(by_email, "alice@example.com")
+    users.find(in_ages, 18, 30)
+```
+
+A prepared query runs only on the collection it was prepared on, and fails with `INVALID_QUERY` on another.
 
 :::
 

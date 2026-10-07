@@ -59,6 +59,18 @@ if (!report.ok) {
 
 :::
 
+::: lang python
+
+```python
+report = db.check()  # 또는 `await db.check_async()`
+
+if not report.ok:
+    for problem in report.problems:
+        print(problem.page, problem.tree, problem.message)
+```
+
+:::
+
 - 문제마다 그 문제가 있는 페이지와, 문제를 찾은 트리나 컬렉션이 적혀 있습니다.
 - 검사는 파일 전체를 읽으므로 모든 객체를 읽는 것과 비슷하게 걸립니다. 메모리는 페이지마다 1비트만 쓰고, 객체 수에 따라 늘지 않습니다.
 - 읽을 수 없는 페이지가 있으면 그 아래 페이지는 읽지 못합니다. 이런 페이지는 하나씩 누수로 보고하지 않고 문제 하나로 묶어 셉니다.
@@ -101,6 +113,16 @@ print('${report.entries} entries of commit ${report.commitId}');
 
 :::
 
+::: lang python
+
+```python
+report = db.backup("backups/app.darudb")  # 또는 `await db.backup_async(path)`
+
+print(f"{report.entries} entries of commit {report.commit_id}")
+```
+
+:::
+
 - 사본은 대상 경로 옆에 임시 이름으로 쓰고, 온전하고 디스크에 기록된 뒤에야 대상 경로로 옮깁니다. 백업은 이미 있는 파일을 덮어쓰지 않습니다. 경로에 파일이 있으면 `INVALID_ARGUMENT`로 실패합니다.
 - 백업은 도는 동안 복사하는 커밋을 읽기 트랜잭션처럼 붙잡고 있습니다. 그래서 그동안 다른 쪽이 쓰면 파일이 커질 수 있습니다.
 
@@ -133,6 +155,14 @@ await db.backupAsync('app.rekeyed.darudb', { password: 'a new password' }); // �
 
 ```dart
 await db.backupAsync('app.rekeyed.darudb', password: 'a new password'); // 또는 `db.backup(path, ...)`
+```
+
+:::
+
+::: lang python
+
+```python
+db.backup("app.rekeyed.darudb", password="a new password")  # 또는 `await db.backup_async(...)`
 ```
 
 :::
@@ -171,6 +201,16 @@ console.log(`${report.bytesBefore} bytes, then ${report.bytesAfter}`);
 final report = await db.compactAsync(); // 또는 `db.compact()`
 
 print('${report.bytesBefore} bytes, then ${report.bytesAfter}');
+```
+
+:::
+
+::: lang python
+
+```python
+report = db.compact()  # 또는 `await db.compact_async()`
+
+print(f"{report.bytes_before} bytes, then {report.bytes_after}")
 ```
 
 :::
@@ -236,7 +276,22 @@ if (!report.whole) {
 
 :::
 
-- 새 파일이 가장 새 커밋을 그대로 담으면 <LangCode rust="is_whole()" node="whole" dart="whole" />이 참입니다. 그렇지 않으면 읽지 못한 곳을 옛 버전으로 채운 것입니다. 항목이 옛 값을 가질 수 있고, 잃어버린 페이지에서 지워졌던 항목이 되살아날 수도 있습니다.
+::: lang python
+
+```python
+import darudb
+
+report = darudb.Database.salvage("app.darudb", "rescued.darudb")  # 또는 `Database.salvage_async`
+
+if not report.whole:
+    print(report.entries_recovered, report.values_lost, report.objects_dropped)
+```
+
+암호화한 파일은 키워드 인자에 `key`나 `password`를 넣어 되살립니다.
+
+:::
+
+- 새 파일이 가장 새 커밋을 그대로 담으면 <LangCode rust="is_whole()" node="whole" dart="whole" python="whole" />이 참입니다. 그렇지 않으면 읽지 못한 곳을 옛 버전으로 채운 것입니다. 항목이 옛 값을 가질 수 있고, 잃어버린 페이지에서 지워졌던 항목이 되살아날 수도 있습니다.
 - 레코드를 읽을 수 없는 객체와, 고유 인덱스 값을 다른 객체가 이미 차지한 객체는 빼고 그 수를 셉니다.
 - 되살리기는 파일을 혼자 써야 합니다. 어느 프로세스든 파일을 열고 있으면 `BUSY`로 실패하고, 되살리는 동안 파일을 열어도 `BUSY`로 실패합니다.
 - 새 파일의 페이지 크기는 옛 파일과 같고, 암호화한 파일의 키나 비밀번호로 새 파일도 열립니다. 백업처럼 경로에 이미 있는 파일은 덮어쓰지 않습니다.

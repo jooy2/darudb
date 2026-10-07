@@ -25,4 +25,10 @@ order: 1
 
 :::
 
+::: lang python
+
+`darudb` 패키지는 모든 것을 최상위에서 내보냅니다. `import darudb`나 `from darudb import Database, Schema, collection`처럼 가져오면 됩니다. 이 호출들이 받고 돌려주는 타입은 [타입](../types/index.md)에 있습니다.
+
+:::
+
 <PageList section="api" />

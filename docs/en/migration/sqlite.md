@@ -162,6 +162,35 @@ const app = Schema(1, [userSchema, postSchema]);
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import field
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    email: str | None = field(default=None, unique=True)
+    age: int = field(default=0, index=True)
+
+
+@darudb.collection("posts")
+class Post:
+    slug: str = field(primary_key=True)
+    author: int | None = field(default=None, link=User, index=True)
+    body: str
+    published_at: str | None = None
+    tags: list[str] = field(index=True)
+
+
+app = darudb.Schema(1, [User, Post])
+```
+
+:::
+
 ## Copy the rows
 
 ::: lang rust
@@ -412,11 +441,76 @@ void main() {
 
 :::
 
+::: lang python
+
+The script reads the old file with the `sqlite3` module, which comes with Python, so there is nothing to install for it:
+
+```python
+import sqlite3
+from collections import defaultdict
+
+import darudb
+
+from schema import Post, User, app
+
+sqlite = sqlite3.connect("file:app.sqlite?mode=ro", uri=True)
+db = darudb.Database.open("app.darudb", schema=app)
+
+
+def copy(rows, cls, convert):
+    """Copies ``rows`` into the collection of ``cls``, a thousand to a transaction."""
+    batch = []
+
+    def flush():
+        with db.write(durability="deferred") as txn:
+            txn.collection(cls).insert_many(batch)
+
+        batch.clear()
+
+    for row in rows:
+        batch.append(convert(row))
+
+        if len(batch) == 1000:
+            flush()
+
+    if batch:
+        flush()
+
+
+copy(
+    sqlite.execute("SELECT id, name, email, age FROM users"),
+    User,
+    lambda row: User(id=row[0], name=row[1], email=row[2], age=row[3]),
+)
+
+# The join table becomes a list on each post.
+tags = defaultdict(list)
+
+for slug, tag in sqlite.execute("SELECT post_slug, tag FROM post_tags"):
+    tags[slug].append(tag)
+
+copy(
+    sqlite.execute("SELECT slug, author_id, body, published_at FROM posts"),
+    Post,
+    lambda row: Post(
+        slug=row[0], author=row[1], body=row[2], published_at=row[3], tags=tags.get(row[0], [])
+    ),
+)
+
+# Every deferred commit is durable once this returns.
+db.close()
+sqlite.close()
+```
+
+`mode=ro` in the file's URI opens it read-only. The module reads an `INTEGER` as an `int`, a `REAL` as a `float` and a `BLOB` as `bytes`, which the package stores as they are.
+
+:::
+
 The old file is opened read-only and stays as it was. Copying the whole join table into memory first is what lets each post be written once, with its tags; for a join table too large for memory, read it ordered by `post_slug` beside the posts ordered by `slug` instead.
 
 ## Check the copy
 
-Count each table and each collection, and compare: `SELECT count(*) FROM users` against <LangCode rust="len" node="count" dart="count" /> on `users`. Then run the [integrity check](../guide/tools.md#check-a-file) on the new file, which also checks every object against its indexes.
+Count each table and each collection, and compare: `SELECT count(*) FROM users` against <LangCode rust="len" node="count" dart="count" python="count" /> on `users`. Then run the [integrity check](../guide/tools.md#check-a-file) on the new file, which also checks every object against its indexes.
 
 ## Queries
 
@@ -441,6 +535,6 @@ The query language reads much like a `WHERE` clause:
 
 ## What changes in the application
 
-- **Transactions** are <LangCode rust="begin_read and begin_write" node="db.read and db.write" dart="db.read and db.write" /> instead of `BEGIN` and `COMMIT`, and a read happens in one too. [Transactions](../guide/transactions.md) says what a commit promises.
+- **Transactions** are <LangCode rust="begin_read and begin_write" node="db.read and db.write" dart="db.read and db.write" python="db.read and db.write" /> instead of `BEGIN` and `COMMIT`, and a read happens in one too. [Transactions](../guide/transactions.md) says what a commit promises.
 - **Schema changes** raise the schema's version instead of running `ALTER TABLE`: the engine adds new collections, fields and indexes by itself, and a migration names the rest. See [Migrations](../guide/migrations.md).
 - **Results are plain objects**, which keep their values after the transaction ends.

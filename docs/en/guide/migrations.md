@@ -148,6 +148,51 @@ final db = Database.open(
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import Migration, field
+
+
+@darudb.collection("people")
+class Person:
+    id: int | None = None
+    full_name: str
+    email: str | None = field(default=None, unique=True)
+    age: str = ""
+
+
+def to_v2(m: darudb.Migrating) -> None:
+    people = m.collection(Person)
+
+    for key in m.previous_keys("users"):
+        before = m.previous("users", key)
+
+        if before is not None:
+            people.update(key, age=f"{before['age']} years")
+
+
+db = darudb.Database.open(
+    "app.darudb",
+    schema=darudb.Schema(2, [Person]),
+    migrations=[
+        Migration(
+            2,
+            rename_collections=[("users", "people")],
+            rename_fields=[("users", "name", "full_name")],
+            replace_fields=[("users", "age")],
+            delete_collections=["teams"],
+            run=to_v2,
+        )
+    ],
+)
+```
+
+`previous` gives an object as the old schema read it, as a `dict` of its fields by their old names, since the class of the old schema is usually gone from the program. If `run` raises, `open` raises the same exception. With `Database.open_async`, `run` may be a coroutine function, given an `AsyncMigrating` whose calls are awaited.
+
+:::
+
 - **Renames** keep the data where it is, so they cost nothing however many objects there are. A rename names the collection by its name before the migration.
 - **A replaced field** is a new field with the old name, for a change of type. **A deleted collection** goes with its objects and indexes.
 - **The migration function** runs in the migration's write transaction, after the renames, under the new schema. `previous` reads an object as the old schema did, with the old names and the values of removed and replaced fields, so read an object that way before writing it: a written object keeps only the new schema's fields. A deleted collection can still be read that way until the migration commits.

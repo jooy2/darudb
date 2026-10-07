@@ -26,5 +26,5 @@ DaruDB 파일의 스키마를 바꾸는 방법은 가이드의 [마이그레이�
 
 ## 가이드
 
-- [SQLite](./sqlite.md): 테이블과 행, 인덱스. Rust와 Node.js, Dart로 옮깁니다.
+- [SQLite](./sqlite.md): 테이블과 행, 인덱스. Rust와 Node.js, Dart, Python으로 옮깁니다.
 - [Realm](./realm.md): 객체 스키마와 링크, 내장 객체. Node.js로 옮깁니다.

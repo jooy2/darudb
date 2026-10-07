@@ -60,7 +60,24 @@ final count = db.read((txn) => txn.collection(userSchema).count());
 
 :::
 
-A read transaction sees one commit for as long as it lives, whatever is committed after it began, and never waits for a writer. There is one write transaction at a time in a file, across every handle and every process. A write waits for the one already running for up to the busy timeout, five seconds unless <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" /> says otherwise, and then fails with `BUSY`.
+::: lang python
+
+`db.write()` and `db.read()` are context managers. A `with db.write() as txn:` block commits when it ends; if it raises, nothing it did is kept, and the exception goes on as it was. A `with db.read() as txn:` block is a read transaction. Neither lets a transaction outlive its block: a transaction or a collection used after its block has ended raises `CLOSED`.
+
+```python
+with db.write() as txn:
+    key = txn.collection(User).insert(User(name="Alice"))
+
+with db.read() as txn:
+    count = txn.collection(User).count()
+```
+
+- The blocks are synchronous. The [asynchronous API](./async.md) has `async with db.write_async()` and `async with db.read_async()`.
+- Write transactions do not nest: `db.write()` on the same file inside a write block of the same thread fails at once with `INVALID_ARGUMENT`, where it would otherwise wait for itself, and so do `sync`, `close`, `compact`, `set_key` and `set_password`, which would wait for it too. A write in another thread waits for this one, as another process's would.
+
+:::
+
+A read transaction sees one commit for as long as it lives, whatever is committed after it began, and never waits for a writer. There is one write transaction at a time in a file, across every handle and every process. A write waits for the one already running for up to the busy timeout, five seconds unless <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" python="busy_timeout" /> says otherwise, and then fails with `BUSY`.
 
 ## Sync and deferred commits
 
@@ -108,7 +125,19 @@ db.sync();
 
 :::
 
-Deferred commits become durable at the next sync commit, at <LangCode rust="Database::sync" node="db.sync()" dart="db.sync()" />, when the database is closed, or once they have waited a second. A crash of the process loses none of them, because they are already in the file. A power cut can undo the newest ones, but it never leaves a gap and never damages the file: what comes back is a commit that was made, with every commit before it.
+::: lang python
+
+```python
+with db.write(durability="deferred") as txn:
+    txn.collection(Event).insert(Event(kind="click"))
+
+# Everything committed so far is durable once this returns.
+db.sync()
+```
+
+:::
+
+Deferred commits become durable at the next sync commit, at <LangCode rust="Database::sync" node="db.sync()" dart="db.sync()" python="db.sync()" />, when the database is closed, or once they have waited a second. A crash of the process loses none of them, because they are already in the file. A power cut can undo the newest ones, but it never leaves a gap and never damages the file: what comes back is a commit that was made, with every commit before it.
 
 ::: lang rust
 
@@ -120,6 +149,6 @@ A sync commit costs one wait for the disk, which on most machines is the larger 
 
 ## The page cache
 
-Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" /> sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
+Each process keeps the pages it reads in a cache, so that reading a page again costs neither a read nor a check. The cache takes up to 32 MiB for each open file by default, and only as pages are read, so a smaller database never takes all of it. <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" python="cache_size" /> sets the size in bytes: more for a large database that is read often, less in a process with little memory, such as a mobile app extension.
 
 Opening a file that is already open in the process gives another handle to the same database, which shares its cache and its writer.

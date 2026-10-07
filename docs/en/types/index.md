@@ -25,4 +25,10 @@ The types are exported from the package's library, `package:darudb/darudb.dart`.
 
 :::
 
+::: lang python
+
+The types are exported from the package's root, as `darudb.Key` or `from darudb import CheckReport`, and the package ships type hints for them. The calls that take and return them are in [API](../api/index.md).
+
+:::
+
 <PageList section="types" />

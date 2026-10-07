@@ -92,6 +92,34 @@ db.read((txn) {
 
 :::
 
+::: lang python
+
+`find`, `find_one`, `count`는 조건이나 `Query`를 받습니다. `F`는 `F.age`처럼 필드를 가리키고, 그 필드를 비교하면 조건이 됩니다. 조건은 `&`(둘 다), `|`(둘 중 하나), `~`(부정)로 엮습니다. `where`는 조건을 `Query`로 만들고, `Query`에는 정렬과 오프셋, 개수 제한을 붙입니다. `find_one`은 첫 객체에서 멈춥니다.
+
+```python
+from darudb import F, where
+
+with db.read() as txn:
+    users = txn.collection(User)
+
+    adults = users.find(where(F.age >= 18).sort_by(F.age, descending=True).limit(10))
+
+    users.find(F.email.is_null())
+    users.find(F.tags.contains("new") & F.age.between(18, 30))
+    users.find(F.team.city == "Seoul")
+    users.find((F.name == "Alice") | F.email.is_null())
+    users.count(~F.name.startswith("A"))
+```
+
+조건은 `==`, `!=`, `<`, `<=`, `>`, `>=`와 메서드 `between`, `is_in`, `contains`, `startswith`, `endswith`, `is_null`, `is_not_null`로 만듭니다. `== None`과 `!= None`도 null인지 검사합니다. 쿼리에 `where`를 다시 부르면 AND로 조건이 붙고, `sort_by`를 다시 부르면 앞의 정렬에서 같은 객체끼리 그 필드로 정렬합니다. 내장 객체나 링크를 지나는 경로는 `F.address.city`처럼 속성으로 잇고, 이름이 메서드와 같은 필드는 `F["name"]`으로 가리킵니다.
+
+- **괄호.** Python에서 `&`와 `|`는 `==`나 `>=`보다 먼저 묶이므로, 다른 조건과 엮는 비교는 괄호로 감쌉니다. 조건에는 참거짓 값이 없어서 `and`, `or`, `not`을 쓰면 `TypeError`가 납니다.
+- **Python 이름.** 경로는 필드를 Python 속성 이름으로 가리키고, 패키지가 그 이름을 파일에 저장된 이름으로 바꿔 엔진에 넘깁니다. `field(name=...)`를 준 필드라면 두 이름이 다릅니다.
+- **재사용.** 메서드마다 새 쿼리를 돌려주고, 쿼리는 실행하는 컬렉션마다 한 번만 컴파일됩니다. 그래서 변수에 담아 둔 쿼리는 다음에 실행할 때 다시 컴파일하지 않습니다.
+- **검사.** `F`에는 타입이 없으므로, 컬렉션에 없는 필드나 타입이 다른 값을 쓴 쿼리는 실행할 때 `INVALID_QUERY`로 실패합니다.
+
+:::
+
 조건의 뜻은 언어와 관계없이 같습니다.
 
 - **경로**는 필드 이름이고, 내장 객체나 링크를 지날 때는 `.`으로 잇습니다. `address.city`처럼 쓰고, `author.name`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다.
@@ -138,6 +166,16 @@ users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [1
 ```
 
 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
+
+:::
+
+::: lang python
+
+```python
+users.find("age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10", 18, "A")
+```
+
+값은 문자열 뒤에 위치 인자로 넘깁니다. 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. 문자열 쿼리에서는 필드를 파일에 저장된 이름으로 쓰고, `F`로 만든 경로에서는 Python 속성 이름으로 씁니다.
 
 :::
 
@@ -203,6 +241,27 @@ db.read((txn) {
 ```
 
 준비한 쿼리는 준비할 때 정한 컬렉션에서만 실행됩니다.
+
+:::
+
+::: lang python
+
+`db.prepare`는 클래스와 쿼리를 받습니다. 쿼리는 문자열로 써도 되고, 바뀌는 값 자리에 `param`을 넣어 만들어도 됩니다. 준비한 쿼리를 값과 함께 `find`, `find_one`, `count`에 넘기면 되며, 동기와 비동기 트랜잭션 어디서든 쓸 수 있습니다.
+
+```python
+from darudb import F, param
+
+by_email = db.prepare(User, F.email == param(0))
+in_ages = db.prepare(User, "age BETWEEN $0 AND $1 SORT BY age")
+
+with db.read() as txn:
+    users = txn.collection(User)
+
+    users.find_one(by_email, "alice@example.com")
+    users.find(in_ages, 18, 30)
+```
+
+준비한 쿼리는 준비할 때 정한 컬렉션에서만 실행되고, 다른 컬렉션에서는 `INVALID_QUERY`로 실패합니다.
 
 :::
 

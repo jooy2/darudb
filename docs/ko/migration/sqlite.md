@@ -162,6 +162,35 @@ const app = Schema(1, [userSchema, postSchema]);
 
 :::
 
+::: lang python
+
+```python
+import darudb
+from darudb import field
+
+
+@darudb.collection("users")
+class User:
+    id: int | None = None
+    name: str
+    email: str | None = field(default=None, unique=True)
+    age: int = field(default=0, index=True)
+
+
+@darudb.collection("posts")
+class Post:
+    slug: str = field(primary_key=True)
+    author: int | None = field(default=None, link=User, index=True)
+    body: str
+    published_at: str | None = None
+    tags: list[str] = field(index=True)
+
+
+app = darudb.Schema(1, [User, Post])
+```
+
+:::
+
 ## 행 복사하기
 
 ::: lang rust
@@ -412,11 +441,76 @@ void main() {
 
 :::
 
+::: lang python
+
+스크립트는 Python에 들어 있는 `sqlite3` 모듈로 원래 파일을 읽으므로 따로 설치할 것이 없습니다.
+
+```python
+import sqlite3
+from collections import defaultdict
+
+import darudb
+
+from schema import Post, User, app
+
+sqlite = sqlite3.connect("file:app.sqlite?mode=ro", uri=True)
+db = darudb.Database.open("app.darudb", schema=app)
+
+
+def copy(rows, cls, convert):
+    """``rows``를 ``cls``의 컬렉션에 트랜잭션마다 천 개씩 복사합니다."""
+    batch = []
+
+    def flush():
+        with db.write(durability="deferred") as txn:
+            txn.collection(cls).insert_many(batch)
+
+        batch.clear()
+
+    for row in rows:
+        batch.append(convert(row))
+
+        if len(batch) == 1000:
+            flush()
+
+    if batch:
+        flush()
+
+
+copy(
+    sqlite.execute("SELECT id, name, email, age FROM users"),
+    User,
+    lambda row: User(id=row[0], name=row[1], email=row[2], age=row[3]),
+)
+
+# 연결 테이블은 글마다의 목록이 됩니다.
+tags = defaultdict(list)
+
+for slug, tag in sqlite.execute("SELECT post_slug, tag FROM post_tags"):
+    tags[slug].append(tag)
+
+copy(
+    sqlite.execute("SELECT slug, author_id, body, published_at FROM posts"),
+    Post,
+    lambda row: Post(
+        slug=row[0], author=row[1], body=row[2], published_at=row[3], tags=tags.get(row[0], [])
+    ),
+)
+
+# 이 호출이 반환되면 지연 커밋이 모두 디스크에 기록됩니다.
+db.close()
+sqlite.close()
+```
+
+파일 URI의 `mode=ro`는 파일을 읽기 전용으로 엽니다. 이 모듈은 `INTEGER`를 `int`로, `REAL`을 `float`로, `BLOB`을 `bytes`로 읽고, 패키지는 이 값을 그대로 저장합니다.
+
+:::
+
 원래 파일은 읽기 전용으로 열어서 그대로 남습니다. 연결 테이블을 먼저 메모리에 다 읽어 두기 때문에 글마다 태그와 함께 한 번에 쓸 수 있습니다. 연결 테이블이 메모리에 담기에 너무 크면, `post_slug`로 정렬해 읽으면서 `slug`로 정렬한 글과 나란히 맞춰 가세요.
 
 ## 복사본 확인하기
 
-테이블과 컬렉션마다 개수를 세어 비교합니다. `SELECT count(*) FROM users`의 결과를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" dart="count" />)와 견주면 됩니다. 그다음 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌리면, 모든 객체를 인덱스와도 맞춰 봅니다.
+테이블과 컬렉션마다 개수를 세어 비교합니다. `SELECT count(*) FROM users`의 결과를 `users` 컬렉션의 개수(<LangCode rust="len" node="count" dart="count" python="count" />)와 견주면 됩니다. 그다음 새 파일에 [무결성 검사](../guide/tools.md#파일-검사하기)를 돌리면, 모든 객체를 인덱스와도 맞춰 봅니다.
 
 ## 쿼리
 
@@ -441,6 +535,6 @@ void main() {
 
 ## 애플리케이션에서 바뀌는 것
 
-- **트랜잭션**은 `BEGIN`과 `COMMIT` 대신 <LangCode rust="begin_read와 begin_write" node="db.read와 db.write" dart="db.read와 db.write" />를 쓰고, 읽기도 트랜잭션 안에서 합니다. 커밋이 무엇을 보장하는지는 [트랜잭션](../guide/transactions.md)에 있습니다.
+- **트랜잭션**은 `BEGIN`과 `COMMIT` 대신 <LangCode rust="begin_read와 begin_write" node="db.read와 db.write" dart="db.read와 db.write" python="db.read와 db.write" />를 쓰고, 읽기도 트랜잭션 안에서 합니다. 커밋이 무엇을 보장하는지는 [트랜잭션](../guide/transactions.md)에 있습니다.
 - **스키마 변경**은 `ALTER TABLE`을 실행하는 대신 스키마 버전을 올립니다. 새 컬렉션과 필드, 인덱스는 엔진이 알아서 추가하고, 나머지는 마이그레이션에 적습니다. [마이그레이션](../guide/migrations.md)을 보세요.
 - **결과는 평범한 객체**여서 트랜잭션이 끝나도 값이 그대로 남습니다.

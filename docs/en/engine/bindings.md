@@ -6,7 +6,7 @@ languages: [rust]
 
 # Building a binding
 
-This page describes the calls of the Rust crate that a language binding is built on, the byte formats a binding exchanges with the engine, and how the Node.js package divides its work between JavaScript and the engine.
+This page describes the calls of the Rust crate that a language binding is built on, the byte formats a binding exchanges with the engine, how the Node.js package divides its work between JavaScript and the engine, and how the Python package differs.
 
 ## What a binding does
 
@@ -18,7 +18,7 @@ A binding translates, and the engine decides. Checking objects against the schem
 - Runs migration functions in its own language, between the steps of a migration that the engine stops for.
 - Passes every error's code through unchanged.
 
-The Node.js package is built this way, with napi-rs, and a Dart package is planned the same way. The formats below are specified in [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md) in the repository.
+The Node.js package is built this way, with napi-rs, and so is the Dart package, through a C interface that `dart:ffi` calls. The Python package, built with PyO3, divides the work the same way but hands the engine its own types rather than the byte formats; [How the Python package differs](#how-the-python-package-differs) says where. The formats below are specified in [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md) in the repository.
 
 ## Opening with a schema
 
@@ -173,7 +173,7 @@ The engine checks every query against the collection's schema when it runs, and 
 
 ## Errors
 
-Every [`Error`](../types/rust/error.md) has a stable code, `Error::code`, such as `NOT_FOUND` or `DUPLICATE_KEY`. A binding passes it through unchanged, as `error.code` in JavaScript, and uses the same codes for failures of its own, such as `CLOSED` for an object used after it was closed and `INVALID_ARGUMENT` for a value it cannot convert. A code, once released, is never renamed. `Error` is non-exhaustive, so a `match` on it needs a wildcard arm, and matching on the code is often simpler.
+Every [`Error`](../types/rust/error.md) has a stable code, `Error::code`, such as `NOT_FOUND` or `DUPLICATE_KEY`. A binding passes it through unchanged, as `error.code` in JavaScript and Python, and uses the same codes for failures of its own, such as `CLOSED` for an object used after it was closed and `INVALID_ARGUMENT` for a value it cannot convert. A code, once released, is never renamed. `Error` is non-exhaustive, so a `match` on it needs a wildcard arm, and matching on the code is often simpler.
 
 ## Threads and the event loop
 
@@ -181,11 +181,11 @@ Every engine call blocks its thread until it is done: it may wait for the disk, 
 
 Three rules come with that:
 
-- **Do not let a pool thread wait for the process's own writer.** `begin_write` waits for a write transaction already running in the same process. If tasks waiting for it hold every pool thread while the running one needs a thread to finish, neither moves. The Node.js package queues its process's writes on each file in JavaScript and hands them to the pool one at a time, keyed by the file's device and inode, which on Windows are its volume serial number and file index, the same two the engine reads, so that two paths to one file share a queue. Its `syncAsync` and `closeAsync` queue with them, since a sync waits for the writer.
+- **Do not let a pool thread wait for the process's own writer.** `begin_write` waits for a write transaction already running in the same process. If tasks waiting for it hold every pool thread while the running one needs a thread to finish, neither moves. The Node.js package queues its process's writes on each file in JavaScript and hands them to the pool one at a time, keyed by the file's device and inode, which on Windows are its volume serial number and file index, the same two the engine reads, so that two paths to one file share a queue. Its `syncAsync` and `closeAsync` queue with them, since a sync waits for the writer. The Python package keeps the same queue for each event loop, in Python, keyed by the device and inode that `os.stat` gives.
 - **Never open the database file.** On Unix-like systems, closing that descriptor would release every lock the engine holds on the file. Finding a file's device and inode with `stat` opens nothing.
-- **End read transactions promptly.** One left open keeps the pages of its commit from reuse in every process, so the file grows. A binding should make a leaked one hard to write, such as by scoping each transaction to a function, as the Node.js package does.
+- **End read transactions promptly.** One left open keeps the pages of its commit from reuse in every process, so the file grows. A binding should make a leaked one hard to write, such as by scoping each transaction to a function, as the Node.js package does, or to a `with` block, as the Python package does.
 
-`OpenOptions::key` and `OpenOptions::password` copy the secret into buffers that the engine wipes when it drops them. The Node.js package copies the caller's secret into buffers of its own, builds the options with them before any asynchronous task runs, and then fills its buffers with zeros.
+`OpenOptions::key` and `OpenOptions::password` copy the secret into buffers that the engine wipes when it drops them. The Node.js package copies the caller's secret into buffers of its own, builds the options with them before any asynchronous task runs, and then fills its buffers with zeros. The Python package's native module copies the secret into a buffer that is wiped when it is dropped, and hands the engine that copy.
 
 ## How the Node.js package divides the work
 
@@ -199,3 +199,13 @@ Three rules come with that:
 | Queues each file's writes for the thread pool, and wipes secrets | Locks, transactions, commits, recovery and encryption |
 
 Between the two, the native layer in `packages/node/src/lib.rs` converts arguments, returns the records a query finds in one buffer, each after its length, and turns an `Error` into a JavaScript error with the same `code`.
+
+## How the Python package differs
+
+The Python package, `packages/python`, is Python code that is the API, over a native module, `darudb._native`, built from `packages/python/src` with PyO3 and maturin. It decides nothing about the file either, but where the other bindings hand the engine bytes, it hands the engine the crate's own types:
+
+- **Schema.** `_schema.py` reads the decorated classes into fields, types and defaults, and the native module builds the engine's [`Schema`](../api/rust/schema.md) and [`Migration`](../api/rust/migration.md)s from them with the crate's builders, rather than encoding a schema record. The engine checks the schema when the file is opened, and a migration runs through `open_migrating` as above. A migration function reads an old object with [`Migrating`](../api/rust/migrating.md)'s `previous`, as an `Object`, rather than with `previous_record`.
+- **Objects.** The native module turns each Python object into the engine's dynamic [`Object`](../types/rust/object.md), each field under the name the file stores, and writes it with `insert`, `put` or `update`, which check it against the schema by name. An object read comes back as an `Object`, which the module makes into an instance of the class without calling its `__init__`. A batch is converted whole before any of it is written, and crosses in one call.
+- **Queries.** `_query.py` records a query built with `F` as nested tuples, with each attribute turned into the name the file stores. The native module writes them as the IR above and reads it with `QueryRequest::decode`, so a query built in Python means what the same query means in every other language. Text goes to `Query::prepare`, and each run binds its parameters with `Query::bind`.
+- **Threads.** Every engine call releases the GIL, through `Python::detach`, and each handle keeps its engine object behind a mutex, so any thread may use it and the module declares itself safe for free-threaded Python. The asynchronous API runs the calls on a thread pool of the package.
+- **Errors** are `darudb.DaruError`, with the engine's code unchanged. A Python value the engine cannot hold is `INVALID_ARGUMENT`, so that a caller catches one kind of error for every refusal.

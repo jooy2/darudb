@@ -68,6 +68,24 @@ An error a function of yours throws inside a transaction or a migration is throw
 
 :::
 
+::: lang python
+
+Every error the package raises for the database is a `darudb.DaruError`, whose `code` is one of the codes below and whose `message` says what happened. The asynchronous API raises the same errors.
+
+```python
+import darudb
+
+try:
+    darudb.Database.open("missing.darudb", create=False)
+except darudb.DaruError as error:
+    if error.code == "NOT_FOUND":
+        pass  # Nothing exists at that path.
+```
+
+A Python value the engine cannot hold, such as an `int` beyond 64 bits, fails with `INVALID_ARGUMENT` too, rather than a `TypeError`, so one `except` catches every refusal. An exception your own code raises inside a `with` block or a migration's `run` goes on as it was. [`DaruError`](../types/python/error.md) in the Types section has the details.
+
+:::
+
 A program can rely on the code, where the message is meant for a person and may change.
 
 ## Every code

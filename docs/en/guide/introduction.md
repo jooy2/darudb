@@ -5,7 +5,7 @@ order: 1
 
 # Introduction
 
-DaruDB is an embedded database that keeps an application's data in one local file, with one engine written in Rust that programs in Rust, Node.js and Dart all use.
+DaruDB is an embedded database that keeps an application's data in one local file, with one engine written in Rust that programs in Rust, Node.js, Dart and Python all use.
 
 An embedded database runs inside your program rather than beside it. There is no server to install, start or connect to: your program opens a file, reads and writes objects in it, and closes it. That makes it the kind of database a desktop application, a mobile app, a command-line tool or a small server keeps its own data in.
 
@@ -16,6 +16,7 @@ An embedded database runs inside your program rather than beside it. There is no
 | Crate `darudb` | Rust | The engine itself, and a library a Rust program uses directly |
 | npm package `darudb` | Node.js | A binding over the engine, with a typed TypeScript API, synchronous and asynchronous |
 | Dart package `darudb` | Dart | A binding over the engine for Flutter apps and Dart programs, synchronous and with `Future`s, whose generator `darudb_generator` stores annotated classes |
+| PyPI package `darudb` | Python | A binding over the engine for Python programs, synchronous and for `asyncio`, whose collections are dataclasses |
 
 The Rust crate is not only the core the other packages are built on. A Rust program depends on it the way a Node.js program depends on the npm package, and gets the same collections, queries, migrations and tools. It also has two things the bindings do not: the [storage kernel](../engine/storage-kernel.md) of named byte trees under the objects, and the [calls bindings are built on](../engine/bindings.md).
 
@@ -35,7 +36,7 @@ These are goals. Each one becomes a claim when the benchmark or the test suite t
 
 ## How it is built
 
-The engine is written once, in Rust, and the Node.js and Dart packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
+The engine is written once, in Rust, and the Node.js, Dart and Python packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
 
 ## Where it stands
 
@@ -45,4 +46,4 @@ The engine is written once, in Rust, and the Node.js and Dart packages are thin 
 - **Objects.** Schemas, collections, indexes, links and embedded objects, queries built in code or written as text, and migrations from one schema version to the next.
 - **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
 - **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
-- **Packages.** The Rust crate, the Node.js package and the Dart package have all of the above, and all three are released. The Node.js and Dart packages ship the engine prebuilt for every platform they support, so installing them needs no Rust compiler.
+- **Packages.** The Rust crate, the Node.js package, the Dart package and the Python package have all of the above. The first three are released, and the Python package is still to have its first release. The Node.js, Dart and Python packages ship the engine prebuilt for every platform they support, so installing them needs no Rust compiler.

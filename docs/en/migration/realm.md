@@ -214,6 +214,49 @@ const app = Schema(1, [userSchema, postSchema]);
 
 :::
 
+::: lang python
+
+A Python program opens the copied file with the same declaration as decorated classes. The two have to agree, in version, collections, fields, types and indexes, or opening fails with `SCHEMA_MISMATCH`:
+
+```python
+import darudb
+from darudb import field
+
+
+@darudb.embedded
+class Address:
+    city: str
+    zip: str | None = None
+
+
+@darudb.collection("users")
+class User:
+    id: str = field(primary_key=True)
+    name: str
+    email: str | None = field(default=None, index=True)
+    age: int = field(default=0, index=True)
+    score: float | None = None
+    avatar: bytes | None = None
+    joined: int
+    tags: list[str]
+    address: Address | None = None
+
+
+@darudb.collection("posts")
+class Post:
+    slug: str = field(primary_key=True)
+    author: str | None = field(default=None, link=User, index=True)
+    readers: list[str] = field(link=User)
+    price: str | None = None
+    ref: str | None = None
+    meta: str
+
+
+app = darudb.Schema(1, [User, Post])
+```
+
+:::
+
 ## Copy the objects
 
 The script reads the Realm file through the `realm` package and writes the DaruDB file through the Node.js package, whatever language the application is in: a DaruDB file is the same file in every language.
@@ -227,6 +270,12 @@ Realm has no Rust SDK. Run the script below once with the Node.js package, then 
 ::: lang dart
 
 Realm's Flutter SDK reads the file from Dart too, through the app's own Realm model classes, and the copy can be written the same way in Dart, a class at a time. The script below needs neither: run it once with the Node.js package, then open the file it writes from Dart with `Database.open('app.darudb', schema: app)`.
+
+:::
+
+::: lang python
+
+Realm has no Python SDK. Run the script below once with the Node.js package, then open the file it writes from Python with `darudb.Database.open("app.darudb", schema=app)`.
 
 :::
 
@@ -293,7 +342,7 @@ process.exit(0);
 
 ## Check the copy
 
-Compare `realm.objects('User').length` with <LangCode rust="len" node="count" dart="count" /> on `users`, for every class, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
+Compare `realm.objects('User').length` with <LangCode rust="len" node="count" dart="count" python="count" /> on `users`, for every class, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
 
 ## Queries
 
@@ -321,7 +370,7 @@ The query language is close to the Realm Query Language that `filtered` takes:
 
 - **Results are plain objects.** A query returns objects copied out of the file, not live objects tied to it: they do not change when the data does, and they stay usable after the transaction and the database are closed. A change is written back with `put` or `update`.
 - **No change notifications.** Nothing calls the application when data changes. After a write, read again what the screen shows.
-- **Transactions** are <LangCode rust="begin_write and commit" node="db.write" dart="db.write" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
+- **Transactions** are <LangCode rust="begin_write and commit" node="db.write" dart="db.write" python="db.write" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
 - **Schema versions** keep working the same way: raise the schema's version, and give a migration for what the engine does not do by itself. See [Migrations](../guide/migrations.md).
 - **Encryption** takes a 32-byte key or a password instead of Realm's 64-byte key. The new file has a key of its own; see [Encryption](../guide/encryption.md).
 - **Sync** to a server has no counterpart: DaruDB keeps data in a local file only.
