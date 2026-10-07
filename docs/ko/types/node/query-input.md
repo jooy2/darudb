@@ -14,7 +14,7 @@ type QueryInput<O> = ((query: Query<O>) => Query<O> | void) | Query<O>;
 `O`는 컬렉션의 객체 타입이고, 이 타입 덕분에 [`where`](../../api/node/query.md)와 `sortBy`는 컬렉션의 필드와 그 타입의 값만 받습니다.
 
 - **함수**는 새 [Query](../../api/node/query.md)를 받아 조건을 더합니다. 그 쿼리를 돌려주거나 아무것도 돌려주지 않아도 되고, 다른 값을 돌려주면 `INVALID_QUERY`로 실패합니다.
-- **`Query`**는 `new Query<O>()`로 만들고, 한 번 만들어 여러 번 넘길 수 있습니다.
+- **`Query`는** `new Query<O>()`로 만들고, 한 번 만들어 여러 번 넘길 수 있습니다.
 - **아무것도 주지 않으면** `find()`는 모든 객체를 기본 키 순서로 돌려주고, `count()`는 모든 객체를 셉니다.
 
 [ReadCollection](../../api/node/read-collection.md)은 쿼리 언어로 쓴 문자열과 매개변수, [Prepared](./prepared.md) 쿼리도 받는데, 이들은 따로 정의된 오버로드입니다. 쿼리로 무엇을 할 수 있는지는 [쿼리](../../guide/queries.md)에 있습니다.

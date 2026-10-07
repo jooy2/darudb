@@ -18,9 +18,9 @@ pub trait CollectionType: Sized + 'static {
 }
 ```
 
-- **`Key`**는 기본 키의 타입입니다. 자동 증가 키면 `i64`이고, 아니면 키 필드의 [`KeyType`](./field-type.md#keytype)입니다.
-- **`COLLECTION`**은 `collection`이 선언하는 컬렉션 이름입니다. [`Link`](./link.md)는 컬렉션을 선언하지 않고 이 이름으로 대상 컬렉션을 가리킵니다. 자기 컬렉션의 객체를 가리키는 링크가 컬렉션을 선언하면 선언이 끝없이 이어지기 때문입니다.
-- **`collection`**은 [`Collection`](../../api/rust/collection.md)으로 컬렉션을 선언합니다.
+- **`Key`는** 기본 키의 타입입니다. 자동 증가 키면 `i64`이고, 아니면 키 필드의 [`KeyType`](./field-type.md#keytype)입니다.
+- **`COLLECTION`은** `collection`이 선언하는 컬렉션 이름입니다. [`Link`](./link.md)는 컬렉션을 선언하지 않고 이 이름으로 대상 컬렉션을 가리킵니다. 자기 컬렉션의 객체를 가리키는 링크가 컬렉션을 선언하면 선언이 끝없이 이어지기 때문입니다.
+- **`collection`은** [`Collection`](../../api/rust/collection.md)으로 컬렉션을 선언합니다.
 - **슬롯.** 필드는 `collection`이 선언한 순서대로 0부터 번호를 받고, 자동 증가 `id`가 있으면 그 필드가 첫 번호입니다. `write_field`는 슬롯 번호로 필드를 쓰고, `read`는 필드마다 슬롯 번호와 함께 한 번씩 받습니다.
 
 ```rust
