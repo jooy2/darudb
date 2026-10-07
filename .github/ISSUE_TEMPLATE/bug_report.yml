@@ -45,6 +45,7 @@ body:
         - A damaged file, or recovering one
         - Rust API
         - Node.js binding
+        - Dart package
         - Python package
         - Build / packaging
         - Documentation site
@@ -88,6 +89,7 @@ body:
         - File system:
         - Rust version (for the Rust API):
         - Node.js version (for the Node.js binding):
+        - Dart or Flutter version (for the Dart package):
         - Python version (for the Python package):
     validations:
       required: true
