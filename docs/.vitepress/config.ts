@@ -44,6 +44,7 @@ const repoUrl = packageJson.repository.url.replace(/\.git$/, '');
 const npmUrl = `https://www.npmjs.com/package/${packageJson.name}`;
 const cratesUrl = 'https://crates.io/crates/darudb';
 const pypiUrl = 'https://pypi.org/project/darudb/';
+const pubUrl = 'https://pub.dev/packages/darudb';
 
 /**
  * What the site is about, in the default locale. The npm package has a
@@ -479,7 +480,7 @@ function structuredData(description: string, url: string) {
     runtimePlatform: ['Node.js'],
     license: 'https://opensource.org/licenses/MIT',
     author: { '@type': 'Organization', name: 'CDGet', url: 'https://cdget.com' },
-    sameAs: [repoUrl, npmUrl, cratesUrl, pypiUrl]
+    sameAs: [repoUrl, npmUrl, cratesUrl, pubUrl, pypiUrl]
   };
 }
 
