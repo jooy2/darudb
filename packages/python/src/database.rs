@@ -137,7 +137,7 @@ impl NativeDatabase {
         let mut options = BackupOptions::new();
 
         if let Some(key) = key {
-            options.key(key_of(key)?);
+            options.key(*Zeroizing::new(key_of(key)?));
         }
 
         if let Some(password) = password {
@@ -326,7 +326,7 @@ fn open<'py>(
     }
 
     if let Some(key) = key {
-        options.key(key_of(key)?);
+        options.key(*Zeroizing::new(key_of(key)?));
     }
 
     if let Some(password) = password {
@@ -366,7 +366,7 @@ fn salvage<'py>(
     let mut options = OpenOptions::new();
 
     if let Some(key) = key {
-        options.key(key_of(key)?);
+        options.key(*Zeroizing::new(key_of(key)?));
     }
 
     if let Some(password) = password {
