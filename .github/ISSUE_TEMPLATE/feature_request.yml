@@ -54,6 +54,7 @@ body:
         - Rust
         - Node.js
         - Dart
+        - Python
         - All of them
     validations:
       required: true

@@ -12,6 +12,8 @@ Only the **latest release** of each package receives security fixes; there are n
 | `darudb` (npm)       | Anything older | No        |
 | `darudb` (pub.dev)   | Latest release | Yes       |
 | `darudb` (pub.dev)   | Anything older | No        |
+| `darudb` (PyPI)      | Latest release | Yes       |
+| `darudb` (PyPI)      | Anything older | No        |
 
 If a release line is ever maintained on its own, this table will name it.
 
