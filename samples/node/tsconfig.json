@@ -1,0 +1,23 @@
+{
+  // Type checking only: Node.js and Electron run the TypeScript of `core`,
+  // `server` and `electron` as it is, by stripping its types, and Vite builds
+  // `ui`. So nothing is emitted, imports name `.ts` files, and only syntax a
+  // type stripper can erase is allowed.
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": false,
+    "skipLibCheck": true
+  },
+  "include": ["core", "electron", "server", "ui", "tests", "vite.config.ts", "playwright.config.ts"]
+}

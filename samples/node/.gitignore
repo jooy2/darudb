@@ -1,0 +1,6 @@
+# What `vite build` writes, the database `npm run web` keeps, and what
+# Playwright leaves after a run.
+dist/
+.data/
+playwright-report/
+test-results/

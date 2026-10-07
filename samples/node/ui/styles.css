@@ -1,0 +1,94 @@
+/*
+ * The page under the components: Plass draws glass, which needs something
+ * behind it, and leaves the page's own background to the app.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: linear-gradient(160deg, var(--plass-bg-from) 0%, var(--plass-bg-to) 100%);
+  background-attachment: fixed;
+  color: var(--plass-fg);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+.sample-main {
+  padding: 1.5rem;
+  min-width: 0;
+}
+
+.sample-collection {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.sample-filter {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.sample-filter > :first-child {
+  flex: 1;
+}
+
+.sample-filter > button {
+  margin-top: 1.6rem;
+}
+
+.sample-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem 1rem;
+}
+
+/* An alert, the embedded object and a long text take the whole row. */
+.sample-form > .sample-wide {
+  grid-column: 1 / -1;
+}
+
+.sample-muted {
+  opacity: 0.6;
+}
+
+.sample-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.sample-path {
+  overflow-wrap: anywhere;
+  font-size: 0.8em;
+}
+
+.sample-swatch {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.2);
+  vertical-align: middle;
+}
+
+.sample-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+/* One line per object: a wide table scrolls sideways rather than wrapping. */
+.sample-collection td,
+.sample-collection th {
+  white-space: nowrap;
+}
