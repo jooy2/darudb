@@ -22,8 +22,8 @@ repository = "https://github.com/jooy2/darudb"
 homepage = "https://darudb.cdget.com"
 
 [workspace.dependencies]
-darudb = { path = "crates/darudb", version = "1.0.0" }
-darudb-derive = { path = "crates/darudb-derive", version = "=1.0.0" }
+darudb = { path = "crates/darudb", version = "1.0.1" }
+darudb-derive = { path = "crates/darudb-derive", version = "=1.0.1" }
 tempfile = "3.27.0"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"

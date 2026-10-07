@@ -1,6 +1,6 @@
 [package]
 name = "darudb"
-version = "1.0.0"
+version = "1.0.1"
 description = "An embedded database that keeps an application's data in one local file."
 readme = "README.md"
 keywords = ["database", "embedded", "storage", "encryption"]
