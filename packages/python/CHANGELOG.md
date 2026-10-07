@@ -1,0 +1,16 @@
+# Changelog
+
+> This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
+
+## vNext (2026--)
+
+### Added
+
+- `Database.open` opens or creates a database file, with a `Schema` of classes decorated with `@collection`, and the options `create`, `page_size`, `busy_timeout`, `cache_size`, `key`, `password` and `password_hashing`. A file holding an older schema version is migrated in one write transaction, through the `Migration`s given for the versions in between, whose `run` functions read the old objects through `Migrating.previous`.
+- `@collection` and `@embedded` make a class a frozen, keyword-only dataclass whose annotations are its fields' types: `bool`, `int`, `float`, `str`, `bytes`, lists of those, embedded classes, and any of them `| None` for an optional field. `field` adds a default, an index, a unique index, a primary key, a link to another collection, or a stored name of its own. A collection without a primary key is numbered by the engine, through its field `id: int | None = None`.
+- `db.read()` and `db.write()` are context managers: a write commits when its block ends, deferred with `durability="deferred"`, and aborts when it raises. `txn.collection(User)` gives a collection's objects as instances of the class: `get`, `find`, `find_one` and `count`, and in a write `insert`, `insert_many`, `put`, `put_many`, `update` and `delete`. Write transactions on one file do not nest, and a second one in the same thread is refused with `INVALID_ARGUMENT`.
+- Queries built from `F`: `F.age >= 18`, `F.address.city == "Seoul"` through embedded objects and links, `between`, `is_in`, `contains`, `startswith`, `endswith` and null tests, combined with `&`, `|` and `~`, in a `Query` with `where`, `sort_by`, `offset` and `limit`. Text in the query language with `$0`, `$1` and on, and `Database.prepare` with `param(0)` in a built query, compile a query once and run it with parameters.
+- `Database.sync`, `close`, `set_key`, `set_password`, `is_encrypted`, `page_size`, `format_version` and `schema_version`. Every failure is a `DaruError` with the engine's error code.
+- The asynchronous API for `asyncio`: `Database.open_async`, `read_async`, `write_async`, `sync_async`, `close_async` and an `_async` twin of every tool and key change, which run the engine's work on a thread of the package's pool. The operations of one transaction run in the order they were called, this process's asynchronous writes on one file take turns, and a synchronous write, sync or close on the file from the event loop's thread while one runs is refused with `INVALID_ARGUMENT`. A migration's `run` may be a coroutine function with `open_async`.
+- The tools: `check`, the integrity check, which reports every problem in a `CheckReport`; `backup`, a copy of the published commit in a new file, under a new data key when it is given a `key` or a `password`; `compact`, which makes the file smaller in place; and `Database.salvage`, which rescues what it can of a damaged file into a new one.
+- The native module releases the GIL while the engine works, and declares itself safe for free-threaded Python.

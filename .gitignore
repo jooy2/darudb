@@ -55,6 +55,17 @@ packages/dart/*/pubspec.lock
 packages/dart/*/test/**/*.g.dart
 packages/dart/*/build/
 
+# The Python package. `maturin develop` puts the native module beside the
+# Python code it belongs to, and a virtual environment for working on the
+# package goes in `.venv/`. The tools leave caches of their own.
+packages/python/.venv/
+packages/python/python/darudb/*.so
+packages/python/python/darudb/*.pyd
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
 # VitePress files
 docs/.vitepress/.temp
 docs/.vitepress/.temp/*

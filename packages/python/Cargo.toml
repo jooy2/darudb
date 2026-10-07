@@ -1,0 +1,32 @@
+[package]
+name = "darudb-python"
+version = "1.0.0"
+description = "The native half of the Python binding of DaruDB. Published to PyPI as `darudb`, inside its wheels, never to crates.io."
+publish = false
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+# maturin names the module after `tool.maturin.module-name` in `pyproject.toml`,
+# `darudb._native`, and `#[pymodule]` names it the same.
+name = "darudb_native"
+crate-type = ["cdylib"]
+# A test binary of an extension module would have to link libpython, which a
+# runner without the development files lacks. The Python tests in `tests/`
+# test this crate through the package instead.
+test = false
+doctest = false
+
+[dependencies]
+darudb.workspace = true
+# The stable ABI from Python 3.11, so that one wheel per platform serves every
+# later version. A free-threaded interpreter, which the stable ABI does not
+# cover before 3.15, gets a wheel of its own, built for its version.
+# `MIT OR Apache-2.0`.
+pyo3 = { version = "0.29.3", features = ["abi3-py311"] }
+# Wipes the copies of a key or a password the binding makes. Already in the
+# build through the engine; Apache-2.0 OR MIT.
+zeroize.workspace = true
