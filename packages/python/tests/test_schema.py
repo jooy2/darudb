@@ -54,6 +54,16 @@ def test_a_class_that_is_a_dataclass_already_is_kept_as_it_is(path: Path) -> Non
             assert txn.collection(Note).get(1) == Note("hi", 1)
 
 
+def test_a_class_with_slots_is_refused() -> None:
+    @darudb.collection("notes")
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class Note:
+        text: str
+        id: int | None = None
+
+    assert "__slots__" in refused(Note)
+
+
 def test_a_collection_without_a_key_needs_an_id() -> None:
     @darudb.collection
     class Note:

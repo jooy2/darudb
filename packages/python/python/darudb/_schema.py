@@ -309,6 +309,10 @@ def _resolve(cls: type) -> Resolved:
     if info is None:
         raise invalid(f"{cls!r} is not a class decorated with @collection or @embedded")
 
+    if cls.__dictoffset__ == 0:
+        # An object read is built by filling its `__dict__`.
+        raise invalid(f"{cls.__name__} has __slots__, so an object read could not be built")
+
     try:
         hints = typing.get_type_hints(cls)
     except NameError as error:
