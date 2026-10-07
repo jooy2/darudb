@@ -499,6 +499,31 @@ class Migration:
     run: Callable[[Migrating], None] | Callable[[AsyncMigrating], Awaitable[None]] | None = None
     """The function of the step, given the migration's transaction."""
 
+    def __post_init__(self) -> None:
+        if type(self.version) is not int or not 1 <= self.version < 2**63:
+            raise invalid(f"a migration's version is a whole number, not {self.version!r}")
+
+        for name, size in (
+            ("rename_collections", 2),
+            ("rename_fields", 3),
+            ("replace_fields", 2),
+        ):
+            for entry in getattr(self, name):
+                if (
+                    not isinstance(entry, tuple | list)
+                    or len(entry) != size
+                    or not all(isinstance(part, str) for part in entry)
+                ):
+                    raise invalid(f"each of {name} is {size} names, not {entry!r}")
+
+        if isinstance(self.delete_collections, str) or not all(
+            isinstance(name, str) for name in self.delete_collections
+        ):
+            raise invalid(f"delete_collections is names, not {self.delete_collections!r}")
+
+        if self.run is not None and not callable(self.run):
+            raise invalid(f"run is a function, not {self.run!r}")
+
     def spec(
         self,
     ) -> tuple[

@@ -519,6 +519,47 @@ def _run_migrations(
         raise
 
 
+def whole(name: str, value: object, low: int = 0, high: int = 2**63) -> None:
+    """Refuses ``value`` unless it is an int from ``low`` up to ``high``, so that
+    an option out of range is the engine's kind of error, not Python's."""
+    if type(value) is not int or not low <= value < high:
+        raise invalid(f"{name} is a whole number from {low} up, not {value!r}")
+
+
+def check_options(
+    *,
+    schema: object = None,
+    create: object = True,
+    page_size: object = None,
+    busy_timeout: object = None,
+    cache_size: object = None,
+    password_hashing: object = None,
+) -> None:
+    """Refuses an option of the wrong kind before it reaches the engine, which
+    checks the ranges."""
+    if schema is not None and not isinstance(schema, Schema):
+        raise invalid(f"schema is a Schema, not {schema!r}")
+
+    if type(create) is not bool:
+        raise invalid(f"create is True or False, not {create!r}")
+
+    if page_size is not None:
+        whole("page_size", page_size, high=2**32)
+
+    if cache_size is not None:
+        whole("cache_size", cache_size)
+
+    if busy_timeout is not None and not (
+        isinstance(busy_timeout, int | float)
+        and not isinstance(busy_timeout, bool)
+        and 0 <= busy_timeout < float("inf")
+    ):
+        raise invalid(f"busy_timeout is a number of seconds from 0 up, not {busy_timeout!r}")
+
+    if password_hashing is not None and not isinstance(password_hashing, PasswordHashing):
+        raise invalid(f"password_hashing is a PasswordHashing, not {password_hashing!r}")
+
+
 def check_migrations(migrations: Sequence[Migration]) -> None:
     """Refuses what is not a migration, and two migrations to one version."""
     seen: set[int] = set()
@@ -595,6 +636,14 @@ class Database:
           at the cost ``password_hashing`` sets.
         """
         location = os.fspath(path)
+        check_options(
+            schema=schema,
+            create=create,
+            page_size=page_size,
+            busy_timeout=busy_timeout,
+            cache_size=cache_size,
+            password_hashing=password_hashing,
+        )
         check_migrations(migrations)
         native = _native.open(
             location,
@@ -666,6 +715,7 @@ class Database:
         ``BUSY``. It never replaces a file: a ``target`` that is taken is
         ``INVALID_ARGUMENT``.
         """
+        check_options(busy_timeout=busy_timeout)
         report = _native.salvage(
             os.fspath(source),
             os.fspath(target),
@@ -828,6 +878,7 @@ class Database:
         ``password``, is encrypted under a new data key that only they open.
         It never replaces a file: a ``path`` that is taken is
         ``INVALID_ARGUMENT``."""
+        check_options(password_hashing=password_hashing)
         report = self._native.backup(
             os.fspath(path),
             key=key,

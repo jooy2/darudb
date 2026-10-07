@@ -178,3 +178,35 @@ def test_a_schema_refuses_what_is_not_a_collection() -> None:
 
     with pytest.raises(DaruError):
         darudb.Schema(1, [User, Twin])
+
+
+def test_options_of_the_wrong_kind_are_invalid(path: Path) -> None:
+    for options in (
+        {"page_size": "4096"},
+        {"page_size": -1},
+        {"cache_size": -1},
+        {"cache_size": 1.5},
+        {"busy_timeout": "5"},
+        {"busy_timeout": float("inf")},
+        {"create": 1},
+        {"schema": "users"},
+        {"password_hashing": (1, 1, 1)},
+    ):
+        with pytest.raises(DaruError) as error:
+            open_db(path, **options)
+
+        assert error.value.code == "INVALID_ARGUMENT", options
+
+    assert not path.exists()
+
+    for make in (
+        lambda: darudb.Migration(-1),
+        lambda: darudb.Migration(2.5),  # type: ignore[arg-type]
+        lambda: darudb.Migration(2, rename_fields=[("users", "a")]),  # type: ignore[list-item]
+        lambda: darudb.Migration(2, delete_collections="users"),
+        lambda: darudb.Migration(2, run="later"),  # type: ignore[arg-type]
+    ):
+        with pytest.raises(DaruError) as error:
+            make()
+
+        assert error.value.code == "INVALID_ARGUMENT"

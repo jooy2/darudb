@@ -46,6 +46,7 @@ from ._database import (
     QueryInput,
     _held,
     check_migrations,
+    check_options,
     file_key_of,
     native_query,
 )
@@ -520,6 +521,14 @@ async def open_async(
     password: str | bytes | bytearray | None,
     password_hashing: PasswordHashing | None,
 ) -> Database:
+    check_options(
+        schema=schema,
+        create=create,
+        page_size=page_size,
+        busy_timeout=busy_timeout,
+        cache_size=cache_size,
+        password_hashing=password_hashing,
+    )
     check_migrations(migrations)
     native = await run(
         partial(
