@@ -1,6 +1,6 @@
 [package]
 name = "darudb-python"
-version = "1.0.0"
+version = "0.1.0"
 description = "The native half of the Python binding of DaruDB. Published to PyPI as `darudb`, inside its wheels, never to crates.io."
 publish = false
 edition.workspace = true
