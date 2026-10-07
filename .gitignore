@@ -61,6 +61,8 @@ packages/dart/*/build/
 packages/python/.venv/
 packages/python/python/darudb/*.so
 packages/python/python/darudb/*.pyd
+# Written by `tool/notices.py` before the release workflow builds a wheel.
+packages/python/python/darudb/THIRD_PARTY_NOTICES.txt
 __pycache__/
 .pytest_cache/
 .mypy_cache/

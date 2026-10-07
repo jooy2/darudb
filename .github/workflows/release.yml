@@ -814,6 +814,12 @@ jobs:
         if: ${{ !matrix.stable-only }}
         with:
           python-version: 3.14t
+      # The notices of the crates the module links, which every wheel ships
+      # beside it.
+      - name: Write the third-party notices
+        env:
+          PYTHON: ${{ steps.stable.outputs.python-path }}
+        run: '"$PYTHON" tool/notices.py'
       # The containers have every CPython, by name; elsewhere the wheels are
       # built for the interpreters set up above.
       - name: Name the interpreters
@@ -906,6 +912,15 @@ jobs:
           fi
 
           twine check --strict dist/*
+
+          for wheel in dist/*.whl; do
+            for file in darudb/THIRD_PARTY_NOTICES.txt LICENSE; do
+              if ! python -m zipfile -l "$wheel" | grep -q "$file"; then
+                echo "::error::$wheel lacks $file"
+                exit 1
+              fi
+            done
+          done
       - name: List what the distributions contain
         run: |
           for wheel in dist/*.whl; do

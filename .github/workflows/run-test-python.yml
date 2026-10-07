@@ -38,9 +38,9 @@ jobs:
       # mypy reads the native module's stub, so nothing needs building.
       - run: pip install ruff mypy
       - name: Lint
-        run: ruff check python tests
+        run: ruff check python tests tool
       - name: Check formatting
-        run: ruff format --check python tests
+        run: ruff format --check python tests tool
       - name: Type-check
         run: mypy
 
