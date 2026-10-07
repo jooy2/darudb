@@ -21,6 +21,7 @@ on:
           - crate
           - dart
           - dart-generator
+          - python
       publish:
         description: Publish it. Off, the run publishes nothing.
         type: boolean
@@ -87,6 +88,11 @@ jobs:
             echo "changelog=packages/dart/darudb/CHANGELOG.md" >> "$GITHUB_OUTPUT"
             echo "tag=dart-v$version" >> "$GITHUB_OUTPUT"
             echo "title=darudb $version for Dart" >> "$GITHUB_OUTPUT"
+          elif [ "$PACKAGE" = python ]; then
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' packages/python/pyproject.toml | head -n 1)
+            echo "changelog=packages/python/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+            echo "tag=python-v$version" >> "$GITHUB_OUTPUT"
+            echo "title=darudb $version for Python" >> "$GITHUB_OUTPUT"
           elif [ "$PACKAGE" = dart-generator ]; then
             version=$(sed -n 's/^version: \(.*\)$/\1/p' packages/dart/darudb_generator/pubspec.yaml)
             echo "changelog=packages/dart/darudb_generator/CHANGELOG.md" >> "$GITHUB_OUTPUT"
@@ -716,11 +722,246 @@ jobs:
             !packages/dart/darudb_generator/pubspec.lock
           if-no-files-found: error
 
+  build-python:
+    if: needs.version.outputs.package == 'python'
+    needs: version
+    runs-on: ${{ matrix.host }}
+    name: Build the Python wheels for ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each platform builds on a runner of its own architecture, so that
+        # its wheels are tested where they were built. Each gets the stable
+        # ABI's wheel, for every CPython from 3.11, and the free-threaded
+        # 3.14's, which the stable ABI does not cover; 32-bit Windows gets
+        # the stable ABI's alone. Linux builds in the PyPA's containers:
+        # manylinux2014 is glibc 2.17, the oldest the engine supports.
+        include:
+          - {
+              host: ubuntu-latest,
+              platform: manylinux-x86_64,
+              target: x86_64-unknown-linux-gnu,
+              manylinux: '2014'
+            }
+          - {
+              host: ubuntu-24.04-arm,
+              platform: manylinux-aarch64,
+              target: aarch64-unknown-linux-gnu,
+              manylinux: '2014'
+            }
+          - {
+              host: ubuntu-latest,
+              platform: musllinux-x86_64,
+              target: x86_64-unknown-linux-musl,
+              manylinux: musllinux_1_2,
+              musl: true
+            }
+          - {
+              host: ubuntu-24.04-arm,
+              platform: musllinux-aarch64,
+              target: aarch64-unknown-linux-musl,
+              manylinux: musllinux_1_2,
+              musl: true
+            }
+          - {
+              host: macos-15-intel,
+              platform: macos-x86_64,
+              target: x86_64-apple-darwin,
+              macos: '10.12'
+            }
+          - {
+              host: macos-latest,
+              platform: macos-arm64,
+              target: aarch64-apple-darwin,
+              macos: '11.0'
+            }
+          - { host: windows-latest, platform: windows-x64, target: x86_64-pc-windows-msvc }
+          # The first CPython built for Windows on ARM is 3.13, which tests the
+          # stable ABI's wheel there.
+          - {
+              host: windows-11-arm,
+              platform: windows-arm64,
+              target: aarch64-pc-windows-msvc,
+              stable-python: '3.13'
+            }
+          - {
+              host: windows-latest,
+              platform: windows-x86,
+              target: i686-pc-windows-msvc,
+              arch: x86,
+              stable-only: true
+            }
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./packages/python
+
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        id: stable
+        with:
+          python-version: ${{ matrix.stable-python || '3.11' }}
+          architecture: ${{ matrix.arch }}
+      - uses: actions/setup-python@v6
+        id: free
+        if: ${{ !matrix.stable-only }}
+        with:
+          python-version: 3.14t
+      # The containers have every CPython, by name; elsewhere the wheels are
+      # built for the interpreters set up above.
+      - name: Name the interpreters
+        id: interpreters
+        env:
+          STABLE: ${{ steps.stable.outputs.python-path }}
+          FREE: ${{ steps.free.outputs.python-path }}
+          CONTAINER: ${{ matrix.manylinux }}
+        run: |
+          if [ -n "$CONTAINER" ]; then
+            echo "list=python3.11 python3.14t" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=$STABLE $FREE" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: packages/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist --interpreter ${{ steps.interpreters.outputs.list }}
+      - name: List the wheels
+        run: ls -l dist
+      - name: Test the stable ABI's wheel
+        if: ${{ !matrix.musl }}
+        env:
+          PYTHON: ${{ steps.stable.outputs.python-path }}
+        run: |
+          "$PYTHON" -m pip install pytest
+          "$PYTHON" -m pip install --no-index --find-links dist darudb
+          "$PYTHON" -m pytest
+      - name: Test the free-threaded wheel
+        if: ${{ !matrix.musl && !matrix.stable-only }}
+        env:
+          PYTHON: ${{ steps.free.outputs.python-path }}
+        run: |
+          "$PYTHON" -m pip install pytest
+          "$PYTHON" -m pip install --no-index --find-links dist darudb
+          "$PYTHON" -m pytest
+      # The runner is glibc's, so a musl wheel is tested in Alpine.
+      - name: Test the stable ABI's wheel on musl
+        if: matrix.musl
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/io" -w /io/packages/python python:3.11-alpine sh -c '
+            pip install pytest &&
+            pip install --no-index --find-links dist darudb &&
+            python -m pytest -p no:cacheprovider
+          '
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-wheels-${{ matrix.platform }}
+          path: packages/python/dist/*.whl
+          if-no-files-found: error
+
+  python:
+    if: needs.version.outputs.package == 'python'
+    needs: [version, build-python]
+    runs-on: ubuntu-latest
+    name: Package for PyPI
+
+    defaults:
+      run:
+        working-directory: ./packages/python
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: python-wheels-*
+          merge-multiple: true
+          path: packages/python/dist
+      # The source distribution holds the engine's crates too, so that pip
+      # can build the package where no wheel fits, with a Rust toolchain.
+      - run: python -m pip install maturin twine
+      - name: Build the source distribution
+        run: maturin sdist --out dist
+      # Every platform's two wheels but 32-bit Windows's one, and the source.
+      - name: Check every distribution is there and complete
+        run: |
+          ls -l dist
+          count=$(ls dist/*.whl | wc -l)
+
+          if [ "$count" -ne 17 ]; then
+            echo "::error::$count wheels, not 17"
+            exit 1
+          fi
+
+          twine check --strict dist/*
+      - name: List what the distributions contain
+        run: |
+          for wheel in dist/*.whl; do
+            python -m zipfile -l "$wheel"
+          done
+
+          tar -tzf dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-dist
+          path: packages/python/dist/*
+          if-no-files-found: error
+
+  # Publishes through PyPI's trusted publishing: the project trusts this
+  # workflow of this repository in the `pypi` environment, so PyPI takes the
+  # run's OIDC token in place of a secret, and the action uploads an
+  # attestation that ties each file to this run. Its own job, so that the
+  # jobs that install and build third-party code never hold the permission to
+  # ask for that token. A file PyPI has already is skipped, so a run that
+  # failed part of the way can run again.
+  python-publish:
+    if: needs.version.outputs.package == 'python' && needs.version.outputs.publish == 'true'
+    needs: [version, python]
+    runs-on: ubuntu-latest
+    name: Publish to PyPI
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
   # Its own job, so that the jobs that install and build third-party code
   # never hold a token that can write to the repository.
   github-release:
     if: needs.version.outputs.publish == 'true' && !cancelled() && !failure()
-    needs: [version, crate, crate-publish, npm, npm-publish, dart, dart-generator]
+    needs:
+      [
+        version,
+        crate,
+        crate-publish,
+        npm,
+        npm-publish,
+        dart,
+        dart-generator,
+        python,
+        python-publish
+      ]
     runs-on: ubuntu-latest
     name: Tag and release on GitHub
     permissions:
