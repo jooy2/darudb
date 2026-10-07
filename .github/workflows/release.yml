@@ -801,13 +801,15 @@ jobs:
         shell: bash
         working-directory: ./packages/python
 
-    env:
-      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos }}
-
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      # Only on macOS: rustc cannot read an empty deployment target, even when
+      # `cargo metadata` on another system asks it about a macOS target.
+      - name: Set the oldest macOS the wheels support
+        if: matrix.macos
+        run: echo "MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos }}" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v6
         id: stable
         with:
