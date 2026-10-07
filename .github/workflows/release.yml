@@ -820,8 +820,9 @@ jobs:
         env:
           PYTHON: ${{ steps.stable.outputs.python-path }}
         run: '"$PYTHON" tool/notices.py'
-      # The containers have every CPython, by name; elsewhere the wheels are
-      # built for the interpreters set up above.
+      # The PyPA's containers keep every CPython under
+      # `/opt/python/<python tag>-<abi tag>`; elsewhere the wheels are built for
+      # the interpreters set up above.
       - name: Name the interpreters
         id: interpreters
         env:
@@ -830,7 +831,7 @@ jobs:
           CONTAINER: ${{ matrix.manylinux }}
         run: |
           if [ -n "$CONTAINER" ]; then
-            echo "list=python3.11 python3.14t" >> "$GITHUB_OUTPUT"
+            echo "list=/opt/python/cp311-cp311/bin/python /opt/python/cp314-cp314t/bin/python" >> "$GITHUB_OUTPUT"
           else
             echo "list=$STABLE $FREE" >> "$GITHUB_OUTPUT"
           fi
