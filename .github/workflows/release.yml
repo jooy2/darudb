@@ -435,7 +435,9 @@ jobs:
             if npm view "$spec" version > /dev/null 2>&1; then
               echo "$spec is on npm already"
             else
-              npm publish "$1" --access public --provenance
+              # Verbose, so that a token exchange npm refuses says why in the log,
+              # rather than a 404 from the token it falls back to.
+              npm publish "$1" --access public --provenance --loglevel verbose
             fi
           }
 
