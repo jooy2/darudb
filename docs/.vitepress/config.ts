@@ -43,6 +43,7 @@ const siteUrl = packageJson.homepage.replace(/\/+$/, '');
 const repoUrl = packageJson.repository.url.replace(/\.git$/, '');
 const npmUrl = `https://www.npmjs.com/package/${packageJson.name}`;
 const cratesUrl = 'https://crates.io/crates/darudb';
+const pypiUrl = 'https://pypi.org/project/darudb/';
 
 /**
  * What the site is about, in the default locale. The npm package has a
@@ -50,7 +51,7 @@ const cratesUrl = 'https://crates.io/crates/darudb';
  * site is about every package.
  */
 const SITE_DESCRIPTION =
-  "An embedded database that keeps an application's data in one local file, for Rust, Node.js and Dart. One engine written in Rust, with encryption, crash safety and several processes on one file as goals from the start.";
+  "An embedded database that keeps an application's data in one local file, for Rust, Node.js, Dart and Python. One engine written in Rust, with encryption, crash safety and several processes on one file as goals from the start.";
 
 /** `/` for whichever locale is the default, `/{lang}/` for every other one. */
 const localeBase = (lang: string) => (lang === defaultLocale ? '/' : `/${lang}/`);
@@ -122,7 +123,7 @@ const vitePressI18nConfig: VitePressI18nOptions = {
   searchProvider: 'local',
   description: {
     en: SITE_DESCRIPTION,
-    ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 처음부터 목표로 설계합니다.'
+    ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart, Python에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 처음부터 목표로 설계합니다.'
   },
   themeConfig: {
     en: { nav: navFor('en', ['Guide', 'Engine', 'API', 'Types', 'Changelog']) },
@@ -394,8 +395,8 @@ function llmsTxt(): string {
     `> ${SITE_DESCRIPTION}`,
     '',
     'One engine, written in Rust, shipped to Rust as the crate `darudb`, to Node.js as the npm',
-    'package `darudb`, and to Dart as the package `darudb`. Every language reads and writes the same file the same',
-    'way, because every rule about the file lives in the engine.',
+    'package `darudb`, to Dart as the package `darudb`, and to Python as the PyPI package `darudb`. Every language',
+    'reads and writes the same file the same way, because every rule about the file lives in the engine.',
     ''
   ];
 
@@ -408,6 +409,8 @@ function llmsTxt(): string {
     ['Node.js types', 'types/node'],
     ['Dart API', 'api/dart'],
     ['Dart types', 'types/dart'],
+    ['Python API', 'api/python'],
+    ['Python types', 'types/python'],
     ['Migration', 'migration']
   ];
 
@@ -476,7 +479,7 @@ function structuredData(description: string, url: string) {
     runtimePlatform: ['Node.js'],
     license: 'https://opensource.org/licenses/MIT',
     author: { '@type': 'Organization', name: 'CDGet', url: 'https://cdget.com' },
-    sameAs: [repoUrl, npmUrl, cratesUrl]
+    sameAs: [repoUrl, npmUrl, cratesUrl, pypiUrl]
   };
 }
 

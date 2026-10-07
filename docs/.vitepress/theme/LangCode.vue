@@ -14,7 +14,7 @@ import { CODE_LANGUAGES } from '../languages';
 
 // One prop per language, written out: the compiler that reads `defineProps`
 // cannot resolve a mapped type.
-const props = defineProps<{ rust?: string; node?: string; dart?: string }>();
+const props = defineProps<{ rust?: string; node?: string; dart?: string; python?: string }>();
 
 const spellings = CODE_LANGUAGES.filter((item) => props[item.id] !== undefined).map((item) => ({
   id: item.id,

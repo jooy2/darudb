@@ -11,7 +11,7 @@
  * in `<head>`, and by the theme, which draws the switch.
  */
 
-export type LanguageId = 'rust' | 'node' | 'dart';
+export type LanguageId = 'rust' | 'node' | 'dart' | 'python';
 
 export interface CodeLanguage {
   id: LanguageId;
@@ -26,7 +26,8 @@ export interface CodeLanguage {
 export const CODE_LANGUAGES: CodeLanguage[] = [
   { id: 'rust', label: 'Rust', available: true },
   { id: 'node', label: 'Node.js', available: true },
-  { id: 'dart', label: 'Dart', available: true }
+  { id: 'dart', label: 'Dart', available: true },
+  { id: 'python', label: 'Python', available: true }
 ];
 
 export const LANGUAGE_IDS: LanguageId[] = CODE_LANGUAGES.map((language) => language.id);

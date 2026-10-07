@@ -23,7 +23,8 @@
  */
 html[data-code-lang='rust'] .lang-only[data-code-lang]:not([data-code-lang~='rust']),
 html[data-code-lang='node'] .lang-only[data-code-lang]:not([data-code-lang~='node']),
-html[data-code-lang='dart'] .lang-only[data-code-lang]:not([data-code-lang~='dart']) {
+html[data-code-lang='dart'] .lang-only[data-code-lang]:not([data-code-lang~='dart']),
+html[data-code-lang='python'] .lang-only[data-code-lang]:not([data-code-lang~='python']) {
   display: none;
 }
 
@@ -51,9 +52,53 @@ html[data-code-lang='dart'] .lang-only[data-code-lang]:not([data-code-lang~='dar
  * from each page's frontmatter.
  */
 html[data-code-lang='rust']
-  .VPSidebarItem:has(> .item > .link:is([href*='/api/node/'], [href*='/types/node/'])),
+  .VPSidebarItem:has(
+    > .item
+      > .link:is(
+        [href*='/api/node/'],
+        [href*='/types/node/'],
+        [href*='/api/dart/'],
+        [href*='/types/dart/'],
+        [href*='/api/python/'],
+        [href*='/types/python/']
+      )
+  ),
 html[data-code-lang='node']
-  .VPSidebarItem:has(> .item > .link:is([href*='/api/rust/'], [href*='/types/rust/'])) {
+  .VPSidebarItem:has(
+    > .item
+      > .link:is(
+        [href*='/api/rust/'],
+        [href*='/types/rust/'],
+        [href*='/api/dart/'],
+        [href*='/types/dart/'],
+        [href*='/api/python/'],
+        [href*='/types/python/']
+      )
+  ),
+html[data-code-lang='dart']
+  .VPSidebarItem:has(
+    > .item
+      > .link:is(
+        [href*='/api/rust/'],
+        [href*='/types/rust/'],
+        [href*='/api/node/'],
+        [href*='/types/node/'],
+        [href*='/api/python/'],
+        [href*='/types/python/']
+      )
+  ),
+html[data-code-lang='python']
+  .VPSidebarItem:has(
+    > .item
+      > .link:is(
+        [href*='/api/rust/'],
+        [href*='/types/rust/'],
+        [href*='/api/node/'],
+        [href*='/types/node/'],
+        [href*='/api/dart/'],
+        [href*='/types/dart/']
+      )
+  ) {
   display: none;
 }
 
