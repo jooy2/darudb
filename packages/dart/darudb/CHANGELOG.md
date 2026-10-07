@@ -2,6 +2,12 @@
 
 > This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Fixed
+
+- The package resolves in a Flutter app on Flutter 3.38 to 3.44, the oldest releases it supports. It asked for versions of `hooks`, `code_assets` and `native_toolchain_rust` that need `meta` 1.19, which those Flutter releases pin lower, so `flutter pub get` failed there.
+
 ## v1.0.1 (2026-10-07)
 
 ### Added

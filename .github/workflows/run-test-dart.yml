@@ -96,3 +96,51 @@ jobs:
         run: dart analyze --fatal-infos
       - name: Test
         run: dart test
+
+  run-test-flutter:
+    runs-on: ubuntu-latest
+    name: Open a database in a Flutter app on Flutter ${{ matrix.flutter }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The package's oldest Flutter, which pins `meta` lowest of the
+        # releases it supports, so that its constraints still resolve
+        # beside what a Flutter app's SDK pins.
+        flutter: ['3.38.0']
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ matrix.flutter }}
+          channel: stable
+      # An app outside the repository that depends on the package by path,
+      # as an application on that Flutter would. `flutter test` runs the
+      # build hook, which compiles the engine for the host.
+      - name: Make an app that depends on the package
+        working-directory: ${{ runner.temp }}
+        run: |
+          flutter create --platforms linux --project-name minimum minimum
+          cd minimum
+          flutter pub add "darudb:{\"path\":\"$GITHUB_WORKSPACE/packages/dart/darudb\"}"
+          rm test/widget_test.dart
+          cat > test/open_test.dart <<'DART'
+          import 'dart:io';
+
+          import 'package:darudb/darudb.dart';
+          import 'package:flutter_test/flutter_test.dart';
+
+          void main() {
+            test('a database opens and closes', () {
+              final Directory directory = Directory.systemTemp.createTempSync('minimum');
+              final Database db = Database.open('${directory.path}/app.darudb');
+
+              expect(db.formatVersion, formatVersion);
+              db.close();
+              directory.deleteSync(recursive: true);
+            });
+          }
+          DART
+      - name: Test
+        working-directory: ${{ runner.temp }}/minimum
+        run: flutter test

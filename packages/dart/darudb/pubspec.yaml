@@ -7,13 +7,16 @@ homepage: https://darudb.cdget.com
 environment:
   sdk: ^3.10.0
 
+# The oldest of the hook packages are the newest that resolve beside what
+# Flutter 3.38 pins: `hooks` 2.1 and `code_assets` 2 need `meta` 1.19, and
+# Flutter pins `meta` to 1.17 in 3.38 and to 1.18 up to 3.44.
 dependencies:
-  code_assets: ^2.1.0
+  code_assets: ">=1.2.1 <3.0.0"
   crypto: ^3.0.6
   ffi: ^2.2.0
-  hooks: ^2.2.0
+  hooks: ">=2.0.2 <3.0.0"
   meta: ^1.17.0
-  native_toolchain_rust: ^1.0.7
+  native_toolchain_rust: ^1.0.4+0
 
 dev_dependencies:
   build_runner: ^2.10.0
