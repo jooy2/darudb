@@ -134,6 +134,9 @@ def test_processes_write_one_file(path: Path) -> None:
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="the system has no fork")
+# The engine's threads, and the asynchronous API's pool from the tests before,
+# may still run, which Python warns about on Linux.
+@pytest.mark.filterwarnings("ignore:.*multi-threaded.*fork:DeprecationWarning")
 def test_a_forked_child_opens_the_file_again(path: Path) -> None:
     db = open_db(path)
 
