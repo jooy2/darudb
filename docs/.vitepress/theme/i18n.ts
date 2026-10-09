@@ -8,13 +8,17 @@ const STRINGS = {
     switchLabel: 'Language',
     switchList: 'The language you use DaruDB from',
     switchHint: 'Examples, the API and the types follow this choice on every page.',
-    planned: 'Planned'
+    planned: 'Planned',
+    packages: 'Packages',
+    packagesHeading: 'Package registries'
   },
   ko: {
     switchLabel: '언어',
     switchList: 'DaruDB를 사용할 언어',
     switchHint: '모든 페이지의 예제와 API, 타입이 이 선택을 따릅니다.',
-    planned: '예정'
+    planned: '예정',
+    packages: '패키지',
+    packagesHeading: '패키지 저장소'
   }
 };
 

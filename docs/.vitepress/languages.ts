@@ -50,6 +50,14 @@ export const LANGUAGE_STORAGE_KEY = 'darudb-language';
  */
 export const PER_LANGUAGE_SECTIONS = ['api', 'types'];
 
+/** A package registry, with the packages one language installs DaruDB from. */
+export interface Registry {
+  language: LanguageId;
+  /** The registry's own name for itself, such as `crates.io`. */
+  name: string;
+  packages: { name: string; link: string }[];
+}
+
 /** What the theme config carries about pages that are not for every language. */
 export interface LanguagePages {
   /** Shared-section pages written for some languages only, from their frontmatter. */

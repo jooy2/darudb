@@ -1,6 +1,6 @@
 /**
- * The marks of the languages DaruDB ships for, which the language switch
- * draws beside each language's name.
+ * The marks of the languages DaruDB ships for, which the language switch and
+ * the package menu draw beside each language's name.
  *
  * They come from Simple Icons (CC0-1.0), through the same iconify package
  * VitePress draws its social links from, and they are read here, at build

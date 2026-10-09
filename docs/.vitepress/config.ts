@@ -22,7 +22,8 @@ import {
   languageOfRoute,
   languagesOf,
   type LanguageId,
-  type LanguagePages
+  type LanguagePages,
+  type Registry
 } from './languages';
 import { languageIcons } from './icons';
 import { summaryFromSource } from './pages';
@@ -46,6 +47,31 @@ const npmUrl = `https://www.npmjs.com/package/${packageJson.name}`;
 const cratesUrl = 'https://crates.io/crates/darudb';
 const pypiUrl = 'https://pypi.org/project/darudb/';
 const pubUrl = 'https://pub.dev/packages/darudb';
+
+/**
+ * Every package a reader installs, by the registry it is published on, for the
+ * package menu in the navbar. In the order the languages are named everywhere.
+ */
+const registries: Registry[] = [
+  {
+    language: 'rust',
+    name: 'crates.io',
+    packages: [
+      { name: 'darudb', link: cratesUrl },
+      { name: 'darudb-derive', link: 'https://crates.io/crates/darudb-derive' }
+    ]
+  },
+  { language: 'node', name: 'npm', packages: [{ name: packageJson.name, link: npmUrl }] },
+  {
+    language: 'dart',
+    name: 'pub.dev',
+    packages: [
+      { name: 'darudb', link: pubUrl },
+      { name: 'darudb_generator', link: 'https://pub.dev/packages/darudb_generator' }
+    ]
+  },
+  { language: 'python', name: 'PyPI', packages: [{ name: 'darudb', link: pypiUrl }] }
+];
 
 /**
  * What the site is about, in the default locale. The npm package has a
@@ -718,8 +744,11 @@ const vitePressConfig: UserConfig = {
     logo: { src: '/logo-64.png', alt: '' },
     // Read by the language switch and the layout. See `languages.ts`.
     languagePages,
-    // The marks the language switch draws. See `icons.ts`.
+    // The marks the language switch and the package menu draw. See `icons.ts`.
     languageIcons: languageIcons(),
+    // The package menu beside the GitHub link, which takes the place of a
+    // social link for each registry. See `PackageMenu.vue`.
+    registries,
     /**
      * `h2` and `h3`, nested. A guide page is a handful of `h2`s with the steps
      * or options as `h3`s under them, and the thing a reader came for is often
@@ -729,10 +758,7 @@ const vitePressConfig: UserConfig = {
     editLink: {
       pattern: editLinkPattern
     },
-    socialLinks: [
-      { icon: 'npm', link: npmUrl, ariaLabel: `${packageJson.name} on npm` },
-      { icon: 'github', link: repoUrl }
-    ],
+    socialLinks: [{ icon: 'github', link: repoUrl }],
     footer: {
       message: 'Released under the MIT License',
       copyright: '© <a href="https://cdget.com">CDGet</a>'

@@ -1,0 +1,243 @@
+/**
+ * The package menu in the navbar, and its list in the hamburger's screen.
+ *
+ * Drawn after the theme's own flyouts (`VPFlyout`, `VPMenu`), so that it
+ * reads as one more of them.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Its place in the navbar
+ *
+ * The theme offers a slot after the social links and before the hamburger,
+ * not one between them, so the menu goes in that slot and the flex order puts
+ * it back in front of the GitHub link. The divider the theme draws before the
+ * social links moves to the menu, so that the menu and the GitHub link sit
+ * together as the site's links out.
+ * ------------------------------------------------------------------------- */
+
+.VPNavBar .content-body > .package-menu {
+  order: 1;
+}
+
+.VPNavBar .content-body > .social-links {
+  order: 2;
+}
+
+.VPNavBar .content-body > .extra {
+  order: 3;
+}
+
+.VPNavBar .content-body > .hamburger {
+  order: 4;
+}
+
+.VPNavBar .content-body > .appearance + .social-links::before {
+  content: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * The navbar's menu
+ * ------------------------------------------------------------------------- */
+
+/*
+ * As tall as the navbar, as the theme's flyouts are, so that the pointer stays
+ * over the menu on its way from the button down to the list.
+ */
+.package-menu {
+  position: relative;
+  display: none;
+  align-items: center;
+  height: var(--vp-nav-height);
+}
+
+@media (min-width: 768px) {
+  .package-menu {
+    display: flex;
+  }
+
+  /* The theme's divider, drawn as it draws the one before the social links. */
+  .package-menu::before {
+    margin-right: 4px;
+    margin-left: 8px;
+    width: 1px;
+    height: 24px;
+    background-color: var(--vp-c-divider);
+    content: '';
+  }
+}
+
+@media (min-width: 1280px) {
+  .package-menu::before {
+    margin-left: 16px;
+  }
+}
+
+.package-menu-button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  color: var(--vp-c-text-2);
+  transition: color 0.25s;
+}
+
+.package-menu-button:hover,
+.package-menu-button[aria-expanded='true'] {
+  color: var(--vp-c-text-1);
+}
+
+.package-menu-button:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.package-menu-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/*
+ * Hidden with `visibility` rather than unmounted, so that it fades as the
+ * theme's flyouts do. A hidden element cannot take focus, so the links are
+ * out of the Tab order while it is closed.
+ */
+.package-menu-panel {
+  position: absolute;
+  z-index: 10;
+  top: calc(var(--vp-nav-height) / 2 + 20px);
+  right: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s,
+    visibility 0.25s;
+}
+
+.package-menu-button[aria-expanded='true'] + .package-menu-panel {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* A mouse opens it by pointing at it; a touch screen only by a tap. */
+@media (hover: hover) {
+  .package-menu:hover .package-menu-panel {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .package-menu:hover .package-menu-button {
+    color: var(--vp-c-text-1);
+  }
+}
+
+.package-menu-list {
+  min-width: 200px;
+  max-height: calc(100vh - var(--vp-nav-height));
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-elv);
+  box-shadow: var(--vp-shadow-3);
+}
+
+.package-menu-heading {
+  padding: 0 12px 4px;
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.package-menu-group + .package-menu-group {
+  margin: 8px -12px 0;
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.package-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 32px;
+  white-space: nowrap;
+}
+
+/* The packages line up under the registry's name rather than its mark. */
+.package-menu-link {
+  display: block;
+  padding: 0 12px 0 36px;
+  border-radius: 6px;
+  color: var(--vp-c-text-1);
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 30px;
+  white-space: nowrap;
+  transition:
+    background-color 0.25s,
+    color 0.25s;
+}
+
+.package-menu-link:hover,
+.package-menu-link:focus-visible {
+  outline: none;
+  color: var(--vp-c-brand-1);
+  background-color: var(--vp-c-default-soft);
+}
+
+/* ---------------------------------------------------------------------------
+ * The hamburger's screen, below 768 pixels
+ * ------------------------------------------------------------------------- */
+
+.package-screen {
+  margin-top: 24px;
+}
+
+.package-screen-heading {
+  padding-bottom: 4px;
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.package-screen-group {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.package-screen-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--vp-c-text-1);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 32px;
+}
+
+.package-screen-group ul {
+  margin: 0;
+  padding: 0 0 0 24px;
+  list-style: none;
+}
+
+.package-screen-group a {
+  display: block;
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  line-height: 28px;
+  transition: color 0.25s;
+}
+
+.package-screen-group a:hover {
+  color: var(--vp-c-brand-1);
+}

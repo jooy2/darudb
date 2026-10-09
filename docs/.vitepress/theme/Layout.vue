@@ -4,12 +4,13 @@ import { onContentUpdated, useData, useRoute } from 'vitepress';
 import { computed, nextTick, onMounted, watch } from 'vue';
 import { isAvailable, languagesOf, routeOf, type LanguagePages } from '../languages';
 import LanguageSwitch from './LanguageSwitch.vue';
+import PackageMenu from './PackageMenu.vue';
 import { language, setLanguage, syncLanguage } from './language';
 
 /*
- * The default layout, with the language switch above the sidebar, and the two
- * things the default theme draws from data rather than from the page, which a
- * `::: lang` block cannot reach on its own.
+ * The default layout, with the language switch above the sidebar, the package
+ * menu in the navbar, and the two things the default theme draws from data
+ * rather than from the page, which a `::: lang` block cannot reach on its own.
  */
 
 const { Layout } = DefaultTheme;
@@ -83,6 +84,12 @@ watch(language, () => nextTick(syncOutline));
 
 <template>
   <Layout>
+    <template #nav-bar-content-after>
+      <PackageMenu />
+    </template>
+    <template #nav-screen-content-after>
+      <PackageMenu variant="screen" />
+    </template>
     <template #sidebar-nav-before>
       <LanguageSwitch />
     </template>
