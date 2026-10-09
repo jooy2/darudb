@@ -102,12 +102,22 @@ const commonSidebarConfig: VitePressSidebarOptions = {
  * The sidebar's groups, in each locale.
  *
  * Named here rather than by the folders' own titles, because `guide/` and
- * `engine/` have no `index.md` to take a heading from, the changelog is a loose
- * page, and a group called "guide" over Korean pages is not a heading.
+ * `engine/` have no `index.md` to take a heading from, and a group called
+ * "guide" over Korean pages is not a heading. `changelog` is the entry each
+ * language's changelog shows under, since the sidebar lists the reader's alone
+ * and the language in its title would say nothing the switch above does not.
  */
 const groupLabels: Record<
   string,
-  { guide: string; engine: string; api: string; types: string; more: string; migration: string }
+  {
+    guide: string;
+    engine: string;
+    api: string;
+    types: string;
+    more: string;
+    changelog: string;
+    migration: string;
+  }
 > = {
   en: {
     guide: 'Guide',
@@ -115,6 +125,7 @@ const groupLabels: Record<
     api: 'API',
     types: 'Types',
     more: 'Discover more',
+    changelog: 'Changelog',
     migration: 'Migration'
   },
   ko: {
@@ -123,6 +134,7 @@ const groupLabels: Record<
     api: 'API',
     types: '타입',
     more: '더 알아보기',
+    changelog: '변경 기록',
     migration: '다른 DB에서 옮기기'
   }
 };
@@ -142,7 +154,8 @@ const navFor = (lang: string, labels: [string, string, string, string, string]) 
   { text: labels[1], link: `${localeBase(lang)}engine/architecture`, activeMatch: '/engine/' },
   { text: labels[2], link: `${localeBase(lang)}api/`, activeMatch: '/api/' },
   { text: labels[3], link: `${localeBase(lang)}types/`, activeMatch: '/types/' },
-  { text: labels[4], link: `${localeBase(lang)}changelog` }
+  // The overview, which sends a reader on to their language's changelog.
+  { text: labels[4], link: `${localeBase(lang)}changelog/`, activeMatch: '/changelog/' }
 ];
 
 const vitePressI18nConfig: VitePressI18nOptions = {
@@ -476,10 +489,20 @@ function llmsTxt(): string {
 
   // What a reader may skip when its context is short, which is the whole of
   // what this heading is reserved for.
+  const changelogs = [
+    ['Rust', 'rust', 'the crates `darudb` and `darudb-derive`'],
+    ['Node.js', 'node', 'the npm package `darudb`'],
+    ['Dart', 'dart', 'the packages `darudb` and `darudb_generator`'],
+    ['Python', 'python', 'the PyPI package `darudb`']
+  ].map(
+    ([name, id, packages]) =>
+      `- [${name} changelog](${siteUrl}${pathOf(`${defaultLocale}/changelog/${id}.md`)}): the changes to ${packages}, newest first`
+  );
+
   lines.push(
     '## Optional',
     '',
-    `- [Changelog](${siteUrl}${pathOf(`${defaultLocale}/changelog`)}): every package's changes, newest first`,
+    ...changelogs,
     `- [Repository](${repoUrl}): the engine, the bindings, and how to build and test each`,
     ''
   );
@@ -821,7 +844,9 @@ const startsWith = (prefix: string) => (item: GeneratedSidebarItem) =>
  * The API and Types sections hold one folder per language. The folders are
  * not shown as groups: their pages go straight under the section's heading,
  * and the reader's language hides the other folders' entries (`languages.css`),
- * so a reader on Node.js sees the Node.js API and nothing else.
+ * so a reader on Node.js sees the Node.js API and nothing else. The changelog
+ * has a page per language and is shown the same way, as one entry, without the
+ * overview that sends a reader on to it.
  */
 function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string): T[] {
   const labels = groupLabels[lang] ?? groupLabels[defaultLocale];
@@ -833,7 +858,7 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
   const engine = find('engine/');
   const api = find('api/');
   const types = find('types/');
-  const changelog = find('changelog');
+  const changelog = find('changelog/');
   const migration = find('migration/');
 
   const titled: [T | undefined, string][] = [
@@ -861,7 +886,13 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
     }
   }
 
-  const loose = [changelog, migration].filter(Boolean) as T[];
+  const changelogs = LANGUAGE_IDS.flatMap((id) =>
+    (changelog?.items ?? [])
+      .filter((item) => item.link === `changelog/${id}`)
+      .map((item) => ({ ...item, text: labels.changelog }) as T)
+  );
+
+  const loose = [...changelogs, migration].filter(Boolean) as T[];
   const more = loose.length ? ({ text: labels.more, items: loose } as unknown as T) : undefined;
   const placed = [guide, engine, api, types, more].filter(Boolean) as T[];
   const moved = new Set<T | undefined>([...placed, changelog, migration]);

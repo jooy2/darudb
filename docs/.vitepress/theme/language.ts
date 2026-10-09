@@ -41,14 +41,15 @@ export function setLanguage(next: LanguageId): void {
 }
 
 /**
- * Reads the language the script in `<head>` applied into the ref.
+ * The reader's language as the document has it, which is right before the app
+ * has mounted as well as after.
  *
- * The attribute is read first, because that script has already decided, for
- * a page written for one language, which language it is. The dev server can
- * add the `head` config after the app has started, so storage is the answer
- * when the attribute is not there yet.
+ * The attribute is read first, because the script in `<head>` has already
+ * decided, for a page written for one language, which language it is. The dev
+ * server can add the `head` config after the app has started, so storage is
+ * the answer when the attribute is not there yet.
  */
-export function syncLanguage(): void {
+export function chosenLanguage(): LanguageId {
   const applied = document.documentElement.dataset.codeLang;
   let stored: string | null = null;
 
@@ -58,7 +59,12 @@ export function syncLanguage(): void {
     // Private browsing: the attribute or the default will do.
   }
 
-  const next = isAvailable(applied) ? applied : isAvailable(stored) ? stored : DEFAULT_LANGUAGE;
+  return isAvailable(applied) ? applied : isAvailable(stored) ? stored : DEFAULT_LANGUAGE;
+}
+
+/** Reads the language the script in `<head>` applied into the ref. */
+export function syncLanguage(): void {
+  const next = chosenLanguage();
 
   current.value = next;
   document.documentElement.dataset.codeLang = next;

@@ -44,11 +44,19 @@ export const LANGUAGE_STORAGE_KEY = 'darudb-language';
 
 /**
  * The sections whose pages are each written for one language, in a folder
- * named after it: `/api/rust/database`, `/types/node/key`. Every other page is
- * shared, with `::: lang` blocks where the languages differ, unless its
- * frontmatter lists `languages`.
+ * named after it: `/api/rust/database`, `/types/node/key`, or a page named
+ * after it: `/changelog/rust`. Every other page is shared, with `::: lang`
+ * blocks where the languages differ, unless its frontmatter lists `languages`.
  */
-export const PER_LANGUAGE_SECTIONS = ['api', 'types'];
+export const PER_LANGUAGE_SECTIONS = ['api', 'types', 'changelog'];
+
+/**
+ * The sections whose overview has nothing of its own to say, and sends a
+ * reader on to the page for their language: `/changelog` to `/changelog/rust`.
+ * The overview is still a page, a list of the languages' pages, for a crawler
+ * and for a reader without scripts.
+ */
+export const FORWARDED_SECTIONS = ['changelog'];
 
 /** A package registry, with the packages one language installs DaruDB from. */
 export interface Registry {
@@ -132,13 +140,32 @@ export function counterpartOf(
     return null;
   }
 
-  const sameSlug = route.replace(`/${folder}/`, `/${target}/`);
+  // The language's segment is a folder, `/api/rust/database`, or the page
+  // itself, `/changelog/rust`.
+  const sameSlug = route.replace(new RegExp(`/${folder}(?=/|$)`), `/${target}`);
 
   if (pages?.reference.includes(sameSlug)) {
     return sameSlug;
   }
 
   return `/${route.split('/')[1]}/`;
+}
+
+/**
+ * Where the overview of a forwarded section sends a reader of `language`, or
+ * `null` for any other path. Takes a path as the router and `location` give
+ * it, with a locale prefix, a hash, or both, and keeps them.
+ */
+export function forwardedPath(
+  path: string,
+  language: LanguageId,
+  localePrefixes: string[]
+): string | null {
+  const match = new RegExp(
+    `^(/(?:${localePrefixes.join('|')}))?/(${FORWARDED_SECTIONS.join('|')})(?:/(?:index(?:\\.html)?)?)?([?#].*)?$`
+  ).exec(path);
+
+  return match ? `${match[1] ?? ''}/${match[2]}/${language}${match[3] ?? ''}` : null;
 }
 
 /**
@@ -154,6 +181,10 @@ export function counterpartOf(
  * reader went to that page, and the sidebar and examples around it should
  * agree with it. `singleLanguagePages` lists those outside the per-language
  * sections, whose folder already says.
+ *
+ * The overview of a forwarded section is replaced, before it paints, by the
+ * reader's page in that section. The router does the same for a link followed
+ * inside the site, which loads no new document (`theme/index.ts`).
  */
 export function languageHeadScript(
   singleLanguagePages: Record<string, LanguageId>,
@@ -165,6 +196,7 @@ export function languageHeadScript(
   const pages = JSON.stringify(singleLanguagePages);
   const locale = JSON.stringify(`^/(?:${localePrefixes.join('|')})(?=/|$)`);
   const section = JSON.stringify(`^/(?:${PER_LANGUAGE_SECTIONS.join('|')})/([a-z]+)(?:/|$)`);
+  const forwarded = JSON.stringify(FORWARDED_SECTIONS.map((name) => `/${name}`));
 
-  return `(function(){var ids=${ids},key=${key},stored,route=location.pathname.replace(/(\\/index)?\\.html$/,'').replace(/\\/+$/,'').replace(new RegExp(${locale}),'')||'/',match=new RegExp(${section}).exec(route),forced=match?match[1]:${pages}[route];try{stored=localStorage.getItem(key)}catch(e){}var lang=ids.indexOf(forced)>=0?forced:ids.indexOf(stored)>=0?stored:${fallback};if(lang===forced&&lang!==stored){try{localStorage.setItem(key,lang)}catch(e){}}document.documentElement.dataset.codeLang=lang})()`;
+  return `(function(){var ids=${ids},key=${key},stored,prefix=new RegExp(${locale}),route=location.pathname.replace(/(\\/index)?\\.html$/,'').replace(/\\/+$/,'').replace(prefix,'')||'/',match=new RegExp(${section}).exec(route),forced=match?match[1]:${pages}[route];try{stored=localStorage.getItem(key)}catch(e){}var lang=ids.indexOf(forced)>=0?forced:ids.indexOf(stored)>=0?stored:${fallback};if(${forwarded}.indexOf(route)>=0){var at=prefix.exec(location.pathname);location.replace((at?at[0]:'')+route+'/'+lang+location.search+location.hash);return}if(lang===forced&&lang!==stored){try{localStorage.setItem(key,lang)}catch(e){}}document.documentElement.dataset.codeLang=lang})()`;
 }

@@ -46,10 +46,11 @@ html[data-code-lang='python'] .lang-only[data-code-lang]:not([data-code-lang~='p
 
 /*
  * The per-language sections in the sidebar. Their pages sit in a folder named
- * after their language, so the reader's language hides the other folders'
- * entries by their links alone. The shared pages that are written for some
- * languages only get rules of their own, written into `<head>` by the config
- * from each page's frontmatter.
+ * after their language, or are named after it, as each language's changelog
+ * is, so the reader's language hides the other languages' entries by their
+ * links alone. The shared pages that are written for some languages only get
+ * rules of their own, written into `<head>` by the config from each page's
+ * frontmatter.
  */
 html[data-code-lang='rust']
   .VPSidebarItem:has(
@@ -60,7 +61,10 @@ html[data-code-lang='rust']
         [href*='/api/dart/'],
         [href*='/types/dart/'],
         [href*='/api/python/'],
-        [href*='/types/python/']
+        [href*='/types/python/'],
+        [href$='/changelog/node'],
+        [href$='/changelog/dart'],
+        [href$='/changelog/python']
       )
   ),
 html[data-code-lang='node']
@@ -72,7 +76,10 @@ html[data-code-lang='node']
         [href*='/api/dart/'],
         [href*='/types/dart/'],
         [href*='/api/python/'],
-        [href*='/types/python/']
+        [href*='/types/python/'],
+        [href$='/changelog/rust'],
+        [href$='/changelog/dart'],
+        [href$='/changelog/python']
       )
   ),
 html[data-code-lang='dart']
@@ -84,7 +91,10 @@ html[data-code-lang='dart']
         [href*='/api/node/'],
         [href*='/types/node/'],
         [href*='/api/python/'],
-        [href*='/types/python/']
+        [href*='/types/python/'],
+        [href$='/changelog/rust'],
+        [href$='/changelog/node'],
+        [href$='/changelog/python']
       )
   ),
 html[data-code-lang='python']
@@ -96,7 +106,10 @@ html[data-code-lang='python']
         [href*='/api/node/'],
         [href*='/types/node/'],
         [href*='/api/dart/'],
-        [href*='/types/dart/']
+        [href*='/types/dart/'],
+        [href$='/changelog/rust'],
+        [href$='/changelog/node'],
+        [href$='/changelog/dart']
       )
   ) {
   display: none;
