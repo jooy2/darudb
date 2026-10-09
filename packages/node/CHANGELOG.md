@@ -2,7 +2,11 @@
 
 > This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
-## vNext (2026--)
+## v1.1.0 (2026-10-09)
+
+### Breaking changes
+
+- The file format is version 6, `FORMAT_VERSION`, which earlier releases cannot open. Opening a file of version 5 raises it to version 6 while no other process has it open, so a file this release has opened no longer opens with 1.0, in Node.js or in any other language's package. An application that may go back to an earlier release, or that shares its file with a program still on one, opens with `upgradeFormat: false`, which also creates new files in version 5, and calls `upgradeFormat` once nothing older opens the file.
 
 ### Added
 
@@ -12,7 +16,7 @@
 
 - An index whose entries for one value come in key order, as a non-unique index's do while the objects' primary keys grow, fills its pages as it goes, where splitting a page in the middle left half of each empty, and so do the branches of every tree. A file of 400,000 sample objects with 14 indexes is 7% smaller for it. Keys in no particular order split pages evenly, as before.
 - `compact` and `compactAsync` first write again, full, every tree whose pages inserts left part empty, so that the file ends about as small as a backup's copy: the same file compacts to 119 MiB rather than 140 MiB.
-- The file format is version 6, `FORMAT_VERSION`, which writes the lengths in a leaf's entries as varints rather than in five bytes. A file of 400,000 sample objects with 14 indexes takes 8% fewer pages, 126 MiB against 138, and compacts to 110 MiB against 119, with reads and writes as fast as before. Opening a file of version 5 raises it to version 6, while no other process has it open, by rewriting its header; its leaves take the new layout as writes change them, and `compact` rewrites the trees where that saves room. A release before this one cannot open a file of version 6, so an application that may go back to one opens with `upgradeFormat: false`, which also creates new files in version 5, and calls `upgradeFormat` once it no longer may.
+- File format 6 writes the lengths in a leaf's entries as varints rather than in five bytes. A file of 400,000 sample objects with 14 indexes takes 8% fewer pages, 126 MiB against 138, and compacts to 110 MiB against 119, with reads and writes as fast as before. A file raised from version 5 has only its header rewritten; its leaves take the new layout as writes change them, and `compact` rewrites the trees where that saves room.
 - The native addon is built with its loops aligned to 64 bytes, so that where a hot loop lands no longer depends on the rest of the build: in a development build, the position of one loop alone made one-object deferred commits 15% slower. It is about 7% larger for it.
 
 ### Fixed
