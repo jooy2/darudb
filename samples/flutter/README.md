@@ -9,7 +9,7 @@ The sample app's screens in Flutter with [Plass UI](https://plass.cdget.com), fo
 | `lib/src/store.dart`  | Every operation the screens ask of the database                             |
 | `lib/src/ui/`         | The screens                                                                 |
 | `test/`               | Unit tests of the sample data and the store                                 |
-| `integration_test/`   | The end-to-end scenario, which runs the app on a desktop                    |
+| `integration_test/`   | The end-to-end scenario, which runs the app with or without a window        |
 
 ```bash
 flutter pub get
@@ -21,5 +21,7 @@ The app depends on the `darudb` package in this checkout, whose build hook compi
 
 ```bash
 flutter test
-flutter test integration_test -d macos
+flutter test integration_test -d flutter-tester
 ```
+
+The second runs the app through the scenario with no window on the screen; `-d macos`, `-d windows` or `-d linux` runs it in the app's window instead.

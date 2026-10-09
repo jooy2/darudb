@@ -26,4 +26,4 @@ npm start
 | `npm run typecheck` | Checks the types of everything here                                  |
 | `npm run format`    | Checks the formatting                                                |
 
-`DARUDB_SAMPLE_DIR` names the folder the database file goes in, and `PORT` the web server's port. `DARUDB_SAMPLE_UI_URL` makes the Electron app load the screens from Vite's development server, for working on them with hot reloading.
+`DARUDB_SAMPLE_DIR` names the folder the database file goes in, and `PORT` the web server's port. `DARUDB_SAMPLE_UI_URL` makes the Electron app load the screens from Vite's development server, for working on them with hot reloading. `DARUDB_SAMPLE_HIDDEN=1` keeps the Electron window off the screen, which the tests set unless `DARUDB_SAMPLE_SHOW=1` asks to watch them.

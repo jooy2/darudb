@@ -8,7 +8,10 @@
  * or in `DARUDB_SAMPLE_DIR` when that is set, which is how the end-to-end
  * tests give each run a folder of its own. `DARUDB_SAMPLE_UI_URL` loads the
  * page from Vite's development server instead of `dist/`, for working on
- * the screens with hot reloading.
+ * the screens with hot reloading. `DARUDB_SAMPLE_HIDDEN=1` keeps the window
+ * off the screen and the app out of the Dock, which the end-to-end tests
+ * set, so that a run does not take the screen from whoever started it; they
+ * drive the page all the same.
  *
  * Electron runs this TypeScript as it is, since its Node.js strips the types
  * of a `.ts` file it loads.
@@ -26,6 +29,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 let store: SampleStore | null = null;
 let closing = false;
 
+const hidden = process.env.DARUDB_SAMPLE_HIDDEN === '1';
+
 const openWindow = async (): Promise<void> => {
   const window = new BrowserWindow({
     width: 1360,
@@ -33,11 +38,15 @@ const openWindow = async (): Promise<void> => {
     minWidth: 960,
     minHeight: 600,
     title: 'DaruDB Sample',
+    show: !hidden,
     webPreferences: {
       preload: join(ROOT, 'electron', 'preload.cjs'),
       contextIsolation: true,
       sandbox: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // A hidden window's timers and frames would be slowed down as a
+      // window in the background's are, and the tests wait on them.
+      backgroundThrottling: !hidden
     }
   });
   const url = process.env.DARUDB_SAMPLE_UI_URL;
@@ -57,6 +66,10 @@ const openWindow = async (): Promise<void> => {
 };
 
 app.whenReady().then(async () => {
+  if (hidden) {
+    app.dock?.hide();
+  }
+
   const directory = process.env.DARUDB_SAMPLE_DIR ?? join(app.getPath('userData'), 'data');
 
   store = await SampleStore.open(directory, 'electron');

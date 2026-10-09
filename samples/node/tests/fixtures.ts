@@ -8,6 +8,9 @@
  * committed is still in the file. In the `web` project it is a page of the
  * server Playwright started, which is reset first, and starting again loads
  * the page again from the same server.
+ *
+ * The Electron window stays hidden, and the app out of the Dock, unless
+ * `DARUDB_SAMPLE_SHOW=1` asks to watch it.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,12 +28,27 @@ export interface Sample {
   restart(): Promise<Page>;
 }
 
-const launch = (directory: string): Promise<ElectronApplication> =>
-  electron.launch({
+const shown = process.env.DARUDB_SAMPLE_SHOW === '1';
+
+const launch = async (directory: string): Promise<ElectronApplication> => {
+  const app = await electron.launch({
     args: [ROOT],
     cwd: ROOT,
-    env: { ...process.env, DARUDB_SAMPLE_DIR: directory }
+    env: { ...process.env, DARUDB_SAMPLE_DIR: directory, DARUDB_SAMPLE_HIDDEN: shown ? '0' : '1' }
   });
+
+  await app.firstWindow();
+
+  const visible = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some((window) => window.isVisible())
+  );
+
+  if (visible !== shown) {
+    throw new Error(`the app's window is ${visible ? 'on' : 'off'} the screen`);
+  }
+
+  return app;
+};
 
 export const test = base.extend<object, { sample: Sample }>({
   sample: [

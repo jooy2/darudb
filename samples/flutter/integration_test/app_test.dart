@@ -5,8 +5,9 @@
 // the file reset. The steps run in order on one database folder, and each
 // starts the app on it anew.
 //
-// Run with `flutter test integration_test -d macos` (or `-d linux`,
-// `-d windows`).
+// Run with `flutter test integration_test -d flutter-tester`, which lays the
+// app out at its window's size with no window on the screen, or on a desktop
+// with `-d macos`, `-d linux` or `-d windows`, which opens the app's window.
 import 'dart:io';
 
 import 'package:flutter/widgets.dart';
@@ -81,6 +82,11 @@ Future<void> _type(WidgetTester tester, Finder field, String text) async {
 }
 
 Future<void> _startApp(WidgetTester tester, String directory) async {
+  // The window's size, which the test runner without a window lays the
+  // screen out at too; on a desktop it is the window's own.
+  tester.view.physicalSize = const Size(1360, 860);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
   await tester.pumpWidget(SampleApp(directory: directory));
   await _pumpUntil(tester, find.byKey(countKey(SampleCollection.people)));
 }

@@ -7,7 +7,7 @@ Nothing here is released. The packages ship only their own folders, the document
 | Path      | What it is                                                                       | Tested with                          |
 | --------- | -------------------------------------------------------------------------------- | ------------------------------------ |
 | `node`    | One set of React screens, run as an Electron app and as a page of a local server | Playwright, in Electron and Chromium |
-| `flutter` | The same screens as a Flutter app, for macOS, Windows, Linux, iOS and Android    | `integration_test`, on a desktop     |
+| `flutter` | The same screens as a Flutter app, for macOS, Windows, Linux, iOS and Android    | `integration_test`, with no window   |
 
 Both use [Plass UI](https://plass.cdget.com) for their components and [randino](https://randino.cdget.com) for their sample data.
 
@@ -63,7 +63,7 @@ npm start
 
 `npm start` builds the screens and opens the Electron app, which keeps its database under the app's user data folder. `npm run web` serves the same screens at `http://127.0.0.1:3000`, with the database in `samples/node/.data/`. `npm run dev` serves them with hot reloading, the database included. `DARUDB_SAMPLE_DIR` puts the database in another folder, and `PORT` serves the web page on another port.
 
-The end-to-end tests run the same scenario in both hosts. Playwright needs its Chromium once:
+The end-to-end tests run the same scenario in both hosts. The Electron app's window stays hidden while they run, and the app out of the Dock, so that they do not take the screen; `DARUDB_SAMPLE_SHOW=1` shows it, for watching a run. Playwright needs its Chromium once, which it runs without a window:
 
 ```bash
 npx playwright install chromium
@@ -86,11 +86,11 @@ The first build compiles the engine for the target, which takes a minute or two;
 
 ```bash
 flutter test
-flutter test integration_test -d macos
+flutter test integration_test -d flutter-tester
 ```
 
-`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test` runs the app itself through the scenario, on the desktop you name: `-d macos`, `-d windows` or `-d linux`. The test drives a window, so it needs a display and a session that is not locked.
+`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario in Flutter's test runner, which lays the app out at its window's size with no window on the screen. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
 
 ## In CI
 
-`.github/workflows/run-test-samples.yml` runs both on Linux, on every pull request and on pushes that change the engine, a binding or a sample: the Node.js sample's tests in Electron and Chromium, and the Flutter sample's unit tests and end-to-end tests on the Linux desktop, each under a virtual display.
+`.github/workflows/run-test-samples.yml` runs both on Linux, on every pull request and on pushes that change the engine, a binding or a sample: the Node.js sample's tests in Electron and Chromium, and the Flutter sample's unit tests and end-to-end tests on the Linux desktop, each under a virtual display, so that CI drives the Flutter app's real window, which a run on a developer's machine leaves out.
