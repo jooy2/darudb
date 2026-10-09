@@ -1,6 +1,6 @@
 [package]
 name = "darudb-derive"
-version = "1.0.1"
+version = "1.1.0"
 description = "The derive macros of DaruDB, `#[derive(Object)]` and `#[derive(Embedded)]`, which the `darudb` crate re-exports with its `derive` feature."
 readme = "README.md"
 keywords = ["database", "embedded", "derive"]
