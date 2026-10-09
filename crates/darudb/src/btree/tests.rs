@@ -55,6 +55,10 @@ impl Store for TestStore {
         Ok(page)
     }
 
+    fn allocate_run_below(&mut self, _pages: u64, _limit: u64) -> Option<u64> {
+        None
+    }
+
     fn allocate_run(&mut self, pages: u64) -> Result<u64> {
         let first = self.next;
 

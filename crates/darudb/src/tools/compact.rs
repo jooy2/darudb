@@ -100,7 +100,9 @@ fn move_tail(db: &Database, report: &mut CompactReport) -> Result<()> {
 
         let moved = txn.relocate_above(threshold)?;
 
-        if moved == 0 {
+        // Nodes moved into pages the file grew by, for want of free ones
+        // below, would leave it larger than it was: the round is dropped.
+        if moved == 0 || txn.space_summary().0 > pages {
             break;
         }
 
@@ -214,10 +216,14 @@ mod tests {
             assert!(report.pages_moved > 0, "{report:?}");
             assert!(report.bytes_after < report.bytes_before, "{report:?}");
 
-            // What is left free is the room the moves needed on the way.
+            // What is left free is the room the moves needed on the way, and
+            // holes too small for an overflow run that found no room below.
             let (pages, free) = db.begin_write().unwrap().space_summary();
 
-            assert!(free * 8 < pages, "{free} of {pages} pages free: {report:?}");
+            assert!(
+                free <= 4 + pages / 8,
+                "{free} of {pages} pages free: {report:?}"
+            );
             assert_eq!(report.bytes_after, fs::metadata(&path).unwrap().len());
             assert_eq!(people(&db), before);
             assert!(db.check().unwrap().is_ok(), "{:?}", db.check().unwrap());

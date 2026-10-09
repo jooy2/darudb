@@ -621,7 +621,9 @@ impl WriteTransaction {
                 threshold,
             )?;
 
-            state.changed |= relocated > 0;
+            // A run with no room below the threshold leaves the nodes on
+            // the way to it copied, with no page given up.
+            state.changed |= relocated > 0 || matches!(state.root, Some(Child::Dirty { .. }));
             moved += relocated;
         }
 

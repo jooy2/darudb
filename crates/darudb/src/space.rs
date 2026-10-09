@@ -272,6 +272,25 @@ impl Space {
         self.page_count
     }
 
+    /// Takes the lowest free run that has `pages` pages ending at or below
+    /// page `limit` out of the free runs, and returns its first page.
+    fn take_run(&mut self, pages: u64, limit: u64) -> Option<u64> {
+        let (start, len) = self
+            .free
+            .iter()
+            .take_while(|(start, _)| start.saturating_add(pages) <= limit)
+            .find(|(_, len)| **len >= pages)
+            .map(|(start, len)| (*start, *len))?;
+
+        self.set_run(start, None);
+
+        if len > pages {
+            self.set_run(start + pages, Some(len - pages));
+        }
+
+        Some(start)
+    }
+
     /// How many pages are free.
     pub(crate) fn free_pages(&self) -> u64 {
         self.free.values().sum()
@@ -343,21 +362,8 @@ impl Store for Space {
     }
 
     fn allocate_run(&mut self, pages: u64) -> Result<u64> {
-        let found = self
-            .free
-            .iter()
-            .find(|(_, len)| **len >= pages)
-            .map(|(start, len)| (*start, *len));
-        let first = match found {
-            Some((start, len)) => {
-                self.set_run(start, None);
-
-                if len > pages {
-                    self.set_run(start + pages, Some(len - pages));
-                }
-
-                start
-            }
+        let first = match self.take_run(pages, u64::MAX) {
+            Some(first) => first,
             None => self.extend(pages)?,
         };
 
@@ -365,6 +371,15 @@ impl Store for Space {
         self.changes += 1;
 
         Ok(first)
+    }
+
+    fn allocate_run_below(&mut self, pages: u64, limit: u64) -> Option<u64> {
+        let first = self.take_run(pages, limit)?;
+
+        self.fresh.extend(first..first + pages);
+        self.changes += 1;
+
+        Some(first)
     }
 
     fn release(&mut self, page: u64, written: u64) {

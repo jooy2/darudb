@@ -92,6 +92,11 @@ pub(crate) trait Store {
     /// `pages` consecutive free pages for this transaction; returns the first.
     fn allocate_run(&mut self, pages: u64) -> Result<u64>;
 
+    /// `pages` consecutive free pages that end at or below page `limit`, if
+    /// there are: what compaction moves a run into, since a run moved to the
+    /// end of the file would grow the file it is shrinking.
+    fn allocate_run_below(&mut self, pages: u64, limit: u64) -> Option<u64>;
+
     /// Gives back a page this transaction no longer uses, which transaction
     /// `written` wrote: the id in the pointer that led to it, or this
     /// transaction's for a page it allocated. A page it allocated itself

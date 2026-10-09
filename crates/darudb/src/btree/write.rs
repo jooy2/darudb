@@ -564,9 +564,10 @@ fn take_split<S: Store>(
 /// Copies every node of the tree under `root` whose page is `threshold` or
 /// above, with every node on the way to one, into pages `store` allocates,
 /// and writes every overflow value with a page at or above it into a run
-/// `store` allocates: what compaction does to empty the file's tail, since
-/// the store hands out its lowest free pages first. Returns how many pages
-/// at or above `threshold` the tree gave up.
+/// `store` has room for below `threshold`, leaving one it has no room for
+/// where it is: what compaction does to empty the file's tail, since the
+/// store hands out its lowest free pages first. Returns how many pages at or
+/// above `threshold` the tree gave up.
 pub(crate) fn relocate<L: Load, S: Store>(
     load: &L,
     store: &mut S,
@@ -614,12 +615,17 @@ fn relocate_into<L: Load, S: Store>(
                     }
                     _ => continue,
                 };
+                // A run with no room below the threshold stays where it is:
+                // moving it to the end of the file would grow the file.
+                let Some(first) = store.allocate_run_below(u64::from(reference.pages), threshold)
+                else {
+                    continue;
+                };
                 let value = load.read_overflow(&reference, tree)?;
                 let key = leaf.key(index).to_vec();
-                let run = store_value(load.page_size(), store, tree, key.len(), &value)?;
-                let stored = run.map_or(StoredRef::Inline(&value), StoredRef::Overflow);
+                let run = write_run(load.page_size(), store, tree, first, &value)?;
                 let old = leaf
-                    .overwrite(index, &key, stored)
+                    .overwrite(index, &key, StoredRef::Overflow(run))
                     .map_err(internal)?
                     .ok_or_else(|| internal("a relocated value does not fit where it was"))?;
 
@@ -1192,9 +1198,23 @@ fn store_value<S: Store>(
         return Ok(None);
     }
 
+    let first = store.allocate_run(overflow_pages(page_size, value.len() as u64))?;
+
+    write_run(page_size, store, tree, first, value).map(Some)
+}
+
+/// Writes `value` into the overflow run from page `first` on, which `store`
+/// allocated, and returns its reference.
+#[inline(always)]
+fn write_run<S: Store>(
+    page_size: usize,
+    store: &mut S,
+    tree: u64,
+    first: u64,
+    value: &[u8],
+) -> Result<OverflowRef> {
     let len = value.len() as u64;
     let pages = overflow_pages(page_size, len);
-    let first = store.allocate_run(pages)?;
     let chunk = content_len(page_size);
     let mut checks = Vec::with_capacity(16 * value.len().div_ceil(chunk));
     let mut index = 0u64;
@@ -1223,13 +1243,13 @@ fn store_value<S: Store>(
         }
     }
 
-    Ok(Some(OverflowRef {
+    Ok(OverflowRef {
         first,
         txn: store.txn(),
         pages: u32::try_from(pages).map_err(|_| internal("an overflow run too long"))?,
         len,
         check: Check::of(&[&checks]),
-    }))
+    })
 }
 
 /// Gives back the overflow pages of a value that is no longer stored.
