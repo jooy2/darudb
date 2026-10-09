@@ -1,9 +1,10 @@
-// The sample from a user's side, in the app itself on a desktop: an empty
-// database, sample data inserted in bulk, the objects filtered and paged by
-// the engine, one object added, changed, refused and deleted, the file
-// checked and compacted, the data still there when the app starts again, and
-// the file reset. The steps run in order on one database folder, and each
-// starts the app on it anew.
+// The sample from a user's side, in the app itself: an empty database, plain
+// or made encrypted, sample data inserted in bulk, the objects filtered and
+// paged by the engine, one object added, changed, refused and deleted, the
+// file checked and compacted, the data still there when the app starts again,
+// and the file reset. The steps run in order on one database folder, and each
+// starts the app on it anew; the whole scenario runs on a plain file and
+// again on an encrypted one.
 //
 // Run with `flutter test integration_test -d flutter-tester`, which lays the
 // app out at its window's size with no window on the screen, or on a desktop
@@ -81,6 +82,14 @@ Future<void> _type(WidgetTester tester, Finder field, String text) async {
   await tester.pump();
 }
 
+/// The line of the file's card that says whether the file is encrypted.
+Finder _fileKind(bool encrypted) => find.byWidgetPredicate(
+  (Widget widget) =>
+      widget is Text &&
+      (widget.data?.endsWith(encrypted ? ', encrypted' : ', not encrypted') ??
+          false),
+);
+
 Future<void> _startApp(WidgetTester tester, String directory) async {
   // The window's size, which the test runner without a window lays the
   // screen out at too; on a desktop it is the window's own.
@@ -110,9 +119,29 @@ Future<void> _openCollection(
   await _pumpUntil(tester, find.byKey(ValueKey<SampleCollection>(collection)));
 }
 
+/// Makes the file again through its card, encrypted or plain.
+Future<void> _makeFile(WidgetTester tester, {required bool encrypted}) async {
+  await _tap(tester, find.text(encrypted ? 'Encrypted' : 'Plain'));
+  await _pumpUntil(
+    tester,
+    find.text(encrypted ? 'Make an encrypted file?' : 'Make a plain file?'),
+  );
+  await _tap(tester, find.text(encrypted ? 'Encrypt' : 'Make plain'));
+  await _pumpUntil(tester, _fileKind(encrypted));
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  for (final bool encrypted in <bool>[false, true]) {
+    group(
+      encrypted ? 'an encrypted file' : 'a plain file',
+      () => _scenario(encrypted: encrypted),
+    );
+  }
+}
+
+void _scenario({required bool encrypted}) {
   late Directory directory;
 
   setUpAll(() {
@@ -123,8 +152,15 @@ void main() {
     directory.deleteSync(recursive: true);
   });
 
-  testWidgets('starts with an empty database', (WidgetTester tester) async {
+  testWidgets('starts with an empty database, plain or made encrypted', (
+    WidgetTester tester,
+  ) async {
     await _startApp(tester, directory.path);
+    await _pumpUntil(tester, _fileKind(false));
+
+    if (encrypted) {
+      await _makeFile(tester, encrypted: true);
+    }
 
     for (final SampleCollection collection in SampleCollection.values) {
       await _waitForCount(tester, collection, '0');
@@ -260,6 +296,8 @@ void main() {
     WidgetTester tester,
   ) async {
     await _startApp(tester, directory.path);
+    // An encrypted file opens again with the sample's password.
+    await _pumpUntil(tester, _fileKind(encrypted));
     await _waitForCount(tester, SampleCollection.organizations, '41');
     await _waitForCount(tester, SampleCollection.people, '2,000');
     await _waitForCount(tester, SampleCollection.posts, '6,000');
@@ -275,5 +313,9 @@ void main() {
     for (final SampleCollection collection in SampleCollection.values) {
       await _waitForCount(tester, collection, '0');
     }
+
+    // A reset keeps the kind of file, and the card turns it into the other.
+    expect(_fileKind(encrypted), findsOneWidget);
+    await _makeFile(tester, encrypted: !encrypted);
   });
 }

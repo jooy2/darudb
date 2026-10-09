@@ -1,6 +1,11 @@
 // The sample's database: the one file it keeps, and every operation the
 // screens ask of it.
 //
+// The file is plain or encrypted with `samplePassword`, as the screens chose
+// when they last made it, and opening finds out which: a plain open of an
+// encrypted file fails with `KEY_REQUIRED`, and the file is opened again with
+// the password.
+//
 // Every call goes through the `Future` API, which does the engine's work on
 // threads of the native library: a call through `dart:ffi` holds the isolate,
 // and this is the isolate that draws the screens. Objects reach the screens
@@ -18,6 +23,12 @@ import 'package:darudb_sample/src/model.dart';
 import 'package:darudb_sample/src/sample.dart';
 
 const String sampleFileName = 'sample.darudb';
+
+/// The password of an encrypted sample file. The sample keeps it in its code
+/// so that either kind of file opens without asking for it, which is fine for
+/// sample data and nothing else: an app keeps its key in the operating
+/// system's keystore, as the encryption guide shows.
+const String samplePassword = 'darudb sample';
 
 /// How many objects a write transaction of a sample run inserts.
 const int _batchSize = 5000;
@@ -218,17 +229,29 @@ final class SampleStore {
   final String path;
   Database _db;
 
-  /// Opens the sample's file in [directory], creating both when they are not
-  /// there.
+  /// Opens the sample's file in [directory], plain or encrypted, creating a
+  /// plain one, and the folder, when they are not there.
   static Future<SampleStore> open(String directory) async {
     await Directory(directory).create(recursive: true);
 
     final String path = '$directory${Platform.pathSeparator}$sampleFileName';
+    Database db;
 
-    return SampleStore._(
-      path,
-      await Database.openAsync(path, schema: sampleSchema),
-    );
+    try {
+      db = await Database.openAsync(path, schema: sampleSchema);
+    } on DaruException catch (error) {
+      if (error.code != 'KEY_REQUIRED') {
+        rethrow;
+      }
+
+      db = await Database.openAsync(
+        path,
+        schema: sampleSchema,
+        password: samplePassword,
+      );
+    }
+
+    return SampleStore._(path, db);
   }
 
   Future<SampleInfo> info() async {
@@ -450,11 +473,16 @@ final class SampleStore {
 
   Future<CompactReport> compact() => _db.compactAsync();
 
-  /// Closes the file, deletes it, and starts again from an empty one.
-  Future<SampleInfo> reset() async {
+  /// Closes the file, deletes it, and starts again from an empty one,
+  /// encrypted with [samplePassword] or not.
+  Future<SampleInfo> reset({required bool encrypted}) async {
     await _db.closeAsync();
     await File(path).delete();
-    _db = await Database.openAsync(path, schema: sampleSchema);
+    _db = await Database.openAsync(
+      path,
+      schema: sampleSchema,
+      password: encrypted ? samplePassword : null,
+    );
 
     return info();
   }

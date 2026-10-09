@@ -116,6 +116,16 @@ const seedOptionsOf = (args: unknown): SeedOptions => {
 
 const objectOf = (value: unknown, what: string): WireObject => recordOf(value, what) as WireObject;
 
+const encryptedOf = (args: unknown): boolean => {
+  const { encrypted } = recordOf(args, 'the arguments');
+
+  if (typeof encrypted !== 'boolean') {
+    throw invalid('encrypted must be true or false');
+  }
+
+  return encrypted;
+};
+
 const run = (
   store: SampleStore,
   method: Method,
@@ -152,7 +162,7 @@ const run = (
     case 'compact':
       return store.compact();
     case 'reset':
-      return store.reset();
+      return store.reset(encryptedOf(args));
   }
 };
 

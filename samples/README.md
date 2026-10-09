@@ -19,6 +19,7 @@ The app opens a database file when it starts, empty the first time, and keeps it
 - **Browse a collection.** The sidebar lists the three collections with their counts. The list shows a page of 50 objects, filtered by a condition in the query language, such as `age >= 65 AND language == "ko"` or `author.language == "en"` for posts, and sorted by a column. The engine does the filtering, sorting and paging: the list asks for `filter SORT BY field LIMIT 50 OFFSET n`.
 - **Add, change and delete objects.** A form for each collection, which shows the engine's error code when it refuses a change, `DUPLICATE_KEY` for a nickname another person holds, for one.
 - **Check, compact and reset the file.** The integrity check, compaction, and a reset that deletes the file and starts again from an empty one.
+- **Encrypt the file, or not.** The file's card chooses between a plain file and one encrypted with a password, and choosing makes the file again, empty, of that kind; a reset keeps the kind. The password is the sample's own, in its code, so that the app opens either kind without asking: it opens the file as a plain one, and when the engine answers `KEY_REQUIRED`, opens it again with the password. An application keeps its key in the operating system's keystore instead, as the [encryption guide](https://darudb.cdget.com/guide/encryption) shows.
 
 The Node.js sample runs the same screens in two hosts. The Electron app holds the database in its main process and the window asks for everything over IPC; the web page cannot load the engine, so a server on this machine holds the database and serves the page.
 
@@ -63,14 +64,14 @@ npm start
 
 `npm start` builds the screens and opens the Electron app, which keeps its database under the app's user data folder. `npm run web` serves the same screens at `http://127.0.0.1:3000`, with the database in `samples/node/.data/`. `npm run dev` serves them with hot reloading, the database included. `DARUDB_SAMPLE_DIR` puts the database in another folder, and `PORT` serves the web page on another port.
 
-The end-to-end tests run the same scenario in both hosts. The Electron app's window stays hidden while they run, and the app out of the Dock, so that they do not take the screen; `DARUDB_SAMPLE_SHOW=1` shows it, for watching a run. Playwright needs its Chromium once, which it runs without a window:
+The end-to-end tests run the same scenario in both hosts, on a plain file and again on an encrypted one, four runs in all. The Electron app's window stays hidden while they run, and the app out of the Dock, so that they do not take the screen; `DARUDB_SAMPLE_SHOW=1` shows it, for watching a run. Playwright needs its Chromium once, which it runs without a window:
 
 ```bash
 npx playwright install chromium
 npm test
 ```
 
-`npm run test:web` and `npm run test:electron` run one host, `npm run typecheck` checks the types and `npm run format` the formatting. After a change to the engine or the binding, build `packages/node` again before testing.
+`npm run test:web` and `npm run test:electron` run one host, on both kinds of file, `npm run typecheck` checks the types and `npm run format` the formatting. After a change to the engine or the binding, build `packages/node` again before testing.
 
 ## Run the Flutter sample
 
@@ -89,7 +90,7 @@ flutter test
 flutter test integration_test -d flutter-tester
 ```
 
-`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario in Flutter's test runner, which lays the app out at its window's size with no window on the screen. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
+`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario, on a plain file and again on an encrypted one, in Flutter's test runner, which lays the app out at its window's size with no window on the screen. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
 
 ## In CI
 

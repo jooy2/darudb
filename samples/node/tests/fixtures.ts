@@ -9,7 +9,9 @@
  * server Playwright started, which is reset first, and starting again loads
  * the page again from the same server.
  *
- * The Electron window stays hidden, and the app out of the Dock, unless
+ * A project whose metadata says `encrypted` runs the scenario on an
+ * encrypted file, which its first step makes through the screens. The
+ * Electron window stays hidden, and the app out of the Dock, unless
  * `DARUDB_SAMPLE_SHOW=1` asks to watch it.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -24,6 +26,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 export interface Sample {
   readonly page: Page;
+  /** Whether the scenario runs on an encrypted file. */
+  readonly encrypted: boolean;
   /** Starts the app again on the same database, and gives its new page. */
   restart(): Promise<Page>;
 }
@@ -53,7 +57,9 @@ const launch = async (directory: string): Promise<ElectronApplication> => {
 export const test = base.extend<object, { sample: Sample }>({
   sample: [
     async ({ browser }, use, workerInfo) => {
-      if (workerInfo.project.name === 'electron') {
+      const encrypted = workerInfo.project.metadata.encrypted === true;
+
+      if (workerInfo.project.name.startsWith('electron')) {
         const directory = mkdtempSync(join(tmpdir(), 'darudb-sample-electron-'));
         let app = await launch(directory);
         let page = await app.firstWindow();
@@ -63,6 +69,7 @@ export const test = base.extend<object, { sample: Sample }>({
           get page() {
             return page;
           },
+          encrypted,
           restart: async () => {
             await app.close();
             app = await launch(directory);
@@ -82,10 +89,11 @@ export const test = base.extend<object, { sample: Sample }>({
       const context = await browser.newContext({ baseURL, viewport: { width: 1360, height: 860 } });
       const page = await context.newPage();
 
-      await page.request.post('api/reset', { data: {} });
+      await page.request.post('api/reset', { data: { encrypted: false } });
       await page.goto('/');
       await use({
         page,
+        encrypted,
         restart: async () => {
           await page.reload();
 

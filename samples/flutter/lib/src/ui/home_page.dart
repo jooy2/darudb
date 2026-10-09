@@ -1,7 +1,8 @@
 // The sample's one screen: the collections and the sample data in the
 // sidebar, the chosen collection's objects beside them, and the file's tools
-// in the header. It opens the store when it first appears and closes it when
-// it goes.
+// in the header. The file's card chooses whether the file is encrypted,
+// which makes it again, empty. It opens the store when it first appears and
+// closes it when it goes.
 import 'dart:async';
 
 import 'package:darudb/darudb.dart';
@@ -146,14 +147,23 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _handleResetPressed(SampleController controller) async {
+  /// Makes the file again, empty, encrypted or not, once the user agrees.
+  Future<void> _remake(
+    SampleController controller, {
+    required bool encrypted,
+    required String title,
+    required String confirmLabel,
+  }) async {
     final bool confirmed = await PlConfirmProvider.of(context).confirm(
-      const PlConfirmOptions(
-        title: Text('Delete every object?'),
+      PlConfirmOptions(
+        title: Text(title),
         description: Text(
-          'The database file is deleted and made again, empty.',
+          encrypted
+              ? 'The database file is deleted and made again, empty, '
+                    "encrypted with the sample's password."
+              : 'The database file is deleted and made again, empty.',
         ),
-        confirmLabel: Text('Reset'),
+        confirmLabel: Text(confirmLabel),
         color: PlassColor.danger,
       ),
     );
@@ -163,7 +173,9 @@ class _HomePageState extends State<HomePage> {
     }
 
     try {
-      await controller.runTool(controller.store.reset);
+      await controller.runTool(
+        () => controller.store.reset(encrypted: encrypted),
+      );
 
       if (mounted) {
         _showDone('The database is empty');
@@ -172,6 +184,30 @@ class _HomePageState extends State<HomePage> {
       _showError(error);
     }
   }
+
+  Future<void> _handleResetPressed(SampleController controller) => _remake(
+    controller,
+    encrypted: controller.info?.encrypted ?? false,
+    title: 'Delete every object?',
+    confirmLabel: 'Reset',
+  );
+
+  Future<void> _handleEncryptionChanged(
+    SampleController controller, {
+    required bool encrypted,
+  }) => encrypted
+      ? _remake(
+          controller,
+          encrypted: true,
+          title: 'Make an encrypted file?',
+          confirmLabel: 'Encrypt',
+        )
+      : _remake(
+          controller,
+          encrypted: false,
+          title: 'Make a plain file?',
+          confirmLabel: 'Make plain',
+        );
 
   Widget _getHeaderWidget(SampleController controller) {
     return PlHeader(
@@ -238,32 +274,57 @@ class _HomePageState extends State<HomePage> {
             if (info != null)
               PlCard(
                 title: const Text('File'),
-                child: PlDataList(
-                  orientation: PlassOrientation.vertical,
-                  size: PlassSize.sm,
-                  children: <PlDataListItem>[
-                    PlDataListItem(
-                      label: const Text('Path'),
-                      value: Text(info.path),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  spacing: 12,
+                  children: <Widget>[
+                    PlSegmentedButton<bool>(
+                      semanticLabel: 'Encryption',
+                      size: PlassSize.sm,
+                      fullWidth: true,
+                      value: info.encrypted,
+                      disabled: controller.busy,
+                      onChanged: (bool encrypted) {
+                        if (encrypted != info.encrypted) {
+                          _handleEncryptionChanged(
+                            controller,
+                            encrypted: encrypted,
+                          );
+                        }
+                      },
+                      segments: const <PlSegment<bool>>[
+                        PlSegment<bool>(value: false, label: Text('Plain')),
+                        PlSegment<bool>(value: true, label: Text('Encrypted')),
+                      ],
                     ),
-                    PlDataListItem(
-                      label: const Text('Size'),
-                      value: Text(formatBytes(info.bytes)),
-                    ),
-                    PlDataListItem(
-                      label: const Text('Format'),
-                      value: Text(
-                        'version ${info.formatVersion}, pages of '
-                        '${formatBytes(info.pageSize)}, '
-                        '${info.encrypted ? 'encrypted' : 'not encrypted'}',
-                      ),
-                    ),
-                    PlDataListItem(
-                      label: const Text('Engine'),
-                      value: Text(
-                        'DaruDB ${info.engineVersion}, schema version '
-                        '${info.schemaVersion ?? 'none'}',
-                      ),
+                    PlDataList(
+                      orientation: PlassOrientation.vertical,
+                      size: PlassSize.sm,
+                      children: <PlDataListItem>[
+                        PlDataListItem(
+                          label: const Text('Path'),
+                          value: Text(info.path),
+                        ),
+                        PlDataListItem(
+                          label: const Text('Size'),
+                          value: Text(formatBytes(info.bytes)),
+                        ),
+                        PlDataListItem(
+                          label: const Text('Format'),
+                          value: Text(
+                            'version ${info.formatVersion}, pages of '
+                            '${formatBytes(info.pageSize)}, '
+                            '${info.encrypted ? 'encrypted' : 'not encrypted'}',
+                          ),
+                        ),
+                        PlDataListItem(
+                          label: const Text('Engine'),
+                          value: Text(
+                            'DaruDB ${info.engineVersion}, schema version '
+                            '${info.schemaVersion ?? 'none'}',
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

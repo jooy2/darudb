@@ -136,8 +136,26 @@ void main() {
   test('reset leaves an empty file', () async {
     await store.seed(people: 1000, seed: 1, onProgress: (_) {});
 
-    final SampleInfo info = await store.reset();
+    final SampleInfo info = await store.reset(encrypted: false);
 
     expect(info.counts.values.every((int count) => count == 0), isTrue);
+    expect(info.encrypted, isFalse);
   });
+
+  test(
+    'an encrypted file opens again with the password, found out by its code',
+    () async {
+      expect((await store.reset(encrypted: true)).encrypted, isTrue);
+      await store.seed(people: 1000, seed: 1, onProgress: (_) {});
+      await store.close();
+
+      store = await SampleStore.open(directory.path);
+
+      final SampleInfo info = await store.info();
+
+      expect(info.encrypted, isTrue);
+      expect(info.counts[SampleCollection.people], 1000);
+      expect((await store.reset(encrypted: false)).encrypted, isFalse);
+    },
+  );
 }

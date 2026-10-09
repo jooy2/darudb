@@ -1,8 +1,9 @@
 /**
  * The sample's one screen: the collections and the sample data in the
  * sidebar, the chosen collection's objects beside them, and the file's tools
- * in the header. Every change bumps `version`, which reads the counts and
- * the page again.
+ * in the header. The file's card chooses whether the file is encrypted,
+ * which makes it again, empty. Every change bumps `version`, which reads the
+ * counts and the page again.
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -15,6 +16,7 @@ import { PlFlex } from 'plass-ui/flex';
 import { PlHeader } from 'plass-ui/header';
 import { PlList, PlListItem } from 'plass-ui/list';
 import { PlPageLayout } from 'plass-ui/page-layout';
+import { PlSegment, PlSegmentedButton } from 'plass-ui/segmented-button';
 import { PlSidebar } from 'plass-ui/sidebar';
 import { usePlToast } from 'plass-ui/toast';
 import { PlTypography } from 'plass-ui/typography';
@@ -92,21 +94,32 @@ export const App = () => {
       });
     });
 
-  const handleReset = async (): Promise<void> => {
+  /** Makes the file again, empty, encrypted or not, once the user agrees. */
+  const remake = async (encrypted: boolean, title: string, confirmLabel: string): Promise<void> => {
     const confirmed = await confirm({
-      title: 'Delete every object?',
-      description: 'The database file is deleted and made again, empty.',
-      confirmLabel: 'Reset',
+      title,
+      description: encrypted
+        ? "The database file is deleted and made again, empty, encrypted with the sample's password."
+        : 'The database file is deleted and made again, empty.',
+      confirmLabel,
       color: 'danger'
     });
 
     if (confirmed) {
       await runTool(async () => {
-        setInfo(await backend.call('reset', null));
+        setInfo(await backend.call('reset', { encrypted }));
         toast.add({ title: 'The database is empty', color: 'success' });
       });
     }
   };
+
+  const handleReset = (): Promise<void> =>
+    remake(info?.encrypted ?? false, 'Delete every object?', 'Reset');
+
+  const handleEncryptionChange = (encrypted: boolean): Promise<void> =>
+    encrypted
+      ? remake(true, 'Make an encrypted file?', 'Encrypt')
+      : remake(false, 'Make a plain file?', 'Make plain');
 
   const header = (
     <PlHeader
@@ -164,20 +177,37 @@ export const App = () => {
         />
         {info === null ? null : (
           <PlCard title="File">
-            <PlDataList orientation="vertical" size="sm">
-              <PlDataListItem label="Path">
-                <span className="sample-path">{info.path}</span>
-              </PlDataListItem>
-              <PlDataListItem label="Size" value={formatBytes(info.bytes)} />
-              <PlDataListItem
-                label="Format"
-                value={`version ${info.formatVersion}, pages of ${formatBytes(info.pageSize)}, ${info.encrypted ? 'encrypted' : 'not encrypted'}`}
-              />
-              <PlDataListItem
-                label="Engine"
-                value={`DaruDB ${info.engineVersion}, schema version ${info.schemaVersion ?? 'none'}`}
-              />
-            </PlDataList>
+            <PlFlex direction="vertical" spacing={3}>
+              <PlSegmentedButton
+                aria-label="Encryption"
+                value={info.encrypted ? 'encrypted' : 'plain'}
+                onValueChange={(value) => {
+                  if (value !== null && (value === 'encrypted') !== info.encrypted) {
+                    void handleEncryptionChange(value === 'encrypted');
+                  }
+                }}
+                disabled={busy}
+                fullWidth
+                size="sm"
+              >
+                <PlSegment value="plain">Plain</PlSegment>
+                <PlSegment value="encrypted">Encrypted</PlSegment>
+              </PlSegmentedButton>
+              <PlDataList orientation="vertical" size="sm">
+                <PlDataListItem label="Path">
+                  <span className="sample-path">{info.path}</span>
+                </PlDataListItem>
+                <PlDataListItem label="Size" value={formatBytes(info.bytes)} />
+                <PlDataListItem
+                  label="Format"
+                  value={`version ${info.formatVersion}, pages of ${formatBytes(info.pageSize)}, ${info.encrypted ? 'encrypted' : 'not encrypted'}`}
+                />
+                <PlDataListItem
+                  label="Engine"
+                  value={`DaruDB ${info.engineVersion}, schema version ${info.schemaVersion ?? 'none'}`}
+                />
+              </PlDataList>
+            </PlFlex>
           </PlCard>
         )}
       </PlFlex>

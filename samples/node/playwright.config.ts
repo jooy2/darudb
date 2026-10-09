@@ -1,9 +1,10 @@
 /**
  * The end-to-end tests: one scenario, run against both hosts of the same
- * screens. The `web` project drives Chromium against `server/main.ts`, which
- * Playwright starts on its own port with a database folder of its own, and
- * the `electron` project launches the app itself. `npm test` builds the
- * page first, since both load `dist/`.
+ * screens, on a plain file and on an encrypted one. The `web` projects drive
+ * Chromium against `server/main.ts`, which Playwright starts on its own port
+ * with a database folder of its own, and the `electron` projects launch the
+ * app itself, with its window hidden. `npm test` builds the page first,
+ * since both load `dist/`.
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,7 +39,16 @@ export default defineConfig({
       use: { browserName: 'chromium', baseURL: `http://127.0.0.1:${PORT}` }
     },
     {
+      name: 'web-encrypted',
+      use: { browserName: 'chromium', baseURL: `http://127.0.0.1:${PORT}` },
+      metadata: { encrypted: true }
+    },
+    {
       name: 'electron'
+    },
+    {
+      name: 'electron-encrypted',
+      metadata: { encrypted: true }
     }
   ],
   webServer: {

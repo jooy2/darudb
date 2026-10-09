@@ -3,6 +3,11 @@
  * screens ask of it. The Electron app and the web server both hold one
  * `SampleStore` and hand it what `dispatch.ts` checked.
  *
+ * The file is plain or encrypted with `SAMPLE_PASSWORD`, as the screens chose
+ * when they last made it, and opening finds out which: a plain open of an
+ * encrypted file fails with `KEY_REQUIRED`, and the file is opened again with
+ * the password.
+ *
  * Every call goes through the asynchronous API, which does the engine's work
  * on the thread pool: in Electron's main process a wait for the disk would
  * stall every window, and in a server every request. Objects leave the
@@ -37,6 +42,14 @@ import { sampleSchema } from './schema.ts';
 import type { SampleSchema } from './schema.ts';
 
 export const FILE_NAME = 'sample.darudb';
+
+/**
+ * The password of an encrypted sample file. The sample keeps it in its code
+ * so that either kind of file opens without asking for it, which is fine for
+ * sample data and nothing else: an application keeps its key in the
+ * operating system's keystore, as the encryption guide shows.
+ */
+export const SAMPLE_PASSWORD = 'darudb sample';
 
 /** How many objects a write transaction of a sample run inserts. */
 const BATCH_SIZE = 5000;
@@ -140,12 +153,25 @@ export class SampleStore {
     this.#db = db;
   }
 
-  /** Opens the sample's file in `directory`, creating both when they are not there. */
+  /**
+   * Opens the sample's file in `directory`, plain or encrypted, creating a
+   * plain one, and the folder, when they are not there.
+   */
   static async open(directory: string, host: Host): Promise<SampleStore> {
     await mkdir(directory, { recursive: true });
 
     const path = join(directory, FILE_NAME);
-    const db = await Database.openAsync(path, { schema: sampleSchema });
+    let db: Database<SampleSchema>;
+
+    try {
+      db = await Database.openAsync(path, { schema: sampleSchema });
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== 'KEY_REQUIRED') {
+        throw error;
+      }
+
+      db = await Database.openAsync(path, { schema: sampleSchema, password: SAMPLE_PASSWORD });
+    }
 
     return new SampleStore(path, host, db);
   }
@@ -310,11 +336,17 @@ export class SampleStore {
     };
   }
 
-  /** Closes the file, deletes it, and starts again from an empty one. */
-  async reset(): Promise<Info> {
+  /**
+   * Closes the file, deletes it, and starts again from an empty one,
+   * encrypted with `SAMPLE_PASSWORD` or not.
+   */
+  async reset(encrypted: boolean): Promise<Info> {
     await this.#db.closeAsync();
     await rm(this.path);
-    this.#db = await Database.openAsync(this.path, { schema: sampleSchema });
+    this.#db = await Database.openAsync(this.path, {
+      schema: sampleSchema,
+      ...(encrypted ? { password: SAMPLE_PASSWORD } : {})
+    });
 
     return this.info();
   }

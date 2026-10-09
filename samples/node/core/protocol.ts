@@ -112,7 +112,8 @@ export interface Methods {
   seed: { args: SeedOptions; result: SeedReport };
   check: { args: null; result: CheckSummary };
   compact: { args: null; result: CompactSummary };
-  reset: { args: null; result: Info };
+  /** Makes the file again, empty, encrypted or not. */
+  reset: { args: { encrypted: boolean }; result: Info };
 }
 
 export type Method = keyof Methods;

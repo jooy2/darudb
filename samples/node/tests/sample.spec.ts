@@ -1,9 +1,10 @@
 /**
- * The sample from a user's side: an empty database, sample data inserted in
- * bulk, the objects listed, filtered, sorted and paged by the engine, one
- * object added, changed, refused and deleted, the file checked and
- * compacted, the data still there after the app starts again, and the file
- * reset. The steps run in order on one database, in both projects.
+ * The sample from a user's side: an empty database, plain or made
+ * encrypted, sample data inserted in bulk, the objects listed, filtered,
+ * sorted and paged by the engine, one object added, changed, refused and
+ * deleted, the file checked and compacted, the data still there after the
+ * app starts again, and the file reset. The steps run in order on one
+ * database, in every project.
  */
 import type { Page } from '@playwright/test';
 
@@ -38,14 +39,33 @@ const columnOf = async (page: Page, header: string): Promise<string[]> => {
 /** The question a confirmation asks, the one alert dialog open at the time. */
 const confirmDialog = (page: Page) => page.getByRole('alertdialog');
 
+/** The file card's line that says whether the file is encrypted. */
+const fileKind = (page: Page, encrypted: boolean) =>
+  page.getByText(encrypted ? /, encrypted$/ : /, not encrypted$/);
+
+/** Makes the file again through its card, encrypted or plain. */
+const makeFile = async (page: Page, encrypted: boolean): Promise<void> => {
+  await page.getByRole('radio', { name: encrypted ? 'Encrypted' : 'Plain' }).click();
+  await confirmDialog(page)
+    .getByRole('button', { name: encrypted ? 'Encrypt' : 'Make plain' })
+    .click();
+  await expect(fileKind(page, encrypted)).toBeVisible();
+};
+
 const insertSampleData = async (page: Page): Promise<void> => {
   await page.getByLabel('Seed', { exact: true }).fill(String(SEED));
   await page.getByRole('button', { name: 'Insert sample data' }).click();
   await expect(page.getByText('Inserted 4,020 objects')).toBeVisible();
 };
 
-test('starts with an empty database', async ({ sample }) => {
-  const { page } = sample;
+test('starts with an empty database, plain or made encrypted', async ({ sample }) => {
+  const { page, encrypted } = sample;
+
+  await expect(fileKind(page, false)).toBeVisible();
+
+  if (encrypted) {
+    await makeFile(page, true);
+  }
 
   await expect(countOf(page, 'organizations')).toHaveText('0');
   await expect(countOf(page, 'people')).toHaveText('0');
@@ -204,6 +224,8 @@ test('checks and compacts the file', async ({ sample }) => {
 test('keeps what it committed when the app starts again', async ({ sample }) => {
   const page = await sample.restart();
 
+  // An encrypted file opens again with the sample's password.
+  await expect(fileKind(page, sample.encrypted)).toBeVisible();
   await expect(countOf(page, 'organizations')).toHaveText('41');
   await expect(countOf(page, 'people')).toHaveText('2,000');
   await expect(countOf(page, 'posts')).toHaveText('6,000');
@@ -218,4 +240,7 @@ test('resets the database', async ({ sample }) => {
   await expect(countOf(page, 'organizations')).toHaveText('0');
   await expect(countOf(page, 'people')).toHaveText('0');
   await expect(countOf(page, 'posts')).toHaveText('0');
+  // A reset keeps the kind of file, and the card turns it into the other.
+  await expect(fileKind(page, sample.encrypted)).toBeVisible();
+  await makeFile(page, !sample.encrypted);
 });
