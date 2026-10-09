@@ -46,6 +46,10 @@ pub(crate) struct Leaf {
     /// them zeros.
     garbage: usize,
     heads: Heads,
+    /// Where the last insert put its entry, while no entry has moved since:
+    /// in memory only, for telling a split that continues a run of inserts
+    /// from any other (`insert_into` in `write.rs`).
+    last_insert: Option<u16>,
 }
 
 /// Leaves are equal when their pages are, whatever prefix their heads
@@ -68,6 +72,7 @@ impl Leaf {
             low: check_offset(page_size),
             garbage: 0,
             heads: Heads::default(),
+            last_insert: None,
         }
     }
 
@@ -115,6 +120,7 @@ impl Leaf {
             // none: the leaf then splits sooner than it has to, no more.
             garbage: end.saturating_sub(low).saturating_sub(cells),
             heads,
+            last_insert: None,
         }
     }
 
@@ -133,6 +139,7 @@ impl Leaf {
             low: check_offset(page_size) - used,
             garbage: 0,
             heads,
+            last_insert: None,
         }
     }
 
@@ -230,8 +237,18 @@ impl Leaf {
         write_cell(&mut self.page, self.low, key, value);
         set_slot(&mut self.page, index, self.low);
         self.count += 1;
+        self.last_insert = u16::try_from(index).ok();
 
         true
+    }
+
+    /// Whether an entry put in place `index` goes right after the one the
+    /// last insert put in.
+    pub(crate) fn follows_last_insert(&self, index: usize) -> bool {
+        index > 0
+            && self
+                .last_insert
+                .is_some_and(|last| usize::from(last) == index - 1)
     }
 
     /// Replaces the value of entry `index`, whose key is `key`, with `value`
@@ -285,6 +302,8 @@ impl Leaf {
     pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
         let mut right = Leaf::new(self.page.len());
 
+        self.last_insert = None;
+
         if at >= self.count {
             return right;
         }
@@ -311,6 +330,8 @@ impl Leaf {
     /// Removes entry `index`, zeroing its cell, and returns the overflow run
     /// of its value, if it had one, for the caller to give back.
     pub(crate) fn remove(&mut self, index: usize) -> Result<Option<OverflowRef>, &'static str> {
+        self.last_insert = None;
+
         let run = match self.value(index)? {
             StoredRef::Inline(_) => None,
             StoredRef::Overflow(reference) => Some(reference),

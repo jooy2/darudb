@@ -332,6 +332,40 @@ impl Harness {
         self.store.free.append(&mut self.store.retired);
     }
 
+    /// How full the committed tree's pages are: the share of the content
+    /// area of all leaves that entries take, and the same of the branches
+    /// below the root.
+    fn fill(&self) -> (f64, f64) {
+        let capacity = content_len(self.loader.page_size());
+        let (mut leaves, mut leaf_bytes, mut branches, mut branch_bytes) = (0, 0, 0, 0);
+        let mut pending = vec![(self.root.clone().unwrap(), None::<u8>, true)];
+
+        while let Some((child, level, is_root)) = pending.pop() {
+            let node = resolve(&self.loader, &child, TREE, level).unwrap();
+
+            match &node.to_node() {
+                Node::Leaf(_) => {
+                    leaves += 1;
+                    leaf_bytes += node.size();
+                }
+                Node::Branch(branch) => {
+                    if !is_root {
+                        branches += 1;
+                        branch_bytes += node.size();
+                    }
+
+                    for child in &branch.children {
+                        pending.push((child.clone(), Some(branch.level - 1), false));
+                    }
+                }
+            }
+        }
+
+        let share = |bytes: usize, pages: usize| bytes as f64 / (pages.max(1) * capacity) as f64;
+
+        (share(leaf_bytes, leaves), share(branch_bytes, branches))
+    }
+
     /// Walks the committed tree and checks every rule the format sets.
     /// Returns the number of entries.
     fn check_structure(&self) -> usize {
@@ -1057,4 +1091,67 @@ fn a_backward_walk_gives_the_forward_walk_in_reverse() {
 
 fn as_slice(bound: &Bound<Vec<u8>>) -> Bound<&[u8]> {
     bound.as_ref().map(Vec::as_slice)
+}
+
+/// Keys that grow within ranges, as an index's entries for a few values do
+/// when the primary keys of the objects grow, fill their leaves and branches,
+/// one transaction after another, where even splits left half of each empty.
+#[test]
+fn keys_that_grow_within_ranges_fill_their_pages() {
+    let mut rng = Rng::new(7);
+    let mut harness = Harness::new(4096);
+    let mut model = BTreeMap::new();
+
+    for id in 0..300_000_u32 {
+        let mut key = vec![u8::try_from(rng.below(3)).unwrap()];
+
+        key.extend_from_slice(&id.to_be_bytes());
+        harness.insert(&key, &[7; 20]);
+        model.insert(key, vec![7; 20]);
+
+        if id % 5_000 == 4_999 {
+            harness.commit();
+        }
+    }
+
+    harness.commit();
+    assert_eq!(harness.check_structure(), model.len());
+    assert_eq!(
+        harness.entries(Bound::Unbounded, Bound::Unbounded),
+        model.into_iter().collect::<Vec<_>>()
+    );
+
+    let (leaves, branches) = harness.fill();
+
+    eprintln!("ranges: leaves {leaves:.3}, branches {branches:.3}");
+    assert!(leaves > 0.95, "leaves {leaves:.3} full");
+    assert!(branches > 0.85, "branches {branches:.3} full");
+}
+
+/// Keys in no order split evenly, as before runs were told apart, so that
+/// both parts keep room for the keys that land in them later.
+#[test]
+fn keys_in_no_order_split_evenly() {
+    let mut rng = Rng::new(11);
+    let mut harness = Harness::new(4096);
+    let mut model = BTreeMap::new();
+
+    for round in 0..300_000_u32 {
+        let key = rng.next_u64().to_be_bytes().to_vec();
+
+        harness.insert(&key, &[7; 20]);
+        model.insert(key, vec![7; 20]);
+
+        if round % 5_000 == 4_999 {
+            harness.commit();
+        }
+    }
+
+    harness.commit();
+    assert_eq!(harness.check_structure(), model.len());
+
+    let (leaves, branches) = harness.fill();
+
+    eprintln!("no order: leaves {leaves:.3}, branches {branches:.3}");
+    assert!((0.6..0.8).contains(&leaves), "leaves {leaves:.3} full");
 }

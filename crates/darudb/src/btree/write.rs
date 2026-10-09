@@ -20,8 +20,25 @@ use crate::format::{
     overflow_pages,
 };
 
-/// A node split in two: the separator and the new right-hand node.
-type Split = Option<(Vec<u8>, Child)>;
+/// The node of a split that a run of inserts goes on in: the node that was
+/// split, which keeps the left part, or the new node on its right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+}
+
+/// A node split in two: the separator, the new right-hand node, and the side
+/// the run of inserts that made the split goes on in, when a run made it.
+type Split = Option<(Vec<u8>, Child, Option<Side>)>;
+
+/// The child of a branch that a run goes on in, when child `index` split.
+fn run_child(index: usize, side: Option<Side>) -> Option<usize> {
+    side.map(|side| match side {
+        Side::Left => index,
+        Side::Right => index + 1,
+    })
+}
 
 /// What an insert found under its key: nothing, or a value, with the
 /// overflow run it kept, if any, for the caller to give back.
@@ -144,7 +161,7 @@ fn insert_one<L: Load, S: Store>(
     };
     let (replaced, split) = insert_into(load, store, tree, child, None, put)?;
 
-    if let Some((separator, right)) = split {
+    if let Some((separator, right, _)) = split {
         let level = dirty_node(child)?.level() + 1;
         let left = mem::replace(child, Child::Clean(Pointer::NULL));
         let page = store.allocate()?;
@@ -245,17 +262,31 @@ fn insert_into<L: Load, S: Store>(
             // entry after every other, as keys that only grow bring, goes
             // alone into the new leaf: the full one stays as it is, and a run
             // of such inserts fills its leaves rather than leaving each half
-            // empty. The sizes are read only for the other splits.
-            let middle = if at == leaf.len() {
-                at
+            // empty. An entry right after the one the last insert put in, as
+            // keys that grow within a range of the tree bring (an index's
+            // entries for one value, whose primary keys grow), ends this
+            // leaf, and the entries after it go to the new one: the run goes
+            // on at the end of this leaf until it is full, and then as keys
+            // that only grow do. The parent hears which side the run goes on
+            // in, for its own split. The sizes are read only for the other
+            // splits.
+            let (middle, side) = if at == leaf.len() {
+                (at, Some(Side::Right))
             } else {
                 let mut sizes: Vec<usize> = (0..leaf.len())
                     .map(|index| leaf.entry_size(index))
                     .collect();
 
                 sizes.insert(at, cell_len(key.len(), value) + 2);
-                split_point(&sizes, capacity)
-                    .ok_or_else(|| internal("a leaf that cannot be split"))?
+
+                if leaf.follows_last_insert(at) && fits_apart(&sizes, at + 1, capacity) {
+                    (at + 1, Some(Side::Left))
+                } else {
+                    let middle = split_point(&sizes, capacity)
+                        .ok_or_else(|| internal("a leaf that cannot be split"))?;
+
+                    (middle, None)
+                }
             };
             let fits = if middle <= at {
                 let mut right = leaf.split_off(middle);
@@ -275,7 +306,7 @@ fn insert_into<L: Load, S: Store>(
 
             Ok((
                 replaced,
-                Some((separator, Child::dirty(page, Node::Leaf(right)))),
+                Some((separator, Child::dirty(page, Node::Leaf(right)), side)),
             ))
         }
         Node::Branch(branch) => {
@@ -295,12 +326,17 @@ fn insert_into<L: Load, S: Store>(
             )?;
             let mut split_up = None;
 
-            if let Some((separator, right)) = split {
+            if let Some((separator, right, side)) = split {
                 branch.keys.insert(index, &separator);
                 branch.children.insert(index + 1, right);
 
                 if branch.keys.branch_len() > capacity {
-                    split_up = Some(split_branch(store, branch, capacity)?);
+                    split_up = Some(split_branch(
+                        store,
+                        branch,
+                        capacity,
+                        run_child(index, side),
+                    )?);
                 }
             }
 
@@ -421,7 +457,7 @@ fn update_into<L: Load, S: Store>(
 /// Puts a new root above `root` when the root split in two, as
 /// [`insert_one`] does.
 fn grow_root<S: Store>(store: &mut S, root: &mut Child, split: Split) -> Result<()> {
-    let Some((separator, right)) = split else {
+    let Some((separator, right, _)) = split else {
         return Ok(());
     };
     let level = dirty_node(root)?.level() + 1;
@@ -493,7 +529,7 @@ fn replace_in_leaf<S: Store>(
 
     Ok((
         replaced,
-        Some((separator, Child::dirty(page, Node::Leaf(right)))),
+        Some((separator, Child::dirty(page, Node::Leaf(right)), None)),
     ))
 }
 
@@ -506,7 +542,7 @@ fn take_split<S: Store>(
     split: Split,
     capacity: usize,
 ) -> Result<Split> {
-    let Some((separator, right)) = split else {
+    let Some((separator, right, side)) = split else {
         return Ok(None);
     };
 
@@ -514,7 +550,12 @@ fn take_split<S: Store>(
     branch.children.insert(index + 1, right);
 
     if branch.keys.branch_len() > capacity {
-        return Ok(Some(split_branch(store, branch, capacity)?));
+        return Ok(Some(split_branch(
+            store,
+            branch,
+            capacity,
+            run_child(index, side),
+        )?));
     }
 
     Ok(None)
@@ -916,7 +957,9 @@ fn rebalance<L: Load, S: Store>(
         if kept.keys.branch_len() <= capacity {
             (true, None)
         } else {
-            (false, Some(split_branch(store, kept, capacity)?))
+            let (separator, right, _) = split_branch(store, kept, capacity, None)?;
+
+            (false, Some((separator, right)))
         }
     };
 
@@ -996,6 +1039,14 @@ fn release_child<S: Store>(store: &mut S, child: &Child) {
     }
 }
 
+/// Whether a sequence of entries of `sizes` bytes cut before entry `at`
+/// leaves both parts within `capacity`.
+fn fits_apart(sizes: &[usize], at: usize, capacity: usize) -> bool {
+    let left: usize = sizes[..at].iter().sum();
+
+    left <= capacity && sizes[at..].iter().sum::<usize>() <= capacity
+}
+
 /// Where to cut a sequence of entries of `sizes` bytes so that both parts
 /// fit in `capacity` and differ in size as little as they can: the index of
 /// the first entry of the second part.
@@ -1036,39 +1087,72 @@ fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Ve
     ))
 }
 
-/// Splits an overflowing branch, keeping the left part in place. The key in
-/// the middle moves up to the parent.
+/// Splits an overflowing branch, keeping the left part in place. A key moves
+/// up to the parent, and each side keeps at least one.
+///
+/// `run` is the child a run of inserts goes on in, when a run made the
+/// split. The left part then keeps that child, as its last, and every child
+/// before it, so that the run goes on at the end of the left part and the
+/// branches it leaves behind are full; when the child is too near the end
+/// for that, the right part takes it with the last key. Any other split
+/// moves up the key in the middle, so that the two parts differ as little as
+/// they can, which leaves both room for keys in any order. Returns the key
+/// that moves up, the new right part, and the side the run goes on in.
 fn split_branch<S: Store>(
     store: &mut S,
     branch: &mut Branch,
     capacity: usize,
-) -> Result<(Vec<u8>, Child)> {
+    run: Option<usize>,
+) -> Result<(Vec<u8>, Child, Option<Side>)> {
     let sizes: Vec<usize> = branch
         .keys
         .iter()
         .map(|key| branch_key_len(key.len()))
         .collect();
     let total: usize = sizes.iter().sum();
-    let mut best = None;
-    let mut before = 0;
+    let parts_fit = |middle: usize| {
+        let before: usize = sizes[..middle].iter().sum();
 
-    // Key `middle` goes up; each side keeps at least one key.
-    for middle in 1..sizes.len().saturating_sub(1) {
-        before += sizes[middle - 1];
+        POINTER_LEN + before <= capacity && POINTER_LEN + total - before - sizes[middle] <= capacity
+    };
+    let after_run = run
+        .filter(|_| sizes.len() >= 3)
+        .map(|child| child.clamp(1, sizes.len() - 2))
+        .filter(|&middle| parts_fit(middle));
+    let (middle, side) = match (after_run, run) {
+        (Some(middle), Some(child)) => (
+            middle,
+            Some(if child <= middle {
+                Side::Left
+            } else {
+                Side::Right
+            }),
+        ),
+        _ => {
+            let mut best = None;
+            let mut before = 0;
 
-        let left = POINTER_LEN + before;
-        let right = POINTER_LEN + total - before - sizes[middle];
+            // Key `middle` goes up; each side keeps at least one key.
+            for middle in 1..sizes.len().saturating_sub(1) {
+                before += sizes[middle - 1];
 
-        if left <= capacity && right <= capacity {
-            let distance = left.abs_diff(right);
+                let left = POINTER_LEN + before;
+                let right = POINTER_LEN + total - before - sizes[middle];
 
-            if best.is_none_or(|(_, best_distance)| distance < best_distance) {
-                best = Some((middle, distance));
+                if left <= capacity && right <= capacity {
+                    let distance = left.abs_diff(right);
+
+                    if best.is_none_or(|(_, best_distance)| distance < best_distance) {
+                        best = Some((middle, distance));
+                    }
+                }
             }
-        }
-    }
 
-    let (middle, _) = best.ok_or_else(|| internal("a branch that cannot be split"))?;
+            let (middle, _) = best.ok_or_else(|| internal("a branch that cannot be split"))?;
+
+            (middle, None)
+        }
+    };
     let right_keys = branch.keys.split_off(middle + 1);
     let separator = branch
         .keys
@@ -1087,6 +1171,7 @@ fn split_branch<S: Store>(
                 children: right_children,
             }),
         ),
+        side,
     ))
 }
 

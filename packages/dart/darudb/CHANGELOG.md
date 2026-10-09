@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- An index whose entries for one value come in key order, as a non-unique index's do while the objects' primary keys grow, fills its pages as it goes, where splitting a page in the middle left half of each empty, and so do the branches of every tree. A file of 400,000 sample objects with 14 indexes is 7% smaller for it. Keys in no particular order split pages evenly, as before.
+
 ### Fixed
 
 - The package resolves in a Flutter app on Flutter 3.38 to 3.44, the oldest releases it supports. It asked for versions of `hooks`, `code_assets` and `native_toolchain_rust` that need `meta` 1.19, which those Flutter releases pin lower, so `flutter pub get` failed there.
