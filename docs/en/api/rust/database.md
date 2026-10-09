@@ -147,7 +147,7 @@ Writes a copy as [`backup`](#backup) does, as [`BackupOptions`](./backup-options
 pub fn compact(&self) -> Result<CompactReport>
 ```
 
-Makes the file smaller in place, and returns a [`CompactReport`](../../types/rust/compact-report.md). It moves every page the file's tail holds into free pages below it, in write transactions of its own, and the commits after them give the tail back to the file system.
+Makes the file smaller in place, and returns a [`CompactReport`](../../types/rust/compact-report.md). It writes again, full, every tree whose pages inserts left part empty, so that the file ends about as small as a backup's copy, then moves every page the file's tail holds into free pages below it, in write transactions of its own, and the commits after them give the tail back to the file system.
 
 Other handles and processes may read and write meanwhile. A page that a read transaction can still reach stays until the transaction ends, so a file with long readers shrinks less, and the next compaction takes the rest. It waits for the write transaction as `begin_write` does.
 

@@ -170,7 +170,7 @@ db.backup("app.rekeyed.darudb", password="a new password")  # or `await db.backu
 
 ## Compact a file
 
-A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. It works in place, while other handles and processes keep reading and writing.
+A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. Before that, it writes again, full, every tree whose pages inserts left part empty: keys that arrive in no particular order leave a tree's pages about two thirds full, so this takes a file down to about the size of a backup's copy. It works in place, while other handles and processes keep reading and writing.
 
 ::: lang rust
 

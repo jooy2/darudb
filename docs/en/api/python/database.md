@@ -318,7 +318,7 @@ async def backup_async(
 def compact(self) -> CompactReport: ...
 ```
 
-Makes the file smaller in place: pages at its end move into free pages nearer its start, and the end goes back to the file system. It works in write transactions of its own, so it waits for the writer as a write does. It is refused with `INVALID_ARGUMENT`, at once, inside a write block of this thread on the same file, through any handle to it, and on the thread of an event loop whose asynchronous write holds the file, since either way it would wait for a write that cannot end until it returns. A page that a read transaction can still reach does not move. [CompactReport](../../types/python/compact-report.md) describes the result.
+Makes the file smaller in place: the trees whose pages inserts left part empty are written again, full, and pages at its end move into free pages nearer its start, and the end goes back to the file system. It works in write transactions of its own, so it waits for the writer as a write does. It is refused with `INVALID_ARGUMENT`, at once, inside a write block of this thread on the same file, through any handle to it, and on the thread of an event loop whose asynchronous write holds the file, since either way it would wait for a write that cannot end until it returns. A page that a read transaction can still reach does not move. [CompactReport](../../types/python/compact-report.md) describes the result.
 
 ### compact_async
 

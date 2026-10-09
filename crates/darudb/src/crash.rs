@@ -291,6 +291,9 @@ enum Action {
     Commit,
     CommitDeferred,
     Sync,
+    /// A compaction, whose sync commits repack trees and move pages, and
+    /// change nothing anyone reads.
+    Compact,
 }
 
 /// Runs random transactions, cutting power or killing the process every few,
@@ -337,6 +340,7 @@ fn run(seed: u64, page_size: u32, steps: usize) {
     for step in 0..steps {
         let crash = rng.below(6) == 0;
         let action = match rng.below(12) {
+            _ if rng.below(16) == 0 => Action::Compact,
             0 if defers => Action::Sync,
             1..=8 if defers => Action::CommitDeferred,
             _ => Action::Commit,
@@ -349,6 +353,11 @@ fn run(seed: u64, page_size: u32, steps: usize) {
 
         let (result, attempted, committing) = match action {
             Action::Sync => (db.sync(), model.clone(), false),
+            Action::Compact => (
+                crate::tools::compact_repacking_every_tree(&db).map(|_| ()),
+                model.clone(),
+                false,
+            ),
             _ => random_transaction(
                 &mut rng,
                 &db,
@@ -362,7 +371,7 @@ fn run(seed: u64, page_size: u32, steps: usize) {
             result.unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
 
             match action {
-                Action::Sync => history = vec![model.clone()],
+                Action::Sync | Action::Compact => history = vec![model.clone()],
                 Action::Commit if committing => history = vec![attempted.clone()],
                 Action::CommitDeferred if committing => history.push(attempted.clone()),
                 _ => {}
@@ -407,8 +416,9 @@ fn run(seed: u64, page_size: u32, steps: usize) {
         } else {
             &model
         };
-        let barrier_returned =
-            finished && (action == Action::Sync || (action == Action::Commit && committing));
+        let barrier_returned = finished
+            && (matches!(action, Action::Sync | Action::Compact)
+                || (action == Action::Commit && committing));
         let allowed = found == *latest
             || (committing && !finished && found == attempted)
             || (power_cut && !barrier_returned && history.contains(&found));
@@ -1428,16 +1438,30 @@ fn run_objects(seed: u64, steps: usize) {
     for step in 0..steps {
         let crash = rng.below(5) == 0;
         let deferred = rng.below(2) == 0;
+        // Now and then a compaction, which repacks the index trees and moves
+        // pages under the objects without changing any.
+        let compacting = rng.below(10) == 0;
 
         if crash {
             disk.stop_after(rng.index(60));
         }
 
-        let (result, attempted, committing) =
-            random_object_transaction(&mut rng, &db, &model, page_size, deferred);
+        let (result, attempted, committing) = if compacting {
+            (
+                crate::tools::compact_repacking_every_tree(&db).map(|_| ()),
+                model.clone(),
+                false,
+            )
+        } else {
+            random_object_transaction(&mut rng, &db, &model, page_size, deferred)
+        };
 
         if !crash {
             result.unwrap_or_else(|error| panic!("seed {seed} step {step}: {error}"));
+
+            if compacting {
+                history = vec![model.clone()];
+            }
 
             if committing {
                 if deferred {
@@ -1475,7 +1499,7 @@ fn run_objects(seed: u64, steps: usize) {
         } else {
             &model
         };
-        let barrier_returned = finished && committing && !deferred;
+        let barrier_returned = finished && ((committing && !deferred) || compacting);
         let allowed = found == *latest
             || (committing && !finished && found == attempted)
             || (power_cut && !barrier_returned && history.contains(&found));

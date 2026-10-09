@@ -1155,3 +1155,93 @@ fn keys_in_no_order_split_evenly() {
     eprintln!("no order: leaves {leaves:.3}, branches {branches:.3}");
     assert!((0.6..0.8).contains(&leaves), "leaves {leaves:.3} full");
 }
+
+/// Repacking writes a tree again with the same entries, overflow values
+/// included, in full pages, none of them a page of the old tree, and gives
+/// back the old nodes but not the overflow runs, which the new leaves take
+/// over: inserts after it reuse the old nodes' pages and the values read the
+/// same.
+#[test]
+fn a_repacked_tree_holds_the_same_in_full_pages() {
+    for seed in 0..6 {
+        let page_size = if seed % 3 == 0 { 16384 } else { 4096 };
+        let mut rng = Rng::new(seed);
+        let mut harness = Harness::new(page_size);
+        let mut model = BTreeMap::new();
+        let write =
+            |harness: &mut Harness, model: &mut BTreeMap<Vec<u8>, Vec<u8>>, rng: &mut Rng| {
+                for _ in 0..400 {
+                    let key = key_of(rng, page_size);
+
+                    if rng.below(4) == 0 {
+                        harness.remove(&key);
+                        model.remove(&key);
+                    } else {
+                        let value = value_of(rng, page_size);
+
+                        harness.insert(&key, &value);
+                        model.insert(key, value);
+                    }
+                }
+
+                harness.commit();
+            };
+
+        for _ in 0..12 {
+            write(&mut harness, &mut model, &mut rng);
+        }
+
+        let (before, _) = harness.fill();
+        let old_pages = collect_pages(&harness);
+
+        repack(&harness.loader, &mut harness.store, TREE, &mut harness.root).unwrap();
+        harness.commit();
+
+        let all = |harness: &Harness| harness.entries(Bound::Unbounded, Bound::Unbounded);
+        let (after, _) = harness.fill();
+
+        assert_eq!(harness.check_structure(), model.len(), "seed {seed}");
+        assert_eq!(
+            all(&harness),
+            model.clone().into_iter().collect::<Vec<_>>(),
+            "seed {seed}"
+        );
+        assert!(
+            collect_pages(&harness).is_disjoint(&old_pages),
+            "seed {seed}"
+        );
+        assert!(
+            after > before && after > 0.85,
+            "seed {seed}: {before:.3} to {after:.3}"
+        );
+
+        // The old nodes' pages are free again, and the runs are not.
+        for _ in 0..3 {
+            write(&mut harness, &mut model, &mut rng);
+        }
+
+        assert_eq!(harness.check_structure(), model.len(), "seed {seed}");
+        assert_eq!(
+            all(&harness),
+            model.into_iter().collect::<Vec<_>>(),
+            "seed {seed}"
+        );
+    }
+}
+
+/// A tree of one leaf repacks to one leaf, and an empty one to nothing.
+#[test]
+fn small_trees_repack_to_themselves() {
+    let mut harness = Harness::new(4096);
+
+    repack(&harness.loader, &mut harness.store, TREE, &mut harness.root).unwrap();
+    assert!(harness.root.is_none());
+
+    harness.insert(b"only", b"one");
+    harness.commit();
+    repack(&harness.loader, &mut harness.store, TREE, &mut harness.root).unwrap();
+    harness.commit();
+
+    assert_eq!(harness.check_structure(), 1);
+    assert_eq!(harness.get(b"only"), Some(b"one".to_vec()));
+}

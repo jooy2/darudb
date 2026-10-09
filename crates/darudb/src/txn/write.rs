@@ -537,6 +537,49 @@ impl WriteTransaction {
         result
     }
 
+    /// Writes tree `name` again with its entries in as few pages as they fit
+    /// in, when that saves a tenth of its pages or more, or with `always`
+    /// whatever it saves (`btree::repack`), and returns whether it did. A
+    /// tree this transaction has changed is left as it is.
+    pub(crate) fn repack_tree(&mut self, name: &str, always: bool) -> Result<bool> {
+        self.check_open()?;
+
+        let result = self.repack_tree_inner(name, always);
+
+        self.failed |= result.is_err();
+
+        result
+    }
+
+    fn repack_tree_inner(&mut self, name: &str, always: bool) -> Result<bool> {
+        let loader = self.shared.loader.clone();
+        let Some(state) = open_tree(
+            &loader,
+            self.catalog.as_ref(),
+            &mut self.trees,
+            &mut self.next_tree_id,
+            name,
+            false,
+        )?
+        else {
+            return Ok(false);
+        };
+        let Some(Child::Clean(root)) = &state.root else {
+            return Ok(false);
+        };
+
+        if !always
+            && !btree::occupancy(&loader, state.id, root)?.worth_repacking(loader.page_size())
+        {
+            return Ok(false);
+        }
+
+        btree::repack(&loader, &mut self.space, state.id, &mut state.root)?;
+        state.changed = true;
+
+        Ok(true)
+    }
+
     /// Moves every page at or above page `threshold` that the commit this
     /// transaction makes would still use, of every tree, the engine's own and
     /// the allocator trees included, into the lowest free pages: the nodes,

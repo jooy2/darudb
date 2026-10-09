@@ -147,7 +147,7 @@ pub fn backup_with(&self, path: impl AsRef<Path>, options: &BackupOptions) -> Re
 pub fn compact(&self) -> Result<CompactReport>
 ```
 
-파일을 그 자리에서 줄이고 [`CompactReport`](../../types/rust/compact-report.md)를 돌려줍니다. 파일 끝쪽 페이지를 모두 앞쪽 빈 페이지로 옮기는 쓰기 트랜잭션을 따로 실행하고, 이어지는 커밋이 비게 된 끝을 파일 시스템에 돌려줍니다.
+파일을 그 자리에서 줄이고 [`CompactReport`](../../types/rust/compact-report.md)를 돌려줍니다. 삽입으로 페이지가 덜 찬 트리를 꽉 채워 다시 써서 파일이 백업 사본과 비슷한 크기까지 줄게 한 다음, 파일 끝쪽 페이지를 모두 앞쪽 빈 페이지로 옮기는 쓰기 트랜잭션을 따로 실행하고, 이어지는 커밋이 비게 된 끝을 파일 시스템에 돌려줍니다.
 
 그동안 다른 핸들과 프로세스는 계속 읽고 씁니다. 다만 읽기 트랜잭션이 아직 닿을 수 있는 페이지는 그 트랜잭션이 끝날 때까지 남습니다. 그래서 오래 도는 읽기 트랜잭션이 있으면 덜 줄어들고, 남은 부분은 다음 압축이 가져갑니다. 쓰기 트랜잭션은 `begin_write`처럼 기다립니다.
 

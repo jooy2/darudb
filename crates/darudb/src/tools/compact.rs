@@ -1,12 +1,14 @@
 //! Compaction: the file made smaller in place, while other handles and
 //! processes go on using it (`design/tools.md`, "Compaction").
 //!
-//! A write transaction moves every page the file's tail holds into the
-//! lowest free pages, which is where the allocator takes pages from anyway,
-//! and the commits after it reclaim the tail and cut it off. It is nothing
-//! but write transactions: the copy-on-write that keeps any commit safe
-//! keeps these safe too, and a process that dies in the middle leaves the
-//! file at one of their commits.
+//! First every tree whose pages inserts left part empty is written again
+//! full, one write transaction a tree (`btree::repack`). Then a write
+//! transaction moves every page the file's tail holds into the lowest free
+//! pages, which is where the allocator takes pages from anyway, and the
+//! commits after it reclaim the tail and cut it off. It is nothing but write
+//! transactions: the copy-on-write that keeps any commit safe keeps these
+//! safe too, and a process that dies in the middle leaves the file at one of
+//! their commits.
 
 use crate::database::Database;
 use crate::error::Result;
@@ -30,6 +32,18 @@ pub struct CompactReport {
 }
 
 pub(crate) fn compact(db: &Database) -> Result<CompactReport> {
+    compact_repacking(db, false)
+}
+
+/// [`compact`], repacking every tree whatever it saves: the crash suite's
+/// files are too small for repacking to be worth it, and it has to cut
+/// repacks short all the same.
+#[cfg(test)]
+pub(crate) fn compact_repacking_every_tree(db: &Database) -> Result<CompactReport> {
+    compact_repacking(db, true)
+}
+
+fn compact_repacking(db: &Database, every_tree: bool) -> Result<CompactReport> {
     let pager = &db.shared().pager;
     let mut report = CompactReport {
         bytes_before: pager.file_len()?,
@@ -38,7 +52,40 @@ pub(crate) fn compact(db: &Database) -> Result<CompactReport> {
 
     // Retained pages no snapshot needs become free, and a free tail goes.
     settle(db)?;
+    move_tail(db, &mut report)?;
 
+    // Trees full of half-empty pages are written again, full, once the file
+    // is as small as moving makes it. Their new nodes go where there is room,
+    // at the end of the file if need be, and the nodes they leave free make
+    // room for moving the tail again; the overflow runs, which need room in
+    // one piece, moved already and stay where they are. A transaction a tree
+    // holds the new nodes of one tree in memory at a time, rather than of the
+    // whole file.
+    let mut repacked = false;
+
+    for name in db.begin_read()?.tree_names_in()? {
+        let mut txn = db.begin_write()?;
+
+        if txn.repack_tree(&name, every_tree)? {
+            txn.commit()?;
+            repacked = true;
+        }
+    }
+
+    if repacked {
+        settle(db)?;
+        move_tail(db, &mut report)?;
+    }
+
+    report.bytes_after = pager.file_len()?;
+
+    Ok(report)
+}
+
+/// Moves the pages of the file's tail into free pages below it, round after
+/// round while each moves pages and shrinks the file, and reclaims and cuts
+/// off the tail each round gives up.
+fn move_tail(db: &Database, report: &mut CompactReport) -> Result<()> {
     for _ in 0..ROUNDS {
         let mut txn = db.begin_write()?;
         let (pages, free) = txn.space_summary();
@@ -68,9 +115,7 @@ pub(crate) fn compact(db: &Database) -> Result<CompactReport> {
         }
     }
 
-    report.bytes_after = pager.file_len()?;
-
-    Ok(report)
+    Ok(())
 }
 
 /// Two empty sync commits: the first reclaims what no snapshot and no
@@ -332,6 +377,60 @@ mod tests {
             assert_eq!(contents(&db), model, "seed {seed}");
             assert!(db.check().unwrap().is_ok(), "seed {seed}");
         }
+    }
+
+    /// Keys put in no particular order leave a tree's pages about two thirds
+    /// full; compaction writes the tree again full, so the file ends about
+    /// as small as a backup's copy, which is written in order, and holds the
+    /// same.
+    #[test]
+    fn half_empty_pages_compact_to_the_size_of_a_copy() {
+        use crate::testing::Rng;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = OpenOptions::new()
+            .open(dir.path().join("loose.darudb"))
+            .unwrap();
+        let mut rng = Rng::new(3);
+
+        for _ in 0..10 {
+            let mut txn = db.begin_write().unwrap();
+
+            for _ in 0..2_000 {
+                let key = rng.next_u64().to_be_bytes();
+
+                txn.insert("loose", &key, &[5; 40]).unwrap();
+            }
+
+            txn.commit().unwrap();
+        }
+
+        let before: Vec<(Vec<u8>, Vec<u8>)> = db
+            .begin_read()
+            .unwrap()
+            .iter("loose")
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let report = db.compact().unwrap();
+        let copy = db.backup(dir.path().join("copy.darudb")).unwrap();
+
+        assert!(
+            report.bytes_after * 20 <= copy.bytes * 21,
+            "{report:?} against a copy of {} bytes",
+            copy.bytes
+        );
+
+        let after: Vec<(Vec<u8>, Vec<u8>)> = db
+            .begin_read()
+            .unwrap()
+            .iter("loose")
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(after, before);
+        assert!(db.check().unwrap().is_ok());
     }
 
     #[test]

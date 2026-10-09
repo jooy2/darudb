@@ -19,6 +19,8 @@ pub use salvage::SalvageReport;
 pub(crate) use backup::backup;
 pub(crate) use check::check;
 pub(crate) use compact::compact;
+#[cfg(test)]
+pub(crate) use compact::compact_repacking_every_tree;
 pub(crate) use salvage::salvage;
 
 use std::fs;

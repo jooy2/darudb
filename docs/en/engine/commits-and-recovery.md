@@ -37,7 +37,7 @@ Relative to one commit, every page of the file is in exactly one of three states
 
 When a write transaction starts, it frees every retained group that no read transaction, in any process, and no possible recovery can still reach. So a read transaction holds back the pages of its commit for as long as it lives, and the file grows meanwhile if others write, but it never makes a writer wait. Pages that deferred commits wrote and then stopped using are freed sooner, as soon as no reader needs them, so a run of small deferred commits that change the same objects keeps writing the same pages rather than growing the file.
 
-The writer takes free pages lowest first, which keeps the file dense at the front, and a sync commit gives the free pages at the end of the file back to the file system. [Compaction](../guide/tools.md) moves pages down to give back more.
+The writer takes free pages lowest first, which keeps the file dense at the front, and a sync commit gives the free pages at the end of the file back to the file system. [Compaction](../guide/tools.md) fills the pages of part-empty trees and moves pages down to give back more.
 
 ## Sync commits
 

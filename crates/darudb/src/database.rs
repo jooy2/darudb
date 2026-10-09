@@ -211,9 +211,11 @@ impl Database {
     /// Makes the file smaller in place, and returns what it did; see
     /// [`CompactReport`](crate::CompactReport).
     ///
-    /// It moves every page the file's tail holds into free pages below it,
-    /// in write transactions of its own, and the commits after them give the
-    /// tail back to the file system. Other handles and processes may read
+    /// It writes again, full, every tree whose pages inserts left part empty,
+    /// so that the file ends about as small as a backup's copy, then moves
+    /// every page the file's tail holds into free pages below it, in write
+    /// transactions of its own, and the commits after them give the tail back
+    /// to the file system. Other handles and processes may read
     /// and write meanwhile; a page a read transaction can still reach stays
     /// until the transaction ends, so a file with long readers shrinks less,
     /// and the next compaction takes the rest. It waits for the writer lock

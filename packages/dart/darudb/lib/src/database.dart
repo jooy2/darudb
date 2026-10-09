@@ -1006,9 +1006,10 @@ final class Database implements Finalizable {
     return BackupReport._(_report((await backedUp).bytes));
   }
 
-  /// Makes the file smaller in place, moving the pages at its end into free
-  /// pages nearer its start, while other handles and processes go on using
-  /// it.
+  /// Makes the file smaller in place, writing again, full, the trees whose
+  /// pages inserts left part empty, and moving the pages at its end into
+  /// free pages nearer its start, while other handles and processes go on
+  /// using it.
   CompactReport compact() {
     _refuseWhileWritingAsync('compact');
     _check(darudb_compact(_live(), _io.out));

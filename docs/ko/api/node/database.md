@@ -225,7 +225,7 @@ backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
 compact(): CompactReport;
 ```
 
-파일을 그 자리에서 줄입니다. 파일 끝쪽 페이지를 앞쪽 빈 페이지로 옮기고, 비게 된 끝을 파일 시스템에 돌려줍니다. 자체 쓰기 트랜잭션으로 일하므로 다른 쓰기처럼 쓰기 잠금을 기다립니다. `write`와 마찬가지로, 같은 파일에 대한 쓰기 트랜잭션의 함수 안에서나 이 프로세스의 비동기 쓰기가 파일을 쥐고 있는 동안에는 `INVALID_ARGUMENT`로 거부됩니다. 읽기 트랜잭션이 아직 닿을 수 있는 페이지는 옮기지 않습니다. 결과는 [CompactReport](../../types/node/compact-report.md)에 있습니다.
+파일을 그 자리에서 줄입니다. 삽입으로 페이지가 덜 찬 트리를 꽉 채워 다시 쓰고, 파일 끝쪽 페이지를 앞쪽 빈 페이지로 옮긴 뒤, 비게 된 끝을 파일 시스템에 돌려줍니다. 자체 쓰기 트랜잭션으로 일하므로 다른 쓰기처럼 쓰기 잠금을 기다립니다. `write`와 마찬가지로, 같은 파일에 대한 쓰기 트랜잭션의 함수 안에서나 이 프로세스의 비동기 쓰기가 파일을 쥐고 있는 동안에는 `INVALID_ARGUMENT`로 거부됩니다. 읽기 트랜잭션이 아직 닿을 수 있는 페이지는 옮기지 않습니다. 결과는 [CompactReport](../../types/node/compact-report.md)에 있습니다.
 
 ### compactAsync
 

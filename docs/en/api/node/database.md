@@ -225,7 +225,7 @@ backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
 compact(): CompactReport;
 ```
 
-Makes the file smaller in place: pages at its end move into free pages nearer its start, and the end goes back to the file system. It works in write transactions of its own, so it waits for the writer lock as a write does, and it is refused with `INVALID_ARGUMENT` inside a write transaction's function on the same file and while an asynchronous write of this process holds the file, as `write` is. A page that a read transaction can still reach does not move. [CompactReport](../../types/node/compact-report.md) describes the result.
+Makes the file smaller in place: the trees whose pages inserts left part empty are written again, full, and pages at its end move into free pages nearer its start, and the end goes back to the file system. It works in write transactions of its own, so it waits for the writer lock as a write does, and it is refused with `INVALID_ARGUMENT` inside a write transaction's function on the same file and while an asynchronous write of this process holds the file, as `write` is. A page that a read transaction can still reach does not move. [CompactReport](../../types/node/compact-report.md) describes the result.
 
 ### compactAsync
 

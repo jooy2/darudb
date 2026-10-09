@@ -889,9 +889,10 @@ class Database:
         return BackupReport(**report)
 
     def compact(self) -> CompactReport:
-        """Makes the file smaller in place: its end moves into free pages nearer
-        its start and goes back to the file system. It writes, so it waits for
-        the writer."""
+        """Makes the file smaller in place: the trees whose pages inserts left
+        part empty are written again, full, and the file's end moves into free
+        pages nearer its start and goes back to the file system. It writes, so
+        it waits for the writer."""
         self._refuse_while_async_writes("compact")
 
         return CompactReport(**self._native.compact())

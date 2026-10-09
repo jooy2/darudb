@@ -280,7 +280,7 @@ Future<BackupReport> backupAsync(
 CompactReport compact();
 ```
 
-파일을 그 자리에서 줄입니다. 파일 끝의 페이지를 앞쪽의 빈 페이지로 옮기고, 끝부분은 파일 시스템에 돌려줍니다. 자기 쓰기 트랜잭션 안에서 일하므로 쓰기처럼 쓰기 차례를 기다리고, `write`가 거부되는 곳에서는 똑같이 `INVALID_ARGUMENT`로 거부됩니다. 읽기 트랜잭션이 아직 닿을 수 있는 페이지는 옮기지 않습니다. 결과는 [CompactReport](../../types/dart/compact-report.md)에 있습니다.
+파일을 그 자리에서 줄입니다. 삽입으로 페이지가 덜 찬 트리를 꽉 채워 다시 쓰고, 파일 끝의 페이지를 앞쪽의 빈 페이지로 옮긴 뒤, 끝부분은 파일 시스템에 돌려줍니다. 자기 쓰기 트랜잭션 안에서 일하므로 쓰기처럼 쓰기 차례를 기다리고, `write`가 거부되는 곳에서는 똑같이 `INVALID_ARGUMENT`로 거부됩니다. 읽기 트랜잭션이 아직 닿을 수 있는 페이지는 옮기지 않습니다. 결과는 [CompactReport](../../types/dart/compact-report.md)에 있습니다.
 
 ### compactAsync
 

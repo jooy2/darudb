@@ -639,10 +639,11 @@ export interface Database<S extends Schema<any> = Schema> {
   /** `backup` on the thread pool. */
   backupAsync(path: string, options?: BackupOptions): Promise<BackupReport>;
   /**
-   * Makes the file smaller in place: its end moves into free pages nearer
-   * its start and goes back to the file system. It writes, so it waits for
-   * the writer lock, and it is refused while an asynchronous write of this
-   * process holds the file.
+   * Makes the file smaller in place: the trees whose pages inserts left part
+   * empty are written again, full, and the file's end moves into free pages
+   * nearer its start and goes back to the file system. It writes, so it waits
+   * for the writer lock, and it is refused while an asynchronous write of
+   * this process holds the file.
    */
   compact(): CompactReport;
   /** `compact` on the thread pool, after this process's writes on the file. */
