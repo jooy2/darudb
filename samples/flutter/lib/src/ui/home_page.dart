@@ -213,7 +213,7 @@ class _HomePageState extends State<HomePage> {
     final SampleInfo? info = controller.info;
 
     return PlSidebar(
-      width: 340,
+      width: 320,
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

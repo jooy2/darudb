@@ -35,8 +35,8 @@ const columnOf = async (page: Page, header: string): Promise<string[]> => {
   return page.locator(`table tbody tr td:nth-child(${index + 1})`).allTextContents();
 };
 
-/** The question a confirmation asks, the one dialog open at the time. */
-const confirmDialog = (page: Page) => page.getByRole('dialog');
+/** The question a confirmation asks, the one alert dialog open at the time. */
+const confirmDialog = (page: Page) => page.getByRole('alertdialog');
 
 const insertSampleData = async (page: Page): Promise<void> => {
   await page.getByLabel('Seed', { exact: true }).fill(String(SEED));

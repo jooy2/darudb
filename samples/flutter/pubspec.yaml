@@ -17,7 +17,7 @@ dependencies:
   darudb:
     path: ../../packages/dart/darudb
   path_provider: 2.1.6
-  plass_ui: 1.8.0
+  plass_ui: 1.8.1
   randino: 1.3.1
 
 dev_dependencies:

@@ -476,10 +476,10 @@ packages:
     dependency: "direct main"
     description:
       name: plass_ui
-      sha256: "573b50bf88883dc4b5ad78583750af5bd92912de59310c22734a2887d834c18b"
+      sha256: b8a1457e2d368624a982b0a3f1e3546dc52265e22d66320ac29521ca95c51f17
       url: "https://pub.dev"
     source: hosted
-    version: "1.8.0"
+    version: "1.8.1"
   platform:
     dependency: transitive
     description:

@@ -367,10 +367,6 @@ class _CollectionViewState extends State<CollectionView> {
                     _load();
                   },
                   loading: _loading,
-                  // A pinned header keeps the widths it measured in the frame
-                  // before, and overflows for a frame when new rows make the
-                  // columns narrower, which a test reports as an error.
-                  stickyHeader: false,
                   striped: true,
                   hoverable: true,
                   empty: const PlEmpty(
