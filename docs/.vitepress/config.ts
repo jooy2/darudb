@@ -24,6 +24,7 @@ import {
   type LanguageId,
   type LanguagePages
 } from './languages';
+import { languageIcons } from './icons';
 import { summaryFromSource } from './pages';
 
 const vitePressDir = dirname(fileURLToPath(import.meta.url));
@@ -717,6 +718,8 @@ const vitePressConfig: UserConfig = {
     logo: { src: '/logo-64.png', alt: '' },
     // Read by the language switch and the layout. See `languages.ts`.
     languagePages,
+    // The marks the language switch draws. See `icons.ts`.
+    languageIcons: languageIcons(),
     /**
      * `h2` and `h3`, nested. A guide page is a handful of `h2`s with the steps
      * or options as `h3`s under them, and the thing a reader came for is often

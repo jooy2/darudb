@@ -9,6 +9,7 @@ import {
   type LanguagePages,
   type LanguageId
 } from '../languages';
+import LanguageIcon from './LanguageIcon.vue';
 import { language, setLanguage } from './language';
 import { localeOf, t } from './i18n';
 
@@ -181,9 +182,9 @@ watch(
         <span
           v-for="item in CODE_LANGUAGES.filter((entry) => entry.available)"
           :key="item.id"
-          class="lang-only"
+          class="lang-only lang-switch-face"
           :data-code-lang="item.id"
-          >{{ item.label }}</span
+          ><LanguageIcon :id="item.id" />{{ item.label }}</span
         >
       </span>
       <svg class="lang-switch-chevron" viewBox="0 0 24 24" aria-hidden="true">
@@ -212,6 +213,7 @@ watch(
           :aria-disabled="!item.available"
           @click="choose(item.id)"
         >
+          <LanguageIcon :id="item.id" />
           <span class="lang-switch-option-label">{{ item.label }}</span>
           <span v-if="!item.available" class="lang-switch-planned">{{ t(locale, 'planned') }}</span>
           <svg class="lang-switch-check" viewBox="0 0 24 24" aria-hidden="true">

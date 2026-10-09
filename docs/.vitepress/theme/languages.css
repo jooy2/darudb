@@ -179,6 +179,14 @@ html[data-code-lang='python']
   text-overflow: ellipsis;
 }
 
+/* The chosen language's mark and name, one of the faces `.lang-only` picks. */
+.lang-switch-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  vertical-align: middle;
+}
+
 .lang-switch-chevron {
   flex: none;
   width: 14px;
@@ -272,6 +280,34 @@ html[data-code-lang='python']
   color: var(--vp-c-text-2);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/*
+ * Each language's mark, in its brand colour where that colour reads on both
+ * backgrounds of the site at the 3:1 a graphic needs. Rust's is black, so it
+ * takes the text colour instead, which keeps it legible in the dark theme.
+ */
+.lang-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.lang-icon[data-icon='rust'] {
+  color: var(--vp-c-text-1);
+}
+
+.lang-icon[data-icon='node'] {
+  color: #5fa04e;
+}
+
+.lang-icon[data-icon='dart'] {
+  color: #0175c2;
+}
+
+.lang-icon[data-icon='python'] {
+  color: #3776ab;
 }
 
 /* ---------------------------------------------------------------------------
