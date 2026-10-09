@@ -510,6 +510,20 @@ export interface OpenOptions<S = Schema> {
    * `Database` of one file in a process shares the cache of the first.
    */
   cacheSize?: number;
+  /**
+   * Whether opening a file in an older format version raises it to the
+   * newest one this package writes, `FORMAT_VERSION`. `true` by default.
+   * Raising it rewrites the header only; the older leaves take the newer,
+   * smaller layout as writes change them, and `compact` rewrites the trees
+   * where that saves room. It happens only while no other process has the
+   * file open. A release that knows only the older version cannot open the
+   * file afterwards, so an application that may go back to one sets this to
+   * `false`, and raises the version with `upgradeFormat` once it no longer
+   * may; a new database is then created in format version 5, which every
+   * release reads. Every `Database` of one file in a process shares the
+   * options of the first.
+   */
+  upgradeFormat?: boolean;
   /** The collections the database holds. */
   schema?: S;
   /** How an older schema version becomes this one. */
@@ -579,7 +593,10 @@ export interface Database<S extends Schema<any> = Schema> {
   readonly isOpen: boolean;
   /** The size of every page in the file, in bytes. */
   readonly pageSize: number;
-  /** The file format version recorded in the file. */
+  /**
+   * The file format version recorded in the file: 6, which this package
+   * writes, or 5 for a file that opening did not raise (`upgradeFormat`).
+   */
   readonly formatVersion: number;
   /** Whether the file is encrypted. */
   readonly isEncrypted: boolean;
@@ -648,6 +665,18 @@ export interface Database<S extends Schema<any> = Schema> {
   compact(): CompactReport;
   /** `compact` on the thread pool, after this process's writes on the file. */
   compactAsync(): Promise<CompactReport>;
+  /**
+   * Raises the file's format version to `FORMAT_VERSION`, as opening does
+   * unless `upgradeFormat` is `false`, and returns whether it did: `false`
+   * for a file in that version already. It waits for the writer lock, and
+   * needs the file to itself: while another process has it open, it fails
+   * with `BUSY`. A release that knows only the older version cannot open the
+   * file afterwards. It is refused while an asynchronous write of this
+   * process holds the file.
+   */
+  upgradeFormat(): boolean;
+  /** `upgradeFormat` on the thread pool, after this process's writes on the file. */
+  upgradeFormatAsync(): Promise<boolean>;
   /**
    * Changes the key of an encrypted database to `key`, 32 bytes. It re-encrypts
    * no page, and when it returns, the old key or password no longer opens the

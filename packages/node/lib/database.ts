@@ -67,6 +67,7 @@ interface OpenOptions<M> extends Secret {
   pageSize?: number;
   busyTimeout?: number;
   cacheSize?: number;
+  upgradeFormat?: boolean;
   schema?: DeclaredSchema;
   migrations?: Migration<M>[];
   passwordHashing?: { memoryKib: number; iterations: number; parallelism: number };
@@ -365,6 +366,7 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     pageSize,
     busyTimeout,
     cacheSize,
+    upgradeFormat,
     schema,
     migrations = [],
     passwordHashing
@@ -385,6 +387,7 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     pageSize,
     busyTimeout,
     cacheSize,
+    upgradeFormat,
     schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
     migrations: migrations.map(nativeMigration),
     passwordHashing
@@ -604,7 +607,7 @@ class Database {
     return this.#database().pageSize;
   }
 
-  /** The file format version recorded in the file. */
+  /** The file format version recorded in the file: 6, or 5 for one opening did not raise. */
   get formatVersion(): number {
     return this.#database().formatVersion;
   }
@@ -928,6 +931,29 @@ class Database {
 
     try {
       return settle(await database.compactAsync());
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Raises the file's format version to the newest. It waits for the writer
+   * lock, so it is refused while an asynchronous write of this process holds
+   * the file, as a synchronous write is.
+   */
+  upgradeFormat(): boolean {
+    const database = this.#database();
+
+    return holdForSync(this.#file, '`upgradeFormat`', () => database.upgradeFormat());
+  }
+
+  /** `upgradeFormat` on the thread pool, after this process's writes on the file. */
+  async upgradeFormatAsync(): Promise<boolean> {
+    const database = this.#database();
+    const release = await turn(this.#file);
+
+    try {
+      return settle(await database.upgradeFormatAsync());
     } finally {
       release();
     }

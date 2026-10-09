@@ -107,7 +107,7 @@ The size of every page in the file, in bytes. A file keeps the page size it was 
 readonly formatVersion: number;
 ```
 
-The file format version recorded in the file. A file this build opens has the version of [FORMAT_VERSION](../../types/node/constants.md).
+The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/node/constants.md)), or 5 for a file that opening did not raise ([`upgradeFormat`](../../types/node/open-options.md#upgradeformat)).
 
 ### isEncrypted
 
@@ -234,6 +234,22 @@ compactAsync(): Promise<CompactReport>;
 ```
 
 `compact` on the thread pool, after this process's earlier writes on the file.
+
+### upgradeFormat
+
+```ts
+upgradeFormat(): boolean;
+```
+
+Raises the file's format version to [FORMAT_VERSION](../../types/node/constants.md), as opening does unless the [`upgradeFormat`](../../types/node/open-options.md#upgradeformat) option is `false`, and returns whether it did: `false` for a file in that version already. It waits for the writer lock as a write does, and needs the file to itself: while another process has the file open, it fails with `BUSY` and changes nothing. It is refused with `INVALID_ARGUMENT` where `write` is. A release that knows only the older version refuses the file afterwards.
+
+### upgradeFormatAsync
+
+```ts
+upgradeFormatAsync(): Promise<boolean>;
+```
+
+`upgradeFormat` on the thread pool, after this process's earlier writes on the file.
 
 ### setKey
 

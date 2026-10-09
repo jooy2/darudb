@@ -107,7 +107,7 @@ readonly pageSize: number;
 readonly formatVersion: number;
 ```
 
-파일에 기록된 파일 형식 버전입니다. 이 빌드가 여는 파일이면 [FORMAT_VERSION](../../types/node/constants.md)과 같습니다.
+파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6([FORMAT_VERSION](../../types/node/constants.md))이거나, 열 때 올리지 않은 파일이라면 5입니다([`upgradeFormat`](../../types/node/open-options.md#upgradeformat)).
 
 ### isEncrypted
 
@@ -234,6 +234,22 @@ compactAsync(): Promise<CompactReport>;
 ```
 
 스레드 풀에서 실행하는 `compact`입니다. 이 프로세스가 그 파일에 먼저 시작한 쓰기가 끝난 뒤에 실행됩니다.
+
+### upgradeFormat
+
+```ts
+upgradeFormat(): boolean;
+```
+
+파일의 형식 버전을 [FORMAT_VERSION](../../types/node/constants.md)으로 올리고, 올렸는지 돌려줍니다. [`upgradeFormat`](../../types/node/open-options.md#upgradeformat) 옵션이 `false`가 아니라면 여는 쪽이 하는 일과 같습니다. 이미 그 버전인 파일이면 `false`를 돌려줍니다. 쓰기처럼 쓰기 잠금을 기다리고, 파일을 혼자 써야 합니다. 다른 프로세스가 파일을 열고 있으면 아무것도 바꾸지 않고 `BUSY`로 실패합니다. `write`가 거부되는 곳에서는 똑같이 `INVALID_ARGUMENT`로 거부됩니다. 올린 뒤에는 예전 버전만 아는 릴리스가 파일을 거부합니다.
+
+### upgradeFormatAsync
+
+```ts
+upgradeFormatAsync(): Promise<boolean>;
+```
+
+스레드 풀에서 실행하는 `upgradeFormat`입니다. 이 프로세스가 그 파일에 먼저 시작한 쓰기가 끝난 뒤에 실행됩니다.
 
 ### setKey
 

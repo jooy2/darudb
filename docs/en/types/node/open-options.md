@@ -6,7 +6,7 @@ counterpart: /api/rust/open-options
 
 # OpenOptions
 
-`OpenOptions` is what `Database.open` takes besides the path: whether to create the file, its page size, how long to wait for other processes, the page cache, the schema and its migrations, and the key or password of an encrypted file.
+`OpenOptions` is what `Database.open` takes besides the path: whether to create the file, its page size, how long to wait for other processes, the page cache, whether to raise an older file format, the schema and its migrations, and the key or password of an encrypted file.
 
 ```ts
 interface OpenOptions<S = Schema>
@@ -14,7 +14,7 @@ interface OpenOptions<S = Schema>
 
 Every field is optional, and `Database.open(path)` without options creates or opens a plain database without a schema. `S` is the type of the [schema](../../api/node/schema.md), which [`Database.open`](../../api/node/database.md) infers from the `schema` option and passes on to the migration functions. It carries types only.
 
-Some options belong to the file rather than to one `Database`. A process that opens a file it already has open gets another handle to the same database, and `busyTimeout`, `cacheSize` and `passwordHashing` stay those of the first handle. `pageSize` matters only when the file is created. Each handle keeps the `schema` it was opened with, and an encrypted file needs its `key` or `password` on every open.
+Some options belong to the file rather than to one `Database`. A process that opens a file it already has open gets another handle to the same database, and `busyTimeout`, `cacheSize`, `upgradeFormat` and `passwordHashing` stay those of the first handle. `pageSize` matters only when the file is created. Each handle keeps the `schema` it was opened with, and an encrypted file needs its `key` or `password` on every open.
 
 ```ts
 import { collection, Database, schema, t } from 'darudb';
@@ -61,6 +61,18 @@ cacheSize?: number;
 ```
 
 How much memory the page cache may take, in bytes: a whole number from 0 up, and 32 MiB by default. Any other value fails with `INVALID_ARGUMENT`. The cache keeps pages read from the file, already checked and decrypted, so that reading one again costs neither a read nor a check. It holds at least 16 pages whatever this says, and fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up a database that does not fit in it; a process short of memory can give it less.
+
+### upgradeFormat
+
+```ts
+upgradeFormat?: boolean;
+```
+
+Whether opening a file in an older format version raises it to [`FORMAT_VERSION`](./constants.md), the newest this package writes. `true` by default.
+
+- **What it costs.** Raising the version rewrites the header and nothing else, with three barriers, whatever the file holds. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](../../api/node/database.md#compact) rewrites the trees where that saves room.
+- **When it happens.** Only while no other process has the file open, in the process that opens it then. With another process in, the file stays as it is until the next such open.
+- **Going back.** A release that knows only the older version refuses the file once it is raised. An application that may go back to such a release sets this to `false`, and raises the version with [`upgradeFormat`](../../api/node/database.md#upgradeformat) once it no longer may. With `false`, a new database is created in format version 5, which every release reads.
 
 ### schema
 

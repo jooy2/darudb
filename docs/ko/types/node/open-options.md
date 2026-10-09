@@ -6,7 +6,7 @@ counterpart: /api/rust/open-options
 
 # OpenOptions
 
-`OpenOptions`는 `Database.open`이 경로와 함께 받는 옵션으로, 파일 생성 여부, 페이지 크기, 다른 프로세스를 기다리는 시간, 페이지 캐시, 스키마와 마이그레이션, 암호화한 파일의 키나 비밀번호를 정합니다.
+`OpenOptions`는 `Database.open`이 경로와 함께 받는 옵션으로, 파일 생성 여부, 페이지 크기, 다른 프로세스를 기다리는 시간, 페이지 캐시, 예전 파일 형식을 올릴지, 스키마와 마이그레이션, 암호화한 파일의 키나 비밀번호를 정합니다.
 
 ```ts
 interface OpenOptions<S = Schema>
@@ -14,7 +14,7 @@ interface OpenOptions<S = Schema>
 
 필드는 모두 생략할 수 있습니다. 옵션 없이 `Database.open(path)`를 부르면 스키마가 없고 암호화하지 않은 데이터베이스를 만들거나 엽니다. `S`는 [스키마](../../api/node/schema.md)의 타입입니다. [`Database.open`](../../api/node/database.md)이 `schema` 옵션에서 추론해 마이그레이션 함수에 넘기며, 타입 정보만 담습니다.
 
-몇몇 옵션은 `Database` 하나가 아니라 파일에 딸립니다. 같은 프로세스에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기는데, `busyTimeout`, `cacheSize`, `passwordHashing`은 처음 연 핸들의 값을 그대로 씁니다. `pageSize`는 파일을 만들 때만 쓰입니다. `schema`는 핸들마다 열 때 준 것을 따로 쓰고, 암호화한 파일은 열 때마다 `key`나 `password`가 있어야 합니다.
+몇몇 옵션은 `Database` 하나가 아니라 파일에 딸립니다. 같은 프로세스에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기는데, `busyTimeout`, `cacheSize`, `upgradeFormat`, `passwordHashing`은 처음 연 핸들의 값을 그대로 씁니다. `pageSize`는 파일을 만들 때만 쓰입니다. `schema`는 핸들마다 열 때 준 것을 따로 쓰고, 암호화한 파일은 열 때마다 `key`나 `password`가 있어야 합니다.
 
 ```ts
 import { collection, Database, schema, t } from 'darudb';
@@ -61,6 +61,18 @@ cacheSize?: number;
 ```
 
 페이지 캐시가 쓸 수 있는 메모리를 바이트 단위로 정합니다. 0 이상의 정수여야 하고, 기본값은 32MiB입니다. 다른 값은 `INVALID_ARGUMENT`로 실패합니다. 캐시는 파일에서 읽어 검사와 복호화까지 마친 페이지를 담아 두므로, 같은 페이지를 다시 읽을 때는 읽기도 검사도 다시 하지 않습니다. 이 값과 관계없이 페이지를 적어도 16개는 담을 수 있고, 페이지를 읽는 만큼만 차므로 캐시보다 작은 데이터베이스가 캐시를 다 차지하는 일은 없습니다. 캐시에 다 들어가지 않는 데이터베이스는 캐시를 키우면 빨라지고, 메모리가 빠듯한 프로세스는 캐시를 줄여도 됩니다.
+
+### upgradeFormat
+
+```ts
+upgradeFormat?: boolean;
+```
+
+예전 형식 버전의 파일을 열 때 이 패키지가 쓰는 가장 새 버전인 [`FORMAT_VERSION`](./constants.md)으로 올릴지 정합니다. 기본값은 `true`입니다.
+
+- **드는 비용.** 파일에 무엇이 있든 헤더만 다시 쓰고, 동기화를 세 번 합니다. 전에 쓴 리프는 쓰기가 바꿀 때까지 배치를 그대로 두다가, 바뀔 때 더 작은 새 배치로 쓰입니다. [`compact`](../../api/node/database.md#compact)는 새 배치로 공간이 줄어드는 트리를 다시 씁니다.
+- **올리는 때.** 다른 프로세스가 파일을 열고 있지 않을 때, 그때 파일을 여는 프로세스가 올립니다. 다른 프로세스가 열고 있으면, 혼자 여는 다음 번까지 파일을 그대로 둡니다.
+- **되돌아가기.** 예전 버전만 아는 릴리스는 올린 파일을 거부합니다. 그런 릴리스로 되돌아갈 수 있는 애플리케이션은 이 값을 `false`로 두고, 되돌아갈 일이 없어지면 [`upgradeFormat`](../../api/node/database.md#upgradeformat)으로 버전을 올립니다. `false`면 새 데이터베이스는 모든 릴리스가 읽는 형식 버전 5로 만듭니다.
 
 ### schema
 

@@ -109,6 +109,9 @@ pub struct NativeOptions {
     /// A password's bytes.
     pub password: Option<Buffer>,
     pub password_hashing: Option<NativePasswordHashing>,
+    /// Whether opening a file in an older format version raises it to the
+    /// newest one.
+    pub upgrade_format: Option<bool>,
 }
 
 /// What hashing a password costs: Argon2id memory in KiB, iterations and
@@ -387,6 +390,14 @@ impl Deliver for Vec<u8> {
     }
 }
 
+impl Deliver for bool {
+    type Js = bool;
+
+    fn deliver(self) -> Result<bool> {
+        Ok(self)
+    }
+}
+
 impl Deliver for () {
     type Js = Null;
 
@@ -471,6 +482,10 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
 
     if let Some(cost) = &options.password_hashing {
         open_options.password_hashing(cost.memory_kib, cost.iterations, cost.parallelism);
+    }
+
+    if let Some(upgrade) = options.upgrade_format {
+        open_options.upgrade_format(upgrade);
     }
 
     for migration in options.migrations.unwrap_or_default() {
@@ -676,6 +691,22 @@ impl NativeDatabase {
         let database = self.database()?.clone();
 
         Ok(Work::task(move || database.check().map_err(to_js_error)))
+    }
+
+    /// Raises the file's format version to the newest, if it is older, and
+    /// says whether it did.
+    #[napi]
+    pub fn upgrade_format(&self) -> Result<bool> {
+        self.database()?.upgrade_format().map_err(to_js_error)
+    }
+
+    #[napi(ts_return_type = "Promise<boolean | NativeFailure>")]
+    pub fn upgrade_format_async(&self) -> Result<AsyncTask<Work<bool>>> {
+        let database = self.database()?.clone();
+
+        Ok(Work::task(move || {
+            database.upgrade_format().map_err(to_js_error)
+        }))
     }
 
     /// The file made smaller in place.

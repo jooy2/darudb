@@ -565,6 +565,50 @@ describe('Database.salvage', () => {
   });
 });
 
+describe('format versions', () => {
+  const notes = schema(1, { notes: collection({ text: t.string() }) });
+
+  it('creates a file in format 5 when upgrading is off, and raises it by opening it again', (context) => {
+    const path = join(tempDir(context), 'app.darudb');
+    let db = Database.open(path, { upgradeFormat: false });
+
+    assert.equal(FORMAT_VERSION, 6);
+    assert.equal(db.formatVersion, 5);
+    db.close();
+    assert.equal(readFileSync(path)[8], 5);
+
+    db = Database.open(path, { upgradeFormat: false });
+    assert.equal(db.formatVersion, 5, 'not raised while upgrading is off');
+    db.close();
+
+    db = Database.open(path);
+    assert.equal(db.formatVersion, 6);
+    db.close();
+    assert.equal(readFileSync(path)[8], 6);
+  });
+
+  it('raises an open file with the call, synchronously and on the thread pool', async (context) => {
+    const dir = tempDir(context);
+
+    for (const asynchronous of [false, true]) {
+      const path = join(dir, `app-${asynchronous}.darudb`);
+      const db = Database.open(path, { schema: notes, upgradeFormat: false });
+      const id = db.write((txn) => txn.collection('notes').insert({ text: 'kept' }));
+      const raised = asynchronous ? await db.upgradeFormatAsync() : db.upgradeFormat();
+
+      assert.equal(raised, true);
+      assert.equal(db.formatVersion, 6);
+      assert.equal(db.upgradeFormat(), false, 'raised already');
+      assert.deepEqual(
+        db.read((txn) => txn.collection('notes').get(id)),
+        { id, text: 'kept' }
+      );
+      assert.equal(db.check().ok, true);
+      db.close();
+    }
+  });
+});
+
 describe('Database#compact', () => {
   const people = schema(1, {
     people: collection({ name: t.string(), email: t.string().unique(), age: t.int().index() })
