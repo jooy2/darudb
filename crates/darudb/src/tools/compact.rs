@@ -198,6 +198,67 @@ mod tests {
             .collect()
     }
 
+    /// A file of format 5, raised to format 6 when it is opened, keeps its
+    /// leaves until compaction writes again the trees whose leaves the
+    /// smaller cells of format 6 take noticeably fewer pages of.
+    #[test]
+    fn compaction_writes_a_raised_file_s_leaves_in_the_newer_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raised.darudb");
+        let mut old = OpenOptions::new();
+
+        old.schema(schema()).upgrade_format(false);
+
+        {
+            let db = old.open(&path).unwrap();
+            let mut txn = db.begin_write().unwrap();
+
+            {
+                let mut people = txn.collection("people").unwrap();
+
+                for n in 0..20_000 {
+                    people
+                        .insert(
+                            Object::new()
+                                .with("name", format!("p{n}"))
+                                .with("age", n % 90),
+                        )
+                        .unwrap();
+                }
+            }
+
+            txn.commit().unwrap();
+            assert_eq!(db.format_version(), 5);
+        }
+
+        let mut new = OpenOptions::new();
+
+        new.schema(schema());
+
+        let db = new.open(&path).unwrap();
+        let before = people(&db);
+
+        assert_eq!(db.format_version(), 6);
+
+        let report = db.compact().unwrap();
+
+        assert!(
+            report.bytes_after * 10 < report.bytes_before * 8,
+            "{report:?}"
+        );
+        assert_eq!(people(&db), before);
+        assert!(db.check().unwrap().is_ok(), "{:?}", db.check().unwrap());
+
+        drop(db);
+
+        assert_eq!(people(&new.open(&path).unwrap()), before);
+        assert_eq!(
+            old.open(&path).unwrap().format_version(),
+            6,
+            "a file raised is not lowered again"
+        );
+    }
+
     #[test]
     fn a_sparse_file_shrinks_and_keeps_every_object() {
         let dir = tempfile::tempdir().unwrap();

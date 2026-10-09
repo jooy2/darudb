@@ -15,8 +15,8 @@ use super::read::{contains, contains_below, internal};
 use super::{Load, Store};
 use crate::error::Result;
 use crate::format::{
-    CONTENT_OFFSET, Check, LeafEntry, OverflowRef, POINTER_LEN, PageHeader, PageKind, Pointer,
-    StoredRef, branch_key_len, cell_len, content_len, inline_entry_len, inline_limit,
+    CONTENT_OFFSET, Cells, Check, LeafEntry, OverflowRef, POINTER_LEN, PageHeader, PageKind,
+    Pointer, StoredRef, branch_key_len, cell_len, content_len, inline_entry_len, inline_limit,
     overflow_pages,
 };
 
@@ -142,7 +142,7 @@ fn insert_one<L: Load, S: Store>(
 
     let Some(child) = root.as_mut() else {
         let page = store.allocate()?;
-        let mut leaf = Leaf::new(load.page_size());
+        let mut leaf = Leaf::new(load.page_size(), store.cells());
 
         if !leaf.insert(0, key, value) {
             return Err(internal("an entry does not fit in an empty leaf"));
@@ -277,7 +277,7 @@ fn insert_into<L: Load, S: Store>(
                     .map(|index| leaf.entry_size(index))
                     .collect();
 
-                sizes.insert(at, cell_len(key.len(), value) + 2);
+                sizes.insert(at, cell_len(leaf.cells(), key.len(), value) + 2);
 
                 if leaf.follows_last_insert(at) && fits_apart(&sizes, at + 1, capacity) {
                     (at + 1, Some(Side::Left))
@@ -507,7 +507,7 @@ fn replace_in_leaf<S: Store>(
     // it and a new leaf, as evenly as their sizes allow.
     let mut sizes: Vec<usize> = (0..leaf.len()).map(|at| leaf.entry_size(at)).collect();
 
-    sizes.insert(index, cell_len(key.len(), value) + 2);
+    sizes.insert(index, cell_len(leaf.cells(), key.len(), value) + 2);
 
     let middle =
         split_point(&sizes, capacity).ok_or_else(|| internal("a leaf that cannot be split"))?;
@@ -623,6 +623,9 @@ fn relocate_into<L: Load, S: Store>(
                 };
                 let value = load.read_overflow(&reference, tree)?;
                 let key = leaf.key(index).to_vec();
+                // A run stays a run, though a value in a run of format 5 may
+                // be short enough for a leaf of format 6, whose cell would
+                // not fit where the reference was.
                 let run = write_run(load.page_size(), store, tree, first, &value)?;
                 let old = leaf
                     .overwrite(index, &key, StoredRef::Overflow(run))
@@ -934,11 +937,11 @@ fn rebalance<L: Load, S: Store>(
         entries.extend(moved.to_entries().map_err(internal)?);
 
         if left_len + right_len <= capacity {
-            *kept = Leaf::from_entries(load.page_size(), &entries);
+            *kept = Leaf::from_entries(load.page_size(), store.cells(), &entries);
 
             (true, None)
         } else {
-            let (left, separator, right) = split_leaf(entries, load.page_size())?;
+            let (left, separator, right) = split_leaf(entries, load.page_size(), store.cells())?;
             let page = store.allocate()?;
 
             *kept = left;
@@ -1079,17 +1082,21 @@ fn split_point(sizes: &[usize], capacity: usize) -> Option<usize> {
 /// Shares out the entries of an overflowing leaf, in order, between two
 /// leaves as evenly as their sizes allow. Returns the left leaf, the
 /// separator, which is the first key of the right one, and the right leaf.
-fn split_leaf(mut entries: Vec<LeafEntry>, page_size: usize) -> Result<(Leaf, Vec<u8>, Leaf)> {
-    let sizes: Vec<usize> = entries.iter().map(LeafEntry::len).collect();
+fn split_leaf(
+    mut entries: Vec<LeafEntry>,
+    page_size: usize,
+    cells: Cells,
+) -> Result<(Leaf, Vec<u8>, Leaf)> {
+    let sizes: Vec<usize> = entries.iter().map(|entry| entry.len(cells)).collect();
     let at = split_point(&sizes, content_len(page_size))
         .ok_or_else(|| internal("a leaf that cannot be split"))?;
     let right = entries.split_off(at);
     let separator = right[0].key.clone();
 
     Ok((
-        Leaf::from_entries(page_size, &entries),
+        Leaf::from_entries(page_size, cells, &entries),
         separator,
-        Leaf::from_entries(page_size, &right),
+        Leaf::from_entries(page_size, cells, &right),
     ))
 }
 
@@ -1194,7 +1201,7 @@ fn store_value<S: Store>(
     key_len: usize,
     value: &[u8],
 ) -> Result<Option<OverflowRef>> {
-    if inline_entry_len(key_len, value.len()) <= inline_limit(page_size) {
+    if inline_entry_len(store.cells(), key_len, value.len()) <= inline_limit(page_size) {
         return Ok(None);
     }
 

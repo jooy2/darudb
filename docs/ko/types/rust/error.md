@@ -66,7 +66,7 @@ NotADatabase { path: PathBuf }
 UnsupportedFormatVersion { path: PathBuf, found: u32, supported: u32 }
 ```
 
-`UNSUPPORTED_FORMAT_VERSION`. DaruDB 데이터베이스지만 이 빌드가 읽지 못하는 형식입니다. `found`는 파일에 기록된 버전이고 `supported`는 이 빌드가 읽는 버전입니다. 두 값은 파일 형식 버전인 [`FORMAT_VERSION`](./constants.md#format-version)이거나, 파일에 저장된 스키마의 객체 형식 버전입니다.
+`UNSUPPORTED_FORMAT_VERSION`. DaruDB 데이터베이스지만 이 빌드가 읽지 못하는 형식입니다. `found`는 파일에 기록된 버전이고 `supported`는 이 빌드가 읽는 가장 새 버전입니다. 두 값은 파일 형식 버전인 [`FORMAT_VERSION`](./constants.md#format-version)이거나, 파일에 저장된 스키마의 객체 형식 버전입니다.
 
 ### Corrupted
 

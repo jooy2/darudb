@@ -18,8 +18,9 @@ use crate::btree::{LoadedNode, Loader};
 use crate::crypto::{DataKey, PasswordCost, RecordAuth, Secret, Unlocker};
 use crate::error::{Error, Result};
 use crate::format::{
-    CommitRecord, HEADER_LEN, KeyBlock, RECORD_LEN, SELECTOR_OFFSET, SLOT_COUNT, Selector,
-    StaticHeader, TreeDescriptor, WindowMark, slot_offset,
+    Cells, CommitRecord, FORMAT_VERSION, HEADER_LEN, KeyBlock, RAISED_OFFSET, RECORD_LEN,
+    SELECTOR_OFFSET, SLOT_COUNT, STATIC_CHECK_OFFSET, STATIC_LEN, Selector, StaticHeader,
+    TreeDescriptor, WindowMark, cells_of, slot_offset,
 };
 use crate::lock::{LockError, Locks};
 use crate::space::YoungParts;
@@ -187,7 +188,15 @@ impl Header {
 #[derive(Debug)]
 pub(crate) struct Shared {
     pub(crate) path: PathBuf,
+    /// The static fields as the file was opened with them. The format
+    /// version may have been raised since, which [`format`](Self::format)
+    /// holds.
     pub(crate) static_header: StaticHeader,
+    /// The file format version: the static fields' when the file was
+    /// opened, until [`raise_format`](Self::raise_format) raises it. A write
+    /// transaction lays out the leaves it writes in the cells of the version
+    /// it finds when it begins.
+    format: AtomicU32,
     pub(crate) pager: Arc<Pager>,
     /// This process's handles to the file and its locks on it.
     locks: Locks,
@@ -272,6 +281,7 @@ impl Shared {
 
         Self {
             path,
+            format: AtomicU32::new(static_header.version),
             static_header,
             pager,
             locks,
@@ -501,6 +511,128 @@ impl Shared {
                 }
             }
         }
+    }
+
+    /// The file format version of the file.
+    pub(crate) fn format_version(&self) -> u32 {
+        self.format.load(Ordering::Acquire)
+    }
+
+    /// How a write transaction that begins now lays out the leaves it
+    /// writes.
+    pub(crate) fn cells(&self) -> Cells {
+        cells_of(self.format_version())
+    }
+
+    /// The static fields as they stand, with the format version raised since
+    /// the file was opened, if it was.
+    pub(crate) fn static_fields(&self) -> StaticHeader {
+        StaticHeader {
+            version: self.format_version(),
+            ..self.static_header
+        }
+    }
+
+    /// Writes the static check that a raise of the format version, cut
+    /// short, left unwritten, when the static fields `bytes` were read from
+    /// the copy that stood in for it. The caller holds the file alone.
+    pub(crate) fn finish_raising(&self, bytes: &[u8]) -> Result<()> {
+        let fields = self.static_header.encode();
+
+        // Static fields that read as themselves need nothing, whatever their
+        // reserved bytes hold; only fields that read from the copy have the
+        // copy's bytes and another check.
+        if bytes.get(..STATIC_CHECK_OFFSET) != Some(&fields[..STATIC_CHECK_OFFSET])
+            || bytes.get(STATIC_CHECK_OFFSET..STATIC_LEN) == Some(&fields[STATIC_CHECK_OFFSET..])
+        {
+            return Ok(());
+        }
+
+        self.pager
+            .write_header(&fields[STATIC_CHECK_OFFSET..], STATIC_CHECK_OFFSET)?;
+        self.barrier()
+    }
+
+    /// Raises the file's format version to the newest this build writes,
+    /// from which on write transactions lay out the leaves they write in its
+    /// cells. The caller holds the file alone, and either holds the writer
+    /// lock or has not let any write transaction begin.
+    ///
+    /// The static check covers the version, and only a one-byte write is
+    /// atomic, so the new static fields go first to the copy at
+    /// [`RAISED_OFFSET`], then the version, then the check, each made durable
+    /// by a barrier before the next is written: a power cut keeps any of the
+    /// writes since the last barrier, and a check kept without its version
+    /// would fail where a library that knows only the old version reads it.
+    /// A cut before the version is durable leaves the old version, and the
+    /// copy, which nothing reads; a cut after it leaves the new version,
+    /// which the copy vouches for until the check is written
+    /// (`StaticHeader::decode`, and [`finish_raising`](Self::finish_raising)).
+    /// No leaf in the newest cells is written before the version is durable,
+    /// so a library that knows only the old version refuses the file before
+    /// it could meet one.
+    pub(crate) fn raise_format(&self) -> Result<()> {
+        let old = self.static_fields();
+        let raised = StaticHeader {
+            version: FORMAT_VERSION,
+            ..old
+        };
+        let fields = raised.encode();
+
+        // Every version this build knows is below 256, so the version's
+        // first byte is the only one that changes, which a write changes
+        // whole or not at all.
+        debug_assert!(old.version < 256 && raised.version < 256);
+
+        self.pager.write_header(&fields, RAISED_OFFSET)?;
+        self.barrier()?;
+        self.pager.write_header(&fields[8..9], 8)?;
+        self.barrier()?;
+        self.pager
+            .write_header(&fields[STATIC_CHECK_OFFSET..], STATIC_CHECK_OFFSET)?;
+        self.barrier()?;
+        self.format.store(FORMAT_VERSION, Ordering::Release);
+
+        Ok(())
+    }
+
+    /// Raises an open file's format version to the newest this build
+    /// writes, if it is older, while no other process has the file open, and
+    /// returns whether it did. Fails with [`Error::Busy`] when another
+    /// process has the file open, or holds the writer lock past the busy
+    /// timeout.
+    pub(crate) fn upgrade_format(self: &Arc<Self>) -> Result<bool> {
+        self.check_owner()?;
+        self.check_usable()?;
+
+        if self.format_version() >= FORMAT_VERSION {
+            return Ok(false);
+        }
+
+        let _writer = self.acquire_writer()?;
+
+        // Another thread raised it while this one waited.
+        if self.format_version() >= FORMAT_VERSION {
+            return Ok(false);
+        }
+
+        match self.locks.alone(self.settings.busy_timeout) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(Error::Busy {
+                    path: self.path.clone(),
+                });
+            }
+            Err(error) => return Err(self.lock_error(error)),
+        }
+
+        // A process that has since closed the file may have committed: the
+        // barriers below make its header durable, which is the selector they
+        // record.
+        let raised = self.refresh_header().and_then(|_| self.raise_format());
+        let shared = self.share_open_lock();
+
+        raised.and(shared).map(|()| true)
     }
 
     /// Lets other processes open the file, once recovery is done.

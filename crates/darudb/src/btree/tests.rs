@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::*;
-use crate::format::{StoredValue, content_len, max_key_len};
+use crate::format::{Cells, StoredValue, content_len, inline_entry_len, inline_limit, max_key_len};
 use crate::storage::sim::SimDisk;
 use crate::storage::{Cache, Pager};
 use crate::testing::Rng;
@@ -33,11 +33,18 @@ struct TestStore {
     /// Pages written after this commit are young; 0, as in a window no
     /// barrier has closed, unless a test says otherwise.
     young_after: u64,
+    /// The cells of the leaves the transaction writes: those of the newest
+    /// format, unless a test says otherwise.
+    cells: Cells,
 }
 
 impl Store for TestStore {
     fn txn(&self) -> u64 {
         self.txn
+    }
+
+    fn cells(&self) -> Cells {
+        self.cells
     }
 
     fn young_after(&self) -> u64 {
@@ -107,9 +114,43 @@ impl Harness {
                 fresh: HashSet::new(),
                 retired: Vec::new(),
                 young_after: 0,
+                cells: Cells::Varint,
             },
             root: None,
         }
+    }
+
+    /// A harness whose transactions write leaves in `cells`.
+    fn with_cells(page_size: usize, cells: Cells) -> Self {
+        let mut harness = Self::new(page_size);
+
+        harness.store.cells = cells;
+        harness
+    }
+
+    /// The cells of every leaf of the committed tree, as many leaves in
+    /// each layout.
+    fn leaf_cells(&self) -> (usize, usize) {
+        let mut counts = (0, 0);
+        let mut pending = vec![(self.root.clone().unwrap(), None::<u8>)];
+
+        while let Some((child, level)) = pending.pop() {
+            match &resolve(&self.loader, &child, TREE, level)
+                .unwrap()
+                .to_node()
+            {
+                Node::Leaf(leaf) if leaf.cells() == Cells::Fixed => counts.0 += 1,
+                Node::Leaf(_) => counts.1 += 1,
+                Node::Branch(branch) => pending.extend(
+                    branch
+                        .children
+                        .iter()
+                        .map(|child| (child.clone(), Some(branch.level - 1))),
+                ),
+            }
+        }
+
+        counts
     }
 
     fn insert(&mut self, key: &[u8], value: &[u8]) -> bool {
@@ -485,15 +526,28 @@ fn key_of(rng: &mut Rng, page_size: usize) -> Vec<u8> {
         .collect()
 }
 
+/// Also: leaves in the cells of format 5, and a tree of them that goes on
+/// changing in the cells of format 6, as a file whose version was raised
+/// does, with leaves in both layouts at once.
 #[test]
 fn random_changes_match_a_model() {
-    for seed in 0..12 {
+    for seed in 0..16 {
         let page_size = if seed % 3 == 0 { 16384 } else { 4096 };
         let mut rng = Rng::new(seed);
-        let mut harness = Harness::new(page_size);
+        let first = match seed % 4 {
+            1 | 2 => Cells::Fixed,
+            _ => Cells::Varint,
+        };
+        let raised = seed % 4 == 2;
+        let mut harness = Harness::with_cells(page_size, first);
         let mut model = BTreeMap::new();
 
         for round in 0..40 {
+            if raised && round == 20 {
+                harness.commit();
+                harness.store.cells = Cells::Varint;
+            }
+
             for _ in 0..rng.index(120) {
                 let key = key_of(&mut rng, page_size);
 
@@ -590,7 +644,60 @@ fn random_changes_match_a_model() {
         for key in model.keys().take(20) {
             assert_eq!(harness.get(key).as_ref(), model.get(key));
         }
+
+        if harness.root.is_some() {
+            harness.commit();
+
+            let (fixed, varint) = harness.leaf_cells();
+
+            match (first, raised) {
+                (Cells::Varint, _) => assert_eq!(fixed, 0, "seed {seed}"),
+                (Cells::Fixed, false) => assert_eq!(varint, 0, "seed {seed}"),
+                (Cells::Fixed, true) => assert!(varint > 0, "seed {seed}"),
+            }
+        }
     }
+}
+
+/// A tree of leaves in the cells of format 5 takes those of format 6 leaf by
+/// leaf as a transaction that writes them changes it: a leaf it changes is
+/// rewritten, and one it does not keeps its page.
+#[test]
+fn a_tree_takes_the_newer_cells_as_its_leaves_change() {
+    let mut harness = Harness::with_cells(4096, Cells::Fixed);
+
+    for n in 0..20_000u32 {
+        harness.insert(&n.to_be_bytes(), &n.to_le_bytes());
+    }
+
+    harness.commit();
+
+    let (fixed, varint) = harness.leaf_cells();
+
+    assert_eq!(varint, 0);
+
+    harness.store.cells = Cells::Varint;
+
+    // Every hundredth key, in the first half of the keys.
+    for n in (0..10_000u32).step_by(100) {
+        harness.insert(&n.to_be_bytes(), b"changed");
+    }
+
+    harness.commit();
+
+    let (left, rewritten) = harness.leaf_cells();
+
+    assert!(rewritten > 0 && left > 0, "{left} and {rewritten}");
+    assert!(left + rewritten <= fixed);
+    assert_eq!(harness.check_structure(), 20_000);
+    assert_eq!(
+        harness.get(&100u32.to_be_bytes()),
+        Some(b"changed".to_vec())
+    );
+    assert_eq!(
+        harness.get(&19_999u32.to_be_bytes()),
+        Some(19_999u32.to_le_bytes().to_vec())
+    );
 }
 
 /// A seeker finds what a lookup from the root finds, whatever order the keys
@@ -997,27 +1104,49 @@ fn collect_pages(harness: &Harness) -> HashSet<u64> {
 
 #[test]
 fn a_value_just_past_the_inline_limit_goes_to_an_overflow_run() {
-    let mut harness = Harness::new(4096);
-    let big = vec![7u8; 1000];
+    for cells in [Cells::Fixed, Cells::Varint] {
+        // The longest value of the key `k` an entry holds inline: 998 bytes
+        // in format 5, and 1000 in format 6, whose lengths take fewer.
+        let longest = (0..2000)
+            .rev()
+            .find(|len| inline_entry_len(cells, 1, *len) <= inline_limit(4096))
+            .unwrap();
 
-    harness.insert(b"k", &big);
+        assert_eq!(
+            longest,
+            match cells {
+                Cells::Fixed => 998,
+                Cells::Varint => 1000,
+            }
+        );
 
-    let Some(Child::Dirty { node, .. }) = &harness.root else {
-        panic!();
-    };
-    let Node::Leaf(leaf) = node.as_ref() else {
-        panic!();
-    };
+        for (len, overflow) in [(longest, false), (longest + 1, true)] {
+            let mut harness = Harness::with_cells(4096, cells);
+            let value = vec![7u8; len];
 
-    assert!(matches!(
-        leaf.to_entries().unwrap()[0].value,
-        StoredValue::Overflow(_)
-    ));
-    assert_eq!(harness.get(b"k"), Some(big.clone()));
+            harness.insert(b"k", &value);
 
-    harness.commit();
+            let Some(Child::Dirty { node, .. }) = &harness.root else {
+                panic!();
+            };
+            let Node::Leaf(leaf) = node.as_ref() else {
+                panic!();
+            };
 
-    assert_eq!(harness.get(b"k"), Some(big));
+            assert_eq!(
+                matches!(
+                    leaf.to_entries().unwrap()[0].value,
+                    StoredValue::Overflow(_)
+                ),
+                overflow
+            );
+            assert_eq!(harness.get(b"k"), Some(value.clone()));
+
+            harness.commit();
+
+            assert_eq!(harness.get(b"k"), Some(value));
+        }
+    }
 }
 
 /// Also: counting the entries of a range a leaf at a time gives the number

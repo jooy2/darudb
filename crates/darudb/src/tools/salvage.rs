@@ -28,8 +28,8 @@ use crate::format::object::schema::{CollectionDef, StoredSchema};
 use crate::format::object::{codec, key};
 use crate::format::{
     CATALOG_TREE, Cipher, CommitRecord, FIRST_USER_TREE, HEADER_LEN, HeaderError, KEY_BLOCK_LEN,
-    MAX_PAGE_SIZE, MIN_PAGE_SIZE, PageHeader, PageKind, Pointer, SLOT_COUNT, StaticHeader,
-    StoredRef, TreeDescriptor, page_check, slot_offset, stored_check,
+    MAX_PAGE_SIZE, MIN_PAGE_SIZE, PageHeader, Pointer, SLOT_COUNT, StaticHeader, StoredRef,
+    TreeDescriptor, page_check, slot_offset, stored_check,
 };
 use crate::options::OpenOptions;
 use crate::schema::objects::index_entries;
@@ -171,6 +171,7 @@ impl Input {
                     .map_err(|error| io_error(path, std::io::Error::other(error)))?;
 
                 StaticHeader {
+                    version: options.new_format_version(),
                     page_size,
                     file_id,
                     cipher: Cipher::Plain,
@@ -280,7 +281,7 @@ impl Input {
             return;
         };
         let header = match PageHeader::read(page) {
-            Ok(header) if header.kind == PageKind::Leaf => header,
+            Ok(header) if header.kind.is_leaf() => header,
             Ok(_) => return,
             Err(_) => {
                 report.pages_damaged += 1;

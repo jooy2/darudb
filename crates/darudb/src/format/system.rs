@@ -125,8 +125,9 @@ pub(crate) fn decode_retained_key(key: &[u8]) -> Result<(u64, u32), &'static str
 /// How many 12-byte runs one retained tree value holds, so that the entry
 /// stays inline.
 pub(crate) fn runs_per_value(page_size: usize) -> usize {
-    // An inline entry spends 7 bytes besides its key and value, and the key is
-    // 12 bytes.
+    // An inline entry spends at most 7 bytes besides its key and value, its
+    // slot and the lengths of format 5, which those of format 6 never
+    // exceed, and the key is 12 bytes.
     (inline_limit(page_size) - 7 - 12) / 12
 }
 
@@ -158,7 +159,7 @@ pub(crate) fn decode_runs(value: &[u8]) -> Result<Vec<(u64, u32)>, &'static str>
 mod tests {
     use super::*;
     use crate::format::Check;
-    use crate::format::node::inline_entry_len;
+    use crate::format::node::{Cells, inline_entry_len};
 
     #[test]
     fn a_descriptor_reads_back_as_it_was_written() {
@@ -199,7 +200,9 @@ mod tests {
         let runs = vec![(1, 1); runs_per_value(4096)];
         let value = encode_runs(&runs);
 
-        assert!(inline_entry_len(12, value.len()) <= inline_limit(4096));
+        for cells in [Cells::Fixed, Cells::Varint] {
+            assert!(inline_entry_len(cells, 12, value.len()) <= inline_limit(4096));
+        }
         assert_eq!(decode_runs(&value), Ok(runs));
     }
 }

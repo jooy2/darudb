@@ -18,9 +18,9 @@
 
 use super::node::Heads;
 use crate::format::{
-    CONTENT_OFFSET, LeafEntry, OverflowRef, StoredRef, StoredValue, cell_len, check_offset,
-    encode_leaf, leaf_cell, leaf_entry, leaf_inline, leaf_key, leaf_low, leaf_value, set_slot,
-    write_cell,
+    CONTENT_OFFSET, Cells, LeafEntry, OverflowRef, StoredRef, StoredValue, cell_len, check_offset,
+    convert_leaf, encode_leaf, leaf_cell, leaf_entry, leaf_extent, leaf_inline, leaf_key, leaf_low,
+    leaf_value, set_slot, write_cell,
 };
 
 /// A leaf's page as the commit writes it, and what the node it caches takes
@@ -50,6 +50,8 @@ pub(crate) struct Leaf {
     /// in memory only, for telling a split that continues a run of inserts
     /// from any other (`insert_into` in `write.rs`).
     last_insert: Option<u16>,
+    /// How the page lays out its cells.
+    cells: Cells,
 }
 
 /// Leaves are equal when their pages are, whatever prefix their heads
@@ -64,8 +66,8 @@ impl PartialEq for Leaf {
 impl Eq for Leaf {}
 
 impl Leaf {
-    /// An empty leaf for a page of `page_size` bytes.
-    pub(crate) fn new(page_size: usize) -> Self {
+    /// An empty leaf for a page of `page_size` bytes, in `cells`.
+    pub(crate) fn new(page_size: usize, cells: Cells) -> Self {
         Self {
             page: vec![0; page_size],
             count: 0,
@@ -73,17 +75,18 @@ impl Leaf {
             garbage: 0,
             heads: Heads::default(),
             last_insert: None,
+            cells,
         }
     }
 
-    /// A copy of the leaf with `count` entries on `page`, which
-    /// `check_leaf` has passed.
+    /// A copy of the leaf with `count` entries on `page`, laid out in
+    /// `cells`, which `check_leaf` has passed.
     #[cfg(test)]
-    pub(crate) fn from_page(page: &[u8], count: usize) -> Self {
-        let (size, low) = crate::format::leaf_extent(page, count);
-        let heads = Heads::of(count, |index| leaf_key(page, index));
+    pub(crate) fn from_page(cells: Cells, page: &[u8], count: usize) -> Self {
+        let (size, low) = leaf_extent(cells, page, count);
+        let heads = Heads::of(count, |index| leaf_key(cells, page, index));
 
-        Self::from_loaded(page, count, size, low, heads)
+        Self::from_loaded(cells, page, count, size, low, heads)
     }
 
     /// [`from_page`](Self::from_page) for a page whose entries take `size`
@@ -91,18 +94,20 @@ impl Leaf {
     /// keys have `heads`, as the cached node knows them: copying a leaf for a
     /// write transaction to change then reads no cell of it.
     pub(crate) fn from_loaded(
+        cells: Cells,
         page: &[u8],
         count: usize,
         size: usize,
         low: usize,
         heads: Heads,
     ) -> Self {
-        Self::from_owned(page.to_vec(), count, size, low, heads)
+        Self::from_owned(cells, page.to_vec(), count, size, low, heads)
     }
 
     /// [`from_loaded`](Self::from_loaded) with the page itself rather than a
     /// copy of it.
     pub(crate) fn from_owned(
+        cells: Cells,
         page: Vec<u8>,
         count: usize,
         size: usize,
@@ -110,7 +115,7 @@ impl Leaf {
         heads: Heads,
     ) -> Self {
         let end = check_offset(page.len());
-        let cells = size.saturating_sub(2 * count);
+        let cell_bytes = size.saturating_sub(2 * count);
 
         Self {
             page,
@@ -118,19 +123,21 @@ impl Leaf {
             low,
             // Cells that overlap, which only a damaged page has, count as
             // none: the leaf then splits sooner than it has to, no more.
-            garbage: end.saturating_sub(low).saturating_sub(cells),
+            garbage: end.saturating_sub(low).saturating_sub(cell_bytes),
             heads,
             last_insert: None,
+            cells,
         }
     }
 
-    /// A leaf holding `entries`, in order, which fit in a page.
-    pub(crate) fn from_entries(page_size: usize, entries: &[LeafEntry]) -> Self {
+    /// A leaf holding `entries`, in order, laid out in `cells`, which fit in
+    /// a page.
+    pub(crate) fn from_entries(page_size: usize, cells: Cells, entries: &[LeafEntry]) -> Self {
         let mut page = vec![0; page_size];
 
-        encode_leaf(entries, &mut page);
+        encode_leaf(cells, entries, &mut page);
 
-        let used: usize = entries.iter().map(|entry| entry.len() - 2).sum();
+        let used: usize = entries.iter().map(|entry| entry.len(cells) - 2).sum();
         let heads = Heads::of(entries.len(), |index| &entries[index].key);
 
         Self {
@@ -140,7 +147,35 @@ impl Leaf {
             garbage: 0,
             heads,
             last_insert: None,
+            cells,
         }
+    }
+
+    /// The leaf laid out in `cells`, with the same entries and heads: a leaf
+    /// of format 5 that a write transaction changes in a file of format 6.
+    /// Its removed cells' bytes are dropped on the way.
+    pub(crate) fn into_cells(self, cells: Cells) -> Result<Self, &'static str> {
+        if cells == self.cells {
+            return Ok(self);
+        }
+
+        let page = convert_leaf(self.cells, cells, &self.page, self.count)?;
+        let (_, low) = leaf_extent(cells, &page, self.count);
+
+        Ok(Self {
+            page,
+            count: self.count,
+            low,
+            garbage: 0,
+            heads: self.heads,
+            last_insert: None,
+            cells,
+        })
+    }
+
+    /// How the page lays out its cells.
+    pub(crate) fn cells(&self) -> Cells {
+        self.cells
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -162,19 +197,19 @@ impl Leaf {
     }
 
     pub(crate) fn key(&self, index: usize) -> &[u8] {
-        leaf_key(&self.page, index)
+        leaf_key(self.cells, &self.page, index)
     }
 
     pub(crate) fn value(&self, index: usize) -> Result<StoredRef<'_>, &'static str> {
-        leaf_value(&self.page, index)
+        leaf_value(self.cells, &self.page, index)
     }
 
     pub(crate) fn entry(&self, index: usize) -> Result<(&[u8], StoredRef<'_>), &'static str> {
-        leaf_entry(&self.page, index)
+        leaf_entry(self.cells, &self.page, index)
     }
 
     pub(crate) fn inline(&self, index: usize) -> Option<(&[u8], &[u8])> {
-        leaf_inline(&self.page, index)
+        leaf_inline(self.cells, &self.page, index)
     }
 
     /// Where `key` is, or where it would go.
@@ -191,22 +226,22 @@ impl Leaf {
     /// How many keys are below `key`, or at or below it with `or_equal`.
     #[inline(always)]
     pub(crate) fn rank(&self, key: &[u8], or_equal: bool) -> usize {
-        let page = &self.page;
+        let (page, cells) = (&self.page, self.cells);
         let first = if self.count > 0 {
-            leaf_key(page, 0)
+            leaf_key(cells, page, 0)
         } else {
             &[]
         };
 
         self.heads
-            .rank(first, key, or_equal, |index| leaf_key(page, index))
+            .rank(first, key, or_equal, |index| leaf_key(cells, page, index))
     }
 
     /// Inserts `key` and `value` as entry `index`, if they fit in the page;
     /// returns whether they did. The page is compacted first when only the
     /// bytes of removed cells make room.
     pub(crate) fn insert(&mut self, index: usize, key: &[u8], value: StoredRef<'_>) -> bool {
-        let len = cell_len(key.len(), value);
+        let len = cell_len(self.cells, key.len(), value);
 
         if len + 2 > self.free() {
             if len + 2 > self.free() + self.garbage {
@@ -225,7 +260,8 @@ impl Leaf {
         let slots = CONTENT_OFFSET + 2 * index;
         let slots_end = CONTENT_OFFSET + 2 * self.count;
 
-        self.heads.insert(index, key, |at| leaf_key(&self.page, at));
+        self.heads
+            .insert(index, key, |at| leaf_key(self.cells, &self.page, at));
 
         // An entry after every other, as keys that only grow bring, moves
         // no slot, and a call to move none is left out.
@@ -234,7 +270,7 @@ impl Leaf {
         }
 
         self.low -= len;
-        write_cell(&mut self.page, self.low, key, value);
+        write_cell(self.cells, &mut self.page, self.low, key, value);
         set_slot(&mut self.page, index, self.low);
         self.count += 1;
         self.last_insert = u16::try_from(index).ok();
@@ -268,8 +304,8 @@ impl Leaf {
         key: &[u8],
         value: StoredRef<'_>,
     ) -> Result<Option<Option<OverflowRef>>, &'static str> {
-        let (at, len) = leaf_cell(&self.page, index);
-        let new_len = cell_len(key.len(), value);
+        let (at, len) = leaf_cell(self.cells, &self.page, index);
+        let new_len = cell_len(self.cells, key.len(), value);
 
         if new_len > len {
             return Ok(None);
@@ -280,7 +316,7 @@ impl Leaf {
             StoredRef::Overflow(reference) => Some(reference),
         };
 
-        write_cell(&mut self.page, at, key, value);
+        write_cell(self.cells, &mut self.page, at, key, value);
         self.page[at + new_len..at + len].fill(0);
         self.garbage += len - new_len;
 
@@ -289,7 +325,7 @@ impl Leaf {
 
     /// The bytes entry `index` takes, its slot included.
     pub(crate) fn entry_size(&self, index: usize) -> usize {
-        leaf_cell(&self.page, index).1 + 2
+        leaf_cell(self.cells, &self.page, index).1 + 2
     }
 
     /// Moves the entries from `at` on into a new leaf, which it returns, and
@@ -300,7 +336,7 @@ impl Leaf {
     /// makes it, nothing moves, and this leaf and its heads stay as they
     /// are: working them out again read every key of a full leaf.
     pub(crate) fn split_off(&mut self, at: usize) -> Leaf {
-        let mut right = Leaf::new(self.page.len());
+        let mut right = Leaf::new(self.page.len(), self.cells);
 
         self.last_insert = None;
 
@@ -309,7 +345,7 @@ impl Leaf {
         }
 
         for index in at..self.count {
-            let (cell, len) = leaf_cell(&self.page, index);
+            let (cell, len) = leaf_cell(self.cells, &self.page, index);
 
             right.low -= len;
             right.page[right.low..right.low + len].copy_from_slice(&self.page[cell..cell + len]);
@@ -319,10 +355,12 @@ impl Leaf {
         }
 
         right.count = self.count - at;
-        right.heads = Heads::of(right.count, |index| leaf_key(&right.page, index));
+        right.heads = Heads::of(right.count, |index| {
+            leaf_key(right.cells, &right.page, index)
+        });
         self.page[CONTENT_OFFSET + 2 * at..CONTENT_OFFSET + 2 * self.count].fill(0);
         self.count = at;
-        self.heads = Heads::of(at, |index| leaf_key(&self.page, index));
+        self.heads = Heads::of(at, |index| leaf_key(self.cells, &self.page, index));
 
         right
     }
@@ -336,7 +374,7 @@ impl Leaf {
             StoredRef::Inline(_) => None,
             StoredRef::Overflow(reference) => Some(reference),
         };
-        let (at, len) = leaf_cell(&self.page, index);
+        let (at, len) = leaf_cell(self.cells, &self.page, index);
         let slots_end = CONTENT_OFFSET + 2 * self.count;
 
         self.page[at..at + len].fill(0);
@@ -422,7 +460,7 @@ impl Leaf {
         let slots_end = CONTENT_OFFSET + 2 * self.count;
 
         for index in 0..self.count {
-            let (at, len) = leaf_cell(&self.page, index);
+            let (at, len) = leaf_cell(self.cells, &self.page, index);
 
             let Some(low) = cursor.checked_sub(len).filter(|low| *low >= slots_end) else {
                 self.garbage = 0;
@@ -445,20 +483,23 @@ impl Leaf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{Check, check_leaf, decode_leaf, leaf_extent};
+    use crate::format::{Check, check_leaf, decode_leaf, inline_entry_len};
     use crate::testing::Rng;
 
     const PAGE: usize = 4096;
 
+    /// Both layouts of a leaf's cells, which every test runs with.
+    const LAYOUTS: [Cells; 2] = [Cells::Fixed, Cells::Varint];
+
     /// Checks that every byte of a leaf page's content that no slot and no
     /// cell of its `count` entries covers is zero.
-    fn assert_zero_outside_cells(page: &[u8], count: usize) {
+    fn assert_zero_outside_cells(cells: Cells, page: &[u8], count: usize) {
         let mut covered = vec![false; page.len()];
 
         covered[CONTENT_OFFSET..CONTENT_OFFSET + 2 * count].fill(true);
 
         for index in 0..count {
-            let (at, len) = leaf_cell(page, index);
+            let (at, len) = leaf_cell(cells, page, index);
 
             covered[at..at + len].fill(true);
         }
@@ -490,10 +531,16 @@ mod tests {
     /// vector of entries, the page checked and decoded after every change.
     #[test]
     fn a_leaf_changes_as_a_sorted_list_of_entries_does() {
+        for cells in LAYOUTS {
+            changes_as_a_sorted_list(cells);
+        }
+    }
+
+    fn changes_as_a_sorted_list(cells: Cells) {
         let mut rng = Rng::new(21);
 
         for _ in 0..40 {
-            let mut leaf = Leaf::new(PAGE);
+            let mut leaf = Leaf::new(PAGE, cells);
             let mut model: Vec<LeafEntry> = Vec::new();
 
             for _ in 0..300 {
@@ -559,22 +606,22 @@ mod tests {
                     }
                 }
 
-                let size: usize = model.iter().map(LeafEntry::len).sum();
+                let size: usize = model.iter().map(|entry| entry.len(cells)).sum();
 
-                assert_zero_outside_cells(&leaf.page, leaf.len());
+                assert_zero_outside_cells(cells, &leaf.page, leaf.len());
                 leaf.heads
-                    .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
+                    .assert_follow(leaf.len(), |index| leaf_key(cells, &leaf.page, index));
                 assert_eq!(leaf.size(), size);
                 assert!(size <= PAGE - CONTENT_OFFSET - 16);
                 assert_eq!(leaf.to_entries().unwrap(), model);
 
                 // A page on disk holds at least one entry.
                 if !model.is_empty() {
-                    check_leaf(leaf.page(), leaf.len()).unwrap();
-                    assert_eq!(decode_leaf(leaf.page(), leaf.len()).unwrap(), model);
+                    check_leaf(cells, leaf.page(), leaf.len()).unwrap();
+                    assert_eq!(decode_leaf(cells, leaf.page(), leaf.len()).unwrap(), model);
                 }
 
-                let again = Leaf::from_page(leaf.page(), leaf.len());
+                let again = Leaf::from_page(cells, leaf.page(), leaf.len());
 
                 assert_eq!(
                     again.size(),
@@ -589,11 +636,89 @@ mod tests {
 
             let written = leaf.clone().into_page();
 
-            assert_zero_outside_cells(&written, model.len());
-            check_leaf(&written, model.len()).unwrap();
-            assert_eq!(decode_leaf(&written, model.len()).unwrap(), model);
+            assert_zero_outside_cells(cells, &written, model.len());
+            check_leaf(cells, &written, model.len()).unwrap();
+            assert_eq!(decode_leaf(cells, &written, model.len()).unwrap(), model);
             assert_eq!(
-                decode_leaf(&Leaf::from_entries(PAGE, &model).into_page(), model.len()).unwrap(),
+                decode_leaf(
+                    cells,
+                    &Leaf::from_entries(PAGE, cells, &model).into_page(),
+                    model.len()
+                )
+                .unwrap(),
+                model
+            );
+        }
+    }
+
+    /// A leaf of format 5 rewritten in the cells of format 6 holds the same
+    /// entries, in a page no fuller, and goes on changing as any leaf does.
+    #[test]
+    fn a_leaf_rewritten_in_the_other_cells_holds_the_same_entries() {
+        let mut rng = Rng::new(34);
+
+        for _ in 0..100 {
+            let mut leaf = Leaf::new(PAGE, Cells::Fixed);
+            let mut model: Vec<LeafEntry> = Vec::new();
+
+            for _ in 0..rng.below(80) {
+                let key: Vec<u8> = (0..1 + rng.below(30))
+                    .map(|_| u8::try_from(rng.below(256)).unwrap())
+                    .collect();
+
+                if let Err(at) = leaf.search(&key) {
+                    let entry = LeafEntry {
+                        key,
+                        value: value_of(&mut rng),
+                    };
+
+                    if leaf.insert(at, &entry.key, entry.value.as_stored()) {
+                        model.insert(at, entry);
+                    }
+                }
+            }
+
+            // Removed cells' bytes are dropped on the way.
+            if !model.is_empty() && rng.below(2) == 0 {
+                let at = rng.index(model.len());
+
+                leaf.remove(at).unwrap();
+                model.remove(at);
+            }
+
+            let fixed_size = leaf.size();
+            let mut leaf = leaf.into_cells(Cells::Varint).unwrap();
+
+            assert_eq!(leaf.cells(), Cells::Varint);
+            assert_eq!(leaf.to_entries().unwrap(), model);
+            assert_eq!(
+                leaf.size(),
+                model
+                    .iter()
+                    .map(|entry| entry.len(Cells::Varint))
+                    .sum::<usize>()
+            );
+            assert!(leaf.size() <= fixed_size);
+            assert_zero_outside_cells(Cells::Varint, &leaf.page, leaf.len());
+            leaf.heads.assert_follow(leaf.len(), |index| {
+                leaf_key(Cells::Varint, &leaf.page, index)
+            });
+
+            if !model.is_empty() {
+                check_leaf(Cells::Varint, leaf.page(), leaf.len()).unwrap();
+            }
+
+            let key = vec![0xff; 40];
+
+            if leaf.insert(leaf.len(), &key, StoredRef::Inline(b"after")) {
+                model.push(LeafEntry {
+                    key,
+                    value: StoredValue::Inline(b"after".to_vec()),
+                });
+            }
+
+            assert_eq!(
+                decode_leaf(Cells::Varint, &leaf.clone().into_page(), model.len()).unwrap(),
                 model
             );
         }
@@ -601,10 +726,16 @@ mod tests {
 
     #[test]
     fn a_split_leaf_keeps_its_entries_in_two_pages() {
+        for cells in LAYOUTS {
+            splits_into_two_pages(cells);
+        }
+    }
+
+    fn splits_into_two_pages(cells: Cells) {
         let mut rng = Rng::new(5);
 
         for _ in 0..100 {
-            let mut leaf = Leaf::new(PAGE);
+            let mut leaf = Leaf::new(PAGE, cells);
             let mut model: Vec<LeafEntry> = Vec::new();
 
             for _ in 0..60 {
@@ -628,23 +759,30 @@ mod tests {
             let right = leaf.split_off(at);
             let (left_model, right_model) = model.split_at(at);
 
-            assert_zero_outside_cells(&leaf.page, leaf.len());
-            assert_zero_outside_cells(&right.page, right.len());
+            assert_zero_outside_cells(cells, &leaf.page, leaf.len());
+            assert_zero_outside_cells(cells, &right.page, right.len());
             leaf.heads
-                .assert_follow(leaf.len(), |index| leaf_key(&leaf.page, index));
+                .assert_follow(leaf.len(), |index| leaf_key(cells, &leaf.page, index));
             right
                 .heads
-                .assert_follow(right.len(), |index| leaf_key(&right.page, index));
+                .assert_follow(right.len(), |index| leaf_key(cells, &right.page, index));
 
+            assert_eq!(right.cells(), cells);
             assert_eq!(leaf.to_entries().unwrap(), left_model);
             assert_eq!(right.to_entries().unwrap(), right_model);
             assert_eq!(
                 leaf.size(),
-                left_model.iter().map(LeafEntry::len).sum::<usize>()
+                left_model
+                    .iter()
+                    .map(|entry| entry.len(cells))
+                    .sum::<usize>()
             );
             assert_eq!(
                 right.size(),
-                right_model.iter().map(LeafEntry::len).sum::<usize>()
+                right_model
+                    .iter()
+                    .map(|entry| entry.len(cells))
+                    .sum::<usize>()
             );
 
             // The left page reclaims what moved out when it next needs room.
@@ -661,37 +799,39 @@ mod tests {
             assert_eq!(leaf.to_entries().unwrap(), left_model);
 
             if !left_model.is_empty() {
-                check_leaf(&leaf.clone().into_page(), left_model.len()).unwrap();
+                check_leaf(cells, &leaf.clone().into_page(), left_model.len()).unwrap();
             }
         }
     }
 
     #[test]
     fn a_removed_value_is_not_in_the_page_written() {
-        let secret = [0xAB; 64];
-        let mut leaf = Leaf::new(PAGE);
+        for cells in LAYOUTS {
+            let secret = [0xAB; 64];
+            let mut leaf = Leaf::new(PAGE, cells);
 
-        assert!(leaf.insert(0, b"a", StoredRef::Inline(b"kept")));
-        assert!(leaf.insert(1, b"b", StoredRef::Inline(&secret)));
-        assert!(leaf.insert(2, b"c", StoredRef::Inline(b"kept too")));
-        leaf.remove(1).unwrap();
+            assert!(leaf.insert(0, b"a", StoredRef::Inline(b"kept")));
+            assert!(leaf.insert(1, b"b", StoredRef::Inline(&secret)));
+            assert!(leaf.insert(2, b"c", StoredRef::Inline(b"kept too")));
+            leaf.remove(1).unwrap();
 
-        let page = leaf.into_page();
+            let page = leaf.into_page();
 
-        assert!(!page.windows(8).any(|window| window == [0xAB; 8]));
-        assert_eq!(
-            decode_leaf(&page, 2).unwrap(),
-            [
-                LeafEntry {
-                    key: b"a".to_vec(),
-                    value: StoredValue::Inline(b"kept".to_vec()),
-                },
-                LeafEntry {
-                    key: b"c".to_vec(),
-                    value: StoredValue::Inline(b"kept too".to_vec()),
-                },
-            ]
-        );
+            assert!(!page.windows(8).any(|window| window == [0xAB; 8]));
+            assert_eq!(
+                decode_leaf(cells, &page, 2).unwrap(),
+                [
+                    LeafEntry {
+                        key: b"a".to_vec(),
+                        value: StoredValue::Inline(b"kept".to_vec()),
+                    },
+                    LeafEntry {
+                        key: b"c".to_vec(),
+                        value: StoredValue::Inline(b"kept too".to_vec()),
+                    },
+                ]
+            );
+        }
     }
 
     /// A leaf that lost an entry is written with its other cells where they
@@ -699,9 +839,16 @@ mod tests {
     /// needs their room, then or after the page is read again.
     #[test]
     fn a_leaf_is_written_with_the_gaps_its_removed_entries_left() {
-        // Four entries of 908 bytes fill all but 392 of a page's 4024.
+        for cells in LAYOUTS {
+            written_with_gaps(cells);
+        }
+    }
+
+    fn written_with_gaps(cells: Cells) {
+        // Four entries of about 908 bytes fill all but about 400 of a page's
+        // 4024.
         let value = [7; 900];
-        let mut leaf = Leaf::new(PAGE);
+        let mut leaf = Leaf::new(PAGE, cells);
 
         for (index, key) in [b"a", b"b", b"c", b"d"].into_iter().enumerate() {
             assert!(leaf.insert(index, key, StoredRef::Inline(&value)));
@@ -709,18 +856,22 @@ mod tests {
 
         leaf.remove(1).unwrap();
 
-        let starts = |page: &[u8]| (0..3).map(|index| leaf_cell(page, index).0).collect();
+        let starts = |page: &[u8]| {
+            (0..3)
+                .map(|index| leaf_cell(cells, page, index).0)
+                .collect()
+        };
         let before: Vec<usize> = starts(&leaf.page);
         let written = leaf.clone().into_page();
 
         assert_eq!(starts(&written), before, "no cell moved");
-        assert_zero_outside_cells(&written, 3);
+        assert_zero_outside_cells(cells, &written, 3);
 
-        for mut leaf in [leaf.clone(), Leaf::from_page(&written, 3)] {
+        for mut leaf in [leaf.clone(), Leaf::from_page(cells, &written, 3)] {
             assert!(leaf.insert(1, b"bb", StoredRef::Inline(&value)));
-            assert_zero_outside_cells(&leaf.page, 4);
+            assert_zero_outside_cells(cells, &leaf.page, 4);
             assert_eq!(
-                decode_leaf(&leaf.into_page(), 4).unwrap()[1],
+                decode_leaf(cells, &leaf.into_page(), 4).unwrap()[1],
                 LeafEntry {
                     key: b"bb".to_vec(),
                     value: StoredValue::Inline(value.to_vec()),
@@ -733,28 +884,41 @@ mod tests {
 
         let parts = leaf.into_parts();
 
-        assert_eq!((parts.size, parts.low), leaf_extent(&parts.page, 2));
+        assert_eq!((parts.size, parts.low), leaf_extent(cells, &parts.page, 2));
     }
 
     /// A leaf page whose cells overlap: cell 0 runs from offset 100 to the
     /// end, cell 1 lies inside its value and runs to the end too, and cell 2
     /// is small, below them. Only a damaged or crafted file has one, and the
     /// checks of a read refuse it.
-    fn overlapping_page() -> Vec<u8> {
+    fn overlapping_page(cells: Cells) -> Vec<u8> {
         let end = check_offset(PAGE);
         let mut page = vec![0; PAGE];
+        // The value of a one-byte key whose cell runs from `at` to the end.
+        let to_the_end = |at: usize| {
+            (0..end - at)
+                .rev()
+                .find(|len| inline_entry_len(cells, 1, *len) - 2 == end - at)
+                .unwrap()
+        };
 
         // Cell 1 lies inside cell 0's value, so it is written after it.
         for (index, at, key, len) in [
-            (0, 100, b"a", end - 100 - 6),
-            (1, 200, b"b", end - 200 - 6),
+            (0, 100, b"a", to_the_end(100)),
+            (1, 200, b"b", to_the_end(200)),
             (2, 70, b"c", 0),
         ] {
-            write_cell(&mut page, at, key, StoredRef::Inline(&vec![0x5A; len]));
+            write_cell(
+                cells,
+                &mut page,
+                at,
+                key,
+                StoredRef::Inline(&vec![0x5A; len]),
+            );
             set_slot(&mut page, index, at);
         }
 
-        assert!(check_leaf(&page, 3).is_err());
+        assert!(check_leaf(cells, &page, 3).is_err());
 
         page
     }
@@ -766,42 +930,49 @@ mod tests {
     /// damaged file produces an error, never a panic.
     #[test]
     fn a_leaf_whose_cells_overlap_is_changed_without_a_panic() {
-        let page = overlapping_page();
-        let mut leaf = Leaf::from_page(&page, 3);
-        let mut kept = leaf.to_entries().unwrap();
+        for cells in LAYOUTS {
+            let page = overlapping_page(cells);
+            let mut leaf = Leaf::from_page(cells, &page, 3);
+            let mut kept = leaf.to_entries().unwrap();
 
-        kept.pop();
-        leaf.remove(2).unwrap();
+            kept.pop();
+            leaf.remove(2).unwrap();
 
-        let mut inserted = leaf.clone();
+            let mut inserted = leaf.clone();
 
-        // Thirteen bytes: more than the free space, fewer than the free
-        // space and the removed cell.
-        assert!(!inserted.insert(2, b"d", StoredRef::Inline(&[1; 5])));
-        assert_eq!(inserted.to_entries().unwrap(), kept);
-        assert_eq!(
-            Leaf::from_page(&leaf.into_page(), 2).to_entries().unwrap(),
-            kept
-        );
+            // Fifteen bytes in format 5 and twelve in format 6, either more
+            // than the free space, of ten, and fewer than the free space and
+            // the removed cell.
+            assert!(!inserted.insert(2, b"d", StoredRef::Inline(&[1; 7])));
+            assert_eq!(inserted.to_entries().unwrap(), kept);
+            assert_eq!(
+                Leaf::from_page(cells, &leaf.into_page(), 2)
+                    .to_entries()
+                    .unwrap(),
+                kept
+            );
+        }
     }
 
     #[test]
     fn an_insert_that_does_not_fit_changes_nothing() {
-        let mut leaf = Leaf::new(PAGE);
-        let big = vec![7u8; 900];
-        let mut added = 0;
+        for cells in LAYOUTS {
+            let mut leaf = Leaf::new(PAGE, cells);
+            let big = vec![7u8; 900];
+            let mut added = 0;
 
-        while leaf.insert(
-            added,
-            &[u8::try_from(added).unwrap()],
-            StoredRef::Inline(&big),
-        ) {
-            added += 1;
+            while leaf.insert(
+                added,
+                &[u8::try_from(added).unwrap()],
+                StoredRef::Inline(&big),
+            ) {
+                added += 1;
+            }
+
+            let before = leaf.clone();
+
+            assert!(!leaf.insert(0, b"", StoredRef::Inline(&big)));
+            assert_eq!(leaf, before);
         }
-
-        let before = leaf.clone();
-
-        assert!(!leaf.insert(0, b"", StoredRef::Inline(&big)));
-        assert_eq!(leaf, before);
     }
 }

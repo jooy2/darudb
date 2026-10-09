@@ -38,6 +38,7 @@ pub struct OpenOptions {
     page_cipher: Option<Cipher>,
     schema: Option<Schema>,
     migrations: Vec<Migration>,
+    upgrade_format: bool,
 }
 
 impl OpenOptions {
@@ -56,6 +57,7 @@ impl OpenOptions {
             page_cipher: None,
             schema: None,
             migrations: Vec::new(),
+            upgrade_format: true,
         }
     }
 
@@ -133,6 +135,31 @@ impl OpenOptions {
     /// exists only while deferred commits are waiting.
     pub fn max_unsynced_time(&mut self, time: Duration) -> &mut Self {
         self.max_unsynced_time = time;
+        self
+    }
+
+    /// Whether opening a file in an older format version raises it to the
+    /// newest one this build writes, [`FORMAT_VERSION`](crate::FORMAT_VERSION).
+    /// On by default.
+    ///
+    /// Raising the version rewrites the header and nothing else, so it takes
+    /// three barriers whatever the file holds. The leaves written before keep
+    /// their layout until a write transaction changes them, when they take
+    /// the newer, smaller one, and [`Database::compact`] rewrites the trees
+    /// where that saves room. The version is raised only while no other
+    /// process has the file open, by the process that opens it then; with
+    /// another process in, the file stays as it is until the next such open.
+    ///
+    /// A build of the library that knows only the older version refuses the
+    /// file once it is raised. An application that may go back to such a
+    /// build turns this off, and raises the version with
+    /// [`Database::upgrade_format`] once it no longer may. With it off, a new
+    /// database is created in format version 5, which every release reads.
+    ///
+    /// Every handle to a file in one process shares one instance, and the
+    /// options of the handle that opened the file first apply to all of them.
+    pub fn upgrade_format(&mut self, upgrade: bool) -> &mut Self {
+        self.upgrade_format = upgrade;
         self
     }
 
@@ -286,6 +313,20 @@ impl OpenOptions {
 
     pub(crate) fn creates(&self) -> bool {
         self.create
+    }
+
+    /// The format version of a new file: the newest, unless opening is not
+    /// to raise files to it.
+    pub(crate) fn new_format_version(&self) -> u32 {
+        if self.upgrade_format {
+            format::FORMAT_VERSION
+        } else {
+            format::OLDEST_FORMAT_VERSION
+        }
+    }
+
+    pub(crate) fn upgrades_format(&self) -> bool {
+        self.upgrade_format
     }
 
     pub(crate) fn new_page_size(&self) -> u32 {

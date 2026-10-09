@@ -219,6 +219,7 @@ print(f"{report.bytes_before} bytes, then {report.bytes_after}")
 
 - Compaction is made of ordinary write transactions, so it waits for the writer lock like any write, and a crash in the middle leaves the file at one of its commits.
 - A page that a read transaction can still reach cannot move until the transaction ends, so the file shrinks less next to long readers. The next compaction takes the rest.
+- In a file raised from format version 5, compaction also writes again the trees whose leaves the smaller entries of format 6 would put in noticeably fewer pages ([File format](../engine/file-format.md#format-versions)).
 - To get a compact copy without touching the file, use a backup instead.
 
 ## Salvage a damaged file

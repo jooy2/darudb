@@ -4,10 +4,15 @@
 
 ## vNext (2026--)
 
+### Added
+
+- `OpenOptions::upgrade_format` and `Database::upgrade_format`, which say whether opening raises a file of an older format version, and raise an open one.
+
 ### Changed
 
 - An index whose entries for one value come in key order, as a non-unique index's do while the objects' primary keys grow, fills its pages as it goes, where splitting a page in the middle left half of each empty, and so do the branches of every tree. A file of 400,000 sample objects with 14 indexes is 7% smaller for it. Keys in no particular order split pages evenly, as before.
 - `Database::compact` first writes again, full, every tree whose pages inserts left part empty, so that the file ends about as small as a backup's copy: the same file compacts to 119 MiB rather than 140 MiB. Values in overflow runs are not written again.
+- The file format is version 6, which writes the lengths in a leaf's entries as varints rather than in five bytes. A file of 400,000 sample objects with 14 indexes takes 8% fewer pages, 126 MiB against 138, and compacts to 110 MiB against 119, with reads and writes as fast as before. Opening a file of version 5 raises it to version 6, while no other process has it open, by rewriting its header; its leaves take the new layout as writes change them, and `Database::compact` rewrites the trees where that saves room. A release before this one cannot open a file of version 6, so an application that may go back to one opens with `OpenOptions::upgrade_format(false)`, which also creates new files in version 5, and calls `Database::upgrade_format` once it no longer may.
 
 ### Fixed
 

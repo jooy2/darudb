@@ -8,9 +8,12 @@
 //! specification documents.
 //!
 //! Any change to what is written to disk changes [`FORMAT_VERSION`]. Version 5
-//! is the first released one, so every later version has to come with a
-//! migration from the one before. Until one does, a file in another version is
-//! refused when it is opened.
+//! is the first released one, so every later version comes with a migration
+//! from the one before: version 6 lays out leaf cells with varint lengths
+//! ([`Cells`]), and a file of version 5 is raised to it in place, its leaves
+//! rewritten as write transactions change them (`instance.rs`,
+//! `Shared::raise_format`). A file in a version older than 5 or newer than
+//! this build's is refused when it is opened.
 //!
 //! `object` holds the object layer's encodings of `design/objects.md`, kept in
 //! the kernel's trees. They change nothing the kernel reads, and the stored
@@ -28,15 +31,16 @@ mod system;
 
 pub(crate) use check::Check;
 pub(crate) use header::{
-    Cipher, HEADER_LEN, HeaderError, SELECTOR_OFFSET, SLOT_COUNT, STATIC_LEN, Selector,
-    StaticHeader, slot_offset,
+    Cipher, HEADER_LEN, HeaderError, RAISED_OFFSET, SELECTOR_OFFSET, SLOT_COUNT,
+    STATIC_CHECK_OFFSET, STATIC_LEN, Selector, StaticHeader, slot_offset,
 };
 pub(crate) use key_block::{Kdf, KeyBlock};
 pub(crate) use node::{
-    LeafEntry, OverflowRef, StoredRef, StoredValue, branch_child, branch_key, branch_key_len,
-    branch_size, cell_len, check_branch, check_leaf, encode_branch, encode_leaf, inline_entry_len,
-    inline_limit, leaf_cell, leaf_entry, leaf_extent, leaf_inline, leaf_key, leaf_low, leaf_value,
-    max_key_len, overflow_pages, set_slot, write_branch_children, write_cell,
+    Cells, LeafEntry, OverflowRef, StoredRef, StoredValue, branch_child, branch_key,
+    branch_key_len, branch_size, cell_len, check_branch, check_leaf, convert_leaf, encode_branch,
+    encode_leaf, inline_entry_len, inline_limit, leaf_cell, leaf_entry, leaf_extent, leaf_inline,
+    leaf_key, leaf_low, leaf_value, max_key_len, overflow_pages, set_slot, write_branch_children,
+    write_cell,
 };
 #[cfg(test)]
 pub(crate) use node::{branch_len, decode_leaf};
@@ -54,11 +58,30 @@ pub(crate) use system::{
     runs_per_value,
 };
 
-/// The file format version this build of the library reads and writes.
+/// The newest file format version this build of the library reads and
+/// writes, which a new file gets.
 ///
-/// It is recorded in every file's header. A file with another version is
-/// refused with [`Error::UnsupportedFormatVersion`](crate::Error::UnsupportedFormatVersion).
-pub const FORMAT_VERSION: u32 = 5;
+/// It is recorded in every file's header. This build reads and writes files
+/// of version 5, the first one released, too, and raises them to this one
+/// when it opens them, unless
+/// [`OpenOptions::upgrade_format`](crate::OpenOptions::upgrade_format) says
+/// not to. A file with any other version is refused with
+/// [`Error::UnsupportedFormatVersion`](crate::Error::UnsupportedFormatVersion).
+pub const FORMAT_VERSION: u32 = 6;
+
+/// The oldest file format version this build of the library reads and
+/// writes: version 5, the first one released.
+pub(crate) const OLDEST_FORMAT_VERSION: u32 = 5;
+
+/// How the leaves a file of format `version` writes lay out their cells:
+/// with varint lengths from version 6 on.
+pub(crate) fn cells_of(version: u32) -> Cells {
+    if version >= 6 {
+        Cells::Varint
+    } else {
+        Cells::Fixed
+    }
+}
 
 /// The first eight bytes of every DaruDB file.
 ///

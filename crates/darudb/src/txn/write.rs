@@ -237,6 +237,7 @@ impl WriteTransaction {
             durable.txn,
             base.page_count,
             free,
+            shared.cells(),
         );
 
         // Reclaim every retained group that no snapshot and no possible
@@ -568,8 +569,11 @@ impl WriteTransaction {
             return Ok(false);
         };
 
+        let cells = btree::Store::cells(&self.space);
+
         if !always
-            && !btree::occupancy(&loader, state.id, root)?.worth_repacking(loader.page_size())
+            && !btree::occupancy(&loader, state.id, root, cells)?
+                .worth_repacking(loader.page_size())
         {
             return Ok(false);
         }

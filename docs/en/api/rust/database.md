@@ -61,7 +61,17 @@ The size of every page in the file, in bytes. It is fixed when the file is creat
 pub fn format_version(&self) -> u32
 ```
 
-The file format version of the file. A build reads and writes one version and refuses a file in any other when it opens it, so this is always [`FORMAT_VERSION`](../../types/rust/constants.md).
+The file format version of the file: 6, [`FORMAT_VERSION`](../../types/rust/constants.md), or 5 for a file that opening did not raise ([`OpenOptions::upgrade_format`](./open-options.md#upgrade-format)). A file in any other version is refused when it is opened.
+
+### upgrade_format
+
+```rust
+pub fn upgrade_format(&self) -> Result<bool>
+```
+
+Raises the file's format version to [`FORMAT_VERSION`](../../types/rust/constants.md), as opening does unless [`OpenOptions::upgrade_format`](./open-options.md#upgrade-format) turns it off, and returns whether it did: `false` for a file in that version already.
+
+It waits for the write transaction, in this process or another, up to the busy timeout, and needs the file to itself: while another process has the file open, it fails with `BUSY` and changes nothing. A build of the library that knows only the older version refuses the file afterwards.
 
 ### begin_read
 

@@ -53,10 +53,25 @@ impl Database {
         self.shared.static_header.page_size
     }
 
-    /// The file format version of the file, which is the one this build reads
-    /// and writes: a file in any other version is refused when it is opened.
+    /// The file format version of the file: 6, which this build writes,
+    /// or 5, the first one released, for a file that opening did not raise
+    /// (see [`OpenOptions::upgrade_format`]). A file in any other version is
+    /// refused when it is opened.
     pub fn format_version(&self) -> u32 {
-        crate::FORMAT_VERSION
+        self.shared.format_version()
+    }
+
+    /// Raises the file's format version to [`FORMAT_VERSION`](crate::FORMAT_VERSION),
+    /// as opening does unless [`OpenOptions::upgrade_format`] turns it off,
+    /// and returns whether it did: `false` for a file in that version
+    /// already.
+    ///
+    /// It waits for the write transaction, in this process or another, up to
+    /// the busy timeout, and needs the file to itself: while another process
+    /// has it open, it fails with [`Error::Busy`]. A build of the library
+    /// that knows only the older version refuses the file afterwards.
+    pub fn upgrade_format(&self) -> Result<bool> {
+        self.shared.upgrade_format()
     }
 
     /// Starts a read transaction: a consistent view of the database as of the
@@ -334,7 +349,7 @@ impl Database {
     ) -> Result<(PathBuf, Database)> {
         create_beside(
             path,
-            self.shared.static_header,
+            self.shared.static_fields(),
             key_block,
             self.shared.data_key.as_ref(),
         )
@@ -356,7 +371,7 @@ impl Database {
             .map_err(|error| io_error(path, io::Error::other(error)))?;
 
         let data_key = DataKey::from_bytes(*bytes);
-        let mut header = self.shared.static_header;
+        let mut header = self.shared.static_fields();
 
         if header.cipher == Cipher::Plain {
             header.cipher = crypto::preferred_cipher();
@@ -586,7 +601,10 @@ pub(crate) fn create_beside(
         .map_err(|source| io_error(path, source))?;
     let file = Arc::new(file);
     let locks = Locks::on(Arc::clone(&file));
-    let options = OpenOptions::new();
+    let mut options = OpenOptions::new();
+
+    // The copy keeps the format version it was given.
+    options.upgrade_format(false);
 
     locks
         .open_alone(options.settings().busy_timeout)
@@ -744,6 +762,12 @@ fn open_io(
 
             shared.set_header(header);
             shared.set_last_barrier(last_barrier);
+            shared.finish_raising(&bytes)?;
+
+            if options.upgrades_format() && shared.format_version() < crate::FORMAT_VERSION {
+                shared.raise_format()?;
+            }
+
             shared.share_open_lock()?;
         }
         // The first write transaction reads the header under the writer
@@ -892,6 +916,7 @@ fn new_file(
         }
     };
     let header = StaticHeader {
+        version: options.new_format_version(),
         page_size,
         file_id,
         cipher,

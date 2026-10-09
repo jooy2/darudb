@@ -301,6 +301,9 @@ enum Action {
 ///
 /// Some seeds commit only with sync commits, the others mostly with deferred
 /// ones, some of them under a window limit small enough to be reached often.
+/// A third of the seeds start from a file of format 5, which opening it again
+/// after the first cut raises to format 6, so that its trees hold leaves of
+/// both layouts from then on.
 /// Odd seeds encrypt the file, with a key under each of the two page ciphers
 /// or, now and then, with a password under the cipher this machine prefers.
 /// The window's time limit is left out: it depends on the clock, and the run
@@ -330,7 +333,11 @@ fn run(seed: u64, page_size: u32, steps: usize) {
 
     let defers = seed % 4 != 0;
     let mut disk = Arc::new(SimDisk::default());
-    let mut db = Database::create_io(disk.clone(), page_size, &options).unwrap();
+    let mut created = options.clone();
+
+    created.upgrade_format(seed % 3 != 2);
+
+    let mut db = Database::create_io(disk.clone(), page_size, &created).unwrap();
     let mut model = State::new();
     // The state after each commit since the last one known to be durable,
     // that one first: what a power cut may go back to.
@@ -475,6 +482,96 @@ fn difference(expected: &State, found: &State) -> String {
     }
 
     lines.join("; ")
+}
+
+/// Raising a file's format version, cut by a power failure or the process's
+/// death at each of its writes and barriers, leaves a file that opens, whole,
+/// in format 5 or format 6, and in format 6 once the opening that raised it
+/// returned. A torn write of the static check is what the copy of the new
+/// static fields is there for.
+#[test]
+fn a_raise_of_the_format_version_cut_anywhere_leaves_one_version_or_the_other() {
+    let mut rng = Rng::new(61);
+
+    for encrypted in [false, true] {
+        let mut old = OpenOptions::new();
+
+        old.max_unsynced_time(Duration::MAX).upgrade_format(false);
+
+        if encrypted {
+            old.key([9; 32]);
+        }
+
+        let mut new = old.clone();
+
+        new.upgrade_format(true);
+
+        let disk = Arc::new(SimDisk::default());
+        let db = Database::create_io(disk.clone(), 4096, &old).unwrap();
+        let mut model = State::new();
+
+        for _ in 0..6 {
+            let (result, next, committed) = random_transaction(&mut rng, &db, &model, 4096, false);
+
+            result.unwrap();
+
+            if committed {
+                model = next;
+            }
+        }
+
+        assert_eq!(db.format_version(), 5);
+        drop(db);
+
+        let image = disk.current();
+        let mut seen = [false; 2];
+
+        for budget in 0..8 {
+            for round in 0..12 {
+                let disk = Arc::new(SimDisk::from_image(image.clone()));
+
+                disk.stop_after(budget);
+
+                let raised =
+                    Database::open_io(disk.clone(), &new).is_ok_and(|db| db.format_version() == 6);
+                let power_cut = round % 2 == 0;
+                let cut = if power_cut {
+                    disk.power_cut(&mut rng)
+                } else {
+                    disk.current()
+                };
+                let disk = Arc::new(SimDisk::from_image(cut));
+                let db = Database::open_io(disk.clone(), &old).unwrap_or_else(|error| {
+                    panic!("budget {budget} round {round}: reopening failed: {error}")
+                });
+                let version = db.format_version();
+
+                assert!(raised <= (version == 6), "budget {budget} round {round}");
+                assert_eq!(contents(&db), model, "budget {budget} round {round}");
+                check_integrity(&db)
+                    .unwrap_or_else(|error| panic!("budget {budget} round {round}: {error}"));
+                seen[usize::from(version == 6)] = true;
+
+                // Opening it again raises it, if it is not yet, and its
+                // leaves go on changing in either layout.
+                drop(db);
+
+                let db = Database::open_io(disk.clone(), &new).unwrap();
+
+                assert_eq!(db.format_version(), 6);
+
+                let (result, next, committed) =
+                    random_transaction(&mut rng, &db, &model, 4096, false);
+
+                result.unwrap();
+                assert_eq!(contents(&db), if committed { next } else { model.clone() });
+                check_integrity(&db)
+                    .unwrap_or_else(|error| panic!("budget {budget} round {round}: {error}"));
+            }
+        }
+
+        assert_eq!(seen, [true, true], "both versions were left by some cut");
+    }
 }
 
 /// Runs the suite with `DARUDB_CRASH_SEEDS` seeds, 400 by default: enough to

@@ -38,7 +38,7 @@ fn main() -> darudb::Result<()> {
 }
 ```
 
-Every handle to a file in one process shares one instance, and some options belong to that instance: the busy timeout, the cache size, the two limits on deferred commits and the password hashing cost of the handle that opened the file first apply to every handle opened after it. The page size applies only when the file is created. A key or password has to be given by every handle to an encrypted file, and each handle has its own schema.
+Every handle to a file in one process shares one instance, and some options belong to that instance: the busy timeout, the cache size, the two limits on deferred commits, the password hashing cost and whether to upgrade the format of the handle that opened the file first apply to every handle opened after it. The page size applies only when the file is created. A key or password has to be given by every handle to an encrypted file, and each handle has its own schema.
 
 ## Defaults
 
@@ -51,6 +51,7 @@ Every handle to a file in one process shares one instance, and some options belo
 | `max_unsynced_pages` | 16384 pages                           |
 | `max_unsynced_time`  | 1 second                              |
 | `password_hashing`   | 19456 KiB, 2 iterations, 1 lane       |
+| `upgrade_format`     | `true`                                |
 | `key`, `password`    | None: the database is not encrypted   |
 | `schema`             | None: the database has no collections |
 
@@ -113,6 +114,20 @@ pub fn max_unsynced_time(&mut self, time: Duration) -> &mut Self
 ```
 
 How long deferred commits may go without a barrier. When the time is up, a thread the engine starts for the purpose makes them durable, as [`Database::sync`](./database.md#sync) would; if a write transaction is running at that moment, the thread waits for it, and a deferred commit made after the time is up is made durable itself. The thread exists only while deferred commits are waiting.
+
+### upgrade_format
+
+```rust
+pub fn upgrade_format(&mut self, upgrade: bool) -> &mut Self
+```
+
+Whether opening a file in an older format version raises it to [`FORMAT_VERSION`](../../types/rust/constants.md), the newest this build writes. On by default.
+
+- **What it costs.** Raising the version rewrites the header and nothing else, with three barriers, whatever the file holds. The leaves written before keep their layout until a write transaction changes them, when they take the newer, smaller one, and [`Database::compact`](./database.md#compact) rewrites the trees where that saves room.
+- **When it happens.** Only while no other process has the file open, in the process that opens it then. With another process in, the file stays as it is until the next such open.
+- **Going back.** A build that knows only the older version refuses the file once it is raised. An application that may go back to such a build turns this off, and raises the version with [`Database::upgrade_format`](./database.md#upgrade-format) once it no longer may. With it off, a new database is created in format version 5, which every release reads.
+
+[File format](../../engine/file-format.md#format-versions) says what changed between the versions.
 
 ### key
 

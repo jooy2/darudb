@@ -50,7 +50,7 @@ pub(crate) fn finish(
     let (header, mut bytes, heads, size, low) = match node {
         // A leaf is laid out as its page already.
         Node::Leaf(leaf) => {
-            let header = header(PageKind::Leaf, 0, leaf.len(), txn, tree)?;
+            let header = header(PageKind::Leaf(leaf.cells()), 0, leaf.len(), txn, tree)?;
             let LeafParts {
                 page,
                 heads,

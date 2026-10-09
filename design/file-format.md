@@ -1,6 +1,6 @@
 # File format
 
-Status: accepted. This document describes file format version 4.
+Status: accepted. This document describes file format version 6, and version 5 where the two differ: the layout of a leaf's entries, and the leaf's page kind.
 
 A DaruDB database is one file, divided into pages of equal size. Page 0 is the header, which says what the file is and where its newest commits are. Every other page is a node of a B+tree or part of an overflow run that holds one large value. This document gives the layout of each. [Commits and recovery](commits-and-recovery.md) says how they change, and [Locking](locking.md) says how several processes share them.
 
@@ -62,7 +62,9 @@ Page 0 is never encrypted: its fields say how to read everything else, including
 | ------ | ---------- | ------------------------------- |
 | 0      | 64         | [Static fields](#static-fields) |
 | 64     | 1          | [Selector](#the-selector)       |
-| 65     | 447        | Reserved                        |
+| 65     | 63         | Reserved                        |
+| 128    | 64         | [Raised static fields](#raising-the-format-version) |
+| 192    | 320        | Reserved                        |
 | 512    | 512        | [Slot 0](#commit-slots)         |
 | 1024   | 512        | Slot 1                          |
 | 1536   | 512        | Slot 2                          |
@@ -70,12 +72,12 @@ Page 0 is never encrypted: its fields say how to read everything else, including
 
 ### Static fields
 
-Written once, when the file is created, and never again.
+Written when the file is created. Only [raising the format version](#raising-the-format-version) writes them again, and it changes the version and the static check alone.
 
 | Offset | Size | Field                                                                                                |
 | ------ | ---- | ---------------------------------------------------------------------------------------------------- |
 | 0      | 8    | Magic: `89 44 61 72 75 44 42 0A` (`\x89DaruDB\n`)                                                    |
-| 8      | 4    | Format version: 4                                                                                    |
+| 8      | 4    | Format version: 6, or 5                                                                              |
 | 12     | 4    | Page size `P`                                                                                        |
 | 16     | 16   | File id: 16 random bytes, generated when the file is created                                         |
 | 32     | 1    | Cipher: 0 for a plain file, 1 for XChaCha20-Poly1305, 2 for XAES-256-GCM ([Encryption](#encryption)) |
@@ -143,7 +145,7 @@ A plain page carries the 24-byte prefix it does not use. That keeps the content 
 
 | Offset | Size | Field                                                                               |
 | ------ | ---- | ----------------------------------------------------------------------------------- |
-| 24     | 1    | Kind: 1 for a leaf, 2 for a branch, 3 for an overflow page                          |
+| 24     | 1    | Kind: 1 or 4 for a leaf, 2 for a branch, 3 for an overflow page                     |
 | 25     | 1    | Level: 0 for a leaf or an overflow page; for a branch, one more than its children's |
 | 26     | 2    | Entry count                                                                         |
 | 28     | 4    | Reserved                                                                            |
@@ -151,13 +153,27 @@ A plain page carries the 24-byte prefix it does not use. That keeps the content 
 | 40     | 8    | Id of the tree the page belongs to                                                  |
 | 48     | 8    | For an overflow page, its position in its run, counting from 0. Otherwise reserved. |
 
+A leaf of kind 1 lays out its entries as format 5 does, and one of kind 4 as format 6 does ([Leaf pages](#leaf-pages)). A file of format 5 holds leaves of kind 1 only; a file of format 6 holds leaves of either kind, since a file raised from format 5 keeps the leaves it had until a write changes them.
+
 Kind, level, tree id and transaction id are redundant with what the parent already knows. They are there so that a page can be understood on its own: the integrity check compares them with the parent's expectations, and salvage uses them to put pages back into trees when the parents are lost.
 
 ## Leaf pages
 
 A leaf holds the tree's entries in ascending key order. Its content area starts with a **slot array**: one 2-byte offset per entry, in key order, each giving where in the page the entry starts. The entries themselves sit in the rest of the content area, in any order, and no two of them share a byte: a leaf whose entries do is refused as `CORRUPTED`, since a writer changes an entry in place. A writer packs them against the end, leaving the free space in the middle, but it may leave the bytes of an entry it removed where they were until an insert needs the room. Every byte of the content area that no slot and no entry covers is zero, so that nothing removed stays in the file.
 
-An entry is:
+In a leaf of kind 4, which format 6 writes, an entry is:
+
+| Size  | Field                                                                     |
+| ----- | ------------------------------------------------------------------------- |
+| 1–2   | Key length `K`, a varint                                                  |
+| 1–3   | Tag, a varint: `2 × V` for an inline value of `V` bytes, 1 for an overflow value |
+| `K`   | Key                                                                       |
+| `V`   | Inline only: the value                                                    |
+| 44    | Overflow only: the [overflow reference](#overflow-runs)                   |
+
+A varint holds seven bits in each byte, the lowest first, and sets the top bit of every byte but its last. It is written in as few bytes as its value needs, and a leaf whose varint takes more, or runs past three bytes, or whose tag is odd and not 1, is refused as `CORRUPTED`, so that every entry has one encoding.
+
+In a leaf of kind 1, which format 5 wrote, an entry is:
 
 | Size | Field                                                      |
 | ---- | ---------------------------------------------------------- |
@@ -167,6 +183,8 @@ An entry is:
 | `K`  | Key                                                        |
 | `V`  | Inline only: the value                                     |
 | 44   | Overflow only: the [overflow reference](#overflow-runs)    |
+
+**Why varints.** The entries of an index are short: a key of a dozen bytes and an empty value, or a value of a few bytes. Five bytes of lengths were a third of such an entry, slot included, and two are enough for nearly all of them: a key shorter than 128 bytes and a value shorter than 64 take one byte each. The indexes of a file of 400,000 objects with 14 indexes took 16% fewer pages. The cost is reading a varint where a length was read at a fixed place, which measured within the noise of every workload. An entry of kind 4 is never longer than the same entry of kind 1, so a leaf of format 5 always fits in a page when a write rewrites it in format 6, and the limits below hold for both.
 
 A leaf holds at least one entry. An empty tree has no leaf at all: its root pointer is null.
 
@@ -244,7 +262,7 @@ Every tree orders its keys by comparing bytes as unsigned numbers, and a key tha
 | -------------------- | --------------------------------------------------------- | ------------- | ----- | ----- |
 | Content area `C`     | `P − 72`                                                  | 4024          | 16312 | 65464 |
 | Longest key          | `⌊(C − 196) / 4⌋`                                         | 957           | 4029  | 16317 |
-| Largest inline entry | `7 + K + V ≤ ⌊C / 4⌋`                                     | 1006          | 4078  | 16366 |
+| Largest inline entry | `2 + len(K) + len(2 × V) + K + V ≤ ⌊C / 4⌋`, where `len` is a varint's size; in format 5, `7 + K + V ≤ ⌊C / 4⌋` | 1006          | 4078  | 16366 |
 | Largest value        | 2^32 − 1 bytes, and memory permitting on 32-bit platforms |               |       |       |
 
 The key limit guarantees that four entries always fit in a node, whatever their keys and whether their values are inline or not. So a node that overflows can always be split into two valid nodes, and a branch always has room for the key a split pushes up. A value whose entry would exceed the inline limit is stored in an overflow run.
@@ -313,8 +331,8 @@ Anything read from the file is untrusted input. A reader checks everything below
 | Step                                                                               | On failure                         |
 | ---------------------------------------------------------------------------------- | ---------------------------------- |
 | The file holds at least 64 bytes, and they start with the magic                    | `NOT_A_DATABASE`                   |
-| The format version is 4                                                            | `UNSUPPORTED_FORMAT_VERSION`       |
-| The static check matches                                                           | `CORRUPTED`                        |
+| The format version is 5 or 6                                                       | `UNSUPPORTED_FORMAT_VERSION`       |
+| The static check matches, or the [raised static fields](#raising-the-format-version) vouch for them | `CORRUPTED`                        |
 | The page size is a power of two from 4096 to 65536, and the cipher is known        | `CORRUPTED`                        |
 | The file holds at least one whole page                                             | `CORRUPTED`                        |
 | An encrypted file is opened with a key or password, and a plain one without        | `KEY_REQUIRED`, `INVALID_ARGUMENT` |
@@ -336,6 +354,26 @@ Checks that span pages, such as whether every key in a child lies between its pa
 | 2       | Commits, trees and encryption.                                                                              |
 | 3       | Version 2 with the [record MAC](#the-record-mac) in encrypted files, and XAES-256-GCM pages.                |
 | 4       | Version 3 with ints in [object keys](objects.md#keys) in the fewest bytes that hold them.                   |
-| 5       | This document: version 4 with the unsynced window in each [commit record](#commit-slots).                   |
+| 5       | Version 4 with the unsynced window in each [commit record](#commit-slots).                                  |
+| 6       | This document: version 5 with leaf entries of kind 4, whose lengths are [varints](#leaf-pages).             |
 
-Version 5 is the format of the first release. A build that writes it refuses a file of any earlier version with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 to 4 never left development.
+Version 5 is the format of the first release. A build refuses a file of any version before it with `UNSUPPORTED_FORMAT_VERSION` and offers no migration: a version 1 file never held data, and versions 2 to 4 never left development. Every version after it comes with a migration from the one before. A build that writes version 6 reads and writes version 5 too, and raises a file of version 5 to version 6 in place ([Raising the format version](#raising-the-format-version)).
+
+### Raising the format version
+
+A file of format 5 becomes a file of format 6 when its version is raised, and nothing else about it changes then: its leaves of kind 1 are valid in format 6, and a write transaction rewrites each one it changes as a leaf of kind 4. Compaction rewrites the trees whose leaves kind 4 would put in noticeably fewer pages. A build opens a file of format 5 and raises it unless the application says not to, which an application that may go back to a build of format 5 does, and then raises it with an explicit call once it no longer may. A new file is created in format 6, or in format 5 when raising is turned off, so that a release of format 5 can open it.
+
+The version is raised only while no other process has the file open: by the process that opens it then, once it has recovered it, or by the explicit call, which takes the [open lock](locking.md#the-lock-bytes) exclusively for the purpose and fails with `BUSY` when it cannot. A process that has the file open never sees its version change.
+
+The static check covers the version, and only a one-byte write is atomic, so the two cannot change together. The raise writes, each made durable by a barrier before the next begins:
+
+1. The new static fields, version 6 and its static check, at offset 128 of page 0: the **raised static fields**.
+1. Byte 8 of page 0, the version's lowest byte, from 5 to 6. The other bytes of the version are the same in both.
+1. The new static check, at offset 48.
+
+A power cut keeps any of the writes since the last barrier, so without the barriers between them a new check could survive without the new version, and a build of format 5 would take the file for damaged. With them:
+
+- A cut before step 2 is durable leaves version 5 and its check, which every build reads; the raised static fields are reserved bytes to it.
+- A cut after it leaves version 6 with the check of version 5, or a check torn between the two. A build of format 5 refuses version 6 before it looks at the check. A build of format 6 finds the static check failing and the raised static fields holding the same bytes 0 to 47, with a check that passes, and reads those; the first process to open the file alone writes the new check.
+
+No leaf of kind 4 is written before step 2 is durable, so a build of format 5 refuses the file before it could meet one.

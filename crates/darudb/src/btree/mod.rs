@@ -23,7 +23,7 @@ mod write;
 use std::sync::Arc;
 
 use crate::error::Result;
-use crate::format::{Check, OverflowRef, Pointer};
+use crate::format::{Cells, Check, OverflowRef, Pointer};
 
 pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
@@ -51,13 +51,19 @@ pub(crate) trait Load {
 
     /// The node `pointer` names, decoded for a write transaction to change,
     /// as `store` has it change a node: taken from the page cache when its
-    /// page is young, and copied otherwise.
+    /// page is young, and copied otherwise, and a leaf laid out in the cells
+    /// `store` writes.
     ///
     /// A young page is one the next commits of the window write again, and
     /// taking it saves the copy a small deferred commit made of every node
     /// it changed. An older page is the state readers go on reading, and a
     /// transaction that took it and was then dropped would have left the
     /// cache without it.
+    ///
+    /// A leaf that a file of format 5 wrote, in a file raised to format 6, is
+    /// rewritten in the cells of format 6 the first time a write transaction
+    /// changes it, which reads and writes the cells once, so that the file
+    /// takes the smaller cells over as it changes.
     fn node_to_change<S: Store>(
         &self,
         store: &S,
@@ -65,10 +71,17 @@ pub(crate) trait Load {
         tree: u64,
         level: Option<u8>,
     ) -> Result<Node> {
-        if pointer.txn > store.young_after() {
-            self.load_to_change(pointer, tree, level)
+        let node = if pointer.txn > store.young_after() {
+            self.load_to_change(pointer, tree, level)?
         } else {
-            Ok(self.load(pointer, tree, level)?.to_node())
+            self.load(pointer, tree, level)?.to_node()
+        };
+
+        match node {
+            Node::Leaf(leaf) if leaf.cells() != store.cells() => Ok(Node::Leaf(
+                leaf.into_cells(store.cells()).map_err(read::internal)?,
+            )),
+            node => Ok(node),
         }
     }
 
@@ -111,4 +124,8 @@ pub(crate) trait Store {
 
     /// How many pages [`write_run`](Self::write_run) should get at most.
     fn run_pages(&self) -> usize;
+
+    /// The cells this transaction lays its leaves out in: those of the
+    /// file's format version.
+    fn cells(&self) -> Cells;
 }

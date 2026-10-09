@@ -158,7 +158,7 @@ def test_the_versions_match_the_package() -> None:
     assert version is not None
     assert darudb.__version__ == version.group(1)
     assert re.fullmatch(r"\d+\.\d+\.\d+", darudb.ENGINE_VERSION)
-    assert darudb.FORMAT_VERSION == 5
+    assert darudb.FORMAT_VERSION == 6
 
 
 def test_a_schema_refuses_what_is_not_a_collection() -> None:

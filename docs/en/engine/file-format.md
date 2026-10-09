@@ -7,7 +7,7 @@ order: 3
 
 This page summarises how a DaruDB database file is laid out: its pages, the header and its three commit slots, the pointers that verify every page, and how the format is versioned.
 
-The specification, with every offset and field, is [design/file-format.md](https://github.com/jooy2/darudb/blob/main/design/file-format.md) in the repository. It describes format version 5, the one this build reads and writes.
+The specification, with every offset and field, is [design/file-format.md](https://github.com/jooy2/darudb/blob/main/design/file-format.md) in the repository. It describes format version 6, the one this build writes, and version 5, which it reads and writes too.
 
 ## Pages
 
@@ -25,8 +25,9 @@ Page 0 is never encrypted, because it says how to read everything else, the key 
 
 | Bytes | What they hold |
 | --- | --- |
-| 0 to 63 | The static fields: the magic bytes `\x89DaruDB\n`, the format version, the page size, a file id of 16 random bytes, the cipher, and a check of them all. Written once, when the file is created. |
+| 0 to 63 | The static fields: the magic bytes `\x89DaruDB\n`, the format version, the page size, a file id of 16 random bytes, the cipher, and a check of them all. Written when the file is created, and again only to raise its format version. |
 | 64 | The selector |
+| 128 to 191 | The raised static fields: the new static fields, which raising the format version writes first |
 | 512 to 2047 | Three commit slots of 512 bytes each |
 
 The magic's first byte is outside ASCII, so the file is never mistaken for text and a transfer that strips the eighth bit is caught. Its last byte, a newline, catches a transfer that rewrites line endings.
@@ -78,6 +79,7 @@ Every tree has an id, which each of its pages carries, and a tree id is never re
 | 16 and up | Trees of the layers above: the storage kernel's trees, and the collections and indexes of the object layer |
 
 - **Leaves** hold entries in key order, through an array of 2-byte offsets at the start of their content. **Branches** hold child pointers and the separator keys between them.
+- **An entry's lengths are varints** in format 6: the key's length and a tag that gives the value's length or says the value is in an overflow run, each in one byte for a key shorter than 128 bytes and a value shorter than 64. Format 5 spent five bytes on them. An index's entries are short, so its leaves hold about a fifth more of them. A leaf's page kind says which layout it has, so a file raised from format 5 holds leaves of both.
 - **Leaves are not linked to their neighbours.** In a copy-on-write tree, a link would mean rewriting the neighbour every time a leaf is copied, so a walk keeps its path from the root instead.
 - **A large value** goes into an overflow run of consecutive pages, and its entry holds a reference of 44 bytes with a check over the checks of the run's pages.
 - **Keys order as unsigned bytes**, and nothing else. A key is at most a quarter of a page, less a few bytes, which guarantees that four entries always fit in a node, so a node that overflows can always be split.
@@ -97,8 +99,13 @@ Checks that span several pages, such as whether every key under a branch lies be
 
 The header's format version names the layout of everything on disk, and any change to what is written changes it.
 
-- **This build reads and writes format version 5.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
+- **This build writes format version 6, and reads and writes version 5 too.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
 - **Version 5 is the format of the first release**, version 1.0.0 of the Node.js and Dart packages. Versions 1 to 4 never left development, so a file one of their builds wrote is refused, not upgraded.
-- **Every later format version comes with a migration from the one before.** The plan is that opening a file in an older format upgrades it, unless an option turns that off for an application that may roll back to an older build, which then upgrades the file with an explicit call.
+- **Version 6 writes the lengths in a leaf's entries as varints.** A file of 400,000 objects with 14 indexes takes 8% fewer pages than in version 5, 126 MiB against 138 MiB, and compacts to 110 MiB against 119 MiB. Reads and writes measured as fast as in version 5, within the benchmarks' noise of about 2%.
+- **Every later format version comes with a migration from the one before.** Opening a file of version 5 raises it to version 6, while no other process has the file open, unless <LangCode rust="OpenOptions::upgrade_format(false)" node="upgradeFormat: false" dart="upgradeFormat: false" python="upgrade_format=False" /> turns that off.
 
-In Rust, `darudb::FORMAT_VERSION` is the version a build reads and writes ([constants](../types/rust/constants.md)), and in Node.js, the package exports it as `FORMAT_VERSION`.
+Raising the version rewrites the header and nothing else. The leaves the file holds keep their layout, which version 6 reads, until a write changes them and writes them in the new one; compaction rewrites the trees where the new layout saves room. A release that knows only version 5 refuses the file once it is raised, so an application that may go back to one turns raising off, which also creates new files in version 5, and calls <LangCode rust="Database::upgrade_format" node="db.upgradeFormat()" dart="db.upgradeFormat()" python="db.upgrade_format()" /> once it no longer may. That call needs the file to itself, and fails with `BUSY` while another process has it open.
+
+The static check covers the version, and only a one-byte write is atomic, so the raise writes the new static fields to bytes 128 to 191 first, then the version's byte, then the new check, with a barrier after each. A cut anywhere leaves a file that opens in one version or the other: once the version's byte is written, a check that does not match it is vouched for by the copy, and the next process to open the file alone writes it.
+
+The newest version a build writes is <LangCode rust="darudb::FORMAT_VERSION" node="FORMAT_VERSION" dart="formatVersion" python="darudb.FORMAT_VERSION" /> ([constants](../types/rust/constants.md)).

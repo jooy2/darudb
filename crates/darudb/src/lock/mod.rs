@@ -357,6 +357,51 @@ impl Locks {
         Ok(())
     }
 
+    /// Takes the open lock, which this process holds shared, exclusively, if
+    /// no other process has the file open, and holds it and the recovery lock
+    /// as [`Access::Alone`] does, until [`share`](Self::share). Returns
+    /// `false`, holding the open lock shared as before, when another process
+    /// has the file open. Waits up to `timeout` for the recovery lock, which a
+    /// process holds while it opens the file.
+    ///
+    /// No other process can take the open lock while this one holds the
+    /// recovery lock, so the processes that have the file open are the ones
+    /// that hold it shared. A Unix-like system converts the lock in place, or
+    /// leaves it as it was. Windows does not convert a lock its own handle
+    /// holds, so the shared lock is released first, and taken again if the
+    /// exclusive one is refused: in that gap no process can open the file,
+    /// and the others go on holding the lock shared.
+    pub(crate) fn alone(&self, timeout: Duration) -> Result<bool, LockError> {
+        let deadline = Instant::now().checked_add(timeout);
+
+        self.lock_recovery(deadline)?;
+
+        let alone = if cfg!(windows) {
+            self.unlock(OPEN_BYTE, 1)
+                .and_then(|()| self.try_lock(OPEN_BYTE, 1, Mode::Exclusive))
+                .map_err(LockError::Io)
+                .and_then(|alone| {
+                    if !alone {
+                        poll(deadline, || {
+                            self.try_lock(OPEN_BYTE, 1, Mode::Shared)
+                                .map_err(LockError::Io)
+                        })?;
+                    }
+
+                    Ok(alone)
+                })
+        } else {
+            self.try_lock(OPEN_BYTE, 1, Mode::Exclusive)
+                .map_err(LockError::Io)
+        };
+
+        if !matches!(alone, Ok(true)) {
+            self.unlock_recovery();
+        }
+
+        alone
+    }
+
     /// Takes the recovery lock and then the open lock exclusively, waiting up
     /// to `timeout` for every other process to finish opening the file or give
     /// up on it, and holds them as [`Access::Alone`] does. Creating a database

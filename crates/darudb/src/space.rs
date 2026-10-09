@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::btree::Store;
 use crate::error::Result;
-use crate::format::Check;
+use crate::format::{Cells, Check};
 use crate::storage::Pager;
 
 /// The file never reaches this many bytes: the lock bytes start there.
@@ -77,17 +77,21 @@ pub(crate) struct Space {
     changes: u64,
     /// Set while the commit settles the allocator trees.
     settling: bool,
+    /// How the leaves this transaction writes lay out their cells.
+    cells: Cells,
 }
 
 impl Space {
     /// The space of a transaction `txn` whose base commit has `page_count`
-    /// pages and the given free runs, and whose durable commit is `durable`.
+    /// pages and the given free runs, and whose durable commit is `durable`,
+    /// which writes leaves in `cells`.
     pub(crate) fn new(
         pager: Arc<Pager>,
         txn: u64,
         durable: u64,
         page_count: u64,
         free: BTreeMap<u64, u64>,
+        cells: Cells,
     ) -> Self {
         let max_page_count = LOCK_BASE / pager.page_size() as u64;
 
@@ -106,6 +110,7 @@ impl Space {
             set_aside: Vec::new(),
             changes: 0,
             settling: false,
+            cells,
         }
     }
 
@@ -332,6 +337,10 @@ impl Store for Space {
         self.txn
     }
 
+    fn cells(&self) -> Cells {
+        self.cells
+    }
+
     fn young_after(&self) -> u64 {
         self.young_after
     }
@@ -454,7 +463,14 @@ mod tests {
         ));
 
         // Transaction 4, whose durable commit is 2.
-        Space::new(pager, 4, 2, page_count, free.iter().copied().collect())
+        Space::new(
+            pager,
+            4,
+            2,
+            page_count,
+            free.iter().copied().collect(),
+            Cells::Varint,
+        )
     }
 
     #[test]

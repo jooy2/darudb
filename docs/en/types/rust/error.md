@@ -66,7 +66,7 @@ NotADatabase { path: PathBuf }
 UnsupportedFormatVersion { path: PathBuf, found: u32, supported: u32 }
 ```
 
-`UNSUPPORTED_FORMAT_VERSION`. The file is a DaruDB database in a format this build does not read. `found` is the version the file records and `supported` the one this build reads: the file format version, [`FORMAT_VERSION`](./constants.md#format-version), or the object format version of the schema stored in the file.
+`UNSUPPORTED_FORMAT_VERSION`. The file is a DaruDB database in a format this build does not read. `found` is the version the file records and `supported` the newest this build reads: the file format version, [`FORMAT_VERSION`](./constants.md#format-version), or the object format version of the schema stored in the file.
 
 ### Corrupted
 

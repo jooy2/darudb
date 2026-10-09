@@ -39,15 +39,15 @@ pub enum Error {
     },
     /// The file is a DaruDB database in a format this build of the library
     /// cannot read: a file format version, or an object format version of
-    /// the schema stored in it, other than the one this build reads and
-    /// writes. That is a file a newer build wrote, or one a development build
-    /// wrote before the first release.
+    /// the schema stored in it, that this build does not read and write.
+    /// That is a file a newer build wrote, or one a development build wrote
+    /// before the first release.
     UnsupportedFormatVersion {
         /// The file that was opened.
         path: PathBuf,
         /// The version recorded in the file.
         found: u32,
-        /// The version this build reads and writes.
+        /// The newest version this build reads and writes.
         supported: u32,
     },
     /// The file is a DaruDB database, but what it records is impossible, so
@@ -197,7 +197,7 @@ impl fmt::Display for Error {
                 supported,
             } => write!(
                 f,
-                "`{}` uses format version {found}, and this build reads version {supported}",
+                "`{}` uses format version {found}, which this build does not read; the newest it reads is {supported}",
                 path.display()
             ),
             Error::Corrupted { path, reason } => {

@@ -12,6 +12,7 @@
 
 use super::check::{CHECK_LEN, Check};
 use super::le_u64;
+use super::node::Cells;
 
 /// Where the page header starts, after the prefix that holds an encrypted
 /// page's nonce.
@@ -34,15 +35,35 @@ pub(crate) fn check_offset(page_size: usize) -> usize {
     page_size - CHECK_LEN
 }
 
-/// What a page holds.
+/// What a page holds, which the first byte of its header names: 1 for a
+/// leaf with the fixed cells of format 5, 2 for a branch, 3 for an overflow
+/// page, and 4 for a leaf with the varint cells of format 6. A library that
+/// knows only format 5 refuses a page of kind 4, as it refuses the file whose
+/// header says format 6 before it reads any page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PageKind {
-    /// A leaf of a B+tree.
-    Leaf = 1,
+    /// A leaf of a B+tree, with its cells in the layout given.
+    Leaf(Cells),
     /// A branch of a B+tree.
-    Branch = 2,
+    Branch,
     /// One page of an overflow run.
-    Overflow = 3,
+    Overflow,
+}
+
+impl PageKind {
+    /// Whether the page is a leaf, in either layout.
+    pub(crate) fn is_leaf(self) -> bool {
+        matches!(self, Self::Leaf(_))
+    }
+
+    fn byte(self) -> u8 {
+        match self {
+            Self::Leaf(Cells::Fixed) => 1,
+            Self::Branch => 2,
+            Self::Overflow => 3,
+            Self::Leaf(Cells::Varint) => 4,
+        }
+    }
 }
 
 /// The 32-byte header at offset 24 of every page.
@@ -68,7 +89,7 @@ impl PageHeader {
     pub(crate) fn write(&self, page: &mut [u8]) {
         let header = &mut page[PAGE_HEADER_OFFSET..CONTENT_OFFSET];
 
-        header[0] = self.kind as u8;
+        header[0] = self.kind.byte();
         header[1] = self.level;
         header[2..4].copy_from_slice(&self.count.to_le_bytes());
         header[4..8].copy_from_slice(&[0; 4]);
@@ -81,9 +102,10 @@ impl PageHeader {
     pub(crate) fn read(page: &[u8]) -> Result<Self, &'static str> {
         let header = &page[PAGE_HEADER_OFFSET..CONTENT_OFFSET];
         let kind = match header[0] {
-            1 => PageKind::Leaf,
+            1 => PageKind::Leaf(Cells::Fixed),
             2 => PageKind::Branch,
             3 => PageKind::Overflow,
+            4 => PageKind::Leaf(Cells::Varint),
             _ => return Err("the page is of no known kind"),
         };
         let level = header[1];
@@ -165,7 +187,7 @@ mod tests {
         let mut page = vec![0u8; 4096];
 
         PageHeader {
-            kind: PageKind::Leaf,
+            kind: PageKind::Leaf(Cells::Fixed),
             level: 0,
             count: 1,
             txn: 1,
@@ -180,6 +202,27 @@ mod tests {
         page[24] = 9;
 
         assert!(PageHeader::read(&page).is_err());
+    }
+
+    #[test]
+    fn each_leaf_layout_has_a_kind_of_its_own() {
+        let mut page = vec![0u8; 4096];
+
+        for (cells, byte) in [(Cells::Fixed, 1), (Cells::Varint, 4)] {
+            let header = PageHeader {
+                kind: PageKind::Leaf(cells),
+                level: 0,
+                count: 1,
+                txn: 1,
+                tree: 16,
+                index: 0,
+            };
+
+            header.write(&mut page);
+
+            assert_eq!(page[24], byte);
+            assert_eq!(PageHeader::read(&page), Ok(header));
+        }
     }
 
     #[test]

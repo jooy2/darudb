@@ -883,9 +883,12 @@ mod tests {
         let catalog_page = record.catalog.page;
         let mut catalog = page_of(&mut image, catalog_page);
         let header = crate::format::PageHeader::read(&catalog).unwrap();
+        let crate::format::PageKind::Leaf(cells) = header.kind else {
+            panic!("the catalog is not one leaf");
+        };
         let (at, len, old) = (0..usize::from(header.count))
             .find_map(
-                |index| match crate::format::leaf_entry(&catalog, index).unwrap() {
+                |index| match crate::format::leaf_entry(cells, &catalog, index).unwrap() {
                     (b"t", StoredRef::Inline(value)) => Some((
                         value.as_ptr() as usize - catalog.as_ptr() as usize,
                         value.len(),

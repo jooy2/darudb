@@ -25,7 +25,7 @@ use super::node::{Branch, Child, Keys, Node, NodeRef};
 use super::read::internal;
 use super::{Load, Store};
 use crate::error::Result;
-use crate::format::{LeafEntry, POINTER_LEN, Pointer, branch_key_len, content_len};
+use crate::format::{Cells, LeafEntry, POINTER_LEN, Pointer, branch_key_len, content_len};
 
 /// How full the pages of a tree are.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -47,8 +47,16 @@ impl Occupancy {
     }
 }
 
-/// How full the pages of the committed tree under `root` are.
-pub(crate) fn occupancy<L: Load>(load: &L, tree: u64, root: &Pointer) -> Result<Occupancy> {
+/// How full the pages of the committed tree under `root` are, its leaves
+/// measured in `cells`: a file raised to format 6 repacks the trees whose
+/// leaves of format 5 the smaller cells would take noticeably fewer pages
+/// of.
+pub(crate) fn occupancy<L: Load>(
+    load: &L,
+    tree: u64,
+    root: &Pointer,
+    cells: Cells,
+) -> Result<Occupancy> {
     let mut occupancy = Occupancy::default();
     let mut pending = vec![(*root, None)];
 
@@ -57,7 +65,7 @@ pub(crate) fn occupancy<L: Load>(load: &L, tree: u64, root: &Pointer) -> Result<
         let node = NodeRef::Loaded(Arc::clone(&loaded));
 
         occupancy.pages += 1;
-        occupancy.used += node.size() as u64;
+        occupancy.used += node.size_in(cells)? as u64;
 
         if !node.is_leaf() {
             let below = Some(loaded.level() - 1);
@@ -83,6 +91,7 @@ pub(crate) fn repack<L: Load, S: Store>(
     };
     let page_size = load.page_size();
     let capacity = content_len(page_size);
+    let cells = store.cells();
     let mut leaves = Vec::new();
     let mut entries: Vec<LeafEntry> = Vec::new();
     let mut size = 0;
@@ -107,12 +116,12 @@ pub(crate) fn repack<L: Load, S: Store>(
         match node {
             Node::Leaf(leaf) => {
                 for entry in leaf.to_entries().map_err(internal)? {
-                    if size + entry.len() > capacity && !entries.is_empty() {
+                    if size + entry.len(cells) > capacity && !entries.is_empty() {
                         leaves.push(write_leaf(store, page_size, &mut entries)?);
                         size = 0;
                     }
 
-                    size += entry.len();
+                    size += entry.len(cells);
                     entries.push(entry);
                 }
             }
@@ -153,7 +162,7 @@ fn write_leaf<S: Store>(
     page_size: usize,
     entries: &mut Vec<LeafEntry>,
 ) -> Result<(Vec<u8>, Child)> {
-    let leaf = Leaf::from_entries(page_size, entries);
+    let leaf = Leaf::from_entries(page_size, store.cells(), entries);
     let first = mem::take(&mut entries[0].key);
     let page = store.allocate()?;
 

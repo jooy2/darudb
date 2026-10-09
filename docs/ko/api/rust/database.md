@@ -61,7 +61,17 @@ pub fn page_size(&self) -> u32
 pub fn format_version(&self) -> u32
 ```
 
-파일의 파일 형식 버전입니다. 빌드 하나는 한 가지 버전만 읽고 쓰며, 다른 버전의 파일은 열 때 거부합니다. 그래서 이 값은 언제나 [`FORMAT_VERSION`](../../types/rust/constants.md)입니다.
+파일의 파일 형식 버전입니다. [`FORMAT_VERSION`](../../types/rust/constants.md)인 6이거나, 열 때 올리지 않은 파일이라면 5입니다([`OpenOptions::upgrade_format`](./open-options.md#upgrade-format)). 그 밖의 버전 파일은 열 때 거부합니다.
+
+### upgrade_format
+
+```rust
+pub fn upgrade_format(&self) -> Result<bool>
+```
+
+파일의 형식 버전을 [`FORMAT_VERSION`](../../types/rust/constants.md)으로 올리고, 올렸는지 돌려줍니다. [`OpenOptions::upgrade_format`](./open-options.md#upgrade-format)을 끄지 않았다면 여는 쪽이 하는 일과 같습니다. 이미 그 버전인 파일이면 `false`를 돌려줍니다.
+
+이 프로세스든 다른 프로세스든 쓰기 트랜잭션을 바쁨 대기 시간까지 기다리고, 파일을 혼자 써야 합니다. 다른 프로세스가 파일을 열고 있으면 아무것도 바꾸지 않고 `BUSY`로 실패합니다. 올린 뒤에는 예전 버전만 아는 빌드가 파일을 거부합니다.
 
 ### begin_read
 

@@ -405,6 +405,45 @@ fn selector(db: &Database) -> Selector {
     Selector::decode(bytes[SELECTOR_OFFSET]).unwrap()
 }
 
+/// Raising the format version of an open file needs the file alone: while
+/// another process has it open, the call fails with `BUSY` and changes
+/// nothing, and once that process has closed it, the call raises it. A
+/// process that opens the file afterwards writes leaves in the newer cells
+/// beside the older ones.
+#[test]
+fn the_format_version_of_a_file_another_process_has_open_is_not_raised() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.darudb");
+    let mut options = options_for(&path);
+
+    options.upgrade_format(false);
+
+    let db = options.open(&path).unwrap();
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("fill 1"), "done");
+    assert_eq!(db.upgrade_format().unwrap_err().code(), "BUSY");
+    assert_eq!(db.format_version(), 5);
+    assert!(other.finish().0);
+
+    assert!(db.upgrade_format().unwrap());
+    assert_eq!(db.format_version(), 6);
+    assert!(!db.upgrade_format().unwrap(), "raised already");
+
+    let mut other = helper(&path);
+
+    assert_eq!(other.ask("put k 2"), "done");
+    assert_eq!(other.ask("get k"), "2");
+    assert!(other.finish().0);
+
+    let read = db.begin_read().unwrap();
+
+    assert_eq!(read.get("t", b"k").unwrap().as_deref(), Some(&b"2"[..]));
+    assert_eq!(read.len("r").unwrap(), 300);
+    drop(read);
+    crate::crash::check_integrity(&db).unwrap();
+}
+
 #[test]
 fn a_process_that_opens_a_file_another_has_open_does_not_recover_it() {
     let dir = tempfile::tempdir().unwrap();
