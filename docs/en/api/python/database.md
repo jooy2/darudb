@@ -36,6 +36,7 @@ def open(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    upgrade_format: bool = True,
 ) -> Database: ...
 ```
 
@@ -52,6 +53,9 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `key` | A key of 32 bytes, which encrypts a new file and opens an encrypted one |
 | `password` | A password, which does what `key` does through a key derived with Argon2id. A key and a password together fail with `INVALID_ARGUMENT` |
 | `password_hashing` | What deriving a key from a password costs, for a new file and for `set_password`. See [PasswordHashing](../../types/python/password-hashing.md) |
+| `upgrade_format` | Whether a file in an older format version is raised to the newest this package writes, [FORMAT_VERSION](../../types/python/constants.md): `True` by default. See below |
+
+Raising a file's format version rewrites the header and nothing else, with three barriers, and only while no other process has the file open. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](#compact) rewrites the trees where that saves room. A release that knows only the older version refuses the file once it is raised, so an application that may go back to such a release passes `upgrade_format=False`, and calls [`upgrade_format`](#upgrade-format) once it no longer may. With `False`, a new database is created in format version 5, which every release reads.
 
 Migration functions run inside this call, one version step after another, and receive a [Migrating](./migrating.md). They have to be plain functions here: a coroutine function fails with `INVALID_ARGUMENT`, whose message names `open_async`. If a function raises, the file keeps its old schema and data, and `open` raises the same error.
 
@@ -94,6 +98,7 @@ async def open_async(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    upgrade_format: bool = True,
 ) -> Database: ...
 ```
 
@@ -185,7 +190,7 @@ The size of every page in the file, in bytes. A file keeps the page size it was 
 def format_version(self) -> int: ...
 ```
 
-The file format version recorded in the file. A file this build opens has the version of [FORMAT_VERSION](../../types/python/constants.md).
+The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/python/constants.md)), or 5 for a file that opening did not raise, with `upgrade_format=False`.
 
 ### is_encrypted
 
@@ -327,6 +332,22 @@ async def compact_async(self) -> CompactReport: ...
 ```
 
 `compact` on the thread pool, after this event loop's earlier asynchronous writes on the file.
+
+### upgrade_format
+
+```python
+def upgrade_format(self) -> bool: ...
+```
+
+Raises the file's format version to [FORMAT_VERSION](../../types/python/constants.md), as `open` does unless `upgrade_format` is `False` there, and returns whether it did: `False` for a file in that version already. It waits for the writer as a write does, and needs the file to itself: while another process has the file open, it raises `BUSY` and changes nothing. It is refused with `INVALID_ARGUMENT` where `compact` is. A release that knows only the older version refuses the file afterwards.
+
+### upgrade_format_async
+
+```python
+async def upgrade_format_async(self) -> bool: ...
+```
+
+`upgrade_format` on the thread pool, after this event loop's earlier asynchronous writes on the file.
 
 ### set_key
 

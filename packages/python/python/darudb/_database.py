@@ -534,6 +534,7 @@ def check_options(
     busy_timeout: object = None,
     cache_size: object = None,
     password_hashing: object = None,
+    upgrade_format: object = True,
 ) -> None:
     """Refuses an option of the wrong kind before it reaches the engine, which
     checks the ranges."""
@@ -542,6 +543,9 @@ def check_options(
 
     if type(create) is not bool:
         raise invalid(f"create is True or False, not {create!r}")
+
+    if type(upgrade_format) is not bool:
+        raise invalid(f"upgrade_format is True or False, not {upgrade_format!r}")
 
     if page_size is not None:
         whole("page_size", page_size, high=2**32)
@@ -619,6 +623,7 @@ class Database:
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
+        upgrade_format: bool = True,
     ) -> Database:
         """Opens the database at ``path``, creating it if nothing exists there,
         and stores, checks or migrates its schema.
@@ -634,6 +639,15 @@ class Database:
         - ``key`` or ``password``: encrypts a new database, or opens an
           encrypted one. A key is 32 bytes; a password is hashed with Argon2id
           at the cost ``password_hashing`` sets.
+        - ``upgrade_format``: whether opening a file in an older format version
+          raises it to the newest, ``FORMAT_VERSION``, while no other process
+          has it open. True by default. Raising it rewrites the header only;
+          the older leaves take the newer, smaller layout as writes change
+          them, and ``compact`` rewrites the trees where that saves room. A
+          release that knows only the older version cannot open the file
+          afterwards, so an application that may go back to one passes False,
+          and calls ``upgrade_format`` once it no longer may; a new database
+          is then created in format version 5, which every release reads.
         """
         location = os.fspath(path)
         check_options(
@@ -643,6 +657,7 @@ class Database:
             busy_timeout=busy_timeout,
             cache_size=cache_size,
             password_hashing=password_hashing,
+            upgrade_format=upgrade_format,
         )
         check_migrations(migrations)
         native = _native.open(
@@ -656,6 +671,7 @@ class Database:
             key=key,
             password=password,
             password_hashing=None if password_hashing is None else password_hashing.spec(),
+            upgrade_format=upgrade_format,
         )
 
         if isinstance(native, _native.NativeTransaction):
@@ -677,6 +693,7 @@ class Database:
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
+        upgrade_format: bool = True,
     ) -> Database:
         """``open`` on the package's thread pool. A migration's ``run`` may be
         a coroutine function, given an ``AsyncMigrating``."""
@@ -694,6 +711,7 @@ class Database:
             key=key,
             password=password,
             password_hashing=password_hashing,
+            upgrade_format=upgrade_format,
         )
 
     @staticmethod
@@ -799,7 +817,8 @@ class Database:
 
     @property
     def format_version(self) -> int:
-        """The file format version recorded in the file."""
+        """The file format version recorded in the file: 6, which this package
+        writes, or 5 for a file that opening did not raise."""
         return self._native.format_version
 
     @property
@@ -888,6 +907,17 @@ class Database:
 
         return BackupReport(**report)
 
+    def upgrade_format(self) -> bool:
+        """Raises the file's format version to ``FORMAT_VERSION``, as opening
+        does unless ``upgrade_format`` is False, and returns whether it did:
+        False for a file in that version already. It waits for the writer,
+        and needs the file to itself: while another process has it open, it
+        is ``BUSY``. A release that knows only the older version cannot open
+        the file afterwards."""
+        self._refuse_while_async_writes("upgrade_format")
+
+        return self._native.upgrade_format()
+
     def compact(self) -> CompactReport:
         """Makes the file smaller in place: the trees whose pages inserts left
         part empty are written again, full, and the file's end moves into free
@@ -944,6 +974,13 @@ class Database:
         return await run(
             lambda: self.backup(path, key=key, password=password, password_hashing=password_hashing)
         )
+
+    async def upgrade_format_async(self) -> bool:
+        """``upgrade_format`` on the package's thread pool, after this process's
+        writes on the file."""
+        from ._async import after_writes
+
+        return await after_writes(self, self._native.upgrade_format)
 
     async def compact_async(self) -> CompactReport:
         """``compact`` on the package's thread pool, after this process's writes on the file."""

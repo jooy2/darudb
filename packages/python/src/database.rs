@@ -109,6 +109,12 @@ impl NativeDatabase {
         check_report(py, &report)
     }
 
+    /// Raises the file's format version to the newest, and says whether it
+    /// did.
+    fn upgrade_format(&self, py: Python<'_>) -> PyResult<bool> {
+        self.with(py, Database::upgrade_format)
+    }
+
     /// Makes the file smaller in place.
     fn compact<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let report = self.with(py, Database::compact)?;
@@ -279,6 +285,7 @@ fn check_report<'py>(py: Python<'py>, report: &CheckReport) -> PyResult<Bound<'p
     key = None,
     password = None,
     password_hashing = None,
+    upgrade_format = None,
 ))]
 #[expect(
     clippy::too_many_arguments,
@@ -296,6 +303,7 @@ fn open<'py>(
     key: Option<&Bound<'py, PyAny>>,
     password: Option<&Bound<'py, PyAny>>,
     password_hashing: Option<(u32, u32, u32)>,
+    upgrade_format: Option<bool>,
 ) -> PyResult<Bound<'py, PyAny>> {
     one_secret(py, key, password)?;
 
@@ -335,6 +343,10 @@ fn open<'py>(
 
     if let Some((memory, iterations, parallelism)) = password_hashing {
         options.password_hashing(memory, iterations, parallelism);
+    }
+
+    if let Some(upgrade) = upgrade_format {
+        options.upgrade_format(upgrade);
     }
 
     let opening = py

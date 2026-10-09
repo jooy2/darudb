@@ -520,6 +520,7 @@ async def open_async(
     key: bytes | bytearray | memoryview | None,
     password: str | bytes | bytearray | None,
     password_hashing: PasswordHashing | None,
+    upgrade_format: bool,
 ) -> Database:
     check_options(
         schema=schema,
@@ -528,6 +529,7 @@ async def open_async(
         busy_timeout=busy_timeout,
         cache_size=cache_size,
         password_hashing=password_hashing,
+        upgrade_format=upgrade_format,
     )
     check_migrations(migrations)
     native = await run(
@@ -543,6 +545,7 @@ async def open_async(
             key=key,
             password=password,
             password_hashing=None if password_hashing is None else password_hashing.spec(),
+            upgrade_format=upgrade_format,
         )
     )
 

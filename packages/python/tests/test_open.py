@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -189,6 +190,7 @@ def test_options_of_the_wrong_kind_are_invalid(path: Path) -> None:
         {"busy_timeout": "5"},
         {"busy_timeout": float("inf")},
         {"create": 1},
+        {"upgrade_format": 0},
         {"schema": "users"},
         {"password_hashing": (1, 1, 1)},
     ):
@@ -210,3 +212,51 @@ def test_options_of_the_wrong_kind_are_invalid(path: Path) -> None:
             make()
 
         assert error.value.code == "INVALID_ARGUMENT"
+
+
+def test_a_file_of_format_5_is_raised_by_opening_it_or_by_the_call(tmp_path: Path) -> None:
+    for name, by_call in (("opened.darudb", False), ("called.darudb", True)):
+        path = tmp_path / name
+
+        with open_db(path, upgrade_format=False) as db:
+            assert db.format_version == 5
+
+            with db.write() as txn:
+                txn.collection(User).insert(User(name="Alice", age=31))
+
+        assert path.read_bytes()[8] == 5
+
+        if by_call:
+            db = open_db(path, upgrade_format=False)
+
+            assert db.format_version == 5
+            assert db.upgrade_format()
+            assert not db.upgrade_format()
+        else:
+            db = open_db(path)
+
+        with db:
+            assert db.format_version == 6
+            assert path.read_bytes()[8] == 6
+
+            with db.read() as txn:
+                assert txn.collection(User).get(1) == User(id=1, name="Alice", age=31)
+
+            assert db.check().ok
+
+
+def test_the_format_version_is_raised_on_the_thread_pool(tmp_path: Path) -> None:
+    path = tmp_path / "raised.darudb"
+
+    with open_db(path, upgrade_format=False) as db:
+        assert db.format_version == 5
+
+    async def main() -> None:
+        db = await darudb.Database.open_async(path, schema=SCHEMA, upgrade_format=False)
+
+        assert db.format_version == 5
+        assert await db.upgrade_format_async()
+        assert db.format_version == 6
+        await db.close_async()
+
+    asyncio.run(main())

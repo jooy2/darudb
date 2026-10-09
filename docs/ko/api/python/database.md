@@ -36,6 +36,7 @@ def open(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    upgrade_format: bool = True,
 ) -> Database: ...
 ```
 
@@ -52,6 +53,9 @@ def open(
 | `key` | 32바이트 키. 새 파일을 암호화하고, 암호화한 파일을 엽니다 |
 | `password` | 비밀번호. Argon2id로 만든 키로 `key`와 같은 일을 합니다. 키와 비밀번호를 함께 주면 `INVALID_ARGUMENT`로 실패합니다 |
 | `password_hashing` | 비밀번호에서 키를 만드는 비용. 새 파일과 `set_password`에 씁니다. [PasswordHashing](../../types/python/password-hashing.md)을 보세요 |
+| `upgrade_format` | 예전 형식 버전의 파일을 이 패키지가 쓰는 가장 새 버전인 [FORMAT_VERSION](../../types/python/constants.md)으로 올릴지 여부. 기본값은 `True`이며, 아래에 설명합니다 |
+
+형식 버전을 올릴 때는 헤더만 다시 쓰고 동기화를 세 번 하며, 다른 프로세스가 파일을 열고 있지 않을 때만 올립니다. 전에 쓴 리프는 쓰기가 바꿀 때까지 배치를 그대로 두다가, 바뀔 때 더 작은 새 배치로 쓰입니다. [`compact`](#compact)는 새 배치로 공간이 줄어드는 트리를 다시 씁니다. 예전 버전만 아는 릴리스는 올린 파일을 거부하므로, 그런 릴리스로 되돌아갈 수 있는 앱은 `upgrade_format=False`를 넘기고, 되돌아갈 일이 없어지면 [`upgrade_format`](#upgrade-format)을 부릅니다. 끄면 새 데이터베이스는 모든 릴리스가 읽는 형식 버전 5로 만듭니다.
 
 마이그레이션 함수는 이 호출 안에서 버전 단계마다 차례로 실행되며 [Migrating](./migrating.md)을 받습니다. 여기서는 평범한 함수여야 합니다. 코루틴 함수는 `INVALID_ARGUMENT`로 실패하고, 오류 메시지가 `open_async`를 쓰라고 알려 줍니다. 함수가 예외를 일으키면 파일은 예전 스키마와 데이터를 그대로 유지하고, `open`도 같은 예외를 일으킵니다.
 
@@ -94,6 +98,7 @@ async def open_async(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    upgrade_format: bool = True,
 ) -> Database: ...
 ```
 
@@ -185,7 +190,7 @@ def page_size(self) -> int: ...
 def format_version(self) -> int: ...
 ```
 
-파일에 기록된 파일 형식 버전입니다. 이 빌드가 여는 파일이면 [FORMAT_VERSION](../../types/python/constants.md)과 같습니다.
+파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6([FORMAT_VERSION](../../types/python/constants.md))이거나, `upgrade_format=False`로 열어 올리지 않은 파일이라면 5입니다.
 
 ### is_encrypted
 
@@ -327,6 +332,22 @@ async def compact_async(self) -> CompactReport: ...
 ```
 
 스레드 풀에서 실행하는 `compact`입니다. 이 이벤트 루프가 그 파일에 먼저 시작한 비동기 쓰기가 끝난 뒤에 실행됩니다.
+
+### upgrade_format
+
+```python
+def upgrade_format(self) -> bool: ...
+```
+
+파일의 형식 버전을 [FORMAT_VERSION](../../types/python/constants.md)으로 올리고, 올렸는지 돌려줍니다. `open`에서 `upgrade_format`을 `False`로 주지 않았다면 여는 쪽이 하는 일과 같습니다. 이미 그 버전인 파일이면 `False`를 돌려줍니다. 쓰기처럼 쓰기를 기다리고, 파일을 혼자 써야 합니다. 다른 프로세스가 파일을 열고 있으면 아무것도 바꾸지 않고 `BUSY`를 일으킵니다. `compact`가 거부되는 곳에서는 똑같이 `INVALID_ARGUMENT`로 거부됩니다. 올린 뒤에는 예전 버전만 아는 릴리스가 파일을 거부합니다.
+
+### upgrade_format_async
+
+```python
+async def upgrade_format_async(self) -> bool: ...
+```
+
+스레드 풀에서 실행하는 `upgrade_format`입니다. 이 이벤트 루프가 그 파일에 먼저 시작한 비동기 쓰기가 끝난 뒤에 실행됩니다.
 
 ### set_key
 
