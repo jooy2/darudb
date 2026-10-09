@@ -202,6 +202,44 @@ void main() {
 
   test('the engine and format versions are known', () {
     expect(engineVersion, isNotEmpty);
-    expect(formatVersion, greaterThan(0));
+    expect(formatVersion, 6);
   });
+
+  test(
+    'a file of format 5 is raised by opening it again, or by the call',
+    () async {
+      const schema = Schema(1, [noteV1Schema]);
+      final old = Database.open(path, schema: schema, upgradeFormat: false);
+
+      expect(old.formatVersion, 5);
+      old.write((txn) {
+        txn
+            .collection(noteV1Schema)
+            .insert(const NoteV1(title: 'a', body: 'kept'));
+      });
+      old.close();
+      expect(File(path).readAsBytesSync()[8], 5);
+
+      final opened = Database.open(path, schema: schema);
+
+      expect(opened.formatVersion, 6);
+      expect(opened.upgradeFormat(), isFalse);
+      expect(opened.read((txn) => txn.collection(noteV1Schema).count()), 1);
+      opened.close();
+      expect(File(path).readAsBytesSync()[8], 6);
+
+      for (final asynchronous in [false, true]) {
+        final other = '${directory.path}/other-$asynchronous.darudb';
+        final db = Database.open(other, upgradeFormat: false);
+
+        expect(db.formatVersion, 5);
+        expect(
+          asynchronous ? await db.upgradeFormatAsync() : db.upgradeFormat(),
+          isTrue,
+        );
+        expect(db.formatVersion, 6);
+        db.close();
+      }
+    },
+  );
 }

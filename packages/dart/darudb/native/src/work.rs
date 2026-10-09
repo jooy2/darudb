@@ -298,6 +298,21 @@ pub unsafe extern "C" fn darudb_sync_async(database: *const Database, id: i64, c
     unsafe { on_database(database, id, callback, ops::sync) };
 }
 
+/// [`crate::darudb_upgrade_format`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`darudb_begin_write_async`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_upgrade_format_async(
+    database: *const Database,
+    id: i64,
+    callback: Callback,
+) {
+    // SAFETY: the caller's promise.
+    unsafe { on_database(database, id, callback, ops::upgrade_format) };
+}
+
 /// [`crate::darudb_close`] on a thread of the library.
 ///
 /// # Safety

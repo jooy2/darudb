@@ -33,6 +33,7 @@ static Database open(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool upgradeFormat = true,
 });
 ```
 
@@ -49,6 +50,7 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `key` | A key of 32 bytes, which encrypts a new file and opens an encrypted one |
 | `password` | A password, which does what `key` does through a key derived with Argon2id |
 | `passwordHashing` | What deriving a key from a password costs, for a new file and for `setPassword`. See [PasswordHashing](../../types/dart/password-hashing.md) |
+| `upgradeFormat` | Whether a file in an older format version is raised to the newest this package writes, [formatVersion](../../types/dart/constants.md): `true` by default. See below |
 
 Migration functions run inside this call, one version step after another, and receive a [MigrationContext](./migration-context.md). They have to be synchronous here: one that returns a `Future` fails with `INVALID_ARGUMENT`. If one throws, the file keeps its old schema and data, and `open` throws the same error.
 
@@ -62,6 +64,8 @@ Migration functions run inside this call, one version step after another, and re
 ```dart
 final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]));
 ```
+
+Raising a file's format version rewrites the header and nothing else, with three barriers, and only while no other process has the file open. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](#compact) rewrites the trees where that saves room. A release that knows only the older version refuses the file once it is raised, so an app that may go back to such a release passes `upgradeFormat: false`, and calls [`upgradeFormat`](#upgradeformat) once it no longer may. With `false`, a new database is created in format version 5, which every release reads.
 
 The package copies the key and the password into native memory for the call, and fills its copies with zeros once the engine has its own. A `Uint8List` key can be wiped with `fillRange` as soon as `open` returns; a `String` cannot be wiped.
 
@@ -79,6 +83,7 @@ static Future<Database> openAsync(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool upgradeFormat = true,
 });
 ```
 
@@ -149,7 +154,7 @@ The size of every page in the file, in bytes. A file keeps the page size it was 
 int get formatVersion;
 ```
 
-The file format version recorded in the file. A file this build opens has the version of the top-level [formatVersion](../../types/dart/constants.md).
+The file format version recorded in the file: 6, which this package writes (the top-level [formatVersion](../../types/dart/constants.md)), or 5 for a file that opening did not raise, with `upgradeFormat: false`.
 
 ### isEncrypted
 
@@ -289,6 +294,22 @@ Future<CompactReport> compactAsync();
 ```
 
 `compact` on a thread of the native library, after this isolate's earlier asynchronous writes on the file.
+
+### upgradeFormat
+
+```dart
+bool upgradeFormat();
+```
+
+Raises the file's format version to the newest this package writes, as `open` does unless `upgradeFormat` is `false` there, and returns whether it did: `false` for a file in that version already. It waits for the writer as a write does, and needs the file to itself: while another process has the file open, it fails with `BUSY` and changes nothing. It is refused with `INVALID_ARGUMENT` where `write` is. A release that knows only the older version refuses the file afterwards.
+
+### upgradeFormatAsync
+
+```dart
+Future<bool> upgradeFormatAsync();
+```
+
+`upgradeFormat` on a thread of the native library, after this isolate's earlier asynchronous writes on the file.
 
 ### setKey
 

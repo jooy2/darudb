@@ -326,6 +326,7 @@ Uint8List _options({
   required String? password,
   required PasswordHashing? passwordHashing,
   required List<Migration> migrations,
+  bool upgradeFormat = true,
 }) {
   if (key != null && password != null) {
     throw invalidArgument('give a key or a password, not both');
@@ -396,6 +397,7 @@ Uint8List _options({
           w.close(mark);
         },
       ),
+    if (!upgradeFormat) (10, (Writer w) => w.byte(Tag.falseValue)),
     if (migrations.isNotEmpty)
       (
         9,
@@ -569,6 +571,16 @@ final class Database implements Finalizable {
   /// transaction, through the [migrations] registered for the versions in
   /// between. A [key] of 32 bytes or a [password] encrypts a new database,
   /// and opens an encrypted one.
+  ///
+  /// A file in an older format version is raised to the newest this
+  /// package writes, while no other process has it open, unless
+  /// `upgradeFormat` is `false`. Raising it rewrites the header only; the
+  /// older leaves take the newer, smaller layout as writes change them, and
+  /// [compact] rewrites the trees where that saves room. A release that knows
+  /// only the older version cannot open the file afterwards, so an app that
+  /// may go back to one passes `false`, and calls `Database.upgradeFormat`
+  /// once it no longer may; a new database is then created in format version
+  /// 5, which every release reads.
   static Database open(
     String path, {
     Schema? schema,
@@ -580,6 +592,7 @@ final class Database implements Finalizable {
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
+    bool upgradeFormat = true,
   }) {
     final options = _options(
       create: create,
@@ -591,6 +604,7 @@ final class Database implements Finalizable {
       password: password,
       passwordHashing: passwordHashing,
       migrations: migrations,
+      upgradeFormat: upgradeFormat,
     );
     final pathBytes = utf8.encode(path);
     final loaded = _io.load(pathBytes, options);
@@ -673,6 +687,7 @@ final class Database implements Finalizable {
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
+    bool upgradeFormat = true,
   }) async => _openAsync(
     path,
     schema,
@@ -687,6 +702,7 @@ final class Database implements Finalizable {
       password: password,
       passwordHashing: passwordHashing,
       migrations: migrations,
+      upgradeFormat: upgradeFormat,
     ),
   );
 
@@ -755,7 +771,8 @@ final class Database implements Finalizable {
   /// The size of every page in the file, in bytes.
   int get pageSize => _info().pageSize;
 
-  /// The file format version recorded in the file.
+  /// The file format version recorded in the file: 6, which this package
+  /// writes, or 5 for a file that opening did not raise.
   int get formatVersion => _info().formatVersion;
 
   /// Whether the file is encrypted.
@@ -1155,6 +1172,28 @@ final class Database implements Finalizable {
     _refuseWhileWritingAsync('sync');
     _check(darudb_sync(_live()));
   }
+
+  /// Raises the file's format version to the newest this package writes, as
+  /// opening does unless `upgradeFormat` is `false`, and returns whether it
+  /// did: `false` for a file in that version already. It waits for the
+  /// writer lock, and needs the file to itself: while another process has
+  /// it open, it fails with `BUSY`. A release that knows only the older
+  /// version cannot open the file afterwards.
+  bool upgradeFormat() {
+    _refuseWhileWritingAsync('upgradeFormat');
+
+    return _check(darudb_upgrade_format(_live())) == 1;
+  }
+
+  /// [upgradeFormat] on a thread of the native library, after this isolate's
+  /// asynchronous writes on the file.
+  Future<bool> upgradeFormatAsync() => _turns.inTurn(_file, () async {
+    final reply = await _call(
+      (id, callback) => darudb_upgrade_format_async(_live(), id, callback),
+    );
+
+    return reply.status == 1;
+  });
 
   /// Changes the key of an encrypted database to [key], 32 bytes. No page
   /// is encrypted again.

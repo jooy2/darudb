@@ -109,6 +109,9 @@ external int darudb_begin_write(
 @Native<Int32 Function(Pointer<NativeDatabase>)>()
 external int darudb_sync(Pointer<NativeDatabase> database);
 
+@Native<Int32 Function(Pointer<NativeDatabase>)>()
+external int darudb_upgrade_format(Pointer<NativeDatabase> database);
+
 @Native<Int32 Function(Pointer<NativeDatabase>, Pointer<Uint8>, Size)>()
 external int darudb_set_key(
   Pointer<NativeDatabase> database,
@@ -407,6 +410,19 @@ external void darudb_begin_write_async(
   )
 >()
 external void darudb_sync_async(
+  Pointer<NativeDatabase> database,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeDatabase>,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_upgrade_format_async(
   Pointer<NativeDatabase> database,
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,

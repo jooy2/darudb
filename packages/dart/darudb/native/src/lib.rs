@@ -483,6 +483,20 @@ pub unsafe extern "C" fn darudb_sync(database: *const Database) -> i32 {
     })
 }
 
+/// Raises the file's format version to the newest: returns 1 if it did, and
+/// 0 for a file in that version already.
+///
+/// # Safety
+///
+/// `database` came from this library and has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_upgrade_format(database: *const Database) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise.
+        ops::upgrade_format(unsafe { at(database, closed) }?)
+    })
+}
+
 /// Changes the key of an encrypted database to the 32 bytes at `key`.
 ///
 /// # Safety

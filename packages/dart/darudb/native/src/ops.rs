@@ -224,6 +224,7 @@ fn write_key(out: &mut Vec<u8>, key: &darudb::Value) -> Result<()> {
 /// | 8     | `object`: password hashing, fields 1 to 3 the memory in    |
 /// |       | KiB, the iterations and the lanes                          |
 /// | 9     | `list(object)`: migrations, as [`migration_of`] reads them |
+/// | 10    | `bool`: whether opening raises an older format version     |
 fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
     let mut options = darudb::OpenOptions::new();
 
@@ -272,6 +273,9 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
                 for migration in value.list()? {
                     options.migration(migration_of(migration?.object()?)?);
                 }
+            }
+            10 => {
+                options.upgrade_format(value.bool()?);
             }
             _ => {
                 return Err(invalid(format!(
@@ -445,6 +449,17 @@ pub(crate) fn begin_write(database: &Database) -> Result<*const Held> {
 
 pub(crate) fn sync(database: &Database) -> Result<i32> {
     database.with(|database| database.sync().map(|()| 0).map_err(Failure::from))
+}
+
+/// Raises the file's format version: 1 if it did, 0 for a file in the
+/// newest version already.
+pub(crate) fn upgrade_format(database: &Database) -> Result<i32> {
+    database.with(|database| {
+        database
+            .upgrade_format()
+            .map(i32::from)
+            .map_err(Failure::from)
+    })
 }
 
 pub(crate) fn set_key(database: &Database, key: &[u8]) -> Result<i32> {
