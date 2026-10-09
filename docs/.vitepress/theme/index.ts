@@ -1,11 +1,13 @@
 import DefaultTheme from 'vitepress/theme';
 import { inBrowser, type Theme } from 'vitepress';
 import { forwardedPath } from '../languages';
+import CompareTable from './CompareTable.vue';
 import LangCode from './LangCode.vue';
 import Layout from './Layout.vue';
 import PageList from './PageList.vue';
 import { chosenLanguage } from './language';
 import './brand.css';
+import './compare.css';
 import './home.css';
 import './languages.css';
 import './packages.css';
@@ -16,6 +18,7 @@ export default {
   // package menu in the navbar.
   Layout,
   enhanceApp({ app, router, siteData }) {
+    app.component('CompareTable', CompareTable);
     app.component('LangCode', LangCode);
     app.component('PageList', PageList);
 

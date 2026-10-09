@@ -1,0 +1,310 @@
+/**
+ * The comparison page's table (`CompareTable.vue`).
+ *
+ * The page turns the outline off, so its content takes the width the outline
+ * would have had, and the table needs all of it. The prose around the table
+ * keeps the width of every other page.
+ */
+
+.compare-page .vp-doc > div > :not(.compare) {
+  max-width: 688px;
+}
+
+.compare {
+  margin: 24px 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.compare-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 24px;
+  margin-bottom: 12px;
+}
+
+.compare-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.compare-only input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--vp-c-brand-1);
+}
+
+.compare-only strong {
+  font-weight: 600;
+}
+
+.compare-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--vp-c-text-2);
+}
+
+.compare-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/*
+ * Scrolls both ways inside the page, so that the products stay in view above
+ * a row far down and the features beside a column far to the right. It is
+ * positioned, so that the words for screen readers inside the cells are placed
+ * in it and clipped by it; otherwise they would widen the page on a phone.
+ */
+.compare-scroll {
+  position: relative;
+  max-height: calc(100vh - var(--vp-nav-height) - 64px);
+  overflow: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}
+
+.compare-scroll:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+/*
+ * The default theme styles every table in a page, as a block that scrolls on
+ * its own with striped rows. That block would be the scroller the sticky
+ * headings stick to, so the table goes back to being a table, and every rule
+ * below is scoped under `.compare` to outrank the theme's `.vp-doc` rules.
+ */
+.compare .compare-table {
+  display: table;
+  width: 100%;
+  min-width: 1320px;
+  margin: 0;
+  overflow: visible;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.compare .compare-table tr {
+  border: 0;
+  background-color: transparent;
+}
+
+.compare .compare-table th,
+.compare .compare-table td {
+  padding: 8px 10px;
+  border: 0;
+  border-right: 1px solid var(--vp-c-divider);
+  border-bottom: 1px solid var(--vp-c-divider);
+  background-color: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.compare .compare-table tr > :last-child {
+  border-right: 0;
+}
+
+.compare .compare-table tbody:last-child tr:last-child > * {
+  border-bottom: 0;
+}
+
+.compare .compare-table thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background-color: var(--vp-c-bg-soft);
+  font-weight: 600;
+  vertical-align: bottom;
+}
+
+.compare .compare-product {
+  min-width: 128px;
+}
+
+.compare .compare-product a {
+  color: var(--vp-c-text-1);
+  text-decoration: none;
+}
+
+.compare .compare-product a:hover {
+  color: var(--vp-c-brand-1);
+}
+
+.compare .compare-unavailable {
+  display: block;
+  margin-top: 2px;
+  color: var(--vp-c-text-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* The features stay at the left while the products scroll past them. */
+.compare .compare-corner,
+.compare .compare-feature {
+  position: sticky;
+  left: 0;
+  min-width: 176px;
+  background-color: var(--vp-c-bg);
+}
+
+.compare .compare-feature {
+  z-index: 1;
+  font-weight: 500;
+}
+
+.compare .compare-table thead .compare-corner {
+  z-index: 3;
+  background-color: var(--vp-c-bg-soft);
+}
+
+.compare .compare-section th {
+  padding-top: 14px;
+  background-color: var(--vp-c-bg-alt);
+  color: var(--vp-c-text-1);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* A section's name stays in view while the table scrolls sideways. */
+.compare-section-label {
+  position: sticky;
+  left: 10px;
+}
+
+/* The row of the reader's language, among the language rows. */
+html[data-code-lang='rust'] .compare-table tr[data-row-lang='rust'] .compare-feature,
+html[data-code-lang='node'] .compare-table tr[data-row-lang='node'] .compare-feature,
+html[data-code-lang='dart'] .compare-table tr[data-row-lang='dart'] .compare-feature,
+html[data-code-lang='python'] .compare-table tr[data-row-lang='python'] .compare-feature {
+  color: var(--vp-c-brand-1);
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------------
+ * The marks
+ *
+ * A cell's colour, its mark's shape and the word a screen reader reads all
+ * say the same thing, so no reader depends on the colour alone.
+ * ------------------------------------------------------------------------- */
+
+.compare .compare-table td[data-level='yes'] {
+  background-color: var(--vp-c-green-soft);
+}
+
+.compare .compare-table td[data-level='partial'] {
+  background-color: var(--vp-c-yellow-soft);
+}
+
+.compare .compare-table td[data-level='no'] {
+  background-color: var(--vp-c-red-soft);
+}
+
+.compare-mark {
+  display: inline-flex;
+  vertical-align: -3px;
+}
+
+.compare-mark svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.compare [data-level='yes'] > .compare-mark {
+  color: var(--vp-c-green-1);
+}
+
+.compare [data-level='partial'] > .compare-mark {
+  color: var(--vp-c-yellow-1);
+}
+
+.compare [data-level='no'] > .compare-mark {
+  color: var(--vp-c-red-1);
+}
+
+/* The mark's word, for a screen reader; the mark says it on screen. */
+.compare-level {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.compare .compare-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--vp-c-text-1);
+}
+
+/* DaruDB's own column, framed in the brand colour. */
+.compare .compare-table .compare-self {
+  border-right: 2px solid var(--vp-c-brand-1);
+  border-left: 2px solid var(--vp-c-brand-1);
+}
+
+.compare .compare-table thead .compare-self {
+  border-top: 2px solid var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+}
+
+/* ---------------------------------------------------------------------------
+ * The reader's language
+ *
+ * A database with no package for it is faded, or hidden with the checkbox.
+ * CSS rather than the app does both, from `<html data-code-lang>`, as every
+ * other part of the site that follows the language switch does.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * A heading fades its contents rather than itself, since it stays opaque over
+ * the rows that scroll beneath it.
+ */
+html[data-code-lang='rust'] .compare-table td[data-langs]:not([data-langs~='rust']),
+html[data-code-lang='node'] .compare-table td[data-langs]:not([data-langs~='node']),
+html[data-code-lang='dart'] .compare-table td[data-langs]:not([data-langs~='dart']),
+html[data-code-lang='python'] .compare-table td[data-langs]:not([data-langs~='python']),
+html[data-code-lang='rust'] .compare-table th[data-langs]:not([data-langs~='rust']) > *,
+html[data-code-lang='node'] .compare-table th[data-langs]:not([data-langs~='node']) > *,
+html[data-code-lang='dart'] .compare-table th[data-langs]:not([data-langs~='dart']) > *,
+html[data-code-lang='python'] .compare-table th[data-langs]:not([data-langs~='python']) > * {
+  opacity: 0.45;
+}
+
+html[data-code-lang='rust'] .compare-only-mine [data-langs]:not([data-langs~='rust']),
+html[data-code-lang='node'] .compare-only-mine [data-langs]:not([data-langs~='node']),
+html[data-code-lang='dart'] .compare-only-mine [data-langs]:not([data-langs~='dart']),
+html[data-code-lang='python'] .compare-only-mine [data-langs]:not([data-langs~='python']) {
+  display: none;
+}
+
+/* With fewer columns, the table needs no more room than the page gives it. */
+.compare .compare-table.compare-only-mine {
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .compare .compare-corner,
+  .compare .compare-feature {
+    min-width: 128px;
+  }
+}
