@@ -10,11 +10,11 @@ Add the package, and `darudb_generator` with `build_runner` for the code they ge
 
 ```yaml
 dependencies:
-  darudb: ^1.0.0
+  darudb: ^1.1.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.0.0
+  darudb_generator: ^1.1.0
 ```
 
 The package needs Dart 3.10 or later, or Flutter 3.38.1 or later, the first releases with stable build hooks. Flutter 3.38.0 ships a beta build of Dart 3.10, which the package does not accept. Its build hook downloads the engine prebuilt for the application's target, so building an application needs no Rust toolchain; [the native library](#the-native-library) says how.

@@ -68,11 +68,11 @@ npm install darudb
 
 ```yaml
 dependencies:
-  darudb: ^1.0.0
+  darudb: ^1.1.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.0.0
+  darudb_generator: ^1.1.0
 ```
 
 Flutter 앱과 Dart 서버, 명령줄 도구에서 똑같이 쓸 수 있습니다. 생성기가 읽는 클래스는 [컬렉션과 객체](./objects.md)에 있습니다.

@@ -68,11 +68,11 @@ Add the package, with the generator that writes the code for your classes:
 
 ```yaml
 dependencies:
-  darudb: ^1.0.0
+  darudb: ^1.1.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.0.0
+  darudb_generator: ^1.1.0
 ```
 
 The package works in Flutter apps, Dart servers and command-line tools alike. [Collections and objects](./objects.md) shows the classes the generator reads.
