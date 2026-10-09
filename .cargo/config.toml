@@ -1,0 +1,14 @@
+# Every loop is placed at a 64-byte boundary, in every build of this
+# workspace: the Node.js addon, the Dart package's library, the Python
+# module, and the tests and benchmarks. Without it, where a hot loop lands
+# depends on everything else linked beside it, so a change that did not touch
+# a loop can move it, and time with it: the page hash's loop, at another
+# offset in one build, made one-object deferred commits 15% slower. The cost
+# is the padding before each loop.
+#
+# Rust flags a target gets from the environment, such as
+# `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, join these, but `RUSTFLAGS` replaces
+# them, so a build that sets it passes this flag as well (`release.yml`). A
+# consumer of the `darudb` crate builds with its own flags.
+[target.'cfg(all())']
+rustflags = ["-C", "llvm-args=-align-loops=64"]

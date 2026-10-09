@@ -256,10 +256,17 @@ jobs:
       - name: Build
         env:
           CC_OF_TARGET: ${{ matrix.cc }}
+          TARGET: ${{ matrix.target }}
         run: |
           if [ -n "$CC_OF_TARGET" ]; then
             export TARGET_CC="$CC_OF_TARGET"
           fi
+
+          # napi sets RUSTFLAGS for a musl target, which replaces the flags of
+          # `.cargo/config.toml`, so the loop alignment goes in it too.
+          case "$TARGET" in
+            *-musl) export RUSTFLAGS='-C llvm-args=-align-loops=64' ;;
+          esac
 
           npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts
       # The addon is meant to load on glibc 2.17; a symbol versioned for a
@@ -535,9 +542,12 @@ jobs:
             *-android*)
               tools="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
               linker="${TARGET/armv7-linux-androideabi/armv7a-linux-androideabi}21-clang"
-              variable="CARGO_TARGET_$(printf '%s' "$TARGET" | tr 'a-z-' 'A-Z_')_LINKER"
-              export "$variable=$tools/$linker"
-              RUSTFLAGS='-C link-arg=-Wl,-z,max-page-size=16384' cargo build --release -p darudb-dart --target "$TARGET"
+              prefix="CARGO_TARGET_$(printf '%s' "$TARGET" | tr 'a-z-' 'A-Z_')"
+              export "${prefix}_LINKER=$tools/$linker"
+              # The target's own flags join those of `.cargo/config.toml`,
+              # which RUSTFLAGS would replace.
+              export "${prefix}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384"
+              cargo build --release -p darudb-dart --target "$TARGET"
               ;;
             *)
               cargo build --release -p darudb-dart --target "$TARGET"
