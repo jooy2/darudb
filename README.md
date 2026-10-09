@@ -27,13 +27,13 @@ These are the goals the design is built around, in order of priority. They are g
 
 ## Packages
 
-| Package                                                            | Registry                                                                 | Requires                  | Status   |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------- | -------- |
-| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later        | Released |
-| [`packages/node`](packages/node)                                   | [npm: `darudb`](https://www.npmjs.com/package/darudb)                    | Node.js 20 or later       | Released |
-| [`packages/dart/darudb`](packages/dart/darudb)                     | [pub.dev: `darudb`](https://pub.dev/packages/darudb)                     | Dart 3.10 or Flutter 3.38 | Released |
-| [`packages/dart/darudb_generator`](packages/dart/darudb_generator) | [pub.dev: `darudb_generator`](https://pub.dev/packages/darudb_generator) | Dart 3.10 or Flutter 3.38 | Released |
-| [`packages/python`](packages/python)                               | [PyPI: `darudb`](https://pypi.org/project/darudb/)                       | CPython 3.11 or later     | Released |
+| Package                                                            | Registry                                                                 | Requires                    | Status   |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------ | --------------------------- | -------- |
+| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later          | Released |
+| [`packages/node`](packages/node)                                   | [npm: `darudb`](https://www.npmjs.com/package/darudb)                    | Node.js 20 or later         | Released |
+| [`packages/dart/darudb`](packages/dart/darudb)                     | [pub.dev: `darudb`](https://pub.dev/packages/darudb)                     | Dart 3.10 or Flutter 3.38.1 | Released |
+| [`packages/dart/darudb_generator`](packages/dart/darudb_generator) | [pub.dev: `darudb_generator`](https://pub.dev/packages/darudb_generator) | Dart 3.10 or Flutter 3.38.1 | Released |
+| [`packages/python`](packages/python)                               | [PyPI: `darudb`](https://pypi.org/project/darudb/)                       | CPython 3.11 or later       | Released |
 
 The Rust crate is the engine itself. The other packages bind it to their language and add nothing to what it does, so every language reads and writes the same file in the same way. Each package **versions independently and keeps its own changelog** beside its own manifest.
 

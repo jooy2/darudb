@@ -105,8 +105,9 @@ jobs:
       matrix:
         # The package's oldest Flutter, which pins `meta` lowest of the
         # releases it supports, so that its constraints still resolve
-        # beside what a Flutter app's SDK pins.
-        flutter: ['3.38.0']
+        # beside what a Flutter app's SDK pins. Not 3.38.0, whose Dart is a
+        # build of 3.10.0 numbered as a beta, which `sdk: ^3.10.0` refuses.
+        flutter: ['3.38.1']
 
     steps:
       - uses: actions/checkout@v5

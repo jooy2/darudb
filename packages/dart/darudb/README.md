@@ -17,7 +17,7 @@ dev_dependencies:
   darudb_generator: ^1.0.0
 ```
 
-The package needs Dart 3.10 or later, or Flutter 3.38 or later, the first releases with build hooks. Its build hook downloads the engine prebuilt for the application's target, so building an application needs no Rust toolchain; [the native library](#the-native-library) says how.
+The package needs Dart 3.10 or later, or Flutter 3.38.1 or later, the first releases with stable build hooks. Flutter 3.38.0 ships a beta build of Dart 3.10, which the package does not accept. Its build hook downloads the engine prebuilt for the application's target, so building an application needs no Rust toolchain; [the native library](#the-native-library) says how.
 
 Declare each collection as an immutable class, and run `dart run build_runner build`, which writes its schema constant, its query builder and a `copyWith` into the `.g.dart` part:
 

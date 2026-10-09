@@ -23,7 +23,7 @@ This page adds DaruDB to a project from its language's registry, crates.io, npm,
 
 ::: lang dart
 
-- **Dart 3.10 or later**, or Flutter 3.38 or later: the package provides its native library through a build hook, which those releases made stable.
+- **Dart 3.10 or later**, or Flutter 3.38.1 or later: the package provides its native library through a build hook, which those releases made stable. Flutter 3.38.0 ships a beta build of Dart 3.10, which the package does not accept.
 - **Network access the first time an application builds for a target.** The build hook downloads the engine prebuilt for that target from the package's GitHub release, checks its SHA-256 hash and keeps it in its cache, so building needs no Rust toolchain. Libraries ship for Android, iOS, macOS, Windows and Linux. An application that needs a static library, or a target without a prebuilt one, depends on the package through git instead, which builds the engine from source with [rustup](https://rustup.rs).
 
 :::

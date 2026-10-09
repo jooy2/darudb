@@ -18,7 +18,8 @@
 ### Fixed
 
 - `compact` and `compactAsync` no longer grow the file when a value in an overflow run near the file's end finds no run of free pages below to move into. The run stays where it is, and a round of moves that would grow the file is dropped.
-- The package resolves in a Flutter app on Flutter 3.38 to 3.44, the oldest releases it supports. It asked for versions of `hooks`, `code_assets` and `native_toolchain_rust` that need `meta` 1.19, which those Flutter releases pin lower, so `flutter pub get` failed there.
+- The README and the guide name Flutter 3.38.1 as the oldest release the package installs on, where they said 3.38. Flutter 3.38.0 ships a build of Dart 3.10.0 numbered `3.10.0-290.4.beta`, which the package's `sdk: ^3.10.0` has never accepted.
+- The package resolves in a Flutter app on Flutter 3.38.1 to 3.44, the oldest releases it supports. It asked for versions of `hooks`, `code_assets` and `native_toolchain_rust` that need `meta` 1.19, which those Flutter releases pin lower, so `flutter pub get` failed there.
 
 ## v1.0.1 (2026-10-07)
 
