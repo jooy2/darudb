@@ -333,6 +333,8 @@ Uint8List _options({
   }
 
   final writer = Writer(256);
+  // The password's bytes, which are wiped with the writer's once written.
+  final secret = password == null ? null : utf8.encode(password);
   final entries = [
     (1, (Writer w) => w.byte(create ? Tag.trueValue : Tag.falseValue)),
     if (pageSize != null)
@@ -362,20 +364,6 @@ Uint8List _options({
         (Writer w) => w
           ..byte(Tag.bytes)
           ..bytesOf(schema),
-      ),
-    if (key != null)
-      (
-        6,
-        (Writer w) => w
-          ..byte(Tag.bytes)
-          ..bytesOf(key),
-      ),
-    if (password != null)
-      (
-        7,
-        (Writer w) => w
-          ..byte(Tag.bytes)
-          ..bytesOf(utf8.encode(password)),
       ),
     if (passwordHashing != null)
       (
@@ -411,16 +399,39 @@ Uint8List _options({
           }
         },
       ),
+    // The key or the password goes last. The writer grows by copying into a
+    // larger buffer and dropping the old one, so a secret written before
+    // something else could stay behind in a buffer nobody wipes; written
+    // last, it is only ever in the buffer the `finally` below wipes.
+    if (key != null)
+      (
+        6,
+        (Writer w) => w
+          ..byte(Tag.bytes)
+          ..bytesOf(key),
+      ),
+    if (secret != null)
+      (
+        7,
+        (Writer w) => w
+          ..byte(Tag.bytes)
+          ..bytesOf(secret),
+      ),
   ];
 
-  writer.varint(entries.length);
+  try {
+    writer.varint(entries.length);
 
-  for (final (id, write) in entries) {
-    writer.varint(id);
-    write(writer);
+    for (final (id, write) in entries) {
+      writer.varint(id);
+      write(writer);
+    }
+
+    return Uint8List.fromList(writer.written);
+  } finally {
+    writer.bytes.fillRange(0, writer.bytes.length, 0);
+    secret?.fillRange(0, secret.length, 0);
   }
-
-  return Uint8List.fromList(writer.written);
 }
 
 void _migration(Writer w, Migration migration) {

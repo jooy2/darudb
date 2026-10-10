@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- `Database.open`, `openAsync`, `backup`, `backupAsync`, `salvage` and `salvageAsync` wipe every copy of the key or password they make on the way to the engine. The buffer the options were written into, which could be left behind when it grew, and the password's UTF-8 bytes stayed in memory until the garbage collector reclaimed them.
 - `backup` and `backupAsync` refuse a `passwordHashing` cost out of range with `INVALID_ARGUMENT` before they write anything, as opening does, whether a password is given or not. With a password they failed with `INTERNAL`, and without one they ignored the cost.
 
 ## v1.1.0 (2026-10-09)
