@@ -1,0 +1,15 @@
+diff --git a/crates/darudb/src/lock/mod.rs b/crates/darudb/src/lock/mod.rs
+index 0dfd5ab..df3d018 100644
+--- a/crates/darudb/src/lock/mod.rs
++++ b/crates/darudb/src/lock/mod.rs
+@@ -459,10 +459,6 @@ impl Locks {
+     /// the writer lock. `turn` says whether this process holds the turn lock,
+     /// and the attempt claims it once the wait has lasted [`TURN_AFTER`].
+     fn try_writer(&self, started: Instant, turn: &mut bool) -> Result<bool, LockError> {
+-        if !*turn && self.is_locked(TURN_BYTE, 1).map_err(LockError::Io)? {
+-            return Ok(false);
+-        }
+-
+         if self
+             .try_lock(WRITER_BYTE, 1, Mode::Exclusive)
+             .map_err(LockError::Io)?
