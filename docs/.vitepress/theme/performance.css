@@ -1,0 +1,73 @@
+/**
+ * The performance page's tables, which `PerformanceTable.vue` draws.
+ *
+ * DaruDB's column is tinted as on the comparison page, and below each other
+ * store's time its ratio to DaruDB's is coloured by which way it goes: green
+ * where DaruDB is faster, red where it is slower, plain within 5%.
+ */
+
+.vp-doc .performance-scroll {
+  overflow-x: auto;
+}
+
+.vp-doc .performance-table {
+  display: table;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.vp-doc .performance-table th,
+.vp-doc .performance-table td {
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.vp-doc .performance-table tbody th {
+  font-weight: 500;
+  text-align: left;
+  white-space: normal;
+  min-width: 14em;
+}
+
+.vp-doc .performance-table td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.vp-doc .performance-table .performance-self {
+  background-color: var(--vp-c-brand-soft);
+}
+
+.performance-time {
+  display: block;
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+}
+
+.performance-fastest {
+  font-weight: 700;
+}
+
+.performance-ratio {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.performance-behind {
+  color: var(--vp-c-success-1);
+}
+
+.performance-ahead {
+  color: var(--vp-c-danger-1);
+}
+
+.performance-even {
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc .performance-meta,
+.vp-doc .performance-versions {
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+}

@@ -11,3 +11,6 @@ node_modules/
 
 *-lock.json
 *-lock.yaml
+
+# Written by `bench/merge.mjs` from the benchmark's runs.
+.vitepress/theme/performance.json

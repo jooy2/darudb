@@ -9,6 +9,7 @@ import LangTabs from './LangTabs.vue';
 import LanguageIcon from './LanguageIcon.vue';
 import Layout from './Layout.vue';
 import PageList from './PageList.vue';
+import PerformanceTable from './PerformanceTable.vue';
 import QueryDemo from './QueryDemo.vue';
 import StartCards from './StartCards.vue';
 import { chosenLanguage } from './language';
@@ -18,6 +19,7 @@ import './diagram.css';
 import './home.css';
 import './languages.css';
 import './packages.css';
+import './performance.css';
 import './reference.css';
 
 export default {
@@ -33,6 +35,7 @@ export default {
     app.component('LangTabs', LangTabs);
     app.component('LanguageIcon', LanguageIcon);
     app.component('PageList', PageList);
+    app.component('PerformanceTable', PerformanceTable);
     app.component('QueryDemo', QueryDemo);
     app.component('StartCards', StartCards);
 

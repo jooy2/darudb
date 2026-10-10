@@ -27,7 +27,7 @@ Each column is the database as an application installs it today:
 
 ## Speed
 
-This page compares features only. Comparing speed needs benchmarks run the same way for every database, at the same durability settings, and those numbers will be a page of their own.
+This page compares features only. [Performance](./performance.md) compares speed: the same workloads, run the same way in every database at the same durability settings, for each language.
 
 ## Sources
 

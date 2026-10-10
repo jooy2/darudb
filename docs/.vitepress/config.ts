@@ -839,7 +839,8 @@ const startsWith = (prefix: string) => (item: GeneratedSidebarItem) =>
 /**
  * The groups in the order a reader needs them: the guide, the engine, the API
  * and the types, and last a heading of its own over the changelog, the
- * comparison with other databases, and the guides to moving data in from one.
+ * comparison with other databases, the performance measured against them,
+ * and the guides to moving data in from one.
  *
  * The API and Types sections hold one folder per language. The folders are
  * not shown as groups: their pages go straight under the section's heading,
@@ -860,6 +861,7 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
   const types = find('types/');
   const changelog = find('changelog/');
   const compare = find('compare');
+  const performance = find('performance');
   const migration = find('migration/');
 
   const titled: [T | undefined, string][] = [
@@ -893,10 +895,10 @@ function arrangeSidebar<T extends GeneratedSidebarItem>(items: T[], lang: string
       .map((item) => ({ ...item, text: labels.changelog }) as T)
   );
 
-  const loose = [...changelogs, compare, migration].filter(Boolean) as T[];
+  const loose = [...changelogs, compare, performance, migration].filter(Boolean) as T[];
   const more = loose.length ? ({ text: labels.more, items: loose } as unknown as T) : undefined;
   const placed = [guide, engine, api, types, more].filter(Boolean) as T[];
-  const moved = new Set<T | undefined>([...placed, changelog, compare, migration]);
+  const moved = new Set<T | undefined>([...placed, changelog, compare, performance, migration]);
 
   return [...placed, ...items.filter((item) => !moved.has(item))];
 }
