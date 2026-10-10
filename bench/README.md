@@ -9,11 +9,13 @@ It is the one place in the repository besides the documentation's comparison, pe
 | Language | DaruDB | Compared with |
 | --- | --- | --- |
 | Rust | The crate, typed by derive | SQLite (rusqlite, bundled), LMDB (heed), redb |
-| Node.js | `packages/node` | SQLite (better-sqlite3), LMDB (lmdb-js) |
+| Node.js | `packages/node` | SQLite (better-sqlite3), LMDB (lmdb-js), Realm (realm-js) |
 | Dart | `packages/dart/darudb` | SQLite (the `sqlite3` package), Hive CE |
 | Python | `packages/python` | SQLite (the standard library's `sqlite3`), LMDB (py-lmdb) |
 
 Each store is used the way an application in that language would use it: DaruDB through its public API with its schema, SQLite through SQL with prepared statements, and the key-value stores with a record and indexes written by hand. Every read is made into an object of the language, with all its fields. An update that changes one field sets that field where the language's package can, as SQL sets one column: DaruDB's Node.js and Python passes use `update`, where writing the whole object back would build it again in the language first, and the Rust and Dart passes write the typed object back with `put`.
+
+Realm is there for applications moving from it, though its vendor deprecated it in September 2024 and ended support in September 2025. It assigns no keys, so its pass gives each object the key the other stores assign; it has no unique index besides the primary key, so `email` has a plain index; its queries are Realm Query Language strings, which it parses on every call, since it has no prepared queries; and an update sets the one property.
 
 ## The data
 
@@ -59,15 +61,16 @@ A sync commit waits until the disk has the commit; a deferred one returns before
 | LMDB | The default commit | `NO_SYNC`, synced once at the end |
 | redb | `Durability::Immediate` | `Durability::None`, which makes nothing durable until a later immediate commit |
 | Hive CE | A write and `flush` | A write without `flush`, flushed once at the end |
+| Realm | The default commit | None: every commit syncs, so the row has no Realm time |
 
-SQLite runs with `fullfsync = ON`, so that on Apple systems it flushes as DaruDB and LMDB do there; it changes nothing elsewhere. Hive's `flush` is an `fsync`, which on Apple systems does not reach the disk's own cache, so its sync commits there promise less than the others'. On Linux, where the workflow measures, every sync commit is an `fsync` or an `fdatasync`.
+SQLite runs with `fullfsync = ON`, so that on Apple systems it flushes as DaruDB and LMDB do there; it changes nothing elsewhere. Hive's `flush` is an `fsync`, which on Apple systems does not reach the disk's own cache, and Realm's commit there is an `F_BARRIERFSYNC`, which keeps writes in order across a power cut but does not wait for the disk to have them, so the sync commits of both promise less there than the others'. On Linux, where the workflow measures, every sync commit is an `fsync` or an `fdatasync`.
 
 ## How the runs are put together
 
 - **A process for every pass.** Each pass of each store runs in a process of its own, on new files in a temporary directory, so that no store inherits another's page cache, allocator or open files.
 - **Turns.** The stores take turns within a run, and the order moves by one each run, so that no store always runs first or last.
 - **The median.** A cell is the median of the runs, with the fastest and the slowest kept beside it.
-- **Checked results.** Every row hashes the keys and ages of what it found, in the order it found them. The stores of a language have to agree on every row, and every run of a store on itself; otherwise the run fails, because stores that did different work do not compare.
+- **Checked results.** Every row hashes the keys and ages of what it found, in the order it found them. The stores of a language have to agree on every row, and every run of a store on itself; otherwise the run fails, because stores that did different work do not compare. A store with no way to do a row, such as a deferred commit in a store whose every commit syncs, reports a time of `null` for it, and the page leaves that cell empty.
 - **One machine.** The stores of one language run on one machine, one after another, so their times compare with each other. Times of different languages come from different runs and machines, and do not.
 
 ## Running it
@@ -80,8 +83,14 @@ node bench/run.mjs rust --runs 5 --out bench/results/rust.json
 ```
 
 ```bash
-(cd packages/node && npm ci && npm run build) && (cd bench/node && npm ci)
+(cd packages/node && npm ci && npm run build) && (cd bench/node && REALM_DISABLE_ANALYTICS=1 npm ci)
 node bench/run.mjs node --runs 5 --out bench/results/node.json
+```
+
+`REALM_DISABLE_ANALYTICS` keeps Realm's postinstall script from sending usage data. Its install script downloads its library, which npm 12 and later skip, since they run no install scripts unless allowed; then download it by hand:
+
+```bash
+(cd bench/node/node_modules/realm && ../.bin/prebuild-install --runtime napi)
 ```
 
 ```bash

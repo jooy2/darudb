@@ -75,6 +75,11 @@ export class Rows {
     this.push(row, Number(process.hrtime.bigint() - started) / count, digest);
   }
 
+  /** A row the store has no way to do, which the table leaves empty. */
+  none(row) {
+    this.rows.push({ row, ns: null, count: 0, hash: 0 });
+  }
+
   /** A row that is checked and not timed. */
   check(row, digest) {
     this.push(row, 0, digest);

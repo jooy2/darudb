@@ -65,6 +65,10 @@ jobs:
         run: npm ci && npm run build
       - name: Install the other stores
         working-directory: bench/node
+        # Realm's install script downloads its library; its postinstall
+        # script sends usage data unless this is set, as it is not sent on CI.
+        env:
+          REALM_DISABLE_ANALYTICS: '1'
         run: npm ci
       - name: Run
         run: node bench/run.mjs node --runs "$RUNS" --out node.json

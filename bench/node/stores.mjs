@@ -17,6 +17,7 @@ process.stdout.write(
   JSON.stringify([
     { id: 'daru', version: daru },
     { id: 'sqlite', version: `${sqlite} (better-sqlite3 ${versionOf('better-sqlite3')})` },
-    { id: 'lmdb', version: `lmdb-js ${versionOf('lmdb')}` }
+    { id: 'lmdb', version: `lmdb-js ${versionOf('lmdb')}` },
+    { id: 'realm', version: `realm-js ${versionOf('realm')}` }
   ]) + '\n'
 );

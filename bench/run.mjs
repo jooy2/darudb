@@ -114,7 +114,11 @@ for (let pass = 0; pass < runs; pass++) {
       const { row, ns, count, hash } = JSON.parse(line);
       const kept = seen[id].get(row);
 
-      if (!kept) {
+      // A time of null is a row the store has no way to do, such as a
+      // deferred commit in a store whose every commit syncs.
+      if (ns === null) {
+        if (!kept) seen[id].set(row, null);
+      } else if (!kept) {
         seen[id].set(row, { ns: [ns], count, hash });
       } else {
         if (kept.count !== count || kept.hash !== hash) {
@@ -136,11 +140,18 @@ const median = (sorted) => {
 
 const first = seen[stores[0].id];
 const rows = [...first.keys()].map((row) => {
-  const reference = first.get(row);
+  // The first store that does the row is what the others are checked against.
+  const reference = stores.map(({ id }) => seen[id].get(row)).find(Boolean) ?? {
+    count: 0,
+    hash: 0
+  };
   const agree = stores.every(({ id }) => {
     const cell = seen[id].get(row);
 
-    return cell && cell.count === reference.count && cell.hash === reference.hash;
+    return (
+      cell === null ||
+      (cell !== undefined && cell.count === reference.count && cell.hash === reference.hash)
+    );
   });
 
   if (!agree) {
@@ -153,7 +164,11 @@ const rows = [...first.keys()].map((row) => {
     agree,
     results: Object.fromEntries(
       stores.map(({ id }) => {
-        const values = [...seen[id].get(row).ns].sort((a, b) => a - b);
+        const cell = seen[id].get(row);
+
+        if (!cell) return [id, null];
+
+        const values = [...cell.ns].sort((a, b) => a - b);
 
         return [id, { median: median(values), min: values[0], max: values.at(-1) }];
       })
@@ -195,7 +210,8 @@ console.error(''.padEnd(18) + stores.map(({ id }) => id.padStart(12)).join(''));
 
 for (const row of rows) {
   console.error(
-    row.id.padEnd(18) + stores.map(({ id }) => format(row.results[id].median).padStart(12)).join('')
+    row.id.padEnd(18) +
+      stores.map(({ id }) => format(row.results[id]?.median ?? 0).padStart(12)).join('')
   );
 }
 
