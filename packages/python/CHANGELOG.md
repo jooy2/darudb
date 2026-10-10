@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- `insert_many` and `put_many` of an asynchronous collection raise `DaruError` with `INVALID_ARGUMENT` for a batch that is not iterable, as the synchronous ones do, rather than `TypeError`.
 - `backup` and `backup_async` refuse a `password_hashing` cost out of range with `INVALID_ARGUMENT` before they write anything, as opening does, whether a password is given or not. With a password they failed with `INTERNAL`, and without one they ignored the cost.
 
 ## v1.1.0 (2026-10-09)

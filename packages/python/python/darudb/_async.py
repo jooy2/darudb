@@ -245,6 +245,15 @@ class AsyncReadCollection(Generic[T]):
         return await self._order.call(self._txn.count, self._resolved.name, native, parameters)
 
 
+def _batch(objects: Iterable[T]) -> list[T]:
+    """``objects`` as a list, which the batch takes to the pool thread, or the
+    ``INVALID_ARGUMENT`` the synchronous call raises for what is not iterable."""
+    try:
+        return list(objects)
+    except TypeError:
+        raise invalid(f"a batch is an iterable of objects, not {objects}") from None
+
+
 class AsyncWriteCollection(AsyncReadCollection[T]):
     """A collection of an asynchronous write transaction, for reading and writing."""
 
@@ -260,7 +269,7 @@ class AsyncWriteCollection(AsyncReadCollection[T]):
 
     async def insert_many(self, objects: Iterable[T]) -> list[Key]:
         """Inserts ``objects`` in one call into the engine and returns their keys."""
-        batch = list(objects)
+        batch = _batch(objects)
         keys: list[Key] = await self._order.call(
             self._txn.insert_many, self._resolved.name, self._resolved.layout, batch
         )
@@ -277,7 +286,7 @@ class AsyncWriteCollection(AsyncReadCollection[T]):
 
     async def put_many(self, objects: Iterable[T]) -> list[Key]:
         """``put`` of each of ``objects``, in one call."""
-        batch = list(objects)
+        batch = _batch(objects)
         keys: list[Key] = await self._order.call(
             self._txn.put_many, self._resolved.name, self._resolved.layout, batch
         )

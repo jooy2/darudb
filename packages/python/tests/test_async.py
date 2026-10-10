@@ -183,6 +183,12 @@ def test_errors_of_async_calls_are_daru_errors(path: Path) -> None:
 
                 assert error.value.code == "DUPLICATE_KEY"
 
+                for batch in (users.insert_many, users.put_many):
+                    with pytest.raises(DaruError) as error:
+                        await batch(42)  # type: ignore[arg-type]
+
+                    assert error.value.code == "INVALID_ARGUMENT"
+
     run(main())
 
 
