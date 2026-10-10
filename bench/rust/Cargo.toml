@@ -1,0 +1,23 @@
+[package]
+name = "darudb-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Runs the workloads of bench/README.md against DaruDB and other embedded stores, from Rust."
+license = "MIT"
+
+# A workspace of its own: the benchmark is not part of the engine's workspace,
+# and the stores it compares are not the engine's dependencies.
+[workspace]
+
+[dependencies]
+darudb = { path = "../../crates/darudb", features = ["derive"] }
+heed = "=0.22.1"
+redb = "=4.3.0"
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+
+# One profile for every store: the one the Node.js addon is built with.
+[profile.release]
+lto = true
+codegen-units = 1
+debug = "line-tables-only"

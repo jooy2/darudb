@@ -36,6 +36,7 @@ The repository holds one database engine, written in Rust, the bindings that shi
 | `docs`                           | The documentation site, shared by every language                | `cd docs && npm install`, then `npm run dev`                           |
 | `design`                         | The engine's specifications, in English only                    | Read before changing the file format, commits, recovery or locking     |
 | `samples`                        | Sample apps in Node.js and Flutter, with end-to-end tests       | [samples/README.md](samples/README.md)                                 |
+| `bench`                          | The benchmark against other embedded databases, every language  | [bench/README.md](bench/README.md)                                     |
 
 The repository root holds the Cargo workspace (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`) and nothing for JavaScript. There is no root `package.json` and no npm workspace: each JavaScript folder is entered and installed on its own.
 
@@ -86,6 +87,8 @@ A change meant to make the engine faster comes with numbers from before and afte
 ```bash
 cargo run -p darudb --release --example kernel_bench
 ```
+
+The comparison with other embedded databases is `bench/`, whose [README](bench/README.md) lists every setting and how to build each language's harness. The `run-benchmarks` workflow runs it on GitHub-hosted runners and opens a pull request that updates the documentation's performance page; review its numbers against the previous run's before merging it.
 
 For the Node.js binding:
 

@@ -68,6 +68,16 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# The benchmark of `bench/`. Each language's harness keeps what its tools make
+# beside it, and `bench/results/` holds the JSON of runs before `merge.mjs`
+# puts them into the documentation's data. `target/` and `node_modules/` are
+# covered above.
+bench/dart/.dart_tool/
+bench/dart/build/
+bench/dart/lib/*.g.dart
+bench/python/.venv/
+bench/results/
+
 # VitePress files
 docs/.vitepress/.temp
 docs/.vitepress/.temp/*

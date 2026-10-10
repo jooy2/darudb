@@ -1,0 +1,163 @@
+name: run-benchmarks
+
+# Measures DaruDB against the embedded databases each of its languages uses
+# most, with the harness in `bench/`, and opens a pull request that puts the
+# results into the documentation's performance page.
+#
+# Started by hand. A shared runner's numbers move from run to run, so a
+# maintainer looks at the pull request before the numbers are published, and
+# the page shows how the stores of one language compare on one runner rather
+# than the times alone.
+#
+# The pull request needs "Allow GitHub Actions to create and approve pull
+# requests" in the repository's Actions settings. A pull request opened with
+# the workflow's token starts no other workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Passes of each store; a cell is their median
+        default: '5'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUNS: ${{ inputs.runs }}
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    name: Rust
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bench/rust
+      - name: Build the harness
+        working-directory: bench/rust
+        run: cargo build --release
+      - name: Run
+        run: node bench/run.mjs rust --runs "$RUNS" --out rust.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-rust
+          path: rust.json
+
+  node:
+    runs-on: ubuntu-24.04
+    name: Node.js
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the package
+        working-directory: packages/node
+        run: npm ci && npm run build
+      - name: Install the other stores
+        working-directory: bench/node
+        run: npm ci
+      - name: Run
+        run: node bench/run.mjs node --runs "$RUNS" --out node.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-node
+          path: node.json
+
+  dart:
+    runs-on: ubuntu-24.04
+    name: Dart
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - uses: Swatinem/rust-cache@v2
+      # In a checkout, the package's build hook compiles the engine with the
+      # toolchain `rust-toolchain.toml` pins, which rustup installs.
+      - name: Build the harness
+        working-directory: bench/dart
+        run: |
+          dart pub get
+          dart run build_runner build --delete-conflicting-outputs
+          dart build cli
+      - name: Run
+        run: node bench/run.mjs dart --runs "$RUNS" --out dart.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-dart
+          path: dart.json
+
+  python:
+    runs-on: ubuntu-24.04
+    name: Python
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the package into the harness's environment
+        run: |
+          python -m venv bench/python/.venv
+          source bench/python/.venv/bin/activate
+          pip install maturin -r bench/python/requirements.txt
+          (cd packages/python && maturin develop --release)
+      - name: Run
+        run: BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --runs "$RUNS" --out python.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: results-python
+          path: python.json
+
+  publish:
+    needs: [rust, node, dart, python]
+    runs-on: ubuntu-24.04
+    name: Open a pull request with the results
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          merge-multiple: true
+          path: results
+      - name: Put the results into the documentation
+        run: node bench/merge.mjs results/rust.json results/node.json results/dart.json results/python.json
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: benchmarks/${{ github.run_id }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git add docs/.vitepress/theme/performance.json
+          git commit -m "[docs] chore: record the benchmark results of run ${{ github.run_id }}"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "[docs] chore: record the benchmark results of run ${{ github.run_id }}" \
+            --body "The results of [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), $RUNS passes of each store on GitHub-hosted runners. Check that the numbers look like the previous run's before merging: a runner that was busy shows as a row that moved for every store of a language."

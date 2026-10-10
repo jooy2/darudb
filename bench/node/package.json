@@ -1,0 +1,18 @@
+{
+  "name": "darudb-bench-node",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runs the workloads of bench/README.md against DaruDB and other embedded stores, from Node.js.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bench": "node run.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "lmdb": "3.5.6"
+  }
+}

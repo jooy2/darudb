@@ -346,7 +346,7 @@ An engine error inside a migration function keeps its own code: a function that 
 
 ## Benchmarks
 
-Phase 4 ends with benchmarks against established embedded databases at the same durability settings. This repository names no other database, so the comparison runs from outside it: `examples/` measures DaruDB's object layer on its own, the same workloads run elsewhere against the others, and the results are reported without the others' names here.
+Phase 4 ends with benchmarks against established embedded databases at the same durability settings. `examples/` measures DaruDB's object layer on its own, for comparing two builds; `bench/` runs the same workloads against the other databases in every language, and the documentation's performance page shows the results. Those are the places that name the other databases.
 
 ## Not in v1
 
