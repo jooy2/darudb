@@ -2,6 +2,7 @@ import DefaultTheme from 'vitepress/theme';
 import { inBrowser, type Theme } from 'vitepress';
 import { forwardedPath } from '../languages';
 import CompareTable from './CompareTable.vue';
+import Diagram from './Diagram.vue';
 import GuideGrid from './GuideGrid.vue';
 import LangCode from './LangCode.vue';
 import LangTabs from './LangTabs.vue';
@@ -13,6 +14,7 @@ import StartCards from './StartCards.vue';
 import { chosenLanguage } from './language';
 import './brand.css';
 import './compare.css';
+import './diagram.css';
 import './home.css';
 import './languages.css';
 import './packages.css';
@@ -25,6 +27,7 @@ export default {
   Layout,
   enhanceApp({ app, router, siteData }) {
     app.component('CompareTable', CompareTable);
+    app.component('Diagram', Diagram);
     app.component('GuideGrid', GuideGrid);
     app.component('LangCode', LangCode);
     app.component('LangTabs', LangTabs);

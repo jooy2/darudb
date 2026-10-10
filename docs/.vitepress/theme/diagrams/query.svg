@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 600">
+  <defs>
+    <marker id="query-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0L10 5L0 10z" />
+    </marker>
+  </defs>
+
+  <rect class="box" x="150" y="16" width="180" height="40" rx="8" />
+  <text class="strong" x="240" y="41" text-anchor="middle">Built in code</text>
+  <rect class="box" x="390" y="16" width="180" height="40" rx="8" />
+  <text class="strong" x="480" y="41" text-anchor="middle">Written as text</text>
+
+  <path class="line" d="M240 56L338 94" marker-end="url(#query-head)" />
+  <path class="line" d="M480 56L382 94" marker-end="url(#query-head)" />
+
+  <rect class="box accent" x="240" y="96" width="240" height="40" rx="8" />
+  <text class="strong" x="360" y="121" text-anchor="middle">One query in the engine</text>
+
+  <path class="line" d="M360 136V166" marker-end="url(#query-head)" />
+
+  <rect class="box ask" x="200" y="168" width="320" height="52" rx="8" />
+  <text x="360" y="190" text-anchor="middle">A condition on the primary key or an index,</text>
+  <text x="360" y="208" text-anchor="middle">joined to the rest with AND?</text>
+
+  <path class="line" d="M200 194H166" marker-end="url(#query-head)" />
+  <text class="tag" x="183" y="186" text-anchor="middle">yes</text>
+  <rect class="box" x="16" y="168" width="148" height="52" rx="8" />
+  <text x="90" y="190" text-anchor="middle">Read only that</text>
+  <text x="90" y="208" text-anchor="middle">range of the index</text>
+
+  <path class="line" d="M360 220V250" marker-end="url(#query-head)" />
+  <text class="tag" x="370" y="240">no</text>
+
+  <rect class="box ask" x="200" y="252" width="320" height="52" rx="8" />
+  <text x="360" y="283" text-anchor="middle">Sorted by one indexed field alone?</text>
+
+  <path class="line" d="M520 278H554" marker-end="url(#query-head)" />
+  <text class="tag" x="537" y="270" text-anchor="middle">yes</text>
+  <rect class="box" x="556" y="252" width="148" height="52" rx="8" />
+  <text x="630" y="274" text-anchor="middle">Walk that index</text>
+  <text x="630" y="292" text-anchor="middle">in its order</text>
+
+  <path class="line" d="M360 304V334" marker-end="url(#query-head)" />
+  <text class="tag" x="370" y="324">no</text>
+
+  <rect class="box" x="200" y="336" width="320" height="40" rx="8" />
+  <text x="360" y="361" text-anchor="middle">Read every object</text>
+
+  <path class="line" d="M90 220V428H198" marker-end="url(#query-head)" />
+  <path class="line" d="M630 304V428H522" marker-end="url(#query-head)" />
+  <path class="line" d="M360 376V406" marker-end="url(#query-head)" />
+
+  <rect class="box" x="200" y="408" width="320" height="40" rx="8" />
+  <text x="360" y="433" text-anchor="middle">Apply the rest of the filter</text>
+
+  <path class="line" d="M360 448V478" marker-end="url(#query-head)" />
+
+  <rect class="box" x="160" y="480" width="400" height="40" rx="8" />
+  <text x="360" y="505" text-anchor="middle">Sort if needed, skip the offset, stop at the limit</text>
+
+  <path class="line" d="M360 520V550" marker-end="url(#query-head)" />
+
+  <rect class="box accent" x="260" y="552" width="200" height="36" rx="8" />
+  <text class="strong" x="360" y="575" text-anchor="middle">The objects</text>
+</svg>

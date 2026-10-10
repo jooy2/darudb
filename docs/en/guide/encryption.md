@@ -107,6 +107,8 @@ Everything inside a page is encrypted: keys, values, collection and tree names i
 - **Changing the key or the password** re-encrypts nothing, and once it returns, the old one no longer opens the file.
 - A plain database stays plain, and an encrypted one cannot be opened without its key. Keep the key, or the password, where it cannot be lost: without it, the data cannot be read.
 
+<Diagram name="encryption" alt="A password goes through Argon2id, or a 32-byte key is used as it is, to make the key-encryption key, which is never stored. It wraps the data key, which is random and stored wrapped in every commit record, and the data key seals every page with XAES-256-GCM or XChaCha20-Poly1305 and a fresh nonce. A new password or key wraps the same data key again, so no page is encrypted again." />
+
 [Encryption](../engine/encryption.md) in the Engine section explains how pages are encrypted and how the key is kept in the file.
 
 ## Keep the key in the operating system's keystore

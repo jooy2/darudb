@@ -276,3 +276,5 @@ Preparing saves parsing or encoding the query on each run, which matters most fo
 ## How the engine reads
 
 A condition on the primary key or on an indexed field, joined to the rest of the filter with AND, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.
+
+<Diagram name="query" alt="A query built in code and one written as text become one query in the engine. If a condition on the primary key or an index is joined to the rest with AND, the engine reads only that range of the index; otherwise, if the query is sorted by one indexed field alone, it walks that index in order; otherwise it reads every object. It then applies the rest of the filter, sorts if needed, skips the offset and stops at the limit." />

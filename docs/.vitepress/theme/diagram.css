@@ -1,0 +1,109 @@
+/**
+ * The guide's diagrams, which `Diagram.vue` draws inline from `diagrams/`.
+ *
+ * The drawings name what each shape is, a box, a question, an error, a line,
+ * and this file says how each looks, from the theme's own colours. So the
+ * diagrams follow the light and dark themes and the site's brown, and a new
+ * drawing needs no colour of its own.
+ *
+ * A diagram is drawn 720 units wide and scales with the page. Below about 560
+ * pixels its text would shrink past reading, so there it keeps that width and
+ * scrolls sideways instead.
+ */
+
+.vp-doc .diagram {
+  margin: 28px 0;
+}
+
+.diagram-body {
+  overflow-x: auto;
+}
+
+.diagram-body svg {
+  display: block;
+  width: 100%;
+  min-width: 560px;
+  max-width: 720px;
+  height: auto;
+  margin: 0 auto;
+  font-family: var(--vp-font-family-base);
+}
+
+.diagram-body text {
+  fill: var(--vp-c-text-1);
+  font-size: 13px;
+}
+
+.diagram-body .strong {
+  font-weight: 600;
+}
+
+.diagram-body .note {
+  fill: var(--vp-c-text-2);
+  font-size: 11.5px;
+}
+
+.diagram-body .code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+}
+
+.diagram-body .tag {
+  fill: var(--vp-c-brand-1);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.diagram-body .box {
+  fill: var(--vp-c-bg-soft);
+  stroke: var(--vp-c-divider);
+  stroke-width: 1;
+}
+
+/* What the diagram is about: the engine, the commit point, the result. */
+.diagram-body .box.accent {
+  fill: var(--vp-c-brand-soft);
+  stroke: var(--vp-c-brand-1);
+}
+
+/* A question the flow asks, drawn open rather than filled. */
+.diagram-body .box.ask {
+  fill: var(--vp-c-bg);
+  stroke: var(--vp-c-text-3);
+  stroke-dasharray: 4 3;
+}
+
+.diagram-body .box.danger {
+  fill: var(--vp-c-danger-soft);
+  stroke: var(--vp-c-danger-1);
+}
+
+.diagram-body .danger-text {
+  fill: var(--vp-c-danger-1);
+}
+
+/* A group the boxes inside it belong to. */
+.diagram-body .frame {
+  fill: none;
+  stroke: var(--vp-c-brand-1);
+  stroke-width: 1.2;
+}
+
+.diagram-body .frame.soft {
+  fill: var(--vp-c-brand-soft);
+}
+
+.diagram-body .line {
+  fill: none;
+  stroke: var(--vp-c-text-3);
+  stroke-width: 1.3;
+}
+
+/* Something that happens later, not as the next step. */
+.diagram-body .line.later {
+  stroke-dasharray: 5 4;
+}
+
+.diagram-body .head {
+  fill: var(--vp-c-text-3);
+}

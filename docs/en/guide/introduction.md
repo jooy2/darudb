@@ -38,6 +38,8 @@ These are goals. Each one becomes a claim when the benchmark or the test suite t
 
 The engine is written once, in Rust, and the Node.js, Dart and Python packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
 
+<Diagram name="architecture" alt="The Rust crate and the Node.js, Dart and Python packages all call one engine written in Rust. Its layers, from objects and queries down through transactions and the copy-on-write tree to pages, with locks between processes beside them, keep one database file." />
+
 ## Where it stands
 
 - **Storage.** A copy-on-write tree of pages, each verified against the check its parent recorded before it is used, so a damaged page is reported rather than read. A commit is durable when it returns; a deferred commit returns before the disk has it and reaches it within a second by default.

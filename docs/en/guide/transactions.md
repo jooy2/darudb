@@ -83,6 +83,8 @@ A read transaction sees one commit for as long as it lives, whatever is committe
 
 A commit waits for the disk before it returns by default. A deferred commit does not: readers see its changes at once, and they reach the disk together with later commits.
 
+<Diagram name="commits" alt="A sync commit writes its pages and its record, waits for the disk, which is the commit point, flips the selector byte and returns published and durable. A deferred commit writes its pages and its record, flips the selector marked unsynced and returns published; it becomes durable at the next barrier, which comes with the next sync commit, a sync, a close, or the unsynced window's limits." />
+
 ::: lang rust
 
 ```rust

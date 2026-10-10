@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480">
+  <defs>
+    <marker id="migrations-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0L10 5L0 10z" />
+    </marker>
+  </defs>
+
+  <rect class="box" x="230" y="16" width="260" height="40" rx="8" />
+  <text class="strong" x="360" y="41" text-anchor="middle">Open with schema version n</text>
+  <path class="line" d="M360 56V78" marker-end="url(#migrations-head)" />
+
+  <rect class="box ask" x="230" y="80" width="260" height="40" rx="8" />
+  <text x="360" y="105" text-anchor="middle">Compare with the stored schema</text>
+
+  <path class="line" d="M360 120V140M80 140H640" />
+  <path class="line" d="M80 140V162" marker-end="url(#migrations-head)" />
+  <path class="line" d="M220 140V162" marker-end="url(#migrations-head)" />
+  <path class="line" d="M360 140V162" marker-end="url(#migrations-head)" />
+  <path class="line" d="M500 140V162" marker-end="url(#migrations-head)" />
+  <path class="line" d="M640 140V162" marker-end="url(#migrations-head)" />
+
+  <rect class="box" x="16" y="164" width="128" height="60" rx="8" />
+  <text class="note" x="80" y="189" text-anchor="middle">Nothing stored</text>
+  <text class="strong" x="80" y="211" text-anchor="middle">Store the schema</text>
+
+  <rect class="box" x="156" y="164" width="128" height="60" rx="8" />
+  <text class="note" x="220" y="183" text-anchor="middle">Same version,</text>
+  <text class="note" x="220" y="198" text-anchor="middle">same schema</text>
+  <text class="strong" x="220" y="215" text-anchor="middle">Nothing to do</text>
+
+  <rect class="box danger" x="296" y="164" width="128" height="60" rx="8" />
+  <text class="note" x="360" y="183" text-anchor="middle">Same version,</text>
+  <text class="note" x="360" y="198" text-anchor="middle">another schema</text>
+  <text class="strong code danger-text" x="360" y="215" text-anchor="middle">SCHEMA_MISMATCH</text>
+
+  <rect class="box danger" x="436" y="164" width="128" height="60" rx="8" />
+  <text class="note" x="500" y="189" text-anchor="middle">A newer version</text>
+  <text class="strong code danger-text" x="500" y="211" text-anchor="middle">SCHEMA_TOO_NEW</text>
+
+  <rect class="box accent" x="576" y="164" width="128" height="60" rx="8" />
+  <text class="note" x="640" y="189" text-anchor="middle">An older version m</text>
+  <text class="strong" x="640" y="211" text-anchor="middle">Migrate</text>
+
+  <path class="line" d="M640 224V254" marker-end="url(#migrations-head)" />
+
+  <rect class="frame soft" x="200" y="256" width="504" height="208" rx="12" />
+  <text class="strong" x="216" y="280">One write transaction</text>
+
+  <rect class="box" x="216" y="292" width="472" height="34" rx="6" />
+  <text x="232" y="314">1. Rename what the version steps rename</text>
+  <rect class="box" x="216" y="334" width="472" height="34" rx="6" />
+  <text x="232" y="356">2. Add the new collections, fields and indexes</text>
+  <rect class="box" x="216" y="376" width="472" height="34" rx="6" />
+  <text x="232" y="398">3. Run your function for each version step, m + 1 to n</text>
+  <rect class="box" x="216" y="418" width="472" height="34" rx="6" />
+  <text x="232" y="440">4. Store version n and commit</text>
+
+  <text class="note" x="16" y="340">If any step fails, the</text>
+  <text class="note" x="16" y="356">file is left as it was.</text>
+</svg>

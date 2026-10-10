@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 316">
+  <defs>
+    <marker id="encryption-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0L10 5L0 10z" />
+    </marker>
+  </defs>
+
+  <rect class="box" x="16" y="24" width="150" height="44" rx="8" />
+  <text class="strong" x="91" y="51" text-anchor="middle">A password</text>
+  <path class="line" d="M166 46H204" marker-end="url(#encryption-head)" />
+
+  <rect class="box" x="206" y="24" width="170" height="44" rx="8" />
+  <text class="strong" x="291" y="43" text-anchor="middle">Argon2id</text>
+  <text class="note" x="291" y="59" text-anchor="middle">19 MiB, 2 iterations</text>
+
+  <rect class="box" x="16" y="96" width="150" height="44" rx="8" />
+  <text class="strong" x="91" y="123" text-anchor="middle">Or a 32-byte key</text>
+
+  <path class="line" d="M376 46H404V72H434" marker-end="url(#encryption-head)" />
+  <path class="line" d="M166 118H404V92H434" marker-end="url(#encryption-head)" />
+
+  <rect class="box" x="436" y="56" width="170" height="52" rx="8" />
+  <text class="strong" x="521" y="78" text-anchor="middle">Key-encryption key</text>
+  <text class="note" x="521" y="96" text-anchor="middle">never stored</text>
+
+  <path class="line" d="M521 108V146" marker-end="url(#encryption-head)" />
+  <text class="tag" x="530" y="131">wraps</text>
+
+  <rect class="box accent" x="436" y="148" width="268" height="52" rx="8" />
+  <text class="strong" x="570" y="170" text-anchor="middle">Data key</text>
+  <text class="note" x="570" y="188" text-anchor="middle">random, stored wrapped in every record</text>
+
+  <path class="line" d="M521 200V234" marker-end="url(#encryption-head)" />
+  <text class="tag" x="530" y="221">seals</text>
+
+  <text class="note" x="16" y="176">A new password or key wraps</text>
+  <text class="note" x="16" y="192">the same data key again.</text>
+  <text class="note" x="16" y="208">No page is encrypted again.</text>
+
+  <rect class="box" x="16" y="236" width="688" height="64" rx="8" />
+  <text class="strong" x="360" y="258" text-anchor="middle">Every page</text>
+  <text class="note" x="360" y="276" text-anchor="middle">XAES-256-GCM or XChaCha20-Poly1305, with a fresh 24-byte nonce each time it is written.</text>
+  <text class="note" x="360" y="292" text-anchor="middle">The tag is the page's check. Only the header page stays plain.</text>
+</svg>

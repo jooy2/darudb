@@ -7,6 +7,8 @@ order: 8
 
 Changing a schema means raising its version, and opening a file that holds an older version migrates it in one write transaction that either commits whole or leaves the file as it was.
 
+<Diagram name="migrations" alt="Opening with schema version n compares it with the stored schema. With nothing stored, the schema is stored; the same version and schema need nothing; the same version with another schema fails with SCHEMA_MISMATCH; a newer version fails with SCHEMA_TOO_NEW; an older version m is migrated in one write transaction that renames, adds the new collections, fields and indexes, runs your function for each version step from m + 1 to n, and stores version n. If any step fails, the file is left as it was." />
+
 ## What the engine does by itself
 
 The engine makes some changes without being told: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten. An object written before a field existed reads its default, which is why a required field keeps its default once it has one.

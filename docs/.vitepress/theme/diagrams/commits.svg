@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 276">
+  <defs>
+    <marker id="commits-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0L10 5L0 10z" />
+    </marker>
+  </defs>
+
+  <text class="strong" x="16" y="26">Sync commit, the default</text>
+
+  <rect class="box" x="16" y="40" width="152" height="52" rx="8" />
+  <text x="92" y="62" text-anchor="middle">Write the pages</text>
+  <text x="92" y="80" text-anchor="middle">and the record</text>
+  <path class="line" d="M168 66H192" marker-end="url(#commits-head)" />
+
+  <rect class="box accent" x="194" y="40" width="152" height="52" rx="8" />
+  <text class="strong" x="270" y="62" text-anchor="middle">Barrier</text>
+  <text x="270" y="80" text-anchor="middle">wait for the disk</text>
+  <path class="line" d="M346 66H370" marker-end="url(#commits-head)" />
+
+  <rect class="box" x="372" y="40" width="152" height="52" rx="8" />
+  <text x="448" y="62" text-anchor="middle">Flip the</text>
+  <text x="448" y="80" text-anchor="middle">selector byte</text>
+  <path class="line" d="M524 66H548" marker-end="url(#commits-head)" />
+
+  <rect class="box" x="550" y="40" width="152" height="52" rx="8" />
+  <text class="strong" x="626" y="62" text-anchor="middle">Returns</text>
+  <text x="626" y="80" text-anchor="middle">published, durable</text>
+
+  <text class="note" x="16" y="114">The barrier is the commit point: a power cut after it keeps the commit, whatever happens to the selector.</text>
+
+  <text class="strong" x="16" y="156">Deferred commit</text>
+
+  <rect class="box" x="16" y="170" width="152" height="52" rx="8" />
+  <text x="92" y="192" text-anchor="middle">Write the pages</text>
+  <text x="92" y="210" text-anchor="middle">and the record</text>
+  <path class="line" d="M168 196H192" marker-end="url(#commits-head)" />
+
+  <rect class="box" x="194" y="170" width="152" height="52" rx="8" />
+  <text x="270" y="192" text-anchor="middle">Flip the selector,</text>
+  <text x="270" y="210" text-anchor="middle">marked unsynced</text>
+  <path class="line" d="M346 196H370" marker-end="url(#commits-head)" />
+
+  <rect class="box" x="372" y="170" width="152" height="52" rx="8" />
+  <text class="strong" x="448" y="192" text-anchor="middle">Returns</text>
+  <text x="448" y="210" text-anchor="middle">published</text>
+  <path class="line later" d="M524 196H548" marker-end="url(#commits-head)" />
+
+  <rect class="box accent" x="550" y="170" width="152" height="52" rx="8" />
+  <text class="strong" x="626" y="192" text-anchor="middle">Durable</text>
+  <text x="626" y="210" text-anchor="middle">at the next barrier</text>
+
+  <text class="note" x="16" y="244">The next barrier comes with the next sync commit, a sync or a close, or once the unsynced window reaches</text>
+  <text class="note" x="16" y="261">its limits, one second or 16,384 pages by default. A process that crashes loses no commit either way.</text>
+</svg>
