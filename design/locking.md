@@ -27,14 +27,14 @@ On Windows, a lock belongs to the handle. With one handle per process, the behav
 
 All locks are taken on bytes far past the end of any data:
 
-| Byte                  | Name     | Held                                                                        |
-| --------------------- | -------- | --------------------------------------------------------------------------- |
-| 2^62                  | Open     | Shared by every process that has the file open; exclusive during recovery   |
-| 2^62 + 1              | Writer   | Exclusive by the process whose transaction is writing                       |
-| 2^62 + 2              | Recovery | Exclusive by a process that is opening the file, until it has the open lock |
-| 2^62 + 3              | Turn     | Exclusive by the waiting writer whose turn is next                          |
-| 2^62 + 4 to 2^62 + 63 | Reserved |                                                                             |
-| 2^62 + 64 + `s`       | Snapshot | Shared by every process with a read transaction on snapshot `s`             |
+| Byte                  | Name     | Held                                                                                                                              |
+| --------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 2^62                  | Open     | Shared by every process that has the file open; exclusive while one process recovers it, raises its format version or salvages it |
+| 2^62 + 1              | Writer   | Exclusive by the process whose transaction is writing                                                                             |
+| 2^62 + 2              | Recovery | Exclusive by a process that is opening the file, until it has the open lock                                                       |
+| 2^62 + 3              | Turn     | Exclusive by the waiting writer whose turn is next                                                                                |
+| 2^62 + 4 to 2^62 + 63 | Reserved |                                                                                                                                   |
+| 2^62 + 64 + `s`       | Snapshot | Shared by every process with a read transaction on snapshot `s`                                                                   |
 
 **Why so far from the data.** On Windows, byte-range locks are mandatory: a range locked through one handle cannot be read or written through another. Lock bytes that overlapped data would make that data unreadable. The file never reaches 2^62 bytes, so no read or write ever touches a lock byte. Both POSIX record locks and `LockFileEx` accept ranges past the end of the file.
 
@@ -49,7 +49,7 @@ To open the file, a process:
 1. Opens the file for reading and writing, or finds its existing instance for it and stops here.
 1. Takes the recovery lock exclusively. The attempt is repeated with increasing pauses, and waiting past the busy timeout fails with `BUSY`.
 1. Tries to take the open lock exclusively, without waiting.
-1. If it gets it, no other process has the file open. It runs [recovery](commits-and-recovery.md#recovery), then converts the open lock to shared.
+1. If it gets it, no other process has the file open. It runs [recovery](commits-and-recovery.md#recovery), finishes a raise of the format version that was cut short or raises a file of an older version unless the options turn that off ([Raising the format version](file-format.md#raising-the-format-version)), then converts the open lock to shared.
 1. If it does not, other processes have the file open, and the first of them recovered it. It takes the open lock in shared mode.
 1. Releases the recovery lock.
 
