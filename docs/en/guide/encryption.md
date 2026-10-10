@@ -1,6 +1,6 @@
 ---
 title: Encryption
-order: 7
+order: 9
 ---
 
 # Encryption

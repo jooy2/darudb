@@ -1,0 +1,19 @@
+/**
+ * Pages that are mostly tables of code: the query language, the query
+ * builder, and the type tables of the Types section, which set
+ * `pageClass: reference-page` in their frontmatter.
+ *
+ * A cell of code is read as a whole, and one broken over three lines at every
+ * space reads as three fragments. So code in these tables does not wrap, and
+ * a table wider than the page scrolls sideways, which the theme already lets
+ * it do. The column of prose, which comes last in these tables, keeps room
+ * enough for a phrase to sit on a line or two.
+ */
+
+.reference-page .vp-doc td code {
+  white-space: nowrap;
+}
+
+.reference-page .vp-doc td:last-child {
+  min-width: 12em;
+}

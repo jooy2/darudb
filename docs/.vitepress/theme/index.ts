@@ -11,6 +11,7 @@ import './compare.css';
 import './home.css';
 import './languages.css';
 import './packages.css';
+import './reference.css';
 
 export default {
   extends: DefaultTheme,

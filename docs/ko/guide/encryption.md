@@ -1,6 +1,6 @@
 ---
 title: 암호화
-order: 7
+order: 9
 ---
 
 # 암호화

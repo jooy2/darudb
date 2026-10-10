@@ -1,6 +1,6 @@
 ---
 title: 오류
-order: 10
+order: 12
 ---
 
 # 오류

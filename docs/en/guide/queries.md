@@ -7,6 +7,12 @@ order: 4
 
 A query says which objects of a collection to find, in what order, and how many, and can be built in code or written as text.
 
+::: tip Every operator in one place
+
+[Query language](./query-language.md) lists every part of the text form, and [Query builder](./query-builder.md) every part of the builder in your language, each with examples.
+
+:::
+
 ## Build a query
 
 ::: lang rust

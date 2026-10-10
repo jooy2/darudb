@@ -1,6 +1,6 @@
 ---
 title: Migrations
-order: 6
+order: 8
 ---
 
 # Migrations
