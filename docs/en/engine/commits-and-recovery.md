@@ -15,7 +15,7 @@ Everything below holds on a platform that keeps five promises, and the engine re
 
 1. **A one-byte write is atomic.** After a power cut, a byte that was being written holds either its old value or its new one.
 1. **A write changes only the bytes it names**, whether or not they share a sector with other bytes.
-1. **A barrier is a barrier.** When a sync of the file returns successfully, every write issued before it is durable. The engine's barrier is `fsync` on Unix-like systems, `F_FULLFSYNC` on macOS and iOS, where a plain `fsync` only reaches the drive's cache, and `FlushFileBuffers` on Windows.
+1. **A barrier is a barrier.** When a sync of the file returns successfully, every write issued before it is durable. The engine's barrier is `fdatasync` on Linux, Android and the BSDs, which makes the file's length durable with its data and leaves out its times, `F_FULLFSYNC` on macOS and iOS, where a plain `fsync` only reaches the drive's cache, and `FlushFileBuffers` on Windows.
 1. **Byte-range locks work, and die with their owner.**
 1. **The file system is local.** Network file systems break promises 3 and 4, so the engine refuses to open a database on one.
 

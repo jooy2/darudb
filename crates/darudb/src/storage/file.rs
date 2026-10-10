@@ -65,14 +65,18 @@ impl DbFile {
         platform::write_all_vectored_at(&self.file, bufs, offset)
     }
 
-    /// Waits until everything written to the file, and its metadata, is on
-    /// the storage device.
+    /// Waits until everything written to the file, and the metadata needed
+    /// to read it back, such as its length, is on the storage device.
     ///
-    /// On macOS and iOS this is `F_FULLFSYNC` rather than `fsync`, which the
-    /// standard library chooses for us: a plain `fsync` there only reaches the
-    /// drive's cache, which a power cut empties.
-    pub(crate) fn sync_all(&self) -> io::Result<()> {
-        self.file.sync_all()
+    /// On Linux, Android and the BSDs this is `fdatasync`, which leaves out
+    /// the file's times. `fsync` journals them too, which made a sync commit
+    /// a third slower on an ext4 file system and gains a commit nothing,
+    /// since nothing reads them. On macOS and iOS it is `F_FULLFSYNC` rather
+    /// than `fsync`, which the standard library chooses for us: a plain
+    /// `fsync` there only reaches the drive's cache, which a power cut
+    /// empties. On Windows it is `FlushFileBuffers`.
+    pub(crate) fn sync_data(&self) -> io::Result<()> {
+        self.file.sync_data()
     }
 
     /// Cuts the file to `len` bytes, or extends it with zeros.
@@ -95,7 +99,7 @@ impl super::FileIo for DbFile {
     }
 
     fn sync(&self) -> io::Result<()> {
-        self.sync_all()
+        self.sync_data()
     }
 
     fn len(&self) -> io::Result<u64> {

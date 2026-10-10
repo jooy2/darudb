@@ -28,7 +28,7 @@ The design is correct only on a platform that keeps these promises. Each documen
 
 1. **A one-byte write is atomic.** After a power cut, a byte that was being written holds either its old value or its new one.
 1. **A write changes only the bytes it names.** Bytes outside the written range keep their values across a power cut, whether they share a sector with the write or not.
-1. **A barrier is a barrier.** When a sync of the file returns successfully, every write issued to that file before the sync started is durable. The engine's barrier is `fsync` on Unix-like systems, `fcntl(F_FULLFSYNC)` on macOS and iOS, and `FlushFileBuffers` on Windows.
+1. **A barrier is a barrier.** When a sync of the file returns successfully, every write issued to that file before the sync started is durable. The engine's barrier is `fdatasync` on Linux, Android and the BSDs, `fcntl(F_FULLFSYNC)` on macOS and iOS, and `FlushFileBuffers` on Windows. `fdatasync` makes the file's length durable with its data and leaves out its times, which nothing reads.
 1. **Byte-range locks work, and die with their owner.** `fcntl` record locks on Unix-like systems and `LockFileEx` on Windows are honoured between processes, and the operating system releases a process's locks when the process ends for any reason.
 1. **The file system is local.** Network file systems break promises 3 and 4, so the engine refuses to open a database on one.
 

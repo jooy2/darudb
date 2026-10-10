@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- A sync commit on Linux, Android and the BSDs makes the file durable with `fdatasync` rather than `fsync`, which leaves out the file's times and still syncs its length with its data. A sync commit of one object takes a quarter less time for it on a GitHub-hosted Linux runner, 312 µs against 413. macOS, iOS and Windows sync as before.
+
 ### Fixed
 
 - `insert_many` and `put_many` of an asynchronous collection raise `DaruError` with `INVALID_ARGUMENT` for a batch that is not iterable, as the synchronous ones do, rather than `TypeError`.

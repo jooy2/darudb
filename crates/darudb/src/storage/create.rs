@@ -69,7 +69,7 @@ pub(crate) fn create_file(path: &Path, contents: &[u8]) -> io::Result<Option<Cre
 /// created in place, and makes it durable.
 pub(crate) fn fill(file: &DbFile, path: &Path, contents: &[u8]) -> io::Result<()> {
     file.write_all_at(contents, 0)?;
-    file.sync_all()?;
+    file.sync_data()?;
     sync_parent_dir(path)
 }
 
@@ -156,7 +156,7 @@ fn write_synced(path: &Path, contents: &[u8]) -> io::Result<()> {
     let file = DbFile::create_new(path)?;
 
     file.write_all_at(contents, 0)?;
-    file.sync_all()
+    file.sync_data()
 }
 
 /// A name beside `path` that no other process will pick: the database's own
