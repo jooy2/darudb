@@ -1,6 +1,8 @@
 ---
 title: Range
 order: 12
+group: queries
+pageClass: reference-page
 ---
 
 # Range

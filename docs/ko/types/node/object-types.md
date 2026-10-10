@@ -1,7 +1,9 @@
 ---
 title: 객체 타입
 order: 7
+group: objects
 counterpart: /types/rust/object
+pageClass: reference-page
 ---
 
 # 객체 타입

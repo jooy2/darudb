@@ -1,6 +1,8 @@
 ---
 title: PasswordHashing
 order: 2
+group: database
+pageClass: reference-page
 ---
 
 # PasswordHashing

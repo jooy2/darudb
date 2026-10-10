@@ -1,7 +1,9 @@
 ---
 title: Object
 order: 1
+group: objects
 counterpart: /types/node/object-types
+pageClass: reference-page
 ---
 
 # Object
@@ -51,6 +53,16 @@ pub fn new() -> Self
 필드가 하나도 없는 객체를 만듭니다. `Object::default()`도 같습니다.
 
 ## 메서드
+
+| 메서드 | 반환 | 하는 일 |
+| --- | --- | --- |
+| [`with`](#with) | `Object` | 필드를 설정하고 객체를 돌려줍니다. 식 하나로 객체를 만들 때 씁니다 |
+| [`set`](#set) | `Option<Value>` | 필드를 그 자리에서 설정하고, 바뀐 값을 돌려줍니다 |
+| [`get`](#get) | `Option<&Value>` | 필드를 읽습니다 |
+| [`remove`](#remove) | `Option<Value>` | 필드를 빼냅니다 |
+| [`fields`](#fields) | 반복자 | 모든 필드와 값을 이름순으로 |
+| [`len`](#len) | `usize` | 객체가 가진 필드 수 |
+| [`is_empty`](#is-empty) | `bool` | 필드가 하나도 없는지 여부 |
 
 ### with
 

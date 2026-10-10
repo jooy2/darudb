@@ -1,7 +1,9 @@
 ---
 title: 필드 타입
 order: 3
+group: objects
 counterpart: /types/rust/field-type
+pageClass: reference-page
 ---
 
 # 필드 타입

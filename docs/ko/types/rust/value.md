@@ -1,6 +1,8 @@
 ---
 title: Value
 order: 2
+group: objects
+pageClass: reference-page
 ---
 
 # Value
@@ -54,6 +56,17 @@ pub enum Value
 `Int`가 `Float`를 대신하는 곳은 쿼리뿐입니다. `Float` 필드와 비교할 때 -2^53부터 2^53까지의 정수는 그와 같은 부동소수점 수로 봅니다. 숫자 타입이 하나뿐인 언어에서는 `1`과 `1.0`을 구별할 수 없기 때문입니다. 값을 비교하는 나머지 규칙은 [쿼리](../../guide/queries.md)에 있습니다.
 
 ## 메서드
+
+| 메서드                    | 반환               | 값이 이것일 때 |
+| ------------------------- | ------------------ | -------------- |
+| [`is_null`](#is-null)     | `bool`             | `Null`         |
+| [`as_bool`](#as-bool)     | `Option<bool>`     | `Bool`         |
+| [`as_int`](#as-int)       | `Option<i64>`      | `Int`          |
+| [`as_float`](#as-float)   | `Option<f64>`      | `Float`        |
+| [`as_str`](#as-str)       | `Option<&str>`     | `String`       |
+| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`    | `Bytes`        |
+| [`as_list`](#as-list)     | `Option<&[Value]>` | `List`         |
+| [`as_object`](#as-object) | `Option<&Object>`  | `Object`       |
 
 아래 메서드는 값을 변환하지 않습니다. `Int`에 `as_float`를 부르면 `None`이 나옵니다.
 

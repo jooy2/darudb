@@ -354,3 +354,28 @@ html[data-code-lang='python']
   font-size: 14px;
   line-height: 1.6;
 }
+
+/* The grouped table on the Types overview, `<PageList grouped />`. */
+.vp-doc .page-table {
+  display: table;
+  width: 100%;
+}
+
+.vp-doc .page-table td:first-child {
+  white-space: nowrap;
+}
+
+.vp-doc .page-table td:first-child a {
+  font-weight: 600;
+}
+
+.vp-doc .page-table-group th {
+  padding-top: 14px;
+  background-color: var(--vp-c-bg);
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}

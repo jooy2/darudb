@@ -1,7 +1,9 @@
 ---
 title: CollectionSchema
 order: 4
+group: objects
 counterpart: /types/rust/collection-type
+pageClass: reference-page
 ---
 
 # CollectionSchema

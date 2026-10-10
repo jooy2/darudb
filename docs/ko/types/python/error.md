@@ -1,6 +1,8 @@
 ---
 title: DaruError
 order: 1
+group: errors
+pageClass: reference-page
 ---
 
 # DaruError

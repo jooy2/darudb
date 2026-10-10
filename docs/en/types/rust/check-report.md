@@ -1,6 +1,8 @@
 ---
 title: CheckReport
 order: 8
+group: tools
+pageClass: reference-page
 ---
 
 # CheckReport

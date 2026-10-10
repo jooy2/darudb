@@ -1,6 +1,8 @@
 ---
 title: Key
 order: 5
+group: objects
+pageClass: reference-page
 ---
 
 # Key

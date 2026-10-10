@@ -1,6 +1,8 @@
 ---
 title: Value
 order: 2
+group: objects
+pageClass: reference-page
 ---
 
 # Value
@@ -54,6 +56,17 @@ Reading gives the same variants back. An optional field without a value reads as
 A query is the one place where an `Int` stands for a `Float`: compared with a `Float` field, an integer from -2^53 to 2^53 means the float it equals, since a language with one type of number cannot tell `1` from `1.0`. [Queries](../../guide/queries.md) has the rest of how values compare.
 
 ## Methods
+
+| Method                    | Returns            | For a value that is |
+| ------------------------- | ------------------ | ------------------- |
+| [`is_null`](#is-null)     | `bool`             | `Null`              |
+| [`as_bool`](#as-bool)     | `Option<bool>`     | `Bool`              |
+| [`as_int`](#as-int)       | `Option<i64>`      | `Int`               |
+| [`as_float`](#as-float)   | `Option<f64>`      | `Float`             |
+| [`as_str`](#as-str)       | `Option<&str>`     | `String`            |
+| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`    | `Bytes`             |
+| [`as_list`](#as-list)     | `Option<&[Value]>` | `List`              |
+| [`as_object`](#as-object) | `Option<&Object>`  | `Object`            |
 
 None of these converts: `as_float` on an `Int` is `None`.
 

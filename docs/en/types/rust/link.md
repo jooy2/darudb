@@ -1,6 +1,8 @@
 ---
 title: Link
 order: 6
+group: objects
+pageClass: reference-page
 ---
 
 # Link

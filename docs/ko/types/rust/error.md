@@ -1,7 +1,9 @@
 ---
 title: Error와 Result
 order: 7
+group: errors
 counterpart: /types/node/error
+pageClass: reference-page
 ---
 
 # Error와 Result
@@ -35,6 +37,27 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 ```
 
 ## 배리언트
+
+| 배리언트 | 코드 | 언제 |
+| --- | --- | --- |
+| [`Io`](#io) | `IO` | 운영체제가 파일에 대한 작업에 실패했습니다 |
+| [`NotFound`](#notfound) | `NOT_FOUND` | 경로에 데이터베이스가 없고, 새로 만들지 못하게 했습니다 |
+| [`NotADatabase`](#notadatabase) | `NOT_A_DATABASE` | DaruDB 데이터베이스가 아닌 파일입니다 |
+| [`UnsupportedFormatVersion`](#unsupportedformatversion) | `UNSUPPORTED_FORMAT_VERSION` | 이 빌드가 읽지 못하는 형식 버전의 파일입니다 |
+| [`Corrupted`](#corrupted) | `CORRUPTED` | 파일 일부가 손상됐습니다 |
+| [`InvalidArgument`](#invalidargument) | `INVALID_ARGUMENT` | 할 수 없는 일을 요청했습니다 |
+| [`Closed`](#closed) | `CLOSED` | 더는 쓸 수 없는 핸들입니다 |
+| [`Busy`](#busy) | `BUSY` | 다른 쓰기나 복구가 바쁨 대기 시간을 넘겨 파일을 쥐고 있었습니다 |
+| [`SyncFailed`](#syncfailed) | `SYNC_FAILED` | 디스크 기록이 실패해 커밋이 반영됐는지 알 수 없습니다 |
+| [`KeyRequired`](#keyrequired) | `KEY_REQUIRED` | 암호화한 파일을 키나 비밀번호 없이 열었습니다 |
+| [`WrongKey`](#wrongkey) | `WRONG_KEY` | 키나 비밀번호로 파일을 열 수 없습니다 |
+| [`UnsupportedFileSystem`](#unsupportedfilesystem) | `UNSUPPORTED_FILE_SYSTEM` | 파일이 네트워크 파일 시스템이나 잠금이 동작하지 않는 파일 시스템에 있습니다 |
+| [`SchemaMismatch`](#schemamismatch) | `SCHEMA_MISMATCH` | 같은 버전인데 파일의 스키마와 다르거나, 그사이 파일이 마이그레이션됐습니다 |
+| [`SchemaTooNew`](#schematoonew) | `SCHEMA_TOO_NEW` | 파일에 선언한 것보다 새 스키마 버전이 있습니다 |
+| [`DuplicateKey`](#duplicatekey) | `DUPLICATE_KEY` | 기본 키나 고유 값이 이미 쓰이고 있습니다 |
+| [`InvalidQuery`](#invalidquery) | `INVALID_QUERY` | 쿼리를 해석할 수 없거나 스키마에 맞지 않습니다 |
+| [`MigrationFailed`](#migrationfailed) | `MIGRATION_FAILED` | 마이그레이션 함수가 오류로 멈췄습니다 |
+| [`Internal`](#internal) | `INTERNAL` | DaruDB의 버그입니다 |
 
 ### Io
 

@@ -1,7 +1,9 @@
 ---
 title: Field types
 order: 5
+group: objects
 counterpart: /types/rust/field-type
+pageClass: reference-page
 ---
 
 # Field types

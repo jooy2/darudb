@@ -1,6 +1,8 @@
 ---
 title: 필드 타입
 order: 6
+group: objects
+pageClass: reference-page
 ---
 
 # 필드 타입

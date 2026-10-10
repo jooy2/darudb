@@ -1,7 +1,9 @@
 ---
 title: Object types
 order: 7
+group: objects
 counterpart: /types/rust/object
+pageClass: reference-page
 ---
 
 # Object types

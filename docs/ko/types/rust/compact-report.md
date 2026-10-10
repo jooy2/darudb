@@ -1,6 +1,8 @@
 ---
 title: CompactReport
 order: 10
+group: tools
+pageClass: reference-page
 ---
 
 # CompactReport

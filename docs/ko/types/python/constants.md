@@ -1,6 +1,8 @@
 ---
 title: 상수
 order: 12
+group: errors
+pageClass: reference-page
 ---
 
 # 상수

@@ -1,6 +1,6 @@
 /**
  * Pages that are mostly tables of code: the query language, the query
- * builder, and the type tables of the Types section, which set
+ * builder, and the pages of the Types section, which set
  * `pageClass: reference-page` in their frontmatter.
  *
  * A cell of code is read as a whole, and one broken over three lines at every

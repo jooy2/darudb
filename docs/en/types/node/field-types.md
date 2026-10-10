@@ -1,6 +1,8 @@
 ---
 title: Field types
 order: 6
+group: objects
+pageClass: reference-page
 ---
 
 # Field types

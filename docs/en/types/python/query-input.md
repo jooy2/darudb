@@ -1,6 +1,8 @@
 ---
 title: QueryInput
 order: 7
+group: queries
+pageClass: reference-page
 ---
 
 # QueryInput

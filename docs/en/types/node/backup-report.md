@@ -1,6 +1,8 @@
 ---
 title: BackupReport
 order: 11
+group: tools
+pageClass: reference-page
 ---
 
 # BackupReport

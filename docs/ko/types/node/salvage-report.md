@@ -1,6 +1,8 @@
 ---
 title: SalvageReport
 order: 13
+group: tools
+pageClass: reference-page
 ---
 
 # SalvageReport

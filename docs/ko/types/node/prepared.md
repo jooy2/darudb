@@ -1,6 +1,8 @@
 ---
 title: Prepared
 order: 9
+group: queries
+pageClass: reference-page
 ---
 
 # Prepared

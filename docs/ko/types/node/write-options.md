@@ -1,6 +1,8 @@
 ---
 title: WriteOptions
 order: 2
+group: queries
+pageClass: reference-page
 ---
 
 # WriteOptions

@@ -1,6 +1,8 @@
 ---
 title: FieldType
 order: 5
+group: objects
+pageClass: reference-page
 ---
 
 # FieldType

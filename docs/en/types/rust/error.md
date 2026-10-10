@@ -1,7 +1,9 @@
 ---
 title: Error and Result
 order: 7
+group: errors
 counterpart: /types/node/error
+pageClass: reference-page
 ---
 
 # Error and Result
@@ -35,6 +37,27 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 ```
 
 ## Variants
+
+| Variant | Code | When |
+| --- | --- | --- |
+| [`Io`](#io) | `IO` | The operating system failed an operation on the file |
+| [`NotFound`](#notfound) | `NOT_FOUND` | No database is at the path, and creating one was not allowed |
+| [`NotADatabase`](#notadatabase) | `NOT_A_DATABASE` | The file is not a DaruDB database |
+| [`UnsupportedFormatVersion`](#unsupportedformatversion) | `UNSUPPORTED_FORMAT_VERSION` | The file is in a format version this build does not read |
+| [`Corrupted`](#corrupted) | `CORRUPTED` | Part of the file is damaged |
+| [`InvalidArgument`](#invalidargument) | `INVALID_ARGUMENT` | The call asked for something that cannot be done |
+| [`Closed`](#closed) | `CLOSED` | The handle can no longer be used |
+| [`Busy`](#busy) | `BUSY` | Another writer or a recovery held the file past the busy timeout |
+| [`SyncFailed`](#syncfailed) | `SYNC_FAILED` | A barrier failed, so a commit's outcome is unknown |
+| [`KeyRequired`](#keyrequired) | `KEY_REQUIRED` | An encrypted file was opened without its key or password |
+| [`WrongKey`](#wrongkey) | `WRONG_KEY` | The key or password does not open the file |
+| [`UnsupportedFileSystem`](#unsupportedfilesystem) | `UNSUPPORTED_FILE_SYSTEM` | The file is on a network file system, or one without working locks |
+| [`SchemaMismatch`](#schemamismatch) | `SCHEMA_MISMATCH` | The schema differs from the file's at the same version, or the file was migrated since |
+| [`SchemaTooNew`](#schematoonew) | `SCHEMA_TOO_NEW` | The file holds a newer schema version than the one declared |
+| [`DuplicateKey`](#duplicatekey) | `DUPLICATE_KEY` | A primary key or a unique value is taken |
+| [`InvalidQuery`](#invalidquery) | `INVALID_QUERY` | A query does not parse, or does not fit the schema |
+| [`MigrationFailed`](#migrationfailed) | `MIGRATION_FAILED` | A migration function stopped with an error |
+| [`Internal`](#internal) | `INTERNAL` | A bug in DaruDB |
 
 ### Io
 

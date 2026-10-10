@@ -1,7 +1,9 @@
 ---
 title: Migration
 order: 4
+group: database
 counterpart: /api/rust/migration
+pageClass: reference-page
 ---
 
 # Migration
@@ -51,6 +53,17 @@ const db = Database.open('app.darudb', {
 ```
 
 ## 필드
+
+| 필드 | 타입 | 뜻 |
+| --- | --- | --- |
+| [`version`](#version) | `number` | 이 단계가 옮겨 가는 스키마 버전, 2부터 |
+| [`renameCollections`](#renamecollections) | `[from, to][]` | 이름을 바꾸는 컬렉션. 객체는 그 자리에 그대로 있습니다 |
+| [`renameFields`](#renamefields) | `[collection, from, to][]` | 이름을 바꾸는 필드. 레코드를 다시 쓰지 않습니다 |
+| [`deleteCollections`](#deletecollections) | `string[]` | `run` 다음에 객체와 함께 사라지는 컬렉션 |
+| [`replaceFields`](#replacefields) | `[collection, field][]` | 같은 이름의 새 필드로 바꾸는 필드 |
+| [`run`](#run) | `(migrating) => void` | 마이그레이션의 쓰기 트랜잭션 안에서 도는 함수 |
+
+`version`만 꼭 있어야 합니다.
 
 ### version
 

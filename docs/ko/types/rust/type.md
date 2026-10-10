@@ -1,7 +1,9 @@
 ---
 title: Type
 order: 3
+group: objects
 counterpart: /api/node/t
+pageClass: reference-page
 ---
 
 # Type

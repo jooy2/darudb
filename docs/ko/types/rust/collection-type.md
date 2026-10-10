@@ -1,6 +1,8 @@
 ---
 title: CollectionType
 order: 4
+group: objects
+pageClass: reference-page
 ---
 
 # CollectionType

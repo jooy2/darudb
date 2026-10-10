@@ -1,6 +1,8 @@
 ---
 title: BackupOptions
 order: 15
+group: tools
+pageClass: reference-page
 ---
 
 # BackupOptions

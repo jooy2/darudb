@@ -1,6 +1,8 @@
 ---
 title: Constants
 order: 15
+group: errors
+pageClass: reference-page
 ---
 
 # Constants

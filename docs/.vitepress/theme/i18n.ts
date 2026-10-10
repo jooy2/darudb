@@ -17,7 +17,14 @@ const STRINGS = {
     demoText: 'As text',
     demoCode: 'In code',
     demoCaption: 'The objects of the users collection, and the ones the query finds',
-    demoFound: '{count} of {total} objects found'
+    demoFound: '{count} of {total} objects found',
+    pageListName: 'Type',
+    pageListSummary: 'What it is',
+    groupDatabase: 'Opening a database',
+    groupObjects: 'Schemas and objects',
+    groupQueries: 'Queries and writes',
+    groupTools: 'Tools',
+    groupErrors: 'Errors and versions'
   },
   ko: {
     switchLabel: '언어',
@@ -32,7 +39,14 @@ const STRINGS = {
     demoText: '문자열',
     demoCode: '코드',
     demoCaption: 'users 컬렉션의 객체와 그중 쿼리가 찾은 객체',
-    demoFound: '객체 {total}개 중 {count}개를 찾았습니다'
+    demoFound: '객체 {total}개 중 {count}개를 찾았습니다',
+    pageListName: '타입',
+    pageListSummary: '설명',
+    groupDatabase: '데이터베이스 열기',
+    groupObjects: '스키마와 객체',
+    groupQueries: '쿼리와 쓰기',
+    groupTools: '도구',
+    groupErrors: '오류와 버전'
   }
 };
 

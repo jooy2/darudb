@@ -1,7 +1,9 @@
 ---
 title: OpenOptions
 order: 1
+group: database
 counterpart: /api/rust/open-options
+pageClass: reference-page
 ---
 
 # OpenOptions
@@ -29,6 +31,19 @@ const db = Database.open('notes.darudb', {
 ```
 
 ## 필드
+
+| 필드 | 타입 | 기본값 | 정하는 것 |
+| --- | --- | --- | --- |
+| [`create`](#create) | `boolean` | `true` | 없는 파일을 만들지 여부 |
+| [`pageSize`](#pagesize) | `number` | `4096` | 새 파일의 페이지 크기, 바이트 단위 |
+| [`busyTimeout`](#busytimeout) | `number` | `5000` | 다른 쓰기를 기다리는 시간, 밀리초 단위 |
+| [`cacheSize`](#cachesize) | `number` | 32 MiB | 페이지 캐시가 쓸 수 있는 메모리, 바이트 단위 |
+| [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | 예전 형식의 파일을 올릴지 여부 |
+| [`schema`](#schema) | `S` | 없음 | 데이터베이스가 담는 컬렉션 |
+| [`migrations`](#migrations) | `Migration<S>[]` | 없음 | 예전 스키마 버전을 이 버전으로 바꾸는 방법 |
+| [`key`](#key) | `Uint8Array` | 없음 | 암호화한 파일의 32바이트 키 |
+| [`password`](#password) | `string \| Uint8Array` | 없음 | 암호화한 파일의 비밀번호 |
+| [`passwordHashing`](#passwordhashing) | `PasswordHashing` | 19 MiB, 2, 1 | 비밀번호 해시에 드는 작업량 |
 
 ### create
 

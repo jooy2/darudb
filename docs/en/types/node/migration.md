@@ -1,7 +1,9 @@
 ---
 title: Migration
 order: 4
+group: database
 counterpart: /api/rust/migration
+pageClass: reference-page
 ---
 
 # Migration
@@ -51,6 +53,17 @@ const db = Database.open('app.darudb', {
 ```
 
 ## Fields
+
+| Field | Type | What it says |
+| --- | --- | --- |
+| [`version`](#version) | `number` | The schema version this step migrates to, from 2 up |
+| [`renameCollections`](#renamecollections) | `[from, to][]` | Collections renamed, with their objects where they are |
+| [`renameFields`](#renamefields) | `[collection, from, to][]` | Fields renamed, without rewriting a record |
+| [`deleteCollections`](#deletecollections) | `string[]` | Collections that go, with their objects, after `run` |
+| [`replaceFields`](#replacefields) | `[collection, field][]` | Fields replaced by a new field of the same name |
+| [`run`](#run) | `(migrating) => void` | Your function, in the migration's write transaction |
+
+Only `version` is required.
 
 ### version
 

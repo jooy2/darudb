@@ -21,6 +21,8 @@ export interface ReferencePage {
   title: string;
   summary: string;
   order: number;
+  /** The `group` its frontmatter names, for an overview that sorts pages into groups. */
+  group: string;
 }
 
 declare const data: ReferencePage[];
@@ -51,7 +53,8 @@ export default createContentLoader(['*/api/*/*.md', '*/types/*/*.md'], {
           language: language as LanguageId,
           title: String(page.frontmatter.title ?? slug),
           summary: summaryFromSource(page.src ?? '', 200) ?? '',
-          order: Number(page.frontmatter.order ?? 99)
+          order: Number(page.frontmatter.order ?? 99),
+          group: String(page.frontmatter.group ?? '')
         }
       ];
     });

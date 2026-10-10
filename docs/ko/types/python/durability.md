@@ -1,7 +1,9 @@
 ---
 title: Durability
 order: 4
+group: queries
 counterpart: /types/node/write-options
+pageClass: reference-page
 ---
 
 # Durability

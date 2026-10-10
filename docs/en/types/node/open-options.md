@@ -1,7 +1,9 @@
 ---
 title: OpenOptions
 order: 1
+group: database
 counterpart: /api/rust/open-options
+pageClass: reference-page
 ---
 
 # OpenOptions
@@ -29,6 +31,19 @@ const db = Database.open('notes.darudb', {
 ```
 
 ## Fields
+
+| Field | Type | Default | What it sets |
+| --- | --- | --- | --- |
+| [`create`](#create) | `boolean` | `true` | Whether to create a file that is not there |
+| [`pageSize`](#pagesize) | `number` | `4096` | The page size of a new file, in bytes |
+| [`busyTimeout`](#busytimeout) | `number` | `5000` | How long to wait for another writer, in milliseconds |
+| [`cacheSize`](#cachesize) | `number` | 32 MiB | How much memory the page cache may take, in bytes |
+| [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | Whether to raise a file in an older format |
+| [`schema`](#schema) | `S` | None | The collections the database holds |
+| [`migrations`](#migrations) | `Migration<S>[]` | None | How an older schema version becomes this one |
+| [`key`](#key) | `Uint8Array` | None | The 32-byte key of an encrypted file |
+| [`password`](#password) | `string \| Uint8Array` | None | The password of an encrypted file |
+| [`passwordHashing`](#passwordhashing) | `PasswordHashing` | 19 MiB, 2, 1 | How much work hashing a password takes |
 
 ### create
 

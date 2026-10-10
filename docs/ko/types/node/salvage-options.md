@@ -1,6 +1,8 @@
 ---
 title: SalvageOptions
 order: 14
+group: tools
+pageClass: reference-page
 ---
 
 # SalvageOptions

@@ -1,7 +1,9 @@
 ---
 title: DaruException
 order: 14
+group: errors
 counterpart: /types/rust/error
+pageClass: reference-page
 ---
 
 # DaruException

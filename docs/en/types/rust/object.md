@@ -1,7 +1,9 @@
 ---
 title: Object
 order: 1
+group: objects
 counterpart: /types/node/object-types
+pageClass: reference-page
 ---
 
 # Object
@@ -51,6 +53,16 @@ pub fn new() -> Self
 An object with no field set. `Object::default()` is the same.
 
 ## Methods
+
+| Method | Returns | What it does |
+| --- | --- | --- |
+| [`with`](#with) | `Object` | Sets a field and returns the object, for building one in an expression |
+| [`set`](#set) | `Option<Value>` | Sets a field in place, returning the value it replaced |
+| [`get`](#get) | `Option<&Value>` | Reads a field |
+| [`remove`](#remove) | `Option<Value>` | Takes a field out |
+| [`fields`](#fields) | an iterator | Every field with its value, by name |
+| [`len`](#len) | `usize` | How many fields the object has |
+| [`is_empty`](#is-empty) | `bool` | Whether the object has no field |
 
 ### with
 

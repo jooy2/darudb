@@ -1,7 +1,9 @@
 ---
 title: Error
 order: 16
+group: errors
 counterpart: /types/rust/error
+pageClass: reference-page
 ---
 
 # Error
