@@ -71,6 +71,25 @@ impl Digest {
     }
 }
 
+/// Probe only: a path a syscall trace shows when each row starts.
+fn mark(id: &str) {
+    let _ = std::fs::metadata(format!("/bench-marker/{id}"));
+}
+
+/// Probe only: `BENCH_FOCUS=<row>` runs that row `BENCH_REPEAT` times over,
+/// then ends the pass, so that a profile is mostly that row.
+fn focus(id: &str) -> Option<u64> {
+    match std::env::var("BENCH_FOCUS") {
+        Ok(focus) if focus == id => Some(
+            std::env::var("BENCH_REPEAT")
+                .ok()
+                .and_then(|repeat| repeat.parse().ok())
+                .unwrap_or(1),
+        ),
+        _ => None,
+    }
+}
+
 pub struct Row {
     pub id: &'static str,
     pub nanos_each: f64,
@@ -89,10 +108,16 @@ impl Rows {
         mut step: impl FnMut(u64, &mut Digest) -> Result<(), E>,
     ) {
         let mut digest = Digest::default();
+        let repeat = focus(id);
+
+        mark(id);
+
         let started = Instant::now();
 
-        for round in 0..count {
-            step(round, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
+        for _ in 0..repeat.unwrap_or(1) {
+            for round in 0..count {
+                step(round, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
+            }
         }
 
         let nanos = started.elapsed().as_nanos() as f64;
@@ -102,6 +127,11 @@ impl Rows {
             nanos_each: nanos / count as f64,
             digest,
         });
+
+        if repeat.is_some() {
+            self.print();
+            std::process::exit(0);
+        }
     }
 
     /// Runs `work` once, which does `count` operations and commits them, and
@@ -113,6 +143,9 @@ impl Rows {
         work: impl FnOnce(&mut Digest) -> Result<(), E>,
     ) {
         let mut digest = Digest::default();
+
+        mark(id);
+
         let started = Instant::now();
 
         work(&mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
@@ -124,6 +157,11 @@ impl Rows {
             nanos_each: nanos / count as f64,
             digest,
         });
+
+        if focus(id).is_some() {
+            self.print();
+            std::process::exit(0);
+        }
     }
 
     /// A row that is checked and not timed.
