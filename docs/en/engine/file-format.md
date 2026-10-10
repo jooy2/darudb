@@ -100,7 +100,7 @@ Checks that span several pages, such as whether every key under a branch lies be
 The header's format version names the layout of everything on disk, and any change to what is written changes it.
 
 - **This build writes format version 6, and reads and writes version 5 too.** A file in any other version, older or newer, is refused with `UNSUPPORTED_FORMAT_VERSION`, and the error names the version found. The first 16 bytes of the header have kept the same layout since version 1, so every build can at least tell a DaruDB file and its version apart.
-- **Version 5 is the format of the first release**, version 1.0.0 of the Node.js and Dart packages. Versions 1 to 4 never left development, so a file one of their builds wrote is refused, not upgraded.
+- **Version 5 is the format of the first release**, version 1.0 of every package. Versions 1 to 4 never left development, so a file one of their builds wrote is refused, not upgraded.
 - **Version 6 writes the lengths in a leaf's entries as varints.** A file of 400,000 objects with 14 indexes takes 8% fewer pages than in version 5, 126 MiB against 138 MiB, and compacts to 110 MiB against 119 MiB. Reads and writes measured as fast as in version 5, within the benchmarks' noise of about 2%.
 - **Every later format version comes with a migration from the one before.** Opening a file of version 5 raises it to version 6, while no other process has the file open, unless <LangCode rust="OpenOptions::upgrade_format(false)" node="upgradeFormat: false" dart="upgradeFormat: false" python="upgrade_format=False" /> turns that off.
 
@@ -108,4 +108,26 @@ Raising the version rewrites the header and nothing else. The leaves the file ho
 
 The static check covers the version, and only a one-byte write is atomic, so the raise writes the new static fields to bytes 128 to 191 first, then the version's byte, then the new check, with a barrier after each. A cut anywhere leaves a file that opens in one version or the other: once the version's byte is written, a check that does not match it is vouched for by the copy, and the next process to open the file alone writes it.
 
-The newest version a build writes is <LangCode rust="darudb::FORMAT_VERSION" node="FORMAT_VERSION" dart="formatVersion" python="darudb.FORMAT_VERSION" /> ([constants](../types/rust/constants.md)).
+::: lang rust
+
+The newest version a build writes is `darudb::FORMAT_VERSION` ([constants](../types/rust/constants.md)).
+
+:::
+
+::: lang node
+
+The newest version a build writes is `FORMAT_VERSION` ([constants](../types/node/constants.md)).
+
+:::
+
+::: lang dart
+
+The newest version a build writes is `formatVersion` ([constants](../types/dart/constants.md)).
+
+:::
+
+::: lang python
+
+The newest version a build writes is `darudb.FORMAT_VERSION` ([constants](../types/python/constants.md)).
+
+:::

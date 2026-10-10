@@ -13,7 +13,7 @@ The specification is the "Encryption" section of [design/file-format.md](https:/
 
 A database created with a key or a password is encrypted for its whole life: every page but the header, and so every key, every value and every tree name. Every page is also authenticated, and so is every commit record in the header, so a changed byte is reported as `CORRUPTED` rather than read.
 
-A plain database stays plain. It cannot be encrypted in place: its data has to be copied into a new database created with a key or a password.
+A plain database stays plain. It cannot be encrypted in place: its data has to be copied into a new database created with a key or a password, which is what a backup given a key or a password does, for the application to put in the plain file's place ([Back up under a new key](../guide/tools.md#back-up-under-a-new-key)).
 
 ## Pages
 
@@ -45,7 +45,7 @@ The pages are encrypted under a data key: 32 random bytes, generated when the fi
 
 ### Changing the key or the password
 
-Changing the key or the password writes a new key block and re-encrypts no page, so it takes the same time whatever the size of the file. It is a sync commit with the new key block, followed by empty sync commits until no slot holds the old one: three commits in all when nothing else commits in between. Every commit copies the key block of the one before it, which is how the new one reaches the other slots. Until then, the old key still opens the file; once the call returns, it no longer does. In Rust the calls are `Database::set_key` and `Database::set_password`, and in Node.js `setKey` and `setPassword`.
+Changing the key or the password writes a new key block and re-encrypts no page, so it takes the same time whatever the size of the file. It is a sync commit with the new key block, followed by empty sync commits until no slot holds the old one: three commits in all when nothing else commits in between. Every commit copies the key block of the one before it, which is how the new one reaches the other slots. Until then, the old key still opens the file; once the call returns, it no longer does. The calls are <LangCode rust="Database::set_key" node="setKey" dart="setKey" python="set_key" /> and <LangCode rust="Database::set_password" node="setPassword" dart="setPassword" python="set_password" />.
 
 The data key itself stays the same for the life of the file. A backup and a salvage keep it too, since the new file takes the old one's key block, so the key or password that opens the file opens the copy. A backup given a key or a password of its own is the exception: its copy gets a new random data key, which that key or password wraps, and every page of the copy is written under it, as every page of a backup is written anew anyway.
 
@@ -53,7 +53,7 @@ The data key itself stays the same for the life of the file. A backup and a salv
 
 A password becomes a key through Argon2id, which is memory-hard: that is what makes guessing passwords on graphics processors expensive. The default cost is 19 MiB of memory, 2 iterations and 1 lane, the lowest Argon2id setting in the OWASP password storage guidance, which takes tens of milliseconds on a current computer. The memory is what decides it, because a mobile app extension may be allowed little more than that for its whole process.
 
-The cost is stored in each key block, so an application can ask for more when it creates a file or changes its password, `OpenOptions::password_hashing` in Rust and `passwordHashing` in Node.js, without a change to the format. Opening a file always takes the cost it was made with. A key block that asks for more than 1 GiB of memory, 1024 iterations or 64 lanes is refused as `CORRUPTED` before anything is hashed, since the hash allocates its memory at once.
+The cost is stored in each key block, so an application can ask for more when it creates a file or changes its password, with <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" />, without a change to the format. Opening a file always takes the cost it was made with. A key block that asks for more than 1 GiB of memory, 1024 iterations or 64 lanes is refused as `CORRUPTED` before anything is hashed, since the hash allocates its memory at once.
 
 ## Commit records
 

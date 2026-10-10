@@ -41,7 +41,7 @@ The writer takes free pages lowest first, which keeps the file dense at the fron
 
 ## Sync commits
 
-A sync commit is durable when it returns: `commit` in Rust, and the default `durability` of a write in Node.js. It costs one barrier:
+A sync commit is durable when it returns: `commit` in Rust, and the default durability of a write in Node.js, Dart and Python. It costs one barrier:
 
 1. Write every page the transaction changed, each run of consecutive pages with one call.
 1. Write the commit record into a slot that holds nothing anyone may need.
@@ -53,7 +53,7 @@ There is no second barrier after the selector. If a power cut loses that one-byt
 
 ## Deferred commits
 
-A deferred commit, `commit_deferred` in Rust and `durability: 'deferred'` in Node.js, writes its pages and its record and publishes them at once, with the selector's unsynced bit set and no barrier. Readers see it as soon as it returns. The deferred commits since the last barrier form the unsynced window, which these end with a barrier:
+A deferred commit, <LangCode rust="commit_deferred" node="durability: 'deferred'" dart="Durability.deferred" python='durability="deferred"' />, writes its pages and its record and publishes them at once, with the selector's unsynced bit set and no barrier. Readers see it as soon as it returns. The deferred commits since the last barrier form the unsynced window, which these end with a barrier:
 
 - **The next sync commit**, whose barrier covers the whole window.
 - **A call to `sync`, or closing the database**, which calls it. When the last handle to a file in a process is dropped without being closed, the same happens, with no way to report a failure.
@@ -63,7 +63,7 @@ A deferred commit, `commit_deferred` in Rust and `durability: 'deferred'` in Nod
 
 The limits hold for the window, not for each process. Each deferred commit's record says when its window opened and how many pages the window has written, and a process that makes a deferred commit after another process's goes on counting from there. When processes set different limits, the window ends at the strictest of them. A process cannot tell which pages the others wrote, so a page written again by another process is counted twice, which only brings the barrier sooner. The opening time comes from the system clock, and a time a process cannot place, such as one later than now after the clock was set back, counts as a window already past its time limit.
 
-In Rust, `OpenOptions::max_unsynced_pages` and `OpenOptions::max_unsynced_time` change the limits; the Node.js package uses the defaults. The page limit bounds what the closing barrier has to write and what recovery has to check after a power cut. The time limit bounds how much a power cut can undo.
+In Rust, `OpenOptions::max_unsynced_pages` and `OpenOptions::max_unsynced_time` change the limits; the Node.js, Dart and Python packages use the defaults. The page limit bounds what the closing barrier has to write and what recovery has to check after a power cut. The time limit bounds how much a power cut can undo.
 
 Deferred commits exist for applications that would rather lose their last few commits in a power cut than wait for the disk on every one of them.
 
@@ -94,7 +94,7 @@ When a sync fails, the operating system may already have dropped the pages it co
 
 Recovery runs in the first process to open the file, when no other process has it open; the open lock tells ([Locking](./locking.md)). When the last process closed the file normally, recovery costs one read of the header.
 
-1. Read the three commit records, and keep the valid ones whose page count fits in the file. A record that counts more pages than the file holds was written before writes that did not all survive. In an encrypted file, a record whose MAC fails is not valid either.
+1. Read the three commit records, and keep the valid ones whose page count fits in the file. A record that counts more pages than the file holds is not one: the writes that grew the file before it did not all survive. In an encrypted file, a record whose MAC fails is not valid either.
 1. Going from the newest transaction id to the oldest, adopt the first record that is either the published commit with the unsynced bit clear, which is known to be durable, or one that passes checking.
 1. If the adopted commit is not the published one, or the unsynced bit was set, or newer records remain, erase the newer records and publish the adopted commit with the unsynced bit clear, with a barrier before and after.
 1. Cut the file to the adopted commit's page count.

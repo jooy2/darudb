@@ -28,7 +28,7 @@ Every lock is taken on a byte at 2^62 or above, far past any data:
 
 | Byte | Lock | Held |
 | --- | --- | --- |
-| 2^62 | Open | Shared by every process that has the file open, and exclusively by a process recovering it |
+| 2^62 | Open | Shared by every process that has the file open, and exclusively by a process recovering it, raising its format version, or salvaging it |
 | 2^62 + 1 | Writer | Exclusively, by the process whose transaction is writing |
 | 2^62 + 2 | Recovery | Exclusively, by a process that is opening the file, until it holds the open lock |
 | 2^62 + 3 | Turn | Exclusively, by the waiting writer whose turn is next |
@@ -51,7 +51,7 @@ On Windows, a lock belongs to its handle. With one handle in each process, the b
 
 1. Use the process's instance for the file if it has one, and stop here. Otherwise open the file.
 1. Take the recovery lock, trying again with growing pauses; waiting past the busy timeout fails with `BUSY`.
-1. Try to take the open lock exclusively, without waiting. Getting it means no other process has the file open: run [recovery](./commits-and-recovery.md#recovery), then turn the open lock into a shared one.
+1. Try to take the open lock exclusively, without waiting. Getting it means no other process has the file open: run [recovery](./commits-and-recovery.md#recovery), finish raising the format version if a raise was cut short or raise a file of an older version, unless the options say not to, then turn the open lock into a shared one.
 1. Otherwise, other processes have the file open, and the first of them recovered it. Take the open lock shared.
 1. Release the recovery lock.
 

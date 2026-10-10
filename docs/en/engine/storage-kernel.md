@@ -144,7 +144,7 @@ Collections are the place to start. The kernel suits data that is:
 - **Ordered your way**: keys built so that one range finds what you need, such as a timestamp in big-endian followed by an id.
 - **Simple enough** that nothing collections add would be used.
 
-Collections give what the kernel does not: typed fields checked against a schema, indexes kept in step with the objects, queries that choose an index, migrations from one schema version to the next, and an integrity check of every object against its indexes. Above all, only Rust reaches the kernel. The Node.js package reads and writes collections only, so data that another language has to read belongs in a collection. A program in another language leaves the kernel's trees as they are, and backup, compaction and salvage keep them.
+Collections give what the kernel does not: typed fields checked against a schema, indexes kept in step with the objects, queries that choose an index, migrations from one schema version to the next, and an integrity check of every object against its indexes. Above all, only Rust reaches the kernel. The Node.js, Dart and Python packages read and write collections only, so data that another language has to read belongs in a collection. A program in another language leaves the kernel's trees as they are, and backup, compaction and salvage keep them.
 
 ## The calls
 
