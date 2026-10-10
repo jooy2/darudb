@@ -502,7 +502,14 @@ final class SampleStore {
       final Future<List<T>> objects = collection.findText(text);
       final Future<int> total = collection.countText(filter);
 
-      return (await objects, await total);
+      // Both calls are under way before either is awaited, so when a filter
+      // that does not parse fails the first, the second's failure is let go
+      // rather than left unhandled.
+      try {
+        return (await objects, await total);
+      } finally {
+        total.ignore();
+      }
     });
 
     return ListResult(<SampleRow>[
