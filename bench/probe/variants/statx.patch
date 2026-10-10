@@ -1,0 +1,44 @@
+diff --git a/crates/darudb/src/txn/commit.rs b/crates/darudb/src/txn/commit.rs
+index fb3d97b..e249dfc 100644
+--- a/crates/darudb/src/txn/commit.rs
++++ b/crates/darudb/src/txn/commit.rs
+@@ -267,8 +267,6 @@ fn write_and_publish(
+ 
+     pages.sort_unstable_by_key(|page| page.page);
+ 
+-    let written = pages.last().map_or(0, |page| page.page + 1);
+-
+     // Consecutive pages go out together, a run at a time.
+     for run in pages
+         .chunk_by(|before, after| after.page == before.page + 1)
+@@ -287,28 +285,10 @@ fn write_and_publish(
+     // The file has to hold every page the record counts, including pages at
+     // the end that were allocated and released again without being written.
+     // Recovery skips a record that counts more pages than the file holds.
+-    //
+-    // It holds every page the published record counts: the commit that
+-    // published it made sure of that, and only a sync commit and recovery
+-    // shorten the file, each to the count of the record it publishes. It
+-    // also holds every page this commit wrote. Asking the file its length
+-    // costs a system call on every commit, so the file is asked only when
+-    // the record counts pages past both.
+     let needed = record.page_count * pager.page_size() as u64;
+-    let held = txn.header.published()?.page_count.max(written);
+ 
+-    if record.page_count > held {
+-        if pager.file_len()? < needed {
+-            pager.resize(record.page_count)?;
+-        }
+-    } else {
+-        // The crash and multi-process suites run through here thousands of
+-        // times, with files cut short by power failures.
+-        #[cfg(test)]
+-        assert!(
+-            pager.file_len()? >= needed,
+-            "the file holds fewer pages than the published record and the commit's own say"
+-        );
++    if pager.file_len()? < needed {
++        pager.resize(record.page_count)?;
+     }
+ 
+     if txn.barrier_first {

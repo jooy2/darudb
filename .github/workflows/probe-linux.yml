@@ -1,9 +1,8 @@
 name: probe-linux
 
-# Probe only, on a branch that is never merged: why the Rust harness's DaruDB
-# rows on Linux runners differ from the ones measured on macOS. Side `a` is
-# the engine as it is; side `b` issues its barrier with `fdatasync` rather
-# than `fsync`.
+# Probe only, on a branch that is never merged: the engine as the branch has
+# it against the engine with each patch of `bench/probe/variants` applied, on
+# a Linux runner, through the Rust harness's DaruDB passes run in turn.
 
 on:
   push:
@@ -23,73 +22,31 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          path: a
+          path: base
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Tools
+      - name: Machine
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q strace linux-tools-common "linux-tools-$(uname -r)" \
-            || sudo apt-get install -y -q strace linux-tools-common linux-tools-azure
-          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
           mkdir out
-          {
-            uname -a
-            lscpu
-            findmnt -T /tmp
-            perf --version
-            strace -V | head -1
-          } | tee out/machine.txt
-      - name: Build both sides
+          { lscpu | grep -E 'Model name|^CPU\(s\)'; findmnt -T /tmp; } | tee out/machine.txt
+      - name: Build every side
         run: |
-          cp -r a b
-          sed -i 's/self\.file\.sync_all()$/self.file.sync_data()/' b/crates/darudb/src/storage/file.rs
-          git -C b diff --exit-code --quiet && { echo "side b is unchanged"; exit 1; }
-          git -C b diff | tee out/side-b.diff
-          (cd a/bench/rust && cargo build --release -q)
-          (cd b/bench/rust && cargo build --release -q)
-      - name: Trace each store's commits
-        run: |
-          for side in a b; do
-            for store in daru sqlite lmdb redb; do
-              [ "$side" = b ] && [ "$store" != daru ] && continue
-              dir=$(mktemp -d)
-              BENCH_FOCUS=insert-deferred strace -f -T -s 0 -o "out/trace-$side-$store.txt" \
-                -e trace=openat,close,pwrite64,pwritev,pwritev2,write,fsync,fdatasync,fcntl,flock,ftruncate,fallocate,msync,sync_file_range,statx,newfstatat \
-                "$side/bench/rust/target/release/darudb-bench" --child "$store" --dir "$dir" > /dev/null
-              rm -rf "$dir"
-            done
+          sides="base=base/bench/rust/target/release/darudb-bench:daru"
+          for patch in base/bench/probe/variants/*.patch; do
+            name=$(basename "$patch" .patch)
+            cp -r base "$name"
+            git -C "$name" apply "$PWD/$patch"
+            git -C "$name" diff --stat
+            sides="$sides $name=$name/bench/rust/target/release/darudb-bench:daru"
           done
-          python3 a/bench/probe/syscalls.py out/trace-*.txt | tee out/syscalls.txt
-      - name: A/B of the barrier
-        run: |
-          node a/bench/probe/ab.mjs 9 \
-            a=a/bench/rust/target/release/darudb-bench:daru \
-            b=b/bench/rust/target/release/darudb-bench:daru \
-            sqlite=a/bench/rust/target/release/darudb-bench:sqlite \
-            lmdb=a/bench/rust/target/release/darudb-bench:lmdb \
-            | tee out/ab.txt
-      - name: Profile DaruDB's rows
-        run: |
-          bin=a/bench/rust/target/release/darudb-bench
-          for focus in insert-deferred:1 get-key:20 get-email:20 age-equal:8 age-range:20 city-scan:4; do
-            row=${focus%%:*}
-            for store in daru lmdb; do
-              dir=$(mktemp -d)
-              BENCH_FOCUS=$row BENCH_REPEAT=${focus##*:} perf record -q -e cpu-clock -F 999 \
-                --call-graph dwarf,8192 -o "perf-$store-$row.data" "$bin" --child "$store" --dir "$dir" > /dev/null
-              rm -rf "$dir"
-              {
-                echo "######## $store $row: by object"
-                perf report -i "perf-$store-$row.data" --no-children --sort dso --stdio -g none 2> /dev/null | grep -v '^#' | grep -v '^$' | head -8
-                echo "######## $store $row: by function, own time"
-                perf report -i "perf-$store-$row.data" --no-children --sort symbol --stdio -g none --percent-limit 0.8 2> /dev/null | grep -v '^#' | grep -v '^$' | head -45
-                echo "######## $store $row: by function, with callees"
-                perf report -i "perf-$store-$row.data" --children --sort symbol --stdio -g none --percent-limit 3 2> /dev/null | grep -v '^#' | grep -v '^$' | head -45
-              } | tee "out/profile-$store-$row.txt"
-            done
+          for side in $sides; do
+            dir=${side#*=}
+            (cd "${dir%%/bench/*}/bench/rust" && cargo build --release -q)
           done
+          echo "SIDES=$sides" >> "$GITHUB_ENV"
+      - name: A/B
+        run: node base/bench/probe/ab.mjs 15 $SIDES | tee out/ab.txt
       - uses: actions/upload-artifact@v7
         if: always()
         with:
