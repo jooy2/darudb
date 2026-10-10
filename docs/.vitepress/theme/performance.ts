@@ -28,7 +28,8 @@ export interface Results {
   runs: number;
   machine: { os: string; cpu: string; cores: number; memory?: number };
   stores: { id: string; version: string }[];
-  rows: { id: string; count: number; agree: boolean; results: Record<string, Measured> }[];
+  /** A store with no way to do a row has `null` there. */
+  rows: { id: string; count: number; agree: boolean; results: Record<string, Measured | null> }[];
 }
 
 export interface Data {
@@ -41,7 +42,8 @@ export const STORES: Record<string, string> = {
   sqlite: 'SQLite',
   lmdb: 'LMDB',
   redb: 'redb',
-  hive: 'Hive CE'
+  hive: 'Hive CE',
+  realm: 'Realm'
 };
 
 /** The rows the page shows, in order; `left` is a check the page leaves out. */
@@ -118,7 +120,8 @@ export const TEXT = {
       'Below each time, how many times as long as DaruDB the store takes: above 1, DaruDB is faster.',
     ratioTitle: '{store} takes {ratio} times as long as DaruDB',
     versions: 'Versions',
-    missing: 'This language has no results yet.'
+    missing: 'This language has no results yet.',
+    none: '{store} has no way to do this'
   },
   ko: {
     workload: '작업',
@@ -128,6 +131,7 @@ export const TEXT = {
       '시간 아래의 수는 그 저장소가 DaruDB보다 몇 배 걸렸는지를 뜻합니다. 1보다 크면 DaruDB가 빠릅니다.',
     ratioTitle: '{store}는 DaruDB의 {ratio}배 걸립니다',
     versions: '버전',
-    missing: '이 언어의 결과는 아직 없습니다.'
+    missing: '이 언어의 결과는 아직 없습니다.',
+    none: '{store}에는 이 작업이 없습니다'
   }
 };

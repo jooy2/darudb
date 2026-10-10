@@ -374,3 +374,4 @@ The query language is close to the Realm Query Language that `filtered` takes:
 - **Schema versions** keep working the same way: raise the schema's version, and give a migration for what the engine does not do by itself. See [Migrations](../guide/migrations.md).
 - **Encryption** takes a 32-byte key or a password instead of Realm's 64-byte key. The new file has a key of its own; see [Encryption](../guide/encryption.md).
 - **Sync** to a server has no counterpart: DaruDB keeps data in a local file only.
+- **Speed** is measured beside Realm on the [performance page](../performance.md), in its Node.js table, on the same objects and workloads.

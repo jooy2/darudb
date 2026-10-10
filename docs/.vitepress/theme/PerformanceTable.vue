@@ -47,11 +47,26 @@ function table(result: Results) {
         id: row.id,
         label: row.label[locale.value],
         cells: stores.map((store) => {
-          const median = found.results[store]?.median ?? 0;
+          // A store with no way to do the row, such as a deferred commit in a
+          // store whose every commit syncs, gets an empty cell.
+          if (!found.results[store]) {
+            return {
+              store,
+              none: true,
+              time: '—',
+              fastest: false,
+              ratio: null,
+              standing: '',
+              title: fill(text.value.none, { store: STORES[store] })
+            };
+          }
+
+          const median = found.results[store].median;
           const ratio = store === 'daru' || daru === 0 ? null : median / daru;
 
           return {
             store,
+            none: false,
             time: time(median),
             fastest: median === fastest,
             ratio: ratio === null ? null : ratio.toFixed(2),
@@ -122,9 +137,16 @@ const languages = computed(() =>
                 :key="cell.store"
                 :class="{ 'performance-self': cell.store === 'daru' }"
               >
-                <span class="performance-time" :class="{ 'performance-fastest': cell.fastest }">{{
-                  cell.time
-                }}</span>
+                <span v-if="cell.none" :title="cell.title"
+                  ><span class="performance-time" aria-hidden="true">{{ cell.time }}</span
+                  ><span class="visually-hidden">{{ cell.title }}</span></span
+                >
+                <span
+                  v-else
+                  class="performance-time"
+                  :class="{ 'performance-fastest': cell.fastest }"
+                  >{{ cell.time }}</span
+                >
                 <span
                   v-if="cell.ratio"
                   class="performance-ratio"
