@@ -1,0 +1,46 @@
+name: probe-profile
+
+# Probe only, on a branch that is never merged: profiles of single rows of
+# the Rust harness on a Linux runner, DaruDB's beside LMDB's.
+
+on:
+  push:
+    branches: [investigate/linux-perf]
+    paths: [bench/probe/profile.sh, .github/workflows/probe-profile.yml]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bench/rust
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q linux-tools-common "linux-tools-$(uname -r)" \
+            || sudo apt-get install -y -q linux-tools-common linux-tools-azure
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+      - name: Build
+        working-directory: bench/rust
+        run: cargo build --release -q
+      - name: Profile
+        run: |
+          bench/probe/profile.sh out \
+            daru:get-key:30 lmdb:get-key:30 \
+            daru:age-equal:30 lmdb:age-equal:30 \
+            daru:get-email:40 lmdb:get-email:40
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: profile
+          path: out
