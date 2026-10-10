@@ -83,6 +83,41 @@ void main() {
     });
   });
 
+  test('a migration reads a list of links as the keys they hold', () {
+    db.write((txn) {
+      final people = txn.collection(personSchema);
+      final ada = people.insert(const Person(name: 'Ada'));
+      final grace = people.insert(const Person(name: 'Grace'));
+
+      txn
+          .collection(postSchema)
+          .insert(
+            Post(
+              'engines',
+              author: Link<Person>(ada),
+              readers: [Link<Person>(ada), Link<Person>(grace)],
+            ),
+          );
+    });
+    db.close();
+
+    Object? readers;
+
+    db = Database.open(
+      '${directory.path}/app.darudb',
+      schema: const Schema(2, [personSchema, postSchema]),
+      migrations: [
+        Migration(
+          2,
+          run: (context) =>
+              readers = context.previous('posts', 'engines')!['readers'],
+        ),
+      ],
+    );
+
+    expect(readers, [1, 2]);
+  });
+
   test('copyWith and put replace an object, and update sets one field', () {
     final id = db.write(
       (txn) => txn.collection(personSchema).insert(const Person(name: 'Ada')),

@@ -177,6 +177,10 @@ final class MigrationContext {
           field.fields!,
         ),
         final RawLink link => link.key,
+        // A list of links reads as the keys they hold, as one link does.
+        final List<Object?> list when list.any((item) => item is RawLink) => [
+          for (final item in list) item is RawLink ? item.key : item,
+        ],
         null => field.defaultValue?.value,
         final value => value,
       },

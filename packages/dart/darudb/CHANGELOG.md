@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- `MigrationContext.previous` reads a list of links as the keys they hold, as it reads one link, where it gave the package's internal link objects.
 - `findText`, `countText`, `findPrepared` and `countPrepared` of an asynchronous collection complete their `Future` with the error when they fail, as every other call of the `Future` API does. A text that does not parse, or a prepared query of another collection, threw before the `Future` was returned.
 - `Database.open`, `openAsync`, `backup`, `backupAsync`, `salvage` and `salvageAsync` wipe every copy of the key or password they make on the way to the engine. The buffer the options were written into, which could be left behind when it grew, and the password's UTF-8 bytes stayed in memory until the garbage collector reclaimed them.
 - `backup` and `backupAsync` refuse a `passwordHashing` cost out of range with `INVALID_ARGUMENT` before they write anything, as opening does, whether a password is given or not. With a password they failed with `INTERNAL`, and without one they ignored the cost.
