@@ -76,6 +76,9 @@ int main(int argc, char **argv) {
   }
   report("fcntl F_GETLK", started, 200000);
 
+  // Flush what the loops above wrote, so that the next two time one page.
+  fsync(fd);
+
   started = now();
   for (n = 0; n < 200; n++) {
     pwrite(fd, page, sizeof page, (n % 64) * 4096);
