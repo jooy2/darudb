@@ -29,4 +29,4 @@ const FORMAT_VERSION: number;
 const engineVersion: () => string;
 ```
 
-패키지에 든 DaruDB 엔진의 버전을 `'0.1.0'` 같은 문자열로 돌려줍니다. 엔진과 npm 패키지는 버전을 따로 매기므로, 패키지의 `package.json`에 적힌 버전과 다를 수 있습니다.
+패키지에 든 DaruDB 엔진의 버전을 `'1.1.0'` 같은 문자열로 돌려줍니다. 엔진과 npm 패키지는 버전을 따로 매기므로, 패키지의 `package.json`에 적힌 버전과 다를 수 있습니다.

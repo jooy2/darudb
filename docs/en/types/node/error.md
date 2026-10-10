@@ -59,7 +59,7 @@ What went wrong, for a person to read. A message may be reworded in any release,
 ## CLOSED
 
 - After `close` or `closeAsync`, every member of a [Database](../../api/node/database.md) but `path`, `isOpen`, `close` and `closeAsync` throws `CLOSED`, and the asynchronous methods reject with it. Closing again does nothing. `closeAsync` refuses new work as soon as it is called, before its promise settles.
-- A transaction, or a collection taken from it, used after its function has returned throws `CLOSED`, and in the asynchronous API rejects with it. Keep the objects a transaction read instead: they are plain values that outlive it.
+- A transaction, or a collection taken from it, that reads or writes after its function has returned throws `CLOSED`, and in the asynchronous API rejects with it. Keep the objects a transaction read instead: they are plain values that outlive it.
 
 ## Asynchronous calls
 

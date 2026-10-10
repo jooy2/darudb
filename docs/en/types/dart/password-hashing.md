@@ -43,6 +43,7 @@ A value outside its range fails to open with `INVALID_ARGUMENT`. The option is c
 
 - **A new database created with a `password`.** The file records this cost beside the key.
 - **`setPassword` and `setPasswordAsync`.** The new password is hashed at the cost this option gave when the process opened the file, the first handle's if it opened the file more than once, and the file records that cost from then on. Without the option, that is the default cost, whatever the file recorded before.
+- **A backup made with a `password`.** `backup` and `backupAsync` hash the copy's password at the cost their own `passwordHashing` gives, and the copy records it.
 - **Never when a file is opened.** Opening an encrypted file takes the cost the file records, so raising the cost in a new release of an application still opens the files it made before. [`Database.salvage`](../../api/dart/database.md#salvage) does the same, and takes no cost.
 
 [Encryption](../../guide/encryption.md) explains how the key derived from a password protects the file.

@@ -16,7 +16,7 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object> exte
 
 The class's types keep most objects that do not fit from compiling. What is left is checked when an object is written:
 
-- **`INVALID_ARGUMENT`** for an object the file's schema refuses, such as a link holding a key of another type than the linked collection's, or a field another handle's migration changed.
+- **`INVALID_ARGUMENT`** for an object the file's schema refuses, such as a link holding a key of another type than the linked collection's. A file another handle or process migrated since this handle opened it fails with `SCHEMA_MISMATCH` instead.
 - **`DUPLICATE_KEY`** when an insert finds its key taken, or a unique index finds one of the object's values taken.
 - **A refused write changes nothing**, and the transaction can go on and commit.
 

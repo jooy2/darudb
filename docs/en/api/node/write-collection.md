@@ -12,7 +12,7 @@ A `WriteCollection` writes the objects of one collection in a write transaction,
 interface WriteCollection<O, I> extends ReadCollection<O>
 ```
 
-`collection` of a write transaction or of a migration returns one. `O` is the type of an object read, and `I` the type of one written, which [InsertOf](../../types/node/object-types.md) makes from the fields: the required fields without a default, and any of the rest. Reads see the transaction's own changes. The methods can be called only while the transaction's function runs; afterwards they throw `CLOSED`.
+`collection` of a write transaction or of a migration returns one. `O` is the type of an object read, and `I` the type of one written, which [InsertOf](../../types/node/object-types.md) makes from the fields: the required fields without a default, and any of the rest. Reads see the transaction's own changes. The methods can be called only while the transaction's function runs; afterwards those that read or write throw `CLOSED`.
 
 Every write checks the object against the schema first:
 

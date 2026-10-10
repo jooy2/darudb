@@ -113,7 +113,7 @@ InvalidArgument { message: String }
 Closed
 ```
 
-`CLOSED`. The database was used after it was closed. The Rust API never returns it, since [`Database::close`](../../api/rust/database.md#close) consumes the handle; it exists so that the bindings, whose handles outlive their close, report that case with a code from this list.
+`CLOSED`. The handle cannot be used any more. [`Database::close`](../../api/rust/database.md#close) consumes the handle, so in Rust this comes from a handle a forked child inherited from its parent: the child holds none of the parent's locks on the file, so it fails every call, and opens the file itself instead. The bindings report a handle used after it was closed with this code too.
 
 ### Busy
 
@@ -177,7 +177,7 @@ SchemaTooNew { stored: u64, declared: u64 }
 DuplicateKey { message: String }
 ```
 
-`DUPLICATE_KEY`. An insert found its primary key taken, or a unique index found its value taken. `message` names the key or value and the collection.
+`DUPLICATE_KEY`. An insert found its primary key taken, or a unique index found its value taken. `message` names the collection, and either the primary key that is taken or the unique field whose value is.
 
 ### InvalidQuery
 

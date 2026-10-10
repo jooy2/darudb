@@ -48,7 +48,7 @@ final class AsyncWriteTransaction extends AsyncReadTransaction {
 
 `Database.writeAsync`의 쓰기 트랜잭션입니다. 함수는 비동기여도 됩니다. 함수가 완료되고 함수가 부른 호출이 모두 끝나면 커밋하고, 함수가 실패하면 취소합니다. `collection`은 위와 같고 [AsyncWriteCollection](./write-collection.md#asyncwritecollection)을 돌려줍니다. 그 호출은 await 여부와 관계없이 부른 순서대로 네이티브 라이브러리의 스레드에서 실행됩니다.
 
-실패한 호출은 자기 `Future`를 그 오류로 완료하고 아무것도 바꾸지 않으며, 트랜잭션은 함수가 완료되면 나머지를 커밋합니다. 실패한 뒤에 커밋하면 안 되는 함수는 호출을 await해서 오류가 함수의 결과까지 올라가게 합니다. 함수 안에서 같은 파일에 `write`, `sync`, `close`, `compact`, `setKey`, `setPassword`를 부르면 `Async` 짝까지 모두 `INVALID_ARGUMENT`로 거부됩니다.
+실패한 호출은 자기 `Future`를 그 오류로 완료하고 아무것도 바꾸지 않으며, 트랜잭션은 함수가 완료되면 나머지를 커밋합니다. 실패한 뒤에 커밋하면 안 되는 함수는 호출을 await해서 오류가 함수의 결과까지 올라가게 합니다. 함수 안에서 같은 파일에 `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey`, `setPassword`를 부르면 `Async` 짝까지 모두 `INVALID_ARGUMENT`로 거부됩니다.
 
 ```dart
 final carol = await db.writeAsync((txn) async {

@@ -13,7 +13,7 @@ final class Database implements Finalizable
 
 There is no constructor: `Database.open` and `Database.openAsync` return one. A database opened without a [schema](./schema.md) has no collections, and one opened with a schema reaches each collection through the constant `darudb_generator` wrote for its class, such as `userSchema`.
 
-A `Database` works until `close` or `closeAsync` has closed it. After that only `path` and `isOpen` can be read, and every other member throws a [DaruException](../../types/dart/error.md) with the code `CLOSED`. Opening a file that the process already has open, from this isolate or another, gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. A handle that is never closed is closed when the garbage collector reclaims it, but a program should not count on when that happens.
+A `Database` works until `close` or `closeAsync` has closed it. After that only `path`, `isOpen` and `schemaVersion` can be read, `close` and `closeAsync` do nothing, and every other member throws a [DaruException](../../types/dart/error.md) with the code `CLOSED`. Opening a file that the process already has open, from this isolate or another, gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. A handle that is never closed is closed when the garbage collector reclaims it, but a program should not count on when that happens.
 
 Every call runs on the isolate that makes it and holds it until the engine returns, so a write that waits for another writer, or a sync commit that waits for the disk, holds a Flutter app's UI isolate too. Every method that uses the file has a twin whose name ends in `Async`, which does the engine's work on a thread of the package's native library and returns a `Future`. [Asynchronous API](../../guide/async.md) explains how the two kinds of call share a file.
 
@@ -154,7 +154,7 @@ The size of every page in the file, in bytes. A file keeps the page size it was 
 int get formatVersion;
 ```
 
-The file format version recorded in the file: 6, which this package writes (the top-level [formatVersion](../../types/dart/constants.md)), or 5 for a file that opening did not raise, with `upgradeFormat: false`.
+The file format version recorded in the file: 6, which this package writes (the top-level [formatVersion](../../types/dart/constants.md)), or 5 for a file that opening did not raise, with `upgradeFormat: false` or while another process had the file open.
 
 ### isEncrypted
 
@@ -222,7 +222,7 @@ Runs `fn` in a [write transaction](./write-transaction.md), commits it when `fn`
 - `BUSY`: another process's writer held the file for longer than `busyTimeout`.
 - `INVALID_ARGUMENT`: `fn` returned a `Future`, and the transaction was aborted.
 - `INVALID_ARGUMENT` also when the call comes from inside a write transaction's function on the same file, or while an asynchronous write of this isolate holds the file. Write transactions do not nest, and waiting here would hold the isolate that the other write needs to finish.
-- `SYNC_FAILED`: the disk failed the commit's barrier. The database has to be closed and opened again.
+- `SYNC_FAILED`: the disk failed the commit's barrier, so whether the commit took effect is unknown. The database has to be closed and opened again.
 
 ### writeAsync
 

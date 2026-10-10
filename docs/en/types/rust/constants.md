@@ -15,7 +15,7 @@ The crate exports two constants: the version of the crate and the newest file fo
 pub const VERSION: &str
 ```
 
-The version of the `darudb` crate, as its `Cargo.toml` gives it, such as `"1.0.0"`. It is the version of the library compiled into the program, which is useful in a log line or a bug report.
+The version of the `darudb` crate, as its `Cargo.toml` gives it, such as `"1.1.0"`. It is the version of the library compiled into the program, which is useful in a log line or a bug report.
 
 ## FORMAT_VERSION
 

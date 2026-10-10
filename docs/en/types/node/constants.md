@@ -29,4 +29,4 @@ The newest file format version this build of the engine reads and writes, 6, whi
 const engineVersion: () => string;
 ```
 
-Returns the version of the DaruDB engine inside the package, such as `'0.1.0'`. The engine and the npm package are versioned separately, so it can differ from the version in the package's `package.json`.
+Returns the version of the DaruDB engine inside the package, such as `'1.1.0'`. The engine and the npm package are versioned separately, so it can differ from the version in the package's `package.json`.

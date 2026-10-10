@@ -59,7 +59,7 @@ final String message;
 
 ## CLOSED
 
-- `close`나 `closeAsync`로 닫은 뒤에는 [Database](../../api/dart/database.md)의 멤버 가운데 `path`, `isOpen`, `close`, `closeAsync`를 뺀 모든 것이 `CLOSED`를 던지고, 비동기 메서드는 이 오류로 실패합니다. 다시 닫으면 아무 일도 일어나지 않습니다.
+- `close`나 `closeAsync`로 닫은 뒤에는 [Database](../../api/dart/database.md)의 멤버 가운데 `path`, `isOpen`, `schemaVersion`, `close`, `closeAsync`를 뺀 모든 것이 `CLOSED`를 던지고, 비동기 메서드는 이 오류로 실패합니다. 다시 닫으면 아무 일도 일어나지 않습니다.
 - 함수가 반환한 뒤에 트랜잭션이나 거기서 얻은 컬렉션을 쓰면 `CLOSED`를 던지고, `Future` API에서는 이 오류로 실패합니다. 트랜잭션 밖에서 쓸 것은 컬렉션이 아니라 읽은 객체로 남겨 두세요. 객체는 트랜잭션이 끝난 뒤에도 쓸 수 있는 값입니다.
 
 ## Future API

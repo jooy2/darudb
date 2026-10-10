@@ -12,7 +12,7 @@ counterpart: /api/rust/collection-reader
 interface ReadCollection<O>
 ```
 
-읽기 트랜잭션의 `collection`이 돌려주며, 쓰기 트랜잭션의 [WriteCollection](./write-collection.md)에도 아래 멤버가 모두 있어서 트랜잭션 자신의 변경까지 읽습니다. `O`는 컬렉션의 객체 타입이고, [ObjectOf](../../types/node/object-types.md)가 필드로 만듭니다. 메서드는 트랜잭션의 함수가 도는 동안만 부를 수 있고, 그 뒤에는 `CLOSED`를 던집니다.
+읽기 트랜잭션의 `collection`이 돌려주며, 쓰기 트랜잭션의 [WriteCollection](./write-collection.md)에도 아래 멤버가 모두 있어서 트랜잭션 자신의 변경까지 읽습니다. `O`는 컬렉션의 객체 타입이고, [ObjectOf](../../types/node/object-types.md)가 필드로 만듭니다. 메서드는 트랜잭션의 함수가 도는 동안만 부를 수 있고, 그 뒤에 읽거나 쓰는 메서드는 `CLOSED`를 던집니다.
 
 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 객체입니다. 스키마의 필드가 모두 들어 있고, 쓸 때 빠진 필드에는 기본값이나 null이 들어갑니다. 키 필드가 없는 컬렉션의 객체에는 `id`가 있습니다. `t.bigint()`로 선언한 필드는 `bigint`로, 바이트는 `Uint8Array`로 읽힙니다. `t.int()`로 선언한 필드에 2^53 너머의 값이 있으면 읽을 때 `INVALID_ARGUMENT`로 실패합니다.
 

@@ -59,7 +59,7 @@ What went wrong, for a person to read. A message may be reworded in any release,
 
 ## CLOSED
 
-- After `close` or `closeAsync`, every member of a [Database](../../api/dart/database.md) but `path`, `isOpen`, `close` and `closeAsync` throws `CLOSED`, and the asynchronous methods fail with it. Closing again does nothing.
+- After `close` or `closeAsync`, every member of a [Database](../../api/dart/database.md) but `path`, `isOpen`, `schemaVersion`, `close` and `closeAsync` throws `CLOSED`, and the asynchronous methods fail with it. Closing again does nothing.
 - A transaction, or a collection taken from it, used after its function has returned throws `CLOSED`, and in the `Future` API fails with it. Keep the objects a transaction read instead: they are values that outlive it.
 
 ## The Future API

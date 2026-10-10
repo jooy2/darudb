@@ -96,7 +96,7 @@ Holds when the field equals `value`.
 Condition notEquals(V value);
 ```
 
-Holds when the field does not equal `value`, or is null.
+Holds when the field is not null and does not equal `value`.
 
 ### isIn
 
@@ -258,7 +258,7 @@ Holds when the link holds `key`.
 Condition notEquals(Object key);
 ```
 
-Holds when the link does not hold `key`, or is null.
+Holds when the link is not null and does not hold `key`.
 
 ### isIn
 

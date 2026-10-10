@@ -96,7 +96,7 @@ Condition equals(V value);
 Condition notEquals(V value);
 ```
 
-필드가 `value`와 다르거나 null일 때 참입니다.
+필드가 null이 아니고 `value`와 다를 때 참입니다.
 
 ### isIn
 
@@ -258,7 +258,7 @@ Condition equals(Object key);
 Condition notEquals(Object key);
 ```
 
-링크에 `key`가 담겨 있지 않거나 null일 때 참입니다.
+링크가 null이 아니고 `key`를 담고 있지 않을 때 참입니다.
 
 ### isIn
 

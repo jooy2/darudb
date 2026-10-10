@@ -12,7 +12,7 @@ A `ReadCollection` reads the objects of one collection in a transaction: by prim
 interface ReadCollection<O>
 ```
 
-`collection` of a read transaction returns one, and a write transaction's [WriteCollection](./write-collection.md) has every member below too, reading the transaction's own changes. `O` is the type of the collection's objects, which [ObjectOf](../../types/node/object-types.md) makes from its fields. The methods can be called only while the transaction's function runs; afterwards they throw `CLOSED`.
+`collection` of a read transaction returns one, and a write transaction's [WriteCollection](./write-collection.md) has every member below too, reading the transaction's own changes. `O` is the type of the collection's objects, which [ObjectOf](../../types/node/object-types.md) makes from its fields. The methods can be called only while the transaction's function runs; afterwards those that read or write throw `CLOSED`.
 
 Objects come back as plain objects that outlive the transaction. Every field of the schema is there, a field left out when the object was written holding its default or null, and a collection without a key field gives each object its `id`. A field declared with `t.bigint()` reads as a `bigint`, and bytes as a `Uint8Array`. A value beyond 2^53 in a field declared with `t.int()` fails to read with `INVALID_ARGUMENT`.
 

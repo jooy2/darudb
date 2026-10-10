@@ -21,7 +21,7 @@ print(f"darudb {darudb.__version__}, engine {darudb.ENGINE_VERSION}, file format
 FORMAT_VERSION: int
 ```
 
-이 빌드의 엔진이 읽고 쓰는 가장 새 파일 형식 버전인 6이며, 새 파일은 이 버전으로 만듭니다. 파일마다 자신을 쓴 형식 버전을 기록하고, 그 값은 [`Database.format_version`](../../api/python/database.md#format-version)으로 읽습니다. 이 빌드가 읽지 않는 버전의 파일을 열면 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 첫 릴리스의 형식은 버전 5이고, 버전 6은 리프 항목의 길이를 더 적은 바이트로 적습니다. 이 빌드는 두 버전을 모두 읽고 쓰며, 버전 5 파일을 열면 `upgrade_format`이 `False`가 아닌 한 버전 6으로 올립니다. 버전 5보다 앞선 개발 빌드가 쓴 파일은 열리지 않습니다. 이 버전이 무엇을 정하는지는 [파일 형식](../../engine/file-format.md#형식-버전)에 있습니다.
+이 빌드의 엔진이 읽고 쓰는 가장 새 파일 형식 버전인 6이며, 새 파일은 이 버전으로 만듭니다. 파일마다 자신을 쓴 형식 버전을 기록하고, 그 값은 [`Database.format_version`](../../api/python/database.md#format-version)으로 읽습니다. 이 빌드가 읽지 않는 버전의 파일을 열면 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 첫 릴리스의 형식은 버전 5이고, 버전 6은 리프 항목의 길이를 더 적은 바이트로 적습니다. 이 빌드는 두 버전을 모두 읽고 쓰며, 버전 5 파일을 열면 `upgrade_format`이 `False`가 아니고 다른 프로세스가 파일을 열고 있지 않으면 버전 6으로 올립니다. 버전 5보다 앞선 개발 빌드가 쓴 파일은 열리지 않습니다. 이 버전이 무엇을 정하는지는 [파일 형식](../../engine/file-format.md#형식-버전)에 있습니다.
 
 ## ENGINE_VERSION
 

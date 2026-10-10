@@ -108,7 +108,7 @@ Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype) an
 | `#[darudb(rename = "x")]` | The field's name in the collection, which is the Rust field's name otherwise. |
 | `#[darudb(default = 18)]` | The value a record that leaves the field out holds. The field is required. Not on the key. |
 
-A default is anything [`Value::from`](../../types/rust/value.md) takes. Attributes combine in one list, `#[darudb(index, default = 0)]`.
+A default is anything [`Value::from`](../../types/rust/value.md) takes. Attributes combine in one list, `#[darudb(index, default = 0)]`. The `id: Option<i64>` of a collection keyed by an auto-increment takes none of them, and one there fails to compile.
 
 ## What reading and writing check
 

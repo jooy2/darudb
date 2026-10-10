@@ -11,7 +11,7 @@ A `ReadTransaction` reads one commit of the database, for as long as the functio
 interface ReadTransaction<S>
 ```
 
-`Database.read` begins one, passes it to its function, and ends it when the function returns or throws. Everything it reads comes from the commit that was published when it began: commits made meanwhile, by this process or another, are not seen. Beginning one waits for no writer, and no writer waits for it. The transaction and the collections it gives can be used only while the function runs; afterwards every call on them throws `CLOSED`.
+`Database.read` begins one, passes it to its function, and ends it when the function returns or throws. Everything it reads comes from the commit that was published when it began: commits made meanwhile, by this process or another, are not seen. Beginning one waits for no writer, and no writer waits for it. The transaction and the collections it gives can be used only while the function runs; afterwards their reads and writes throw `CLOSED`.
 
 Keep read transactions short where others write. While one is open, the pages that later commits stop using cannot be reused, so writers take new pages and the file grows. `S` is the database's schema, which gives each collection the type of its objects. [Transactions](../../guide/transactions.md) has the longer explanation.
 

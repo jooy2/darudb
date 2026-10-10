@@ -13,7 +13,7 @@ class Database: ...
 
 There is no constructor: `Database.open` and `Database.open_async` return one, and calling `Database()` raises `TypeError`. A database opened without a [schema](./schema.md) has no collections, and one opened with a schema reaches each collection through its class, as `txn.collection(User)`.
 
-A `Database` works until `close` or `close_async` has closed it. After that `path`, `schema`, `schema_version` and `is_open` can still be read, and every member that uses the file raises a [DaruError](../../types/python/error.md) with the code `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with.
+A `Database` works until `close` or `close_async` has closed it. After that `path`, `schema`, `schema_version` and `is_open` can still be read, and every member that uses the file raises a [DaruError](../../types/python/error.md) with the code `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. Some options belong to the file rather than to one handle: `busy_timeout`, `cache_size`, `upgrade_format` and `password_hashing` stay those of the first handle.
 
 The native module releases the GIL for everything the engine does, so other threads run while one waits for the disk or for another writer. A database can be used from several threads at once, and a transaction from any thread, one call at a time. Every method that uses the file has a twin for `asyncio` whose name ends in `_async`, which does the engine's work on a thread pool the package keeps, of at most `min(32, os.cpu_count() + 4)` threads, so that an event loop never waits for the disk or for another process's writer. [Asynchronous API](../../guide/async.md) explains how the two kinds of call share a file.
 
@@ -64,6 +64,8 @@ Migration functions run inside this call, one version step after another, and re
 - `KEY_REQUIRED` and `WRONG_KEY`: the file is encrypted, and neither `key` nor `password` was given, or the wrong one.
 - `SCHEMA_MISMATCH`: the file holds another schema at the same version. `SCHEMA_TOO_NEW`: the file holds a newer version.
 - `BUSY`: another process kept the file busy for longer than `busy_timeout`, or a salvage holds it.
+- `DUPLICATE_KEY`: a migration builds a new unique index, and two objects hold one value.
+- `UNSUPPORTED_FORMAT_VERSION`, `CORRUPTED` and `UNSUPPORTED_FILE_SYSTEM`: the file is in a format version this build does not read, is damaged, or is on a network file system.
 - `INVALID_ARGUMENT`: an option cannot be used, such as a page size that is not a power of two from 4096 to 65536, a negative or NaN `busy_timeout`, a key that is not 32 bytes, both a key and a password, an empty password, a key or a password for a plain file that exists, migrations without a schema, two migrations to one version, or a schema the engine cannot store.
 
 ```python
@@ -190,7 +192,7 @@ The size of every page in the file, in bytes. A file keeps the page size it was 
 def format_version(self) -> int: ...
 ```
 
-The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/python/constants.md)), or 5 for a file that opening did not raise, with `upgrade_format=False`.
+The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/python/constants.md)), or 5 for a file that opening did not raise, with `upgrade_format=False` or while another process had the file open.
 
 ### is_encrypted
 
@@ -249,7 +251,7 @@ The write transaction, as a context manager: `with db.write() as txn` gives a [W
 
 - `BUSY`: another writer, in another thread or another process, held the file for longer than `busy_timeout`.
 - `INVALID_ARGUMENT`: a write block of this thread already holds the file, through this handle or another, or an asynchronous write of the event loop running on this thread holds it. Write transactions do not nest, and waiting here would wait for a write that cannot end until this one does.
-- `SYNC_FAILED`: the disk failed the commit's barrier, raised when the block ends. The database has to be closed and opened again.
+- `SYNC_FAILED`: the disk failed the commit's barrier, so whether the commit took effect is unknown. It is raised when the block ends. The database has to be closed and opened again.
 
 ### read_async
 
@@ -267,7 +269,7 @@ def write_async(self, *, durability: Durability = "sync") -> AsyncWriteScope: ..
 
 The write transaction for `async with`: `async with db.write_async() as txn` gives an [AsyncWriteTransaction](./write-transaction.md#asyncwritetransaction). It commits when the block ends, once every operation it started has finished, and aborts when the block raises. This process's asynchronous writes on one file, from one event loop, take turns: each waits on the event loop for the ones before it to end, and only then takes a thread of the pool, so a write that waits holds no thread.
 
-It fails with `INVALID_ARGUMENT` when a synchronous write block of this thread holds the file, and when it is awaited inside the block of an asynchronous write on the same file, or in a task made inside that block: it would wait for the write it is part of. `sync_async`, `close_async`, `compact_async`, `set_key_async` and `set_password_async`, which take their turn with the writes, are refused there too.
+It fails with `INVALID_ARGUMENT` when a synchronous write block of this thread holds the file, and when it is awaited inside the block of an asynchronous write on the same file, or in a task made inside that block: it would wait for the write it is part of. `sync_async`, `close_async`, `compact_async`, `upgrade_format_async`, `set_key_async` and `set_password_async`, which take their turn with the writes, are refused there too.
 
 ### check
 

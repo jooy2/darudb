@@ -113,7 +113,7 @@ InvalidArgument { message: String }
 Closed
 ```
 
-`CLOSED`. 닫은 데이터베이스를 다시 썼습니다. [`Database::close`](../../api/rust/database.md#close)가 핸들을 소비하므로 Rust API는 이 오류를 돌려주지 않습니다. 닫은 뒤에도 핸들이 남는 바인딩이 그 경우를 이 목록의 코드로 알리도록 둔 배리언트입니다.
+`CLOSED`. 더는 쓸 수 없는 핸들입니다. [`Database::close`](../../api/rust/database.md#close)가 핸들을 소비하므로 Rust에서는 포크한 자식 프로세스가 부모에게서 물려받은 핸들에서 이 오류가 납니다. 자식은 파일에 대한 부모의 잠금을 하나도 쥐지 않으므로 모든 호출이 실패하고, 자식은 파일을 직접 열어야 합니다. 바인딩은 닫은 뒤에 쓴 핸들도 이 코드로 알립니다.
 
 ### Busy
 
@@ -177,7 +177,7 @@ SchemaTooNew { stored: u64, declared: u64 }
 DuplicateKey { message: String }
 ```
 
-`DUPLICATE_KEY`. 넣으려는 기본 키가 이미 있거나, 고유 인덱스에 같은 값이 이미 있습니다. `message`에는 어느 컬렉션의 어떤 키나 값인지 적혀 있습니다.
+`DUPLICATE_KEY`. 넣으려는 기본 키가 이미 있거나, 고유 인덱스에 같은 값이 이미 있습니다. `message`에는 컬렉션과 함께, 이미 있는 기본 키나 값이 겹친 고유 필드가 적혀 있습니다.
 
 ### InvalidQuery
 

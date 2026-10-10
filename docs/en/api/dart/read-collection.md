@@ -54,7 +54,7 @@ db.read((txn) {
 });
 ```
 
-A query that does not fit the file fails with `INVALID_QUERY`, such as one that names a field another handle's migration removed. The types keep the rest from compiling.
+A query that does not fit the file fails with `INVALID_QUERY`, such as a filter nested more than 24 levels deep. A file another handle or process migrated since this handle opened it fails with `SCHEMA_MISMATCH` instead. The types keep the rest from compiling.
 
 ### findOne
 

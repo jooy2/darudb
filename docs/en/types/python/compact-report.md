@@ -17,7 +17,7 @@ class CompactReport:
     pages_moved: int
 ```
 
-[`Database.compact` and `compact_async`](../../api/python/database.md#compact) return one. Compaction moves pages from the end of the file into free pages nearer its start, and gives the end back to the file system. It cannot move a page that a read transaction can still reach, so a long read transaction can leave `bytes_after` close to `bytes_before`, and a later compaction moves the rest. [Tools](../../guide/tools.md) explains when to compact.
+[`Database.compact` and `compact_async`](../../api/python/database.md#compact) return one. Compaction writes again, full, the trees whose pages inserts left part empty, then moves pages from the end of the file into free pages nearer its start, and gives the end back to the file system. It cannot move a page that a read transaction can still reach, so a long read transaction can leave `bytes_after` close to `bytes_before`, and a later compaction moves the rest. [Tools](../../guide/tools.md) explains when to compact.
 
 ```python
 report = db.compact()  # or `await db.compact_async()`

@@ -13,7 +13,7 @@ interface Database<S extends Schema<any> = Schema>
 
 There is no constructor: `Database.open` and `Database.openAsync` return one, and calling `new Database()` throws. The static methods below belong to the `Database` value, whose type is `DatabaseOpener`. `S` is the [schema](./schema.md) the database was opened with. It carries the names of the collections and the types of their objects into every transaction, and nothing at run time. A database opened without a schema has no collections.
 
-A `Database` works until `close` or `closeAsync` is called. After that only `path` and `isOpen` can be read, and every other member throws `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with.
+A `Database` works until `close` or `closeAsync` is called. After that only `path` and `isOpen` can be read, `close` and `closeAsync` do nothing, and every other member throws `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with.
 
 Every method that uses the file has a twin whose name ends in `Async`. The twin does the engine's work on the libuv thread pool and returns a promise, so the event loop never waits for the disk or for another process's writer. [Asynchronous API](../../guide/async.md) explains how the two kinds of call share a file.
 
@@ -174,7 +174,7 @@ Runs `fn` in a [write transaction](./write-transaction.md), commits it when `fn`
 - `BUSY`: another process's writer held the file for longer than `busyTimeout`.
 - `INVALID_ARGUMENT`: `fn` returned a promise, and the transaction was aborted.
 - `INVALID_ARGUMENT` also when the call comes from inside a write transaction's function on the same file, or while an asynchronous write of this process holds the file. Write transactions do not nest, and waiting here would block the thread that the other write needs to finish.
-- `SYNC_FAILED`: the disk failed the commit's barrier. The database has to be closed and opened again.
+- `SYNC_FAILED`: the disk failed the commit's barrier, so whether the commit took effect is unknown. The database has to be closed and opened again.
 
 ### writeAsync
 

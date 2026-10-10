@@ -13,7 +13,7 @@ class Database: ...
 
 생성자는 없습니다. `Database.open`이나 `Database.open_async`가 만들어 돌려주고, `Database()`를 부르면 `TypeError`가 납니다. [스키마](./schema.md) 없이 연 데이터베이스에는 컬렉션이 없고, 스키마를 주고 열면 `txn.collection(User)`처럼 클래스로 컬렉션에 접근합니다.
 
-`close`나 `close_async`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에도 `path`, `schema`, `schema_version`, `is_open`은 읽을 수 있지만, 파일에 접근하는 멤버는 모두 코드가 `CLOSED`인 [DaruError](../../types/python/error.md)를 일으킵니다. 프로세스가 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다.
+`close`나 `close_async`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에도 `path`, `schema`, `schema_version`, `is_open`은 읽을 수 있지만, 파일에 접근하는 멤버는 모두 코드가 `CLOSED`인 [DaruError](../../types/python/error.md)를 일으킵니다. 프로세스가 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다. 몇몇 옵션은 핸들이 아니라 파일에 딸려서, `busy_timeout`, `cache_size`, `upgrade_format`, `password_hashing`은 처음 연 핸들의 값을 따릅니다.
 
 네이티브 모듈은 엔진이 일하는 동안 언제나 GIL을 놓으므로, 한 스레드가 디스크나 다른 쓰기를 기다려도 다른 스레드는 계속 돕니다. 데이터베이스는 여러 스레드에서 동시에 쓸 수 있고, 트랜잭션은 어느 스레드에서든 한 번에 호출 하나씩 쓸 수 있습니다. 파일에 접근하는 메서드에는 이름이 `_async`로 끝나는 `asyncio`용 짝이 있습니다. 짝 메서드는 엔진의 일을 패키지가 따로 두는 스레드 풀에서 하므로, 이벤트 루프가 디스크나 다른 프로세스의 쓰기를 기다리지 않습니다. 이 풀의 스레드는 많아야 `min(32, os.cpu_count() + 4)`개입니다. 두 방식이 한 파일을 어떻게 함께 쓰는지는 [비동기 API](../../guide/async.md)에서 설명합니다.
 
@@ -64,6 +64,8 @@ def open(
 - `KEY_REQUIRED`, `WRONG_KEY`: 암호화된 파일인데 `key`도 `password`도 주지 않았거나, 준 것이 틀렸습니다.
 - `SCHEMA_MISMATCH`: 파일에 버전은 같지만 내용이 다른 스키마가 있습니다. `SCHEMA_TOO_NEW`: 파일의 스키마 버전이 더 높습니다.
 - `BUSY`: 다른 프로세스가 `busy_timeout`보다 오래 파일을 붙잡고 있거나, 되살리기가 파일을 쓰고 있습니다.
+- `DUPLICATE_KEY`: 마이그레이션이 새 고유 인덱스를 만드는데, 두 객체가 같은 값을 가졌습니다.
+- `UNSUPPORTED_FORMAT_VERSION`, `CORRUPTED`, `UNSUPPORTED_FILE_SYSTEM`: 파일이 이 빌드가 읽지 않는 형식 버전이거나, 손상됐거나, 네트워크 파일 시스템에 있습니다.
 - `INVALID_ARGUMENT`: 쓸 수 없는 옵션이 있습니다. 4096부터 65536 사이의 2의 거듭제곱이 아닌 페이지 크기, 음수나 NaN인 `busy_timeout`, 32바이트가 아닌 키, 함께 준 키와 비밀번호, 빈 비밀번호, 이미 있는 평문 파일에 준 키나 비밀번호, 스키마 없이 준 마이그레이션, 같은 버전으로 가는 마이그레이션 둘, 엔진이 저장할 수 없는 스키마가 그 예입니다.
 
 ```python
@@ -190,7 +192,7 @@ def page_size(self) -> int: ...
 def format_version(self) -> int: ...
 ```
 
-파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6([FORMAT_VERSION](../../types/python/constants.md))이거나, `upgrade_format=False`로 열어 올리지 않은 파일이라면 5입니다.
+파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6([FORMAT_VERSION](../../types/python/constants.md))이거나, `upgrade_format=False`로 열었거나 다른 프로세스가 파일을 열고 있어서 올리지 않은 파일이라면 5입니다.
 
 ### is_encrypted
 
@@ -249,7 +251,7 @@ def write(self, *, durability: Durability = "sync") -> _WriteScope: ...
 
 - `BUSY`: 다른 스레드나 다른 프로세스의 쓰기가 `busy_timeout`보다 오래 파일을 붙잡고 있었습니다.
 - `INVALID_ARGUMENT`: 이 스레드의 쓰기 블록이 이 핸들로든 다른 핸들로든 이미 파일을 쥐고 있거나, 이 스레드에서 도는 이벤트 루프의 비동기 쓰기가 파일을 쥐고 있습니다. 쓰기 트랜잭션은 겹칠 수 없고, 여기서 기다리면 이 쓰기가 끝나야 끝날 수 있는 쓰기를 기다리게 됩니다.
-- `SYNC_FAILED`: 커밋의 디스크 동기화가 실패했습니다. 블록이 끝날 때 일어나며, 데이터베이스를 닫고 다시 열어야 합니다.
+- `SYNC_FAILED`: 커밋의 디스크 동기화가 실패해서 커밋이 반영됐는지 알 수 없습니다. 블록이 끝날 때 일어나며, 데이터베이스를 닫고 다시 열어야 합니다.
 
 ### read_async
 
@@ -267,7 +269,7 @@ def write_async(self, *, durability: Durability = "sync") -> AsyncWriteScope: ..
 
 `async with`로 쓰는 쓰기 트랜잭션을 돌려줍니다. `async with db.write_async() as txn`은 [AsyncWriteTransaction](./write-transaction.md#asyncwritetransaction)을 줍니다. 블록이 끝나면 블록에서 시작한 작업이 모두 끝난 뒤에 커밋하고, 블록에서 예외가 나면 취소합니다. 이 프로세스가 한 이벤트 루프에서 한 파일에 하는 비동기 쓰기는 차례를 지킵니다. 각 쓰기는 앞선 쓰기가 끝나기를 이벤트 루프에서 기다렸다가 그제야 풀의 스레드를 잡으므로, 기다리는 쓰기는 스레드를 잡지 않습니다.
 
-이 스레드의 동기 쓰기 블록이 파일을 쥐고 있을 때와, 같은 파일에 하는 비동기 쓰기의 블록 안이나 그 블록 안에서 만든 태스크에서 await할 때는 `INVALID_ARGUMENT`로 실패합니다. 어느 쪽이든 자신을 감싼 쓰기를 기다리게 되기 때문입니다. 쓰기와 함께 차례를 기다리는 `sync_async`, `close_async`, `compact_async`, `set_key_async`, `set_password_async`도 그런 곳에서는 거부됩니다.
+이 스레드의 동기 쓰기 블록이 파일을 쥐고 있을 때와, 같은 파일에 하는 비동기 쓰기의 블록 안이나 그 블록 안에서 만든 태스크에서 await할 때는 `INVALID_ARGUMENT`로 실패합니다. 어느 쪽이든 자신을 감싼 쓰기를 기다리게 되기 때문입니다. 쓰기와 함께 차례를 기다리는 `sync_async`, `close_async`, `compact_async`, `upgrade_format_async`, `set_key_async`, `set_password_async`도 그런 곳에서는 거부됩니다.
 
 ### check
 

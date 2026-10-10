@@ -108,7 +108,7 @@ fn main() -> Result<(), darudb::Error> {
 | `#[darudb(rename = "x")]` | 컬렉션에서 쓰는 필드 이름입니다. 없으면 Rust 필드 이름을 씁니다. |
 | `#[darudb(default = 18)]` | 레코드에 필드가 없을 때 읽히는 값입니다. 필드는 필수가 됩니다. 키에는 붙일 수 없습니다. |
 
-기본값에는 [`Value::from`](../../types/rust/value.md)이 받는 값이면 무엇이든 쓸 수 있습니다. 속성은 `#[darudb(index, default = 0)]`처럼 한 목록에 함께 적습니다.
+기본값에는 [`Value::from`](../../types/rust/value.md)이 받는 값이면 무엇이든 쓸 수 있습니다. 속성은 `#[darudb(index, default = 0)]`처럼 한 목록에 함께 적습니다. 자동 증가 키로 매기는 컬렉션의 `id: Option<i64>`에는 어떤 속성도 붙일 수 없고, 붙이면 컴파일되지 않습니다.
 
 ## 읽고 쓸 때 확인하는 것
 

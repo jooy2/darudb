@@ -48,7 +48,7 @@ final class AsyncWriteTransaction extends AsyncReadTransaction {
 
 The write transaction of `Database.writeAsync`. Its function may be asynchronous. The transaction commits when the function completes, once every call it made has finished, and aborts when the function fails. `collection` works as above and gives an [AsyncWriteCollection](./write-collection.md#asyncwritecollection), whose calls run on threads of the native library in the order they were made, whether or not each was awaited.
 
-A call that fails completes its own `Future` with the error and changes nothing, and the transaction still commits the rest when the function completes. A function that must not commit after a failure lets the error reach its own result, by awaiting the call. Inside the function, `write`, `sync`, `close`, `compact`, `setKey` and `setPassword` on the same file, and their `Async` twins, are refused with `INVALID_ARGUMENT`.
+A call that fails completes its own `Future` with the error and changes nothing, and the transaction still commits the rest when the function completes. A function that must not commit after a failure lets the error reach its own result, by awaiting the call. Inside the function, `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey` and `setPassword` on the same file, and their `Async` twins, are refused with `INVALID_ARGUMENT`.
 
 ```dart
 final carol = await db.writeAsync((txn) async {

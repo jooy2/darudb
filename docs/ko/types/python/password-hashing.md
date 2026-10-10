@@ -34,7 +34,7 @@ db = darudb.Database.open(
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `memory_kib` | `int` | KiB 단위 메모리. `parallelism`의 레인 하나에 8부터 1GiB(1048576)까지이고, 기본값은 19456입니다 |
+| `memory_kib` | `int` | KiB 단위 메모리. 최소는 `parallelism`의 레인마다 8, 최대는 모두 합쳐 1GiB(1048576)이고, 기본값은 19456입니다 |
 | `iterations` | `int` | 메모리를 훑는 횟수. 1부터 1024까지이고, 기본값은 2입니다 |
 | `parallelism` | `int` | 레인 수. 1부터 64까지이고, 기본값은 1입니다 |
 

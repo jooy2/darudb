@@ -71,7 +71,7 @@ Only `version` is required.
 version: number;
 ```
 
-The schema version this step migrates to: a whole number from 2 up to the declared schema's version. Any other number, or two migrations to the same version, fails with `INVALID_ARGUMENT`.
+The schema version this step migrates to: a whole number from 2 up to the declared schema's version. Any other number fails with `INVALID_ARGUMENT`, and so do two migrations to one version among those the file migrates through.
 
 ### renameCollections
 

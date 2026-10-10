@@ -71,7 +71,7 @@ const db = Database.open('app.darudb', {
 version: number;
 ```
 
-이 단계가 올리는 스키마 버전입니다. 2부터 선언한 스키마의 버전까지의 정수여야 합니다. 그 밖의 수를 주거나 같은 버전으로 가는 마이그레이션이 둘이면 `INVALID_ARGUMENT`로 실패합니다.
+이 단계가 올리는 스키마 버전입니다. 2부터 선언한 스키마의 버전까지의 정수여야 합니다. 그 밖의 수를 주면 `INVALID_ARGUMENT`로 실패하고, 파일이 거쳐 가는 버전 가운데 하나로 가는 마이그레이션이 둘이어도 마찬가지입니다.
 
 ### renameCollections
 

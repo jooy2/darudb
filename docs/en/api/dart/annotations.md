@@ -10,11 +10,11 @@ The annotations make a Dart class the objects of a collection, or an embedded ob
 
 ```yaml
 dependencies:
-  darudb: ^1.0.0
+  darudb: ^1.1.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.0.0
+  darudb_generator: ^1.1.0
 ```
 
 A library with annotated classes declares a part named after it, and `dart run build_runner build` writes that part. The generator reads only the annotations, and nothing in the program calls it at run time.

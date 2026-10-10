@@ -12,7 +12,7 @@ counterpart: /api/rust/collection-writer
 interface WriteCollection<O, I> extends ReadCollection<O>
 ```
 
-쓰기 트랜잭션이나 마이그레이션의 `collection`이 돌려줍니다. `O`는 읽은 객체의 타입이고, `I`는 쓰는 객체의 타입입니다. `I`는 [InsertOf](../../types/node/object-types.md)가 필드로 만들며, 기본값이 없는 필수 필드는 반드시 넣고 나머지는 넣어도 되고 빼도 됩니다. 읽기에는 트랜잭션 자신의 변경도 보입니다. 메서드는 트랜잭션의 함수가 도는 동안만 부를 수 있고, 그 뒤에는 `CLOSED`를 던집니다.
+쓰기 트랜잭션이나 마이그레이션의 `collection`이 돌려줍니다. `O`는 읽은 객체의 타입이고, `I`는 쓰는 객체의 타입입니다. `I`는 [InsertOf](../../types/node/object-types.md)가 필드로 만들며, 기본값이 없는 필수 필드는 반드시 넣고 나머지는 넣어도 되고 빼도 됩니다. 읽기에는 트랜잭션 자신의 변경도 보입니다. 메서드는 트랜잭션의 함수가 도는 동안만 부를 수 있고, 그 뒤에 읽거나 쓰는 메서드는 `CLOSED`를 던집니다.
 
 쓰기는 먼저 객체를 스키마에 맞춰 검사합니다.
 

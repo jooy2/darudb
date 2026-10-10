@@ -71,7 +71,7 @@ if not report.ok:
 
 :::
 
-- 문제마다 그 문제가 있는 페이지와, 문제를 찾은 트리나 컬렉션이 적혀 있습니다.
+- 문제마다 문제를 찾은 트리나 컬렉션이 적혀 있고, 문제가 어떤 페이지에 있다면 그 페이지도 적혀 있습니다.
 - 검사는 파일 전체를 읽으므로 모든 객체를 읽는 것과 비슷하게 걸립니다. 메모리는 페이지마다 1비트만 쓰고, 객체 수에 따라 늘지 않습니다.
 - 읽을 수 없는 페이지가 있으면 그 아래 페이지는 읽지 못합니다. 이런 페이지는 하나씩 누수로 보고하지 않고 문제 하나로 묶어 셉니다.
 
@@ -98,6 +98,7 @@ fn back_up(db: &Database) -> Result<(), darudb::Error> {
 
 ```ts
 const report = await db.backupAsync('backups/app.darudb'); // 또는 `db.backup(path)`
+
 console.log(`${report.entries} entries of commit ${report.commitId}`);
 ```
 
@@ -190,6 +191,7 @@ fn compact(db: &Database) -> Result<(), darudb::Error> {
 
 ```ts
 const report = await db.compactAsync(); // 또는 `db.compact()`
+
 console.log(`${report.bytesBefore} bytes, then ${report.bytesAfter}`);
 ```
 
