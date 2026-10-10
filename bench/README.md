@@ -13,7 +13,7 @@ It is the one place in the repository besides the documentation's comparison, pe
 | Dart | `packages/dart/darudb` | SQLite (the `sqlite3` package), Hive CE |
 | Python | `packages/python` | SQLite (the standard library's `sqlite3`), LMDB (py-lmdb) |
 
-Each store is used the way an application in that language would use it: DaruDB through its public API with its schema, SQLite through SQL with prepared statements, and the key-value stores with a record and indexes written by hand. Every read is made into an object of the language, with all its fields.
+Each store is used the way an application in that language would use it: DaruDB through its public API with its schema, SQLite through SQL with prepared statements, and the key-value stores with a record and indexes written by hand. Every read is made into an object of the language, with all its fields. An update that changes one field sets that field where the language's package can, as SQL sets one column: DaruDB's Node.js and Python passes use `update`, where writing the whole object back would build it again in the language first, and the Rust and Dart passes write the typed object back with `put`.
 
 ## The data
 

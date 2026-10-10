@@ -1,9 +1,9 @@
 """DaruDB through its Python package, as an application uses it: the
-collection is a class, and queries that run many times are prepared once."""
+collection is a class, queries that run many times are prepared once, and an
+update sets the one field it changes, as an SQL statement sets one column."""
 
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 
 import darudb
@@ -107,10 +107,8 @@ def run(directory: Path, rows: Rows) -> None:
 
             for r in range(10_000):
                 id_ = ids[r]
-                found = people.get(id_)
-
-                if found is not None:
-                    people.put(dataclasses.replace(found, age=(id_ + 1) % 80))
+                if people.get(id_) is not None:
+                    people.update(id_, age=(id_ + 1) % 80)
 
     def delete(d: Digest) -> None:
         with db.write() as txn:

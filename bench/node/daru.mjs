@@ -1,5 +1,6 @@
 // DaruDB through its Node.js package, as an application uses it: queries that
-// run many times are prepared once, as a statement would be.
+// run many times are prepared once, as a statement would be, and an update
+// sets the one field it changes, as an SQL statement sets one column.
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -95,12 +96,8 @@ rows.all('update', 10_000, () => {
 
     for (let round = 0; round < 10_000; round++) {
       const id = ids[round];
-      const found = people.get(id);
 
-      if (found) {
-        found.age = (id + 1) % 80;
-        people.put(found);
-      }
+      if (people.get(id)) people.update(id, { age: (id + 1) % 80 });
     }
   });
 });
