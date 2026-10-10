@@ -417,7 +417,7 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   Future<List<T>> findText(
     String text, [
     List<Object?> parameters = const [],
-  ]) => _findPrepared(_sync._kept(text), parameters, first: false);
+  ]) async => _findPrepared(_sync._kept(text), parameters, first: false);
 
   /// The first object [text] finds, or `null`.
   Future<T?> findOneText(
@@ -434,14 +434,17 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   }
 
   /// How many objects [text] finds.
-  Future<int> countText(String text, [List<Object?> parameters = const []]) =>
-      _countPrepared(_sync._kept(text), parameters);
+  Future<int> countText(
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async => _countPrepared(_sync._kept(text), parameters);
 
   /// The objects a prepared query finds.
   Future<List<T>> findPrepared(
     Prepared<T> prepared, [
     List<Object?> parameters = const [],
-  ]) => _findPrepared(_sync._preparedOf(prepared), parameters, first: false);
+  ]) async =>
+      _findPrepared(_sync._preparedOf(prepared), parameters, first: false);
 
   /// The first object a prepared query finds, or `null`.
   Future<T?> findOnePrepared(
@@ -461,7 +464,7 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   Future<int> countPrepared(
     Prepared<T> prepared, [
     List<Object?> parameters = const [],
-  ]) => _countPrepared(_sync._preparedOf(prepared), parameters);
+  ]) async => _countPrepared(_sync._preparedOf(prepared), parameters);
 }
 
 /// A collection of a write transaction of the `Future` API, for reading and

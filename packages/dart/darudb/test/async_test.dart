@@ -58,6 +58,34 @@ void main() {
     },
   );
 
+  test(
+    'text queries of an asynchronous collection fail through their Future',
+    () async {
+      final db = Database.open(path, schema: const Schema(1, [userSchema]));
+      final other = db.prepare(userSchema, r'age == $0');
+
+      await db.readAsync((txn) async {
+        final users = txn.collection(userSchema);
+        final calls = <Future<Object?> Function()>[
+          () => users.findText('age >='),
+          () => users.findOneText('age >='),
+          () => users.countText('age >='),
+        ];
+
+        for (final call in calls) {
+          late Future<Object?> running;
+
+          expect(() => running = call(), returnsNormally);
+          await expectLater(running, failsWith('INVALID_QUERY'));
+        }
+
+        expect(await users.countPrepared(other, [1]), 0);
+      });
+
+      db.close();
+    },
+  );
+
   test('the Future API writes, reads, queries and closes', () async {
     final db = await Database.openAsync(
       path,
