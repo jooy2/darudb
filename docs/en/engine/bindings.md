@@ -185,7 +185,7 @@ Three rules come with that:
 - **Never open the database file.** On Unix-like systems, closing that descriptor would release every lock the engine holds on the file. Finding a file's device and inode with `stat` opens nothing.
 - **End read transactions promptly.** One left open keeps the pages of its commit from reuse in every process, so the file grows. A binding should make a leaked one hard to write, such as by scoping each transaction to a function, as the Node.js package does, or to a `with` block, as the Python package does.
 
-`OpenOptions::key` and `OpenOptions::password` copy the secret into buffers that the engine wipes when it drops them. The Node.js package copies the caller's secret into buffers of its own, builds the options with them before any asynchronous task runs, and then fills its buffers with zeros. The Python package's native module copies the secret into a buffer that is wiped when it is dropped, and hands the engine that copy.
+`OpenOptions::key` and `OpenOptions::password` copy the secret into buffers that the engine wipes when it drops them. The Node.js package copies the caller's secret into buffers of its own, builds the options with them before any asynchronous task runs, and then fills its buffers with zeros. The Dart package writes the secret last into the options it copies to native memory, and wipes every copy once the engine has its own. The Python package's native module copies the secret into a buffer that is wiped when it is dropped, and hands the engine that copy.
 
 ## How the Node.js package divides the work
 
