@@ -64,12 +64,14 @@ pub enum Error {
         /// What was wrong with the argument.
         message: String,
     },
-    /// The database was used after it was closed.
+    /// The handle cannot be used any more.
     ///
-    /// The Rust API cannot produce this, because [`Database::close`] consumes
-    /// the handle. A language binding's handle outlives its close, and the
-    /// binding reports a use after that with this error, so that its code
-    /// comes from this list like every other.
+    /// [`Database::close`] consumes the handle, so in Rust this comes from a
+    /// handle a forked child inherited from its parent: the child holds none
+    /// of the parent's locks on the file, so every call fails, and the child
+    /// opens the file itself instead. A language binding's handle outlives
+    /// its close, and the binding reports a use after that with this error
+    /// too, so that its code comes from this list like every other.
     ///
     /// [`Database::close`]: crate::Database::close
     Closed,

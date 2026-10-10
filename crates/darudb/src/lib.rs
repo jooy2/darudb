@@ -1,9 +1,9 @@
 //! DaruDB, an embedded database that keeps an application's data in one local
 //! file.
 //!
-//! This crate is the engine and its Rust API. The Node.js and Dart packages
-//! bind this same engine to their languages, so a file written from one
-//! language reads the same from another.
+//! This crate is the engine and its Rust API. The Node.js, Dart and Python
+//! packages bind this same engine to their languages, so a file written from
+//! one language reads the same from another.
 //!
 //! The storage kernel stores named trees of byte keys and byte values, in
 //! transactions. A commit is durable when it returns, and a file opened after
