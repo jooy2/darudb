@@ -7,6 +7,7 @@ name: probe-linux
 on:
   push:
     branches: [investigate/linux-perf]
+    paths: [bench/probe/variants/**]
 
 permissions:
   contents: read

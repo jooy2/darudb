@@ -90,6 +90,11 @@ fn focus(id: &str) -> Option<u64> {
     }
 }
 
+/// Probe only: `BENCH_SKIP=<row>,<row>` leaves those rows out.
+fn skipped(id: &str) -> bool {
+    std::env::var("BENCH_SKIP").is_ok_and(|skip| skip.split(',').any(|row| row == id))
+}
+
 pub struct Row {
     pub id: &'static str,
     pub nanos_each: f64,
@@ -107,6 +112,10 @@ impl Rows {
         count: u64,
         mut step: impl FnMut(u64, &mut Digest) -> Result<(), E>,
     ) {
+        if skipped(id) {
+            return;
+        }
+
         let mut digest = Digest::default();
         let repeat = focus(id);
 
@@ -142,6 +151,10 @@ impl Rows {
         count: u64,
         work: impl FnOnce(&mut Digest) -> Result<(), E>,
     ) {
+        if skipped(id) {
+            return;
+        }
+
         let mut digest = Digest::default();
 
         mark(id);
