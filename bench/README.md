@@ -1,6 +1,6 @@
 # Benchmark
 
-This folder measures DaruDB against the embedded databases applications reach for most in each language it ships for: the same objects, the same workloads and the same durability in every store, so that the times compare. The documentation's [performance page](https://darudb.cdget.com/performance) shows the results, and `.github/workflows/run-benchmarks.yml` runs it on GitHub-hosted runners.
+This folder measures DaruDB against the embedded databases applications reach for most in each language it ships for: the same objects, the same workloads and the same durability in every store, so that the times compare. The documentation's [performance page](https://darudb.cdget.com/performance) shows the results, and `.github/workflows/run-benchmarks.yml` runs it on GitHub-hosted runners. [TODO.md](TODO.md) lists the work that could close the gaps it shows, and how to measure it.
 
 It is the one place in the repository besides the documentation's comparison, performance and migration pages that names other databases, since a comparison cannot be made without them.
 
