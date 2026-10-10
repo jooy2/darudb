@@ -73,7 +73,8 @@ impl BackupOptions {
     /// How much work hashing the copy's password takes: Argon2id memory in
     /// KiB, iterations, and parallelism, as
     /// [`OpenOptions::password_hashing`](crate::OpenOptions::password_hashing)
-    /// says. 19 MiB, 2 and 1 by default.
+    /// says. 19 MiB, 2 and 1 by default. A cost out of range fails the backup
+    /// with `INVALID_ARGUMENT` before it writes anything, password or not.
     pub fn password_hashing(
         &mut self,
         memory_kib: u32,
@@ -118,6 +119,16 @@ pub(crate) fn backup(db: &Database, path: &Path, options: &BackupOptions) -> Res
             message: "the password is empty".to_owned(),
         });
     }
+
+    // Checked whatever the secret, as opening checks it, so that a cost out
+    // of range is the caller's mistake and not, found only while the key is
+    // wrapped, an internal error.
+    options
+        .password_cost
+        .check()
+        .map_err(|reason| Error::InvalidArgument {
+            message: reason.to_owned(),
+        })?;
 
     let read = db.begin_read()?;
     let record = *read.record();
@@ -389,6 +400,38 @@ mod tests {
 
         assert_eq!(refused.code(), "INVALID_ARGUMENT");
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn a_backup_with_a_password_cost_out_of_range_is_refused_before_it_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(schema());
+
+        let db = filled(&options, &dir.path().join("source.darudb"));
+        let target = dir.path().join("backup.darudb");
+
+        for (memory_kib, iterations, parallelism) in [(0, 0, 0), (19_456, 2, 65), (4, 2, 1)] {
+            for with_password in [true, false] {
+                let mut backup = BackupOptions::new();
+
+                backup.password_hashing(memory_kib, iterations, parallelism);
+
+                if with_password {
+                    backup.password("a password");
+                }
+
+                let refused = db.backup_with(&target, &backup).unwrap_err();
+
+                assert_eq!(
+                    refused.code(),
+                    "INVALID_ARGUMENT",
+                    "{memory_kib} {iterations}"
+                );
+                assert!(!target.exists());
+            }
+        }
     }
 
     /// A backup taken while another thread commits holds one of the commits

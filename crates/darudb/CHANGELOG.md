@@ -2,6 +2,12 @@
 
 > This crate's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Fixed
+
+- `Database::backup_with` refuses a `BackupOptions::password_hashing` cost out of range with `INVALID_ARGUMENT` before it writes anything, as opening does, whether a password is given or not. With a password it failed with `INTERNAL`, and without one it ignored the cost.
+
 ## v1.1.0 (2026-10-09)
 
 ### Breaking changes
