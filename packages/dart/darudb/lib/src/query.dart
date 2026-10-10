@@ -98,7 +98,7 @@ abstract base class ValueField<V extends Object> extends Field {
   /// Holds when the field equals [value].
   Condition equals(V value) => _test(_equal, path, [value]);
 
-  /// Holds when the field does not equal [value], or is null.
+  /// Holds when the field is not null and does not equal [value].
   Condition notEquals(V value) => _test(_notEqual, path, [value]);
 
   /// Holds when the field equals one of [values].
@@ -254,7 +254,7 @@ base class LinkField extends Field {
   /// Holds when the link holds [key].
   Condition equals(Object key) => _test(_equal, path, [key]);
 
-  /// Holds when the link does not hold [key], or is null.
+  /// Holds when the link is not null and does not hold [key].
   Condition notEquals(Object key) => _test(_notEqual, path, [key]);
 
   /// Holds when the link holds one of [keys].
