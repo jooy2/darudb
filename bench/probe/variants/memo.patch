@@ -1,0 +1,65 @@
+diff --git a/crates/darudb/src/btree/load.rs b/crates/darudb/src/btree/load.rs
+index 14dc296..b1806be 100644
+--- a/crates/darudb/src/btree/load.rs
++++ b/crates/darudb/src/btree/load.rs
+@@ -1,6 +1,7 @@
+ //! Loading committed nodes and overflow values, verified, through the page
+ //! cache.
+ 
++use std::cell::RefCell;
+ use std::sync::Arc;
+ 
+ use super::Load;
+@@ -11,6 +12,19 @@ use crate::format::{
+ };
+ use crate::storage::{Cache, Pager};
+ 
++const BRANCH_SLOTS: usize = 64;
++
++thread_local! {
++    /// Probe only: the branches this thread loaded last, by page and check,
++    /// which a later load takes without going through the page cache.
++    static BRANCHES: RefCell<Vec<Option<(u64, Check, Arc<LoadedNode>)>>> =
++        RefCell::new(vec![None; BRANCH_SLOTS]);
++}
++
++fn branch_slot(page: u64) -> usize {
++    (page.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) as usize
++}
++
+ /// The [`Load`] every transaction uses: the pager, and the page cache in
+ /// front of it.
+ #[derive(Debug, Clone)]
+@@ -71,10 +85,32 @@ impl Load for Loader {
+ 
+     fn load(&self, pointer: &Pointer, tree: u64, level: Option<u8>) -> Result<Arc<LoadedNode>> {
+         let page = pointer.page;
++        let slot = branch_slot(page);
++
++        if level != Some(0) {
++            let remembered = BRANCHES.with(|branches| match &branches.borrow()[slot] {
++                Some((at, check, loaded)) if *at == page && *check == pointer.check => {
++                    Some(Arc::clone(loaded))
++                }
++                _ => None,
++            });
++
++            if let Some(loaded) = remembered {
++                self.check_expected(page, &loaded, pointer, tree, level)?;
++
++                return Ok(loaded);
++            }
++        }
+ 
+         if let Some(loaded) = self.cache.get(page, &pointer.check) {
+             self.check_expected(page, &loaded, pointer, tree, level)?;
+ 
++            if loaded.level() > 0 {
++                BRANCHES.with(|branches| {
++                    branches.borrow_mut()[slot] = Some((page, pointer.check, Arc::clone(&loaded)));
++                });
++            }
++
+             return Ok(loaded);
+         }
+ 
