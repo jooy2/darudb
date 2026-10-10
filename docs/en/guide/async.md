@@ -73,7 +73,7 @@ const adults = await db.readAsync((txn) =>
 
 - The function may be asynchronous. `writeAsync` commits when it resolves and aborts when it rejects, and takes the same `durability` option as `write`. `readAsync` sees one commit until the function settles.
 - `readAsync` begins its read on the calling thread, as `read` does, because beginning a read waits for no writer and costs less than a trip to the pool.
-- The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
+- The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `upgradeFormatAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
 
 :::
 
@@ -102,7 +102,7 @@ final adults = await db.readAsync(
 
 - The function may be asynchronous. `writeAsync` commits when it completes and aborts when it fails, and takes the same `durability` as `write`. `readAsync` sees one commit until the function completes.
 - `readAsync` begins its read on the calling isolate, as `read` does, because beginning a read waits for no writer.
-- The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
+- The tools have twins too: `checkAsync`, `backupAsync`, `compactAsync`, `upgradeFormatAsync`, `setKeyAsync`, `setPasswordAsync`, and `Database.salvageAsync`.
 
 :::
 
@@ -134,7 +134,7 @@ await db.close_async()
 - A `write_async` block commits when it ends, once every operation started in it has finished, and aborts when it raises. It takes the same `durability` as `write`. A `read_async` block sees one commit until it ends.
 - `read_async` begins its read on the event loop's thread, as `read` does, because beginning a read waits for no writer. `write_async` begins its write on the pool, since that waits for the writer.
 - A database is an asynchronous context manager too: `async with await darudb.Database.open_async(...) as db:` closes it with `close_async` when the block ends.
-- The tools have twins too: `check_async`, `backup_async`, `compact_async`, `set_key_async`, `set_password_async`, and `Database.salvage_async`.
+- The tools have twins too: `check_async`, `backup_async`, `compact_async`, `upgrade_format_async`, `set_key_async`, `set_password_async`, and `Database.salvage_async`.
 
 :::
 
@@ -168,26 +168,26 @@ await db.close_async()
 
 ::: lang node
 
-- This process's writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first without holding a thread of the pool, and so do `syncAsync` and `closeAsync`, which wait for the writer when a deferred commit is not yet durable.
-- Write transactions still do not nest. Inside a `writeAsync` function, `writeAsync`, `write`, `sync` or `close` on the same file fails with `INVALID_ARGUMENT`, and so do their asynchronous forms.
-- While an asynchronous write on the file is under way, a synchronous `write`, `sync` or `close` from anywhere fails the same way, because it would block the event loop that the other write needs to finish.
+- This process's writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first without holding a thread of the pool, and so do `syncAsync` and `closeAsync`, which wait for the writer when a deferred commit is not yet durable, and `compactAsync`, `upgradeFormatAsync`, `setKeyAsync` and `setPasswordAsync`, which write.
+- Write transactions still do not nest. Inside a `writeAsync` function, `writeAsync`, `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey` or `setPassword` on the same file fails with `INVALID_ARGUMENT`, and so do their asynchronous forms.
+- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey` or `setPassword` from anywhere fails the same way, because it would block the event loop that the other write needs to finish.
 
 :::
 
 ::: lang dart
 
-- An isolate's asynchronous writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first, and so do `syncAsync`, `closeAsync`, `compactAsync` and the key changes, which wait for the writer too.
-- Write transactions still do not nest. Inside a `writeAsync` function, a write, sync, close or compaction on the same file fails with `INVALID_ARGUMENT`, synchronous or not.
-- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close` or `compact` fails the same way, because it would hold the isolate the other write needs to finish.
+- An isolate's asynchronous writes on one file run one after another, even through several `Database` objects. A second `writeAsync` waits for the first, and so do `syncAsync`, `closeAsync`, `compactAsync`, `upgradeFormatAsync` and the key changes, which wait for the writer too.
+- Write transactions still do not nest. Inside a `writeAsync` function, a write, sync, close, compaction, format upgrade or key change on the same file fails with `INVALID_ARGUMENT`, synchronous or not.
+- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey` or `setPassword` fails the same way, because it would hold the isolate the other write needs to finish.
 - Another isolate's writes are another queue: they wait for this isolate's in the engine, as another process's would.
 
 :::
 
 ::: lang python
 
-- An event loop's asynchronous writes on one file run one after another, even through several `Database` objects. A second `write_async` waits for the first on the event loop, without holding a thread of the pool, and so do `sync_async`, `close_async`, `compact_async` and the key changes, which wait for the writer too.
-- Write transactions still do not nest. `write_async` inside a synchronous `write` block on the same file fails with `INVALID_ARGUMENT`. Inside a `write_async` block, `write_async`, `sync_async`, `close_async`, `compact_async` or a key change on the same file fails the same way, since each would wait its turn after the block, and the block would wait for itself. A task made inside the block counts as inside it.
-- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close`, `compact`, `set_key` or `set_password` on the event loop's thread fails with `INVALID_ARGUMENT`, because it would hold the thread the other write needs to finish. From another thread, it waits for the writer as another process's write would.
+- An event loop's asynchronous writes on one file run one after another, even through several `Database` objects. A second `write_async` waits for the first on the event loop, without holding a thread of the pool, and so do `sync_async`, `close_async`, `compact_async`, `upgrade_format_async` and the key changes, which wait for the writer too.
+- Write transactions still do not nest. `write_async` inside a synchronous `write` block on the same file fails with `INVALID_ARGUMENT`. Inside a `write_async` block, `write_async`, `sync_async`, `close_async`, `compact_async`, `upgrade_format_async` or a key change on the same file fails the same way, since each would wait its turn after the block, and the block would wait for itself. A task made inside the block counts as inside it.
+- While an asynchronous write on the file is under way, a synchronous `write`, `sync`, `close`, `compact`, `upgrade_format`, `set_key` or `set_password` on the event loop's thread fails with `INVALID_ARGUMENT`, because it would hold the thread the other write needs to finish. From another thread, it waits for the writer as another process's write would.
 - Another event loop's writes, in another thread, are another queue: they wait for this loop's in the engine, as another process's would.
 
 :::

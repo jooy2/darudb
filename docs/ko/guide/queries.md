@@ -92,7 +92,7 @@ db.read((txn) {
 });
 ```
 
-메서드는 `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull`, `isNotNull`이 있고, 필드마다 맞는 것만 있습니다. `startsWith`는 문자열에, `contains`는 문자열과 목록에 있습니다. `where`를 다시 부르면 AND로 조건이 붙고, `sortBy`를 다시 부르면 앞의 정렬에서 같은 객체끼리 그 필드로 정렬합니다. 링크 필드 `q.team`은 담긴 키와 비교하고, 대상 컬렉션의 필드도 가집니다. 내장 객체 필드는 그 객체의 필드를 가집니다.
+메서드는 `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull`, `isNotNull`이 있고, 필드마다 맞는 것만 있습니다. `startsWith`는 문자열에, `contains`는 문자열과 목록에 있습니다. 목록 필드에는 값 가운데 하나와 같은 원소를 찾는 `containsAny`도 있고, 문자열 목록에는 `anyStartsWith`와 `anyEndsWith`도 있습니다. `where`를 다시 부르면 AND로 조건이 붙고, `sortBy`를 다시 부르면 앞의 정렬에서 같은 객체끼리 그 필드로 정렬합니다. 링크 필드 `q.team`은 담긴 키와 비교하고, 대상 컬렉션의 필드도 가집니다. 내장 객체 필드는 그 객체의 필드를 가집니다.
 
 조건은 모두 타입 검사를 거치므로 `q.age.atLeast('18')`은 컴파일되지 않습니다.
 
@@ -131,7 +131,7 @@ with db.read() as txn:
 - **경로**는 필드 이름이고, 내장 객체나 링크를 지날 때는 `.`으로 잇습니다. `address.city`처럼 쓰고, `author.name`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다.
 - **목록.** 목록에 건 조건은 원소 하나라도 맞으면 참입니다. 목록에 `contains`를 쓰면 그 원소가 있는지 봅니다. 빈 목록은 null이 아닙니다.
 - **null.** null인 필드에 건 조건은 null인지 묻는 조건을 빼고 모두 거짓입니다.
-- **타입.** 값은 필드의 타입과 같아야 합니다. 정수 필드는 정수와 비교하고 실수와는 비교하지 않습니다. 실수 필드는 정수와 실수 모두와 비교합니다. 링크는 대상 컬렉션의 키와 비교합니다. 이를 어기거나 없는 필드를 쓴 쿼리는 `INVALID_QUERY`로 실패합니다.
+- **타입.** 값은 필드의 타입과 같아야 합니다. 정수 필드는 정수와 비교하고 실수와는 비교하지 않습니다. 실수 필드는 실수, 그리고 -2^53부터 2^53까지의 정수와 비교합니다. 링크는 대상 컬렉션의 키와 비교합니다. 이를 어기거나 없는 필드를 쓴 쿼리는 `INVALID_QUERY`로 실패합니다.
 - **순서.** 정렬을 주지 않으면 기본 키 순서로 나오고, 정렬 값이 같은 객체끼리도 기본 키 순서를 따릅니다. null은 오름차순에서 맨 앞, 내림차순에서 맨 뒤에 옵니다. 문자열은 바이트 순서로 비교합니다.
 
 ## 문자열로 쿼리 쓰기
@@ -171,7 +171,7 @@ users.find('age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A
 users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A']);
 ```
 
-패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
+`findOneText`와 `countText`도 문자열을 같은 방식으로 받습니다. 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다른 매개변수로 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
 
 :::
 
@@ -189,7 +189,7 @@ users.find("age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10", 18, "A"
 
 ## 자주 도는 쿼리 준비하기
 
-값만 바꿔 여러 번 실행할 쿼리는 한 번만 해석해 두고 실행할 때마다 값을 넘길 수 있습니다. 준비한 쿼리를 매개변수 값 없이 실행하면 `INVALID_QUERY`로 실패합니다.
+값만 바꿔 여러 번 실행할 쿼리는 한 번만 해석해 두고 실행할 때마다 값을 넘길 수 있습니다. 준비한 쿼리를 매개변수 값을 다 주지 않고 실행하면 `INVALID_QUERY`로 실패합니다.
 
 ::: lang rust
 

@@ -324,6 +324,7 @@ db.close()
 - `max_unsynced_pages`와 `max_unsynced_time`은 지연 커밋이 동기화하지 않고 쌓아 둘 수 있는 양을 정합니다. [트랜잭션](./transactions.md)을 보세요.
 - `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migration`은 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
+- `upgrade_format(false)`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`OpenOptions`](../api/rust/open-options.md)에 있습니다.
 
@@ -339,6 +340,7 @@ db.close()
 - `busyTimeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 밀리초로 정합니다. 기본값은 5000입니다.
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
+- `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
 
 옵션마다 자세한 설명은 타입 섹션의 [`OpenOptions`](../types/node/open-options.md)에 있습니다.
 
@@ -354,6 +356,7 @@ db.close()
 - `busyTimeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 `Duration`으로 정합니다. 기본값은 5초입니다.
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
+- `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/dart/database.md#open)에 있고, `Database.openAsync`도 같은 옵션을 받습니다.
 
@@ -369,6 +372,7 @@ db.close()
 - `busy_timeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 초 단위로 정합니다. 기본값은 5입니다. `float`를 받으므로 `0.5`를 주면 0.5초입니다.
 - `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
+- `upgrade_format=False`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/python/database.md#open)에 있고, `Database.open_async`도 같은 옵션을 받습니다.
 

@@ -324,6 +324,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `max_unsynced_pages` and `max_unsynced_time` limit how much deferred commits may leave unsynced. See [Transactions](./transactions.md).
 - `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migration` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+- `upgrade_format(false)` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
 
 [`OpenOptions`](../api/rust/open-options.md) in the API section has each of them in full.
 
@@ -339,6 +340,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `busyTimeout` sets how long, in milliseconds, a write waits for another writer before failing with `BUSY`: 5000 by default.
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+- `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
 
 [`OpenOptions`](../types/node/open-options.md) in the Types section has each of them in full.
 
@@ -354,6 +356,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `busyTimeout`, a `Duration`, sets how long a write waits for another writer before failing with `BUSY`: five seconds by default.
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+- `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
 
 [`Database.open`](../api/dart/database.md#open) in the API section has each of them in full, and `Database.openAsync` takes the same.
 
@@ -369,6 +372,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `busy_timeout` sets how long, in seconds, a write waits for another writer before failing with `BUSY`: 5 by default. It takes a `float`, so `0.5` is half a second.
 - `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
+- `upgrade_format=False` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
 
 [`Database.open`](../api/python/database.md#open) in the API section has each of them in full, and `Database.open_async` takes the same.
 

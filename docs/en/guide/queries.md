@@ -92,7 +92,7 @@ db.read((txn) {
 });
 ```
 
-The methods are `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull` and `isNotNull`, each on the fields it fits: `startsWith` on a string, `contains` on a string or a list. Calling `where` again adds a condition with AND, and `sortBy` again sorts the objects the first leaves equal. A link's field, `q.team`, compares the key it holds and has the linked collection's fields; an embedded object's field has its fields.
+The methods are `equals`, `notEquals`, `lessThan`, `atMost`, `greaterThan`, `atLeast`, `between`, `isIn`, `contains`, `startsWith`, `endsWith`, `isNull` and `isNotNull`, each on the fields it fits: `startsWith` on a string, `contains` on a string or a list. A list field also has `containsAny`, an element equal to one of the values, and a list of strings `anyStartsWith` and `anyEndsWith`. Calling `where` again adds a condition with AND, and `sortBy` again sorts the objects the first leaves equal. A link's field, `q.team`, compares the key it holds and has the linked collection's fields; an embedded object's field has its fields.
 
 The types check every condition: `q.age.atLeast('18')` does not compile.
 
@@ -131,7 +131,7 @@ What a condition means is the same in every language:
 - **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
 - **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list is not null.
 - **Null.** Every condition on a null field is false, except the test for null.
-- **Types.** A value has the field's type: an integer field compares with an integer, never a float, a float field with any number, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
+- **Types.** A value has the field's type: an integer field compares with an integer, never a float, a float field with a float or with an integer from -2^53 to 2^53, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
 - **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.
 
 ## Write a query as text
@@ -171,7 +171,7 @@ The package keeps up to 256 texts it has parsed, so a text run again with other 
 users.findText(r'age >= $0 AND name STARTSWITH $1 SORT BY age DESC LIMIT 10', [18, 'A']);
 ```
 
-The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
+`findOneText` and `countText` take a text the same way. The package keeps up to 256 texts it has parsed, so a text run again with other parameters is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
 
 :::
 

@@ -40,13 +40,13 @@ Every error the package throws is an `Error` whose `code` is one of the codes be
 try {
   Database.open('missing.darudb', { create: false });
 } catch (error) {
-  if (error.code === 'NOT_FOUND') {
+  if (error instanceof Error && 'code' in error && error.code === 'NOT_FOUND') {
     // Nothing exists at that path.
   }
 }
 ```
 
-[`Error`](../types/node/error.md) in the Types section has the details.
+An error a function of yours throws inside a transaction or a migration is thrown again as it was, with whatever `code` it had. [`Error`](../types/node/error.md) in the Types section has the details.
 
 :::
 
@@ -98,7 +98,7 @@ A program can rely on the code, where the message is meant for a person and may 
 | `CORRUPTED` | The file is a DaruDB database, but part of it has been damaged. |
 | `INVALID_ARGUMENT` | An option was out of range, such as a page size that is not a power of two, or an object does not fit the schema. |
 | `CLOSED` | A database, a transaction or a collection was used after it was closed or after its transaction ended. |
-| `BUSY` | The database stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it. Salvage fails with it when the file is open, and so does opening a file salvage is reading. |
+| `BUSY` | The database stayed busy for longer than the busy timeout: another write transaction held it, or another process was recovering it. Salvage fails with it when the file is open, and so does opening a file salvage is reading, and raising a file's format version while another process has it open. |
 | `SYNC_FAILED` | A sync of the file failed. The last commit may or may not have happened; open the file again. |
 | `KEY_REQUIRED` | The database is encrypted, and it was opened without a key or password. |
 | `WRONG_KEY` | The key or password does not open the database. |

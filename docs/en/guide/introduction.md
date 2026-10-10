@@ -32,15 +32,15 @@ Five requirements shape every decision, in this order of priority.
 1. **Compatibility.** Old and new releases of Windows, macOS, Linux, iOS and Android. The file format carries its version, and every new format version and every new version of your schema comes with a migration from the one before.
 1. **Ease of use.** A schema that is easy to declare and queries that are easy to write, with results that are plain objects rather than handles tied to the open database.
 
-These are goals. Each one becomes a claim when the benchmark or the test suite that proves it is in the repository.
+The test suites in the repository check the encryption, the stability and the compatibility on every change. Whether the performance goal is reached is for benchmarks to say, run at the same durability settings for every database.
 
 ## How it is built
 
-The engine is written once, in Rust, and the Node.js, Dart and Python packages are thin bindings over it that add no behaviour of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
+The engine is written once, in Rust, and the Node.js, Dart and Python packages are thin bindings over it that add no rules about the file of their own. Every rule about the file lives in the engine, which is what makes a file written from one language read the same from another, and what gives every error the same `code` in every language. [How the engine is built](../engine/architecture.md) goes through its layers.
 
 <Diagram name="architecture" alt="The Rust crate and the Node.js, Dart and Python packages all call one engine written in Rust. Its layers, from objects and queries down through transactions and the copy-on-write tree to pages, with locks between processes beside them, keep one database file." />
 
-## Where it stands
+## What it has
 
 - **Storage.** A copy-on-write tree of pages, each verified against the check its parent recorded before it is used, so a damaged page is reported rather than read. A commit is durable when it returns; a deferred commit returns before the disk has it and reaches it within a second by default.
 - **Encryption.** A database created with a key or a password is encrypted and authenticated, every page of it, and changing the password re-encrypts nothing.
@@ -48,4 +48,4 @@ The engine is written once, in Rust, and the Node.js, Dart and Python packages a
 - **Objects.** Schemas, collections, indexes, links and embedded objects, queries built in code or written as text, and migrations from one schema version to the next.
 - **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
 - **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
-- **Packages.** The Rust crate, the Node.js package, the Dart package and the Python package have all of the above, and all four are released. The Node.js, Dart and Python packages ship the engine prebuilt for every platform they support, so installing them needs no Rust compiler.
+- **Packages.** The Rust crate, the Node.js package, the Dart package and the Python package have all of the above. The Node.js, Dart and Python packages ship the engine prebuilt for every platform they support, so installing them needs no Rust compiler.

@@ -11,7 +11,7 @@ Several processes can have one database file open at once, each reading and writ
 
 - Each process sees the others' commits as soon as they are made.
 - One process writes at a time, and a reader never waits for a writer.
-- A write waits for a writer in another process as it does for one in its own, up to the busy timeout, and then fails with `BUSY`.
+- A write waits for a writer in another process as it does for one in its own, up to the busy timeout, and then fails with `BUSY`. The timeout is five seconds unless <LangCode rust="OpenOptions::busy_timeout" node="busyTimeout" dart="busyTimeout" python="busy_timeout" /> says otherwise.
 - A writer that has waited a moment gets the next turn, so a process that commits in a tight loop cannot keep the others out.
 
 The processes coordinate through the operating system's file locks and nothing else: no shared memory, no lock file, no server. A process that dies at any moment, holding any lock, releases it as it dies, and the others carry on. [Locking](../engine/locking.md) in the Engine section describes the locks.

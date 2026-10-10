@@ -37,7 +37,7 @@ The `field` of a condition is a path: a field's name, or names joined by `.` thr
 
 ## Values
 
-A value has the field's type. An `Int` field compares with an integer and never with a float, a `Float` field with any number, and a link with the linked collection's key. Every condition on a null field is false, except `is_null`. Strings compare by their bytes.
+A value has the field's type. An `Int` field compares with an integer and never with a float, a `Float` field with a float or with an integer from -2^53 to 2^53, which means the float it equals, and a link with the linked collection's key. Every condition on a null field is false, except `is_null`. Strings compare by their bytes.
 
 ## Associated functions
 

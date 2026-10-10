@@ -79,7 +79,7 @@ const registries: Registry[] = [
  * site is about every package.
  */
 const SITE_DESCRIPTION =
-  "An embedded database that keeps an application's data in one local file, for Rust, Node.js, Dart and Python. One engine written in Rust, with encryption, crash safety and several processes on one file as goals from the start.";
+  "An embedded database that keeps an application's data in one local file, for Rust, Node.js, Dart and Python. One engine written in Rust, with encryption, crash safety and several processes on one file built in.";
 
 /** `/` for whichever locale is the default, `/{lang}/` for every other one. */
 const localeBase = (lang: string) => (lang === defaultLocale ? '/' : `/${lang}/`);
@@ -164,7 +164,7 @@ const vitePressI18nConfig: VitePressI18nOptions = {
   searchProvider: 'local',
   description: {
     en: SITE_DESCRIPTION,
-    ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart, Python에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 처음부터 목표로 설계합니다.'
+    ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart, Python에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 엔진에 담았습니다.'
   },
   themeConfig: {
     en: { nav: navFor('en', ['Guide', 'Engine', 'API', 'Types', 'Changelog']) },

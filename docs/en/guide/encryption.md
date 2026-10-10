@@ -105,7 +105,7 @@ Everything inside a page is encrypted: keys, values, collection and tree names i
 - **A key** is 32 random bytes, such as one kept in the operating system's keystore, as [below](#keep-the-key-in-the-operating-system-s-keystore).
 - **A password** is turned into a key with Argon2id, which takes tens of milliseconds at the default cost of 19 MiB, 2 iterations and 1 lane. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" /> raises or lowers that cost for a new file and for a password change. A file records the cost it was made with, so opening it takes that cost whatever the option says.
 - **Changing the key or the password** re-encrypts nothing, and once it returns, the old one no longer opens the file.
-- A plain database stays plain, and an encrypted one cannot be opened without its key. Keep the key, or the password, where it cannot be lost: without it, the data cannot be read.
+- A plain database stays plain until it is [backed up under a key](./tools.md#back-up-under-a-new-key), which writes an encrypted copy to take its place. An encrypted one cannot be opened without its key. Keep the key, or the password, where it cannot be lost: without it, the data cannot be read.
 
 <Diagram name="encryption" alt="A password goes through Argon2id, or a 32-byte key is used as it is, to make the key-encryption key, which is never stored. It wraps the data key, which is random and stored wrapped in every commit record, and the data key seals every page with XAES-256-GCM or XChaCha20-Poly1305 and a fresh nonce. A new password or key wraps the same data key again, so no page is encrypted again." />
 

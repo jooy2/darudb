@@ -43,7 +43,7 @@ with db.read() as txn:
 The values of a query's parameters, in order, as positional arguments after the query: `$0` or `param(0)` first. Each is one value a condition compares with, whose Python type decides its type in the engine:
 
 - A `bool` is a bool, and an `int` is an int, which has to fit in 64 bits.
-- A `float` is a float. An `int` field compares only with an int, and a `float` field with any number.
+- A `float` is a float. An `int` field compares only with an int, and a `float` field with a float or with an int from -2^53 to 2^53.
 - A `str` is a string, and `bytes`, a `bytearray` or a `memoryview` is bytes.
 - `None` is allowed only where the parameter is compared with `==` or `!=`, which then test whether the field is `None`. Anywhere else it fails with `INVALID_QUERY`.
 

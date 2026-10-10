@@ -11,7 +11,7 @@ Changing a schema means raising its version, and opening a file that holds an ol
 
 ## What the engine does by itself
 
-The engine makes some changes without being told: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten. An object written before a field existed reads its default, which is why a required field keeps its default once it has one.
+The engine makes some changes without being told: a new collection, a new optional field or one with a default, a removed field, and a new or removed index. Records are not rewritten. An object written before a field existed reads its default, which is why a required field keeps its default once it has one. A collection the new schema leaves out is not removed by itself: the migration has to delete it, or opening fails with `INVALID_ARGUMENT`.
 
 Anything else is named in a migration for the version that makes it.
 
@@ -196,12 +196,14 @@ db = darudb.Database.open(
 :::
 
 - **Renames** keep the data where it is, so they cost nothing however many objects there are. A rename names the collection by its name before the migration.
-- **A replaced field** is a new field with the old name, for a change of type. **A deleted collection** goes with its objects and indexes.
+- **A replaced field** is a new field with the old name, for a change of type, so a required one needs a default, or opening fails with `INVALID_ARGUMENT`. **A deleted collection** goes with its objects and indexes.
 - **The migration function** runs in the migration's write transaction, after the renames, under the new schema. `previous` reads an object as the old schema did, with the old names and the values of removed and replaced fields, so read an object that way before writing it: a written object keeps only the new schema's fields. A deleted collection can still be read that way until the migration commits.
 - **A failed migration** leaves the file with its old schema and its data.
 
 ## Several versions at once
 
-Migrations to several versions run in version order. A file two versions behind runs both steps, and one already at the declared version runs none. Give the migration of every version the application has had, so that a file from any of them can be opened.
+Migrations to several versions run in version order. A file two versions behind runs both steps, and one already at the declared version runs none.
+
+Every step's function runs under the declared schema, the newest one, since the engine stores it before any function runs. So the function of version 2 reaches collections and fields by the names the newest version gives them, and `previous` reads an object as the file held it before the whole migration, under the names of the version it started from. <LangCode rust="Migrating::previous_version" node="previousVersion" dart="previousVersion" python="previous_version" /> says which version that was, for a function that has to tell. Give the migration of every version the application has had, so that a file from any of them can be opened.
 
 A file whose schema version is newer than the declared one fails with `SCHEMA_TOO_NEW`: an application cannot open a file a newer release of itself wrote.

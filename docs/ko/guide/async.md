@@ -18,9 +18,9 @@ languages: [node, dart, python]
 대부분의 호출은 마이크로초 단위로 끝나지만, 스레드를 훨씬 오래 붙잡는 호출도 있습니다.
 
 - 동기 커밋은 디스크를 기다립니다.
-- 쓰기와 파일 열기는 다른 프로세스가 쓰고 있으면 그 쓰기를 기다립니다. 최대 대기 시간인 busy timeout은 기본 5초입니다.
+- 쓰기와 파일 열기는 다른 프로세스가 쓰고 있으면 그 쓰기를 기다립니다. 최대 대기 시간인 바쁨 대기 시간은 기본 5초입니다.
 - 파일을 열 때 복구나 마이그레이션이 돌 수 있고, 암호화된 파일을 비밀번호로 열면 비밀번호를 키로 바꾸는 데 수십 밀리초가 걸립니다.
-- 객체를 많이 돌려주는 쿼리는 그 객체를 다 읽는 만큼 걸리고, 검사, 백업, 압축, 복구 같은 도구는 파일 전체를 읽습니다.
+- 객체를 많이 돌려주는 쿼리는 그 객체를 다 읽는 만큼 걸리고, 검사, 백업, 압축, 되살리기 같은 도구는 파일 전체를 읽습니다.
 
 ::: lang node
 
@@ -73,7 +73,7 @@ const adults = await db.readAsync((txn) =>
 
 - 함수는 비동기여도 됩니다. `writeAsync`는 함수가 이행되면 커밋하고 거부되면 취소하며, `write`와 같은 `durability` 옵션을 받습니다. `readAsync`는 함수가 끝날 때까지 커밋 하나를 봅니다.
 - `readAsync`는 `read`처럼 부른 스레드에서 읽기를 시작합니다. 읽기를 시작할 때는 쓰기를 기다리지 않고, 스레드 풀을 한 번 오가는 것보다 비용이 적기 때문입니다.
-- 도구에도 짝이 있습니다. `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, 그리고 `Database.salvageAsync`입니다.
+- 도구에도 짝이 있습니다. `checkAsync`, `backupAsync`, `compactAsync`, `upgradeFormatAsync`, `setKeyAsync`, `setPasswordAsync`, 그리고 `Database.salvageAsync`입니다.
 
 :::
 
@@ -102,7 +102,7 @@ final adults = await db.readAsync(
 
 - 함수는 비동기여도 됩니다. `writeAsync`는 함수가 완료되면 커밋하고 실패하면 취소하며, `write`와 같은 `durability`를 받습니다. `readAsync`는 함수가 끝날 때까지 커밋 하나를 봅니다.
 - `readAsync`는 `read`처럼 부른 isolate에서 읽기를 시작합니다. 읽기를 시작할 때는 쓰기를 기다리지 않기 때문입니다.
-- 도구에도 짝이 있습니다. `checkAsync`, `backupAsync`, `compactAsync`, `setKeyAsync`, `setPasswordAsync`, 그리고 `Database.salvageAsync`입니다.
+- 도구에도 짝이 있습니다. `checkAsync`, `backupAsync`, `compactAsync`, `upgradeFormatAsync`, `setKeyAsync`, `setPasswordAsync`, 그리고 `Database.salvageAsync`입니다.
 
 :::
 
@@ -134,7 +134,7 @@ await db.close_async()
 - `write_async` 블록은 끝날 때, 그 안에서 시작한 작업이 모두 끝난 뒤에 커밋하고, 예외가 나면 취소합니다. `write`와 같은 `durability`를 받습니다. `read_async` 블록은 끝날 때까지 커밋 하나를 봅니다.
 - `read_async`는 `read`처럼 이벤트 루프의 스레드에서 읽기를 시작합니다. 읽기를 시작할 때는 쓰기를 기다리지 않기 때문입니다. `write_async`는 쓰기를 기다려야 하므로 풀에서 시작합니다.
 - 데이터베이스는 비동기 컨텍스트 관리자이기도 합니다. `async with await darudb.Database.open_async(...) as db:`로 열면 블록이 끝날 때 `close_async`로 닫힙니다.
-- 도구에도 짝이 있습니다. `check_async`, `backup_async`, `compact_async`, `set_key_async`, `set_password_async`, 그리고 `Database.salvage_async`입니다.
+- 도구에도 짝이 있습니다. `check_async`, `backup_async`, `compact_async`, `upgrade_format_async`, `set_key_async`, `set_password_async`, 그리고 `Database.salvage_async`입니다.
 
 :::
 
@@ -168,26 +168,26 @@ await db.close_async()
 
 ::: lang node
 
-- 한 프로세스에서 같은 파일에 하는 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `writeAsync`는 스레드 풀의 스레드를 잡지 않고 첫 번째를 기다립니다. `syncAsync`와 `closeAsync`도 같은 줄에서 기다립니다. 아직 디스크에 기록되지 않은 지연 커밋이 있으면 둘 다 쓰기가 끝나기를 기다려야 하기 때문입니다.
-- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. `writeAsync` 함수 안에서 같은 파일에 `writeAsync`, `write`, `sync`, `close`를 부르면 `INVALID_ARGUMENT`로 실패하고, 각각의 비동기 버전도 마찬가지입니다.
-- 비동기 쓰기가 진행 중일 때는 어디서 부르든 동기 `write`, `sync`, `close`가 같은 오류로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 이벤트 루프를 막기 때문입니다.
+- 한 프로세스에서 같은 파일에 하는 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `writeAsync`는 스레드 풀의 스레드를 잡지 않고 첫 번째를 기다립니다. `syncAsync`와 `closeAsync`도 같은 줄에서 기다립니다. 아직 디스크에 기록되지 않은 지연 커밋이 있으면 둘 다 쓰기가 끝나기를 기다려야 하기 때문입니다. 파일에 쓰는 `compactAsync`, `upgradeFormatAsync`, `setKeyAsync`, `setPasswordAsync`도 같은 줄에서 기다립니다.
+- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. `writeAsync` 함수 안에서 같은 파일에 `writeAsync`, `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey`, `setPassword`를 부르면 `INVALID_ARGUMENT`로 실패하고, 각각의 비동기 버전도 마찬가지입니다.
+- 같은 파일에 비동기 쓰기가 진행 중일 때는 어디서 부르든 동기 `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey`, `setPassword`가 같은 오류로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 이벤트 루프를 막기 때문입니다.
 
 :::
 
 ::: lang dart
 
-- 한 isolate에서 같은 파일에 하는 비동기 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `writeAsync`는 첫 번째를 기다리고, `syncAsync`, `closeAsync`, `compactAsync`와 키 변경도 쓰기를 기다려야 하므로 같은 줄에서 기다립니다.
-- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. `writeAsync` 함수 안에서 같은 파일에 쓰기, 동기화, 닫기, 압축을 하면 동기든 비동기든 `INVALID_ARGUMENT`로 실패합니다.
-- 비동기 쓰기가 진행 중일 때는 동기 `write`, `sync`, `close`, `compact`가 같은 오류로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 isolate를 붙잡기 때문입니다.
+- 한 isolate에서 같은 파일에 하는 비동기 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `writeAsync`는 첫 번째를 기다리고, `syncAsync`, `closeAsync`, `compactAsync`, `upgradeFormatAsync`와 키 변경도 쓰기를 기다려야 하므로 같은 줄에서 기다립니다.
+- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. `writeAsync` 함수 안에서 같은 파일에 쓰기, 동기화, 닫기, 압축, 형식 올리기, 키 변경을 하면 동기든 비동기든 `INVALID_ARGUMENT`로 실패합니다.
+- 같은 파일에 비동기 쓰기가 진행 중일 때는 동기 `write`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey`, `setPassword`가 같은 오류로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 isolate를 붙잡기 때문입니다.
 - 다른 isolate의 쓰기는 다른 줄입니다. 다른 프로세스의 쓰기처럼 엔진 안에서 이 isolate의 쓰기를 기다립니다.
 
 :::
 
 ::: lang python
 
-- 한 이벤트 루프에서 같은 파일에 하는 비동기 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `write_async`는 풀의 스레드를 잡지 않고 이벤트 루프에서 첫 번째를 기다립니다. `sync_async`, `close_async`, `compact_async`와 키 변경도 쓰기를 기다려야 하므로 같은 줄에서 기다립니다.
-- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. 동기 `write` 블록 안에서 같은 파일에 `write_async`를 쓰면 `INVALID_ARGUMENT`로 실패합니다. `write_async` 블록 안에서 같은 파일에 `write_async`, `sync_async`, `close_async`, `compact_async`나 키 변경을 해도 같은 오류로 실패합니다. 저마다 블록이 끝난 다음에야 차례가 오는데 블록은 그 호출이 끝나기를 기다리므로, 결국 자기 자신을 기다리게 되기 때문입니다. 블록 안에서 만든 태스크도 블록 안으로 칩니다.
-- 같은 파일에 비동기 쓰기가 진행 중일 때 이벤트 루프의 스레드에서 동기 `write`, `sync`, `close`, `compact`, `set_key`, `set_password`를 부르면 `INVALID_ARGUMENT`로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 스레드를 붙잡기 때문입니다. 다른 스레드에서 부르면 다른 프로세스의 쓰기처럼 쓰기가 끝나기를 기다립니다.
+- 한 이벤트 루프에서 같은 파일에 하는 비동기 쓰기는 `Database` 객체가 여러 개여도 차례로 실행됩니다. 두 번째 `write_async`는 풀의 스레드를 잡지 않고 이벤트 루프에서 첫 번째를 기다립니다. `sync_async`, `close_async`, `compact_async`, `upgrade_format_async`와 키 변경도 쓰기를 기다려야 하므로 같은 줄에서 기다립니다.
+- 쓰기 트랜잭션은 여전히 겹칠 수 없습니다. 동기 `write` 블록 안에서 같은 파일에 `write_async`를 쓰면 `INVALID_ARGUMENT`로 실패합니다. `write_async` 블록 안에서 같은 파일에 `write_async`, `sync_async`, `close_async`, `compact_async`, `upgrade_format_async`나 키 변경을 해도 같은 오류로 실패합니다. 저마다 블록이 끝난 다음에야 차례가 오는데 블록은 그 호출이 끝나기를 기다리므로, 결국 자기 자신을 기다리게 되기 때문입니다. 블록 안에서 만든 태스크도 블록 안으로 칩니다.
+- 같은 파일에 비동기 쓰기가 진행 중일 때 이벤트 루프의 스레드에서 동기 `write`, `sync`, `close`, `compact`, `upgrade_format`, `set_key`, `set_password`를 부르면 `INVALID_ARGUMENT`로 실패합니다. 기다리면 그 비동기 쓰기가 끝나는 데 필요한 스레드를 붙잡기 때문입니다. 다른 스레드에서 부르면 다른 프로세스의 쓰기처럼 쓰기가 끝나기를 기다립니다.
 - 다른 스레드에서 도는 다른 이벤트 루프의 쓰기는 다른 줄입니다. 다른 프로세스의 쓰기처럼 엔진 안에서 이 루프의 쓰기를 기다립니다.
 
 :::
