@@ -10,7 +10,14 @@ const STRINGS = {
     switchHint: 'Examples, the API and the types follow this choice on every page.',
     planned: 'Planned',
     packages: 'Packages',
-    packagesHeading: 'Package registries'
+    packagesHeading: 'Package registries',
+    examplesIn: 'Examples in',
+    startAction: 'Get started',
+    demoQueries: 'Example queries',
+    demoText: 'As text',
+    demoCode: 'In code',
+    demoCaption: 'The objects of the users collection, and the ones the query finds',
+    demoFound: '{count} of {total} objects found'
   },
   ko: {
     switchLabel: '언어',
@@ -18,7 +25,14 @@ const STRINGS = {
     switchHint: '모든 페이지의 예제와 API, 타입이 이 선택을 따릅니다.',
     planned: '예정',
     packages: '패키지',
-    packagesHeading: '패키지 저장소'
+    packagesHeading: '패키지 저장소',
+    examplesIn: '예제 언어',
+    startAction: '시작하기',
+    demoQueries: '예제 쿼리',
+    demoText: '문자열',
+    demoCode: '코드',
+    demoCaption: 'users 컬렉션의 객체와 그중 쿼리가 찾은 객체',
+    demoFound: '객체 {total}개 중 {count}개를 찾았습니다'
   }
 };
 

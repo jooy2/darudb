@@ -1,15 +1,803 @@
 /**
- * The logo in the home page's hero.
+ * The home page.
  *
- * The default theme sizes the hero image at 320 pixels, and expects an image
- * with room around it. The logo is cropped close to its edges, so between 960
- * and 1152 pixels, where the theme gives the image column less than 320
- * pixels, it ran into the tagline beside it. Drawn smaller in that band, it
- * stays inside its column.
+ * The sections below the hero are Markdown, in each locale's `index.md`, so
+ * their code is highlighted by the pipeline the guide uses and answers to the
+ * same language switch. What is here is what Markdown cannot say: the hero's
+ * mark, the grids, and the places where a landing page should not look like a
+ * document.
+ *
+ * The page's own rules are scoped to `.VPHome`, so that nothing written for the
+ * landing page reaches the pages that keep the default theme. The components
+ * the page uses have class names of their own.
  */
-@media (min-width: 960px) and (max-width: 1151px) {
-  .VPHero.has-image .image-src {
-    max-width: 216px;
-    max-height: 216px;
+
+/* ---------------------------------------------------------------------------
+ * The hero
+ *
+ * The name runs from the logo's brown to its tan, and the light behind the
+ * mark is the tan thinned out. The light is kept faint: the logo is drawn in
+ * the same two colours, and a glow at full strength would wash its outline out.
+ * ------------------------------------------------------------------------- */
+
+.VPHome {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #643c24 20%, #a8743f 90%);
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    rgba(212, 180, 132, 0.62) 40%,
+    rgba(139, 90, 54, 0.34)
+  );
+  --vp-home-hero-image-filter: blur(48px);
+}
+
+.dark .VPHome {
+  --vp-home-hero-name-background: linear-gradient(120deg, #f0dcb8 15%, #c9a06a 85%);
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    rgba(212, 180, 132, 0.3) 40%,
+    rgba(139, 90, 54, 0.3)
+  );
+}
+
+@media (min-width: 640px) {
+  .VPHome {
+    --vp-home-hero-image-filter: blur(60px);
   }
+}
+
+@media (min-width: 960px) {
+  .VPHome {
+    --vp-home-hero-image-filter: blur(72px);
+  }
+}
+
+/* The light behind the mark swells and settles, slowly enough to read as light
+   rather than as movement. `scale` rather than `transform`, which the theme
+   already uses to centre it. */
+.VPHome .image-bg {
+  animation: hero-glow 7s ease-in-out infinite alternate;
+}
+
+@keyframes hero-glow {
+  from {
+    opacity: 0.75;
+    scale: 0.9;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1.08;
+  }
+}
+
+/*
+ * The mark: the logo, two rings around it, and the four languages on the
+ * outer ring, which turns once a minute. Each badge turns back as the ring
+ * turns, so its icon stays upright.
+ *
+ * Sized by `--mark-size`, which follows the space the theme gives the image
+ * column. Between 960 and 1152 pixels that column is narrower than the image
+ * the theme expects, so the mark is drawn smaller there, where it would
+ * otherwise run into the tagline beside it.
+ */
+.hero-mark {
+  --mark-size: 288px;
+  --badge-size: 38px;
+
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--mark-size);
+  height: var(--mark-size);
+  transform: translate(-50%, -50%);
+}
+
+@media (min-width: 640px) {
+  .hero-mark {
+    --mark-size: 352px;
+    --badge-size: 44px;
+  }
+}
+
+@media (min-width: 960px) {
+  .hero-mark {
+    --mark-size: 376px;
+  }
+}
+
+@media (min-width: 960px) and (max-width: 1151px) {
+  .hero-mark {
+    --mark-size: 256px;
+    --badge-size: 36px;
+  }
+}
+
+/*
+ * Below 960 pixels the theme stacks the image over the heading and pulls the
+ * heading up into the image's box, which is room a still logo does not need
+ * and a badge passing the bottom of the ring does. The box of the turning ring
+ * reaches past a phone's edge at its corners, so the page clips it there rather
+ * than scrolling sideways.
+ */
+.VPHome {
+  overflow-x: clip;
+}
+
+@media (max-width: 959px) {
+  .VPHome .VPHero .image {
+    margin-bottom: 0;
+  }
+}
+
+.hero-mark-orbit {
+  position: absolute;
+  inset: 0;
+  animation: hero-turn 60s linear infinite;
+}
+
+.hero-mark-rings {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.hero-mark-ring {
+  fill: none;
+  stroke: rgba(122, 74, 43, 0.26);
+  stroke-width: 0.35;
+}
+
+.hero-mark-ring.inner {
+  stroke: rgba(122, 74, 43, 0.34);
+  stroke-dasharray: 0.8 2.4;
+  stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hero-turn 40s linear infinite reverse;
+}
+
+.dark .hero-mark-ring {
+  stroke: rgba(212, 180, 132, 0.24);
+}
+
+.dark .hero-mark-ring.inner {
+  stroke: rgba(212, 180, 132, 0.36);
+}
+
+/* Each badge is placed on the outer ring, whose radius is 47 of the mark's
+   100, by turning out to its angle, stepping out, and turning back. */
+.hero-mark-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--badge-size);
+  height: var(--badge-size);
+  margin: calc(var(--badge-size) / -2) 0 0 calc(var(--badge-size) / -2);
+  transform: rotate(var(--angle)) translateY(calc(var(--mark-size) * -0.47))
+    rotate(calc(var(--angle) * -1));
+}
+
+.hero-mark-badge-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 50%;
+  background-color: var(--vp-c-bg-elv);
+  box-shadow: var(--vp-shadow-2);
+  animation: hero-turn 60s linear infinite reverse;
+}
+
+.hero-mark-badge-face .lang-icon {
+  width: 52%;
+  height: 52%;
+}
+
+.hero-mark-logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 56%;
+  height: auto;
+  margin: -28% 0 0 -28%;
+  filter: drop-shadow(0 10px 24px rgba(43, 26, 15, 0.22));
+  animation: hero-float 6s ease-in-out infinite;
+}
+
+.dark .hero-mark-logo {
+  filter: drop-shadow(0 10px 26px rgba(0, 0, 0, 0.55));
+}
+
+@keyframes hero-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hero-float {
+  50% {
+    translate: 0 -6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPHome .image-bg,
+  .hero-mark-orbit,
+  .hero-mark-ring.inner,
+  .hero-mark-badge-face,
+  .hero-mark-logo {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The feature cards
+ *
+ * The icons are inline SVG in the front matter, which arrives as raw markup
+ * and carries none of the theme's scoping attributes, so their size is set
+ * here.
+ * ------------------------------------------------------------------------- */
+
+.VPHome .VPFeature .icon {
+  background: linear-gradient(135deg, var(--vp-c-brand-soft), var(--vp-c-default-soft));
+  color: var(--vp-c-brand-1);
+}
+
+.VPHome .VPFeature .icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.VPHome .VPFeature {
+  transition:
+    border-color 0.25s,
+    transform 0.25s;
+}
+
+.VPHome .VPFeature:hover {
+  border-color: var(--vp-c-brand-1);
+  transform: translateY(-3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPHome .VPFeature:hover {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The sections under the features
+ *
+ * A heading here opens a part of a landing page rather than a part of a
+ * document, so it loses the rule above it and its anchor, which a centred
+ * heading would leave floating at the far left, and gains room above it.
+ * ------------------------------------------------------------------------- */
+
+.VPHome .vp-doc h2 {
+  margin: 88px 0 0;
+  padding-top: 0;
+  border-top: none;
+  font-size: 30px;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+.VPHome .vp-doc h2 .header-anchor {
+  display: none;
+}
+
+/* The sentence each section opens with. */
+.VPHome .vp-doc h2 + p {
+  max-width: 680px;
+  margin: 12px auto 0;
+  text-align: center;
+  color: var(--vp-c-text-2);
+}
+
+.VPHome .vp-doc h3 {
+  margin: 36px 0 0;
+  font-size: 17px;
+}
+
+.VPHome .vp-doc .home-note {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+
+/* ---------------------------------------------------------------------------
+ * The four languages, side by side
+ *
+ * The one place on the site that shows every language at once: everywhere
+ * else the switch picks one, and here the four standing together are the
+ * point. Two columns once a column is wide enough for the code to sit in it
+ * without scrolling.
+ * ------------------------------------------------------------------------- */
+
+.home-parity {
+  display: grid;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+@media (min-width: 1100px) {
+  .home-parity {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.home-parity-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-soft);
+  overflow: hidden;
+}
+
+.VPHome .vp-doc .home-parity-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vp-c-text-1);
+}
+
+.VPHome .vp-doc .home-parity div[class*='language-'] {
+  flex: 1;
+  margin: 0;
+  border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * The language tabs above the examples
+ * ------------------------------------------------------------------------- */
+
+.lang-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px 14px;
+  margin: 28px 0 8px;
+}
+
+.lang-tabs-label {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+}
+
+.lang-tabs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background-color: var(--vp-c-bg-alt);
+}
+
+.lang-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: 7px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.16s,
+    background-color 0.16s;
+}
+
+.lang-tab:hover {
+  color: var(--vp-c-text-1);
+}
+
+.lang-tab:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 1px;
+}
+
+.lang-tab .lang-icon {
+  opacity: 0.6;
+  transition: opacity 0.16s;
+}
+
+.lang-tab:hover .lang-icon {
+  opacity: 1;
+}
+
+/* The current tab, written out per language: CSS has no way to say "the one
+   the document is set to". */
+html[data-code-lang='rust'] .lang-tab[data-code-lang='rust'],
+html[data-code-lang='node'] .lang-tab[data-code-lang='node'],
+html[data-code-lang='dart'] .lang-tab[data-code-lang='dart'],
+html[data-code-lang='python'] .lang-tab[data-code-lang='python'] {
+  background-color: var(--vp-c-bg);
+  box-shadow: var(--vp-shadow-1);
+  color: var(--vp-c-brand-1);
+}
+
+html[data-code-lang='rust'] .lang-tab[data-code-lang='rust'] .lang-icon,
+html[data-code-lang='node'] .lang-tab[data-code-lang='node'] .lang-icon,
+html[data-code-lang='dart'] .lang-tab[data-code-lang='dart'] .lang-icon,
+html[data-code-lang='python'] .lang-tab[data-code-lang='python'] .lang-icon {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------------------
+ * The data example
+ * ------------------------------------------------------------------------- */
+
+.query-demo {
+  margin-top: 28px;
+}
+
+.query-demo-picks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.query-demo-pick {
+  padding: 6px 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background-color: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  transition:
+    color 0.16s,
+    border-color 0.16s,
+    background-color 0.16s;
+}
+
+.query-demo-pick:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+}
+
+.query-demo-pick:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.query-demo-pick[aria-pressed='true'] {
+  border-color: var(--vp-c-brand-1);
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}
+
+.query-demo-panel {
+  margin-top: 16px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-soft);
+  overflow: hidden;
+}
+
+.VPHome .vp-doc .query-demo-forms {
+  margin: 0;
+}
+
+.query-demo-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.query-demo-form dt {
+  flex: none;
+  width: 64px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+}
+
+.VPHome .vp-doc .query-demo-form dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.VPHome .vp-doc .query-demo-form code {
+  padding: 0;
+  background: none;
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.query-demo-table {
+  overflow-x: auto;
+}
+
+.VPHome .vp-doc .query-demo-table table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-family: var(--vp-font-family-mono);
+  font-size: 13px;
+}
+
+.query-demo-table caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.VPHome .vp-doc .query-demo-table tr {
+  border: none;
+  background-color: transparent;
+  transition:
+    opacity 0.2s,
+    background-color 0.2s;
+}
+
+.VPHome .vp-doc .query-demo-table th,
+.VPHome .vp-doc .query-demo-table td {
+  padding: 7px 14px;
+  border: none;
+  border-bottom: 1px solid var(--vp-c-divider);
+  white-space: nowrap;
+}
+
+.VPHome .vp-doc .query-demo-table th {
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.VPHome .vp-doc .query-demo-table tr.is-found {
+  background-color: var(--vp-c-brand-soft);
+}
+
+.VPHome .vp-doc .query-demo-table tr.is-skipped {
+  opacity: 0.42;
+}
+
+.VPHome .vp-doc .query-demo-table .query-demo-place {
+  width: 1%;
+  color: var(--vp-c-brand-1);
+  font-weight: 700;
+  text-align: center;
+}
+
+.query-demo-null {
+  color: var(--vp-c-text-3);
+}
+
+.VPHome .vp-doc .query-demo-count {
+  margin: 0;
+  padding: 10px 18px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+ * The guide grid
+ * ------------------------------------------------------------------------- */
+
+.vp-doc .guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vp-doc .guide-grid li + li {
+  margin-top: 0;
+}
+
+.vp-doc .guide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  padding: 16px 18px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-soft);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color 0.25s,
+    transform 0.25s;
+}
+
+.vp-doc .guide-card:hover {
+  border-color: var(--vp-c-brand-1);
+  transform: translateY(-2px);
+}
+
+.guide-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--vp-c-text-1);
+}
+
+.guide-card-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+/* ---------------------------------------------------------------------------
+ * The cards that close the page, one for each language
+ * ------------------------------------------------------------------------- */
+
+.start-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  margin: 28px 0 0;
+}
+
+.vp-doc .start-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 14px;
+  background-color: var(--vp-c-bg-soft);
+  color: inherit;
+  font-weight: 400;
+  text-decoration: none;
+  transition:
+    border-color 0.25s,
+    background-color 0.25s,
+    transform 0.25s;
+}
+
+.vp-doc .start-card:hover {
+  border-color: var(--vp-c-brand-1);
+  background-color: var(--vp-c-bg-elv);
+  transform: translateY(-3px);
+}
+
+/* The card of the language the site is being read in. */
+html[data-code-lang='rust'] .start-card[data-code-lang='rust'],
+html[data-code-lang='node'] .start-card[data-code-lang='node'],
+html[data-code-lang='dart'] .start-card[data-code-lang='dart'],
+html[data-code-lang='python'] .start-card[data-code-lang='python'] {
+  border-color: var(--vp-c-brand-1);
+}
+
+.start-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.start-card-head .lang-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.start-card-name {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--vp-c-text-1);
+}
+
+.start-card-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc .start-card-install {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background-color: var(--vp-c-bg-alt);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.start-card-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--vp-c-brand-1);
+}
+
+.start-card-action svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.25s;
+}
+
+.start-card:hover .start-card-action svg {
+  transform: translateX(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vp-doc .guide-card:hover,
+  .vp-doc .start-card:hover,
+  .start-card:hover .start-card-action svg {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The links that close the page
+ * ------------------------------------------------------------------------- */
+
+.VPHome .vp-doc .home-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 40px;
+}
+
+.VPHome .vp-doc .home-cta p {
+  display: contents;
+}
+
+.VPHome .vp-doc .home-cta a {
+  padding: 8px 20px;
+  border: 1px solid var(--vp-c-brand-1);
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    color 0.25s,
+    background-color 0.25s;
+}
+
+.VPHome .vp-doc .home-cta a:hover {
+  background-color: var(--vp-c-brand-1);
+  color: var(--vp-c-white);
+}
+
+.dark .VPHome .vp-doc .home-cta a:hover {
+  color: var(--vp-button-brand-text);
 }
