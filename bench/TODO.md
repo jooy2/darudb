@@ -99,19 +99,21 @@ LMDB scans several times faster in Rust, redb about twice as fast in Rust on an 
 Done (2026-10-11):
 
 - **A number is compared with a number of its type directly** in a filter and a sort, without a `Value` made for it: `top-score` 7 to 11% faster on Linux runners.
-- **Field marks per leaf, kept beside the page cache** (`Marks` in `btree/load.rs`): the first scan of a leaf marks where the plan's first field lies in each record, and the next one reads it there. On Linux runners, `city-scan` 16 to 21% and `top-score` 19 to 23% faster on top of the comparison, on the M1 Max a quarter; the second run of a scan a third faster and the first 5% slower. Through Node.js and Python on the M1 Max, 22 to 29%.
+- **Field marks per leaf, kept beside the page cache** (`Marks` in `btree/load.rs`): the first scan of a leaf marks where the plan's first field lies in each record, and the next one reads it there. On Linux runners, `city-scan` 16 to 21% and `top-score` 19 to 23% faster on top of the comparison, on the M1 Max a quarter. Through Node.js and Python on the M1 Max, 22 to 29%.
+- **Marks made in the walk's own loop and kept together when it ends**, with no lookup on the first walk of a tree by a field: the first run of a scan took 14% (`city-scan`) and 8% (`top-score`) longer with marks than without on an EPYC 7763 when a pass over each leaf of their own made them and each leaf's were kept under the lock in turn, and takes 2 and 4% longer now. The rows `city-scan-first` and `top-score-first` show it.
 
 Tried and not kept:
 
 - **Marks in `LoadedNode`.** As fast for scans, but the 16 bytes took the node past one cache line, and `age-equal` was 3% slower on an EPYC 7763 in two runs, as it was with the node grown and the marks unused.
-- **Learning marks as the walk tests each record**, rather than in a pass over the leaf of their own: the first run was slower still, since the walk's closures grew for every record, and the second slower too.
+- **Learning marks through the record view as the filter reads each field**, handing a cell down through the query's layers: the first run was slower still, since the walk's closures grew for every record, and the second slower too. Making them in the range walk's loop, from the value it already holds, is what was kept.
+- **Marks made from a tree's second walk on**: the first run as fast as without marks, but the rows of ten runs 5.6% slower on an EPYC 7763, since the second run pays for them.
 - **Hashing the marks' keys with SipHash** took a tenth of a first scan; they are hashed as the page cache's keys are.
 - **Batching the field search a leaf at a time** (a micro-benchmark): no faster than record by record on the M1 Max, whose processor already overlaps the records' searches.
 
 Directions not tried yet:
 
 - **The walk's layers.** A scan hands each record through the range walk, the plan's walk, the gathering of results, the filter's tree and the record view, which took 30% of a profile of `city-scan` on an EPYC 7763 before the marks, more than finding the field took (22%). A filter that is one test of one field now skips the filter's tree, which took 7 to 10% off `city-scan`; making `Reader::any_in` generic over its test instead made `city-scan` 12% slower on the M1 Max, through what the compiler inlined. What is left is the range walk, the gathering of results and the record view.
-- **The first run.** A scan that runs once pays for the marks and gains nothing; a plan could mark only when the collection is walked again.
+- **The first run.** A scan that runs once still pays 2 to 4% for the marks: a vector for each leaf, and the batch kept at the end.
 
 ### 6. A lookup through a unique index in Node.js
 
