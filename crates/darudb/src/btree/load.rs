@@ -1,7 +1,9 @@
 //! Loading committed nodes and overflow values, verified, through the page
 //! cache.
 
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::hash::BuildHasherDefault;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use super::Load;
 use super::node::{LoadedNode, Node};
@@ -9,7 +11,7 @@ use crate::error::{Error, Result};
 use crate::format::{
     CONTENT_OFFSET, Check, OverflowRef, PageHeader, PageKind, Pointer, content_len,
 };
-use crate::storage::{Cache, Pager};
+use crate::storage::{Cache, Fold, Pager};
 
 /// The [`Load`] every transaction uses: the pager, and the page cache in
 /// front of it.
@@ -17,11 +19,46 @@ use crate::storage::{Cache, Pager};
 pub(crate) struct Loader {
     pager: Arc<Pager>,
     cache: Arc<Cache<LoadedNode>>,
+    marks: Arc<Mutex<Marks>>,
 }
+
+/// The marks walks have worked out for the entries of committed leaves, by
+/// page, check and kind: where a field lies in each record of a leaf, for a
+/// query that tests or sorts by the field, so that a query run again finds
+/// it there rather than stepping over the fields before it in every record.
+///
+/// They are kept beside the page cache rather than in its nodes, whose
+/// fields a lookup reads keep to one cache line; a node grown by a field for
+/// them made lookups slower. Like the page cache, they are found only under
+/// the check of the page they were worked out from, so a stale entry never
+/// matches; the oldest go first once they take more than a sixteenth of the
+/// page cache's bytes.
+#[derive(Debug, Default)]
+struct Marks {
+    /// Hashed as the page cache hashes its keys, whose check is a hash of
+    /// the page already: hashing them to resist chosen keys took a tenth of
+    /// a walk that marked every leaf.
+    entries: HashMap<MarksKey, Arc<[u16]>, BuildHasherDefault<Fold>>,
+    order: VecDeque<MarksKey>,
+    used: usize,
+    capacity: usize,
+}
+
+/// What marks are kept by: a leaf's page and check, and the kind of mark.
+type MarksKey = (u64, Check, u64);
 
 impl Loader {
     pub(crate) fn new(pager: Arc<Pager>, cache: Arc<Cache<LoadedNode>>) -> Self {
-        Self { pager, cache }
+        let marks = Marks {
+            capacity: cache.capacity() / 16,
+            ..Marks::default()
+        };
+
+        Self {
+            pager,
+            cache,
+            marks: Arc::new(Mutex::new(marks)),
+        }
     }
 
     /// Whether the page cache holds the node `pointer` names.
@@ -30,9 +67,19 @@ impl Loader {
         self.cache.get(pointer.page, &pointer.check).is_some()
     }
 
+    /// The bytes the marks kept take.
+    #[cfg(test)]
+    pub(crate) fn marks_kept(&self) -> usize {
+        self.lock_marks().used
+    }
+
     /// A damaged-file error naming this loader's file.
     pub(crate) fn corrupted_file(&self, reason: String) -> Error {
         self.pager.corrupted(reason)
+    }
+
+    fn lock_marks(&self) -> std::sync::MutexGuard<'_, Marks> {
+        self.marks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn corrupted(&self, page: u64, reason: &str) -> Error {
@@ -121,6 +168,40 @@ impl Load for Loader {
         self.check_expected(page, &loaded, pointer, tree, level)?;
 
         Ok(loaded.into_node())
+    }
+
+    fn marks(
+        &self,
+        pointer: &Pointer,
+        kind: u64,
+        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
+    ) -> Option<Arc<[u16]>> {
+        let key = (pointer.page, pointer.check, kind);
+
+        if let Some(kept) = self.lock_marks().entries.get(&key) {
+            return Some(Arc::clone(kept));
+        }
+
+        let made = make()?;
+        let mut marks = self.lock_marks();
+        let weight = size_of_val(&*made);
+
+        if marks.entries.insert(key, Arc::clone(&made)).is_none() {
+            marks.order.push_back(key);
+            marks.used += weight;
+        }
+
+        while marks.used > marks.capacity {
+            let Some(oldest) = marks.order.pop_front() else {
+                break;
+            };
+
+            if let Some(old) = marks.entries.remove(&oldest) {
+                marks.used -= size_of_val(&*old);
+            }
+        }
+
+        Some(made)
     }
 
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>> {

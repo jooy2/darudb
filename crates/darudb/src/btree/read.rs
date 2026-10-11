@@ -4,9 +4,9 @@ use std::cmp::Ordering;
 use std::ops::Bound;
 
 use super::Load;
-use super::node::{Child, Node, NodeRef, compare};
+use super::node::{Child, Node, NodeRef, UNMARKED, compare};
 use crate::error::{Error, Result};
-use crate::format::{Pointer, StoredRef, StoredValue};
+use crate::format::{Cells, Pointer, StoredRef, StoredValue, leaf_inline};
 
 /// The node `child` refers to: borrowed if this transaction holds it, loaded
 /// and verified otherwise.
@@ -289,10 +289,6 @@ fn holds(node: &NodeRef<'_>, child: usize, key: &[u8]) -> bool {
     (child == 0 || compare(node.key(child - 1), key) != Ordering::Greater)
         && (child == node.count() || compare(key, node.key(child)) == Ordering::Less)
 }
-
-/// What [`Range::for_each`] gives each entry to: a key and a value, borrowed.
-/// It returns whether to stop.
-pub(crate) type Visit<'v> = dyn FnMut(&[u8], &[u8]) -> Result<bool> + 'v;
 
 /// The entries of a tree from one bound to another, in key order or, walking
 /// backwards, in reverse.
@@ -675,36 +671,55 @@ impl<'a, L: Load> Range<'a, L> {
         Ok(count)
     }
 
-    /// Gives each entry the walk has left to `visit`, borrowed from its leaf,
-    /// until `visit` returns true. Nothing is copied out of a leaf, except a
-    /// value kept in overflow pages, which is read.
-    pub(crate) fn for_each(mut self, visit: &mut Visit<'_>) -> Result<()> {
-        while let Some((node, from, to, done)) = self.left_in_leaf()? {
-            let mut give = |at: usize| -> Result<bool> {
-                if let Some((key, value)) = node.inline_entry(at) {
-                    return visit(key, value);
-                }
+    /// Gives each entry the walk has left to `visit`, a key and a value
+    /// borrowed from its leaf, until `visit` returns true. Nothing is copied
+    /// out of a leaf, except a value kept in overflow pages, which is read.
+    ///
+    /// Generic over `visit`, which a query's walk over every object calls for
+    /// each: a call through a pointer for each entry, and the entry's layout
+    /// asked again for each, cost more than testing a field of the record.
+    pub(crate) fn for_each(
+        self,
+        visit: &mut impl FnMut(&[u8], &[u8]) -> Result<bool>,
+    ) -> Result<()> {
+        self.for_each_marked(None, &|_| UNMARKED, &mut |key, value, _| visit(key, value))
+    }
 
-                match node.entry(at)? {
-                    (key, StoredRef::Inline(value)) => visit(key, value),
-                    (key, StoredRef::Overflow(reference)) => {
-                        visit(key, &self.load.read_overflow(&reference, self.tree)?)
-                    }
+    /// [`for_each`](Self::for_each), giving `visit` each entry's mark of
+    /// kind `kind` as well: what `mark` makes of its value, worked out for
+    /// every entry of a committed leaf the first time a walk reaches it and
+    /// kept by the `Load` for the walks after it ([`Load::marks`]), and
+    /// [`UNMARKED`] where none is kept. Without a kind, every entry is
+    /// unmarked.
+    pub(crate) fn for_each_marked(
+        mut self,
+        kind: Option<u64>,
+        mark: &impl Fn(&[u8]) -> u16,
+        visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
+    ) -> Result<()> {
+        while let Some((node, from, to, done)) = self.left_in_leaf()? {
+            let marks = kind.and_then(|kind| self.leaf_marks(&node, kind, mark));
+            let marks = marks.as_deref();
+            // A committed leaf's layout is settled once for the leaf, and each
+            // entry read with the layout's own code.
+            let stop = match node.committed_leaf() {
+                Some((Cells::Varint, page)) => {
+                    self.visit_leaf(&node, from, to, marks, visit, |at| {
+                        leaf_inline(Cells::Varint, page, at)
+                    })?
+                }
+                Some((Cells::Fixed, page)) => {
+                    self.visit_leaf(&node, from, to, marks, visit, |at| {
+                        leaf_inline(Cells::Fixed, page, at)
+                    })?
+                }
+                None => {
+                    self.visit_leaf(&node, from, to, marks, visit, |at| node.inline_entry(at))?
                 }
             };
 
-            if self.backward {
-                for at in (from..to).rev() {
-                    if give(at)? {
-                        return Ok(());
-                    }
-                }
-            } else {
-                for at in from..to {
-                    if give(at)? {
-                        return Ok(());
-                    }
-                }
+            if stop {
+                return Ok(());
             }
 
             if done {
@@ -719,6 +734,80 @@ impl<'a, L: Load> Range<'a, L> {
         }
 
         Ok(())
+    }
+
+    /// The marks of kind `kind` of the leaf `node` on top of the stack, as
+    /// the `Load` keeps them, when the leaf is committed and so is the
+    /// branch above it, which names it.
+    fn leaf_marks(
+        &self,
+        node: &NodeRef<'_>,
+        kind: u64,
+        mark: &impl Fn(&[u8]) -> u16,
+    ) -> Option<std::sync::Arc<[u16]>> {
+        let [.., (parent, index), _] = self.stack.as_slice() else {
+            return None;
+        };
+        let NodeRef::Loaded(parent) = parent else {
+            return None;
+        };
+        let pointer = parent.child(*index);
+
+        self.load
+            .marks(&pointer, kind, &mut || node.make_marks(mark))
+    }
+
+    /// Gives `visit` the entries `from..to` of the leaf `node`, or the
+    /// reverse walking backwards, each read by `inline` when its value is
+    /// inline and with its mark among `marks`, and returns whether `visit`
+    /// asked to stop.
+    #[inline(always)]
+    fn visit_leaf<'n>(
+        &self,
+        node: &'n NodeRef<'_>,
+        from: usize,
+        to: usize,
+        marks: Option<&[u16]>,
+        visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
+        inline: impl Fn(usize) -> Option<(&'n [u8], &'n [u8])>,
+    ) -> Result<bool> {
+        let mut give = |at: usize| -> Result<bool> {
+            // A leaf's marks were made from a page with the leaf's check, and
+            // so have an entry for each of its entries, unless a damaged file
+            // gave two pages one check.
+            let mark = marks
+                .and_then(|marks| marks.get(at).copied())
+                .unwrap_or(UNMARKED);
+
+            if let Some((key, value)) = inline(at) {
+                return visit(key, value, mark);
+            }
+
+            match node.entry(at)? {
+                (key, StoredRef::Inline(value)) => visit(key, value, mark),
+                (key, StoredRef::Overflow(reference)) => visit(
+                    key,
+                    &self.load.read_overflow(&reference, self.tree)?,
+                    UNMARKED,
+                ),
+            }
+        };
+
+        if self.backward {
+            for at in (from..to).rev() {
+                if give(at)? {
+                    return Ok(true);
+                }
+            }
+        } else {
+            for at in from..to {
+                if give(at)? {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 
     /// Whether `key` lies past the bound the walk stops at: beyond the end

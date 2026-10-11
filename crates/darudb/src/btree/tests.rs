@@ -1378,3 +1378,90 @@ fn small_trees_repack_to_themselves() {
     assert_eq!(harness.check_structure(), 1);
     assert_eq!(harness.get(b"only"), Some(b"one".to_vec()));
 }
+
+/// The marks of a walk over a committed tree are made once for each leaf
+/// and kind, given to every entry of the leaf after that, and kept apart by
+/// kind; a leaf with no committed branch above it has none, and the marks
+/// kept take no more than their share of the page cache.
+#[test]
+fn a_walk_keeps_the_marks_it_makes_for_each_leaf() {
+    const PAGE: usize = 4096;
+
+    let mut harness = Harness::new(PAGE);
+
+    harness.insert(b"only", b"one");
+    harness.commit();
+
+    let walk = |harness: &Harness, kind: u64, made: &std::cell::Cell<usize>| {
+        let mut marks = Vec::new();
+
+        Range::new(
+            &harness.loader,
+            TREE,
+            harness.root.as_ref(),
+            Bound::Unbounded,
+            Bound::Unbounded,
+        )
+        .unwrap()
+        .for_each_marked(
+            Some(kind),
+            &|value| {
+                made.set(made.get() + 1);
+                u16::try_from(value.len()).unwrap() + u16::try_from(kind).unwrap()
+            },
+            &mut |_, _, mark| {
+                marks.push(mark);
+                Ok(false)
+            },
+        )
+        .unwrap();
+        marks
+    };
+    let made = std::cell::Cell::new(0);
+
+    assert_eq!(walk(&harness, 1, &made), [UNMARKED], "a root leaf");
+    assert_eq!(made.get(), 0);
+
+    let mut rng = Rng::new(3);
+    let mut values = BTreeMap::new();
+
+    for _ in 0..2000 {
+        let key = key_of(&mut rng, PAGE);
+        let len = 1 + rng.index(40);
+        let value = rng.bytes(len);
+
+        harness.insert(&key, &value);
+        values.insert(key, value);
+    }
+
+    harness.insert(b"only", b"one");
+    values.insert(b"only".to_vec(), b"one".to_vec());
+    harness.commit();
+
+    for kind in [1, 2] {
+        let expected: Vec<u16> = values
+            .values()
+            .map(|value| u16::try_from(value.len()).unwrap() + u16::try_from(kind).unwrap())
+            .collect();
+        let made = std::cell::Cell::new(0);
+
+        for _ in 0..3 {
+            assert_eq!(walk(&harness, kind, &made), expected, "kind {kind}");
+        }
+
+        assert_eq!(made.get(), values.len(), "made once for each entry");
+    }
+
+    // Many leaves' marks, of many kinds: what is kept stays within its share
+    // of the page cache, a sixteenth of it, and the walk is right whatever
+    // was let go.
+    for kind in 3..60 {
+        let made = std::cell::Cell::new(0);
+
+        assert_eq!(walk(&harness, kind, &made).len(), values.len());
+    }
+
+    let kept = harness.loader.marks_kept();
+
+    assert!(kept <= 64 * PAGE / 16, "{kept} bytes of marks kept");
+}

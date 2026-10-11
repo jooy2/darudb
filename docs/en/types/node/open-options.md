@@ -75,7 +75,7 @@ How long, in milliseconds, opening and a write transaction wait for another proc
 cacheSize?: number;
 ```
 
-How much memory the page cache may take, in bytes: a whole number from 0 up, and 32 MiB by default. Any other value fails with `INVALID_ARGUMENT`. The cache keeps pages read from the file, already checked and decrypted, so that reading one again costs neither a read nor a check. It holds at least 16 pages whatever this says, and fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up a database that does not fit in it; a process short of memory can give it less.
+How much memory the page cache may take, in bytes: a whole number from 0 up, and 32 MiB by default. Any other value fails with `INVALID_ARGUMENT`. The cache keeps pages read from the file, already checked and decrypted, so that reading one again costs neither a read nor a check. It holds at least 16 pages whatever this says, and fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up a database that does not fit in it; a process short of memory can give it less. Beside the pages, it keeps where a field lies in each record of the pages a query without an index read, for the next query that tests or sorts by that field, in up to a sixteenth more than its size.
 
 ### upgradeFormat
 

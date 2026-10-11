@@ -105,6 +105,10 @@ impl OpenOptions {
     /// that does not fit in it; a process with little memory, such as a
     /// mobile app extension, can give it less.
     ///
+    /// Beside the pages, the cache keeps where a field lies in each record
+    /// of the pages a query without an index read, for the next query that
+    /// tests or sorts by that field, in up to a sixteenth more than `bytes`.
+    ///
     /// Every handle to a file in one process shares one cache, and the
     /// options of the handle that opened the file first apply to all of them.
     pub fn cache_size(&mut self, bytes: usize) -> &mut Self {

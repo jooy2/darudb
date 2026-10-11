@@ -27,8 +27,8 @@ use crate::format::{Cells, Check, OverflowRef, Pointer};
 
 pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
-pub(crate) use node::{Child, LoadedNode, Node, NodeRef};
-pub(crate) use read::{Range, Seeker, Visit, get, get_with, resolve};
+pub(crate) use node::{Child, LoadedNode, Node, NodeRef, UNMARKED};
+pub(crate) use read::{Range, Seeker, get, get_with, resolve};
 pub(crate) use repack::{occupancy, repack};
 pub(crate) use write::{
     Change, Inserted, Removed, delete_tree, insert, insert_with, relocate, remove, remove_present,
@@ -88,6 +88,21 @@ pub(crate) trait Load {
     /// Reads a value stored in an overflow run, verified against its
     /// reference.
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>>;
+
+    /// The marks of kind `kind` of the entries of the committed leaf
+    /// `pointer` names, one an entry, as a walk over it worked them out with
+    /// `make`: kept from an earlier walk, or made now and kept, if this
+    /// `Load` keeps marks at all.
+    fn marks(
+        &self,
+        pointer: &Pointer,
+        kind: u64,
+        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
+    ) -> Option<Arc<[u16]>> {
+        let _ = (pointer, kind, make);
+
+        None
+    }
 }
 
 /// Where a write transaction gets and gives back pages.

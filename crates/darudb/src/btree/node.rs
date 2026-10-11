@@ -548,6 +548,10 @@ pub(crate) struct LoadedNode {
     page: Box<[u8]>,
 }
 
+/// The mark of an entry whose value is not inline, or of an entry of a leaf
+/// no marks are kept for: the walk works out what it needs from the value.
+pub(crate) const UNMARKED: u16 = u16::MAX;
+
 /// The longest prefix a [`LoadedNode`] keeps a copy of. Eight bytes cover
 /// the prefix of a tree of integer keys and keep the node in as few cache
 /// lines as it took without heads.
@@ -859,6 +863,32 @@ impl NodeRef<'_> {
                 leaf_value(loaded.leaf_cells(), &loaded.page, index).map_err(super::read::internal)
             }
             _ => Err(super::read::internal("read a value of a branch")),
+        }
+    }
+
+    /// What `mark` makes of the value of each entry of a committed leaf,
+    /// and [`UNMARKED`] for a value that is not inline; `None` for a branch,
+    /// or a leaf this transaction holds.
+    pub(crate) fn make_marks(&self, mark: impl Fn(&[u8]) -> u16) -> Option<Arc<[u16]>> {
+        let (cells, page) = self.committed_leaf()?;
+
+        Some(
+            (0..self.count())
+                .map(|index| match leaf_inline(cells, page, index) {
+                    Some((_, value)) => mark(value),
+                    None => UNMARKED,
+                })
+                .collect(),
+        )
+    }
+
+    /// The layout of a committed leaf's cells, and its page, which a walk
+    /// reads every entry of in place; `None` for a branch, or a leaf this
+    /// transaction holds.
+    pub(crate) fn committed_leaf(&self) -> Option<(Cells, &[u8])> {
+        match self {
+            NodeRef::Loaded(loaded) => loaded.cells.map(|cells| (cells, &loaded.page[..])),
+            NodeRef::Borrowed(_) => None,
         }
     }
 

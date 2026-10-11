@@ -97,7 +97,7 @@ How long [`Database::begin_write`](./database.md#begin-write) waits for a write 
 pub fn cache_size(&mut self, bytes: usize) -> &mut Self
 ```
 
-How much memory the file's page cache may take, in bytes. The cache keeps pages read from the file, checked and decrypted, so that reading one again costs neither a read nor a check. It holds as many pages as fit in `bytes`, and at least 16, and it fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up reading a database that does not fit in it; a process with little memory, such as a mobile app extension, can give it less.
+How much memory the file's page cache may take, in bytes. The cache keeps pages read from the file, checked and decrypted, so that reading one again costs neither a read nor a check. It holds as many pages as fit in `bytes`, and at least 16, and it fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up reading a database that does not fit in it; a process with little memory, such as a mobile app extension, can give it less. Beside the pages, it keeps where a field lies in each record of the pages a query without an index read, for the next query that tests or sorts by that field, in up to a sixteenth more than its size.
 
 ### max_unsynced_pages
 

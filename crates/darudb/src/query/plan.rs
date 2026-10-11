@@ -169,6 +169,28 @@ pub(crate) struct Plan<'s> {
     /// Whether the query has a filter that the access answers alone, so that
     /// counting needs only the keys.
     pub(crate) exact: bool,
+    /// The field of the collection itself that a walk over every record
+    /// reads first in each: the first the filter tests, or else the first
+    /// the sort reads. The walk marks where it lies in each record of a
+    /// leaf, and the marks are kept beside the page cache, so that a query
+    /// that walks the leaf again finds it there.
+    pub(crate) marked: Option<&'s FieldDef>,
+}
+
+/// The field [`Plan::marked`] names for `filter` and `sort`.
+fn marked<'s>(filter: Option<&Cond<'s>>, sort: &[(Resolved<'s>, bool)]) -> Option<&'s FieldDef> {
+    fn first<'s>(cond: &Cond<'s>) -> Option<&'s FieldDef> {
+        match cond {
+            Cond::And(terms) | Cond::Or(terms) => terms.first().and_then(first),
+            Cond::Not(term) => first(term),
+            Cond::Test { path, .. } => path.direct,
+        }
+    }
+
+    match filter {
+        Some(filter) => first(filter),
+        None => sort.first().and_then(|(path, _)| path.direct),
+    }
 }
 
 /// Checks `ir` against `collection` of `schema`, with `parameters` for its
@@ -201,6 +223,7 @@ pub(crate) fn plan<'s>(
     };
 
     Ok(Plan {
+        marked: marked(filter.as_ref(), &sort),
         collection,
         filter,
         sort,
@@ -225,6 +248,7 @@ pub(crate) fn scan<'s>(
     let (filter, sort) = resolve(schema, collection, ir, parameters)?;
 
     Ok(Plan {
+        marked: marked(filter.as_ref(), &sort),
         collection,
         filter,
         sort,

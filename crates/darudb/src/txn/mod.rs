@@ -51,8 +51,23 @@ impl<'a> Range<'a> {
 
     /// Gives each entry the walk has left to `visit`, borrowed rather than
     /// copied, until `visit` returns true.
-    pub(crate) fn for_each(self, visit: &mut btree::Visit<'_>) -> Result<()> {
+    pub(crate) fn for_each(
+        self,
+        visit: &mut impl FnMut(&[u8], &[u8]) -> Result<bool>,
+    ) -> Result<()> {
         self.inner.map_or(Ok(()), |inner| inner.for_each(visit))
+    }
+
+    /// [`for_each`](Self::for_each), with each entry's mark of kind `kind`,
+    /// as [`btree::Range::for_each_marked`] gives it.
+    pub(crate) fn for_each_marked(
+        self,
+        kind: Option<u64>,
+        mark: &impl Fn(&[u8]) -> u16,
+        visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
+    ) -> Result<()> {
+        self.inner
+            .map_or(Ok(()), |inner| inner.for_each_marked(kind, mark, visit))
     }
 
     /// The number of entries the walk has left, counted without reading

@@ -47,7 +47,7 @@ pub(crate) trait Weigh {
 /// file crafted to make keys collide can slow the cache down, but not by
 /// more than the few thousand entries it holds.
 #[derive(Debug, Default)]
-struct Fold(u64);
+pub(crate) struct Fold(u64);
 
 impl Fold {
     fn add(&mut self, word: u64) {
@@ -90,7 +90,6 @@ impl<V: Weigh> Cache<V> {
     }
 
     /// How many bytes the entries may hold.
-    #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }

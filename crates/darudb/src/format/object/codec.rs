@@ -331,11 +331,22 @@ fn ascii(bytes: &[u8]) -> bool {
 /// found by stepping over the fields before it without reading them into
 /// values. For a filter or a sort that reads a field or two of many records;
 /// an object that is kept is read whole, and checked whole, by [`read`].
+pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, &'static str> {
+    match locate_field(bytes, id)? {
+        Some(at) => field_at(bytes, at).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Where the value of field `id` starts in the record `bytes`, at its tag,
+/// if the record holds it: the steps of [`find_field`] that come before the
+/// value.
 ///
 /// The position is a local, handed to the slow paths by value: a reader
 /// passed to them by reference lived in memory, and stepping over each field
 /// then waited for its position to be stored and loaded again.
-pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, &'static str> {
+#[inline(always)]
+pub(crate) fn locate_field(bytes: &[u8], id: u64) -> Result<Option<usize>, &'static str> {
     let (count, mut at) = quick_varint(bytes, 0)?;
     // Two bytes a field at least, as `Reader::count` checks it.
     let count = usize::try_from(count)
@@ -365,43 +376,49 @@ pub(crate) fn find_field(bytes: &[u8], id: u64) -> Result<Option<FieldRef<'_>>, 
             continue;
         }
 
-        let start = at;
-        let tag = *bytes.get(at).ok_or("a record ends early")?;
-
-        at += 1;
-
-        return Ok(Some(match tag {
-            FALSE => FieldRef::Bool(false),
-            TRUE => FieldRef::Bool(true),
-            INT => FieldRef::Int(unzigzag(quick_varint(bytes, at)?.0)),
-            FLOAT => {
-                let exact = bytes
-                    .get(at..)
-                    .and_then(<[u8]>::first_chunk::<8>)
-                    .ok_or("a record ends early")?;
-
-                FieldRef::Float(f64::from_le_bytes(*exact))
-            }
-            STRING => {
-                let (len, from) = quick_varint(bytes, at)?;
-                let text = &bytes[from..skip_bytes(bytes, from, len)?];
-
-                if !utf8(text) {
-                    return Err("a record holds a string that is not UTF-8");
-                }
-
-                FieldRef::String(text)
-            }
-            BYTES => {
-                let (len, from) = quick_varint(bytes, at)?;
-
-                FieldRef::Bytes(&bytes[from..skip_bytes(bytes, from, len)?])
-            }
-            _ => FieldRef::Encoded(&bytes[start..skip_at(bytes, start)?]),
-        }));
+        return Ok(Some(at));
     }
 
     Ok(None)
+}
+
+/// The value whose tag is at `at` of the record `bytes`, where
+/// [`locate_field`] found a field.
+#[inline(always)]
+pub(crate) fn field_at(bytes: &[u8], at: usize) -> Result<FieldRef<'_>, &'static str> {
+    let start = at;
+    let tag = *bytes.get(at).ok_or("a record ends early")?;
+    let at = at + 1;
+
+    Ok(match tag {
+        FALSE => FieldRef::Bool(false),
+        TRUE => FieldRef::Bool(true),
+        INT => FieldRef::Int(unzigzag(quick_varint(bytes, at)?.0)),
+        FLOAT => {
+            let exact = bytes
+                .get(at..)
+                .and_then(<[u8]>::first_chunk::<8>)
+                .ok_or("a record ends early")?;
+
+            FieldRef::Float(f64::from_le_bytes(*exact))
+        }
+        STRING => {
+            let (len, from) = quick_varint(bytes, at)?;
+            let text = &bytes[from..skip_bytes(bytes, from, len)?];
+
+            if !utf8(text) {
+                return Err("a record holds a string that is not UTF-8");
+            }
+
+            FieldRef::String(text)
+        }
+        BYTES => {
+            let (len, from) = quick_varint(bytes, at)?;
+
+            FieldRef::Bytes(&bytes[from..skip_bytes(bytes, from, len)?])
+        }
+        _ => FieldRef::Encoded(&bytes[start..skip_at(bytes, start)?]),
+    })
 }
 
 /// The value of a field of kind `kind` that [`find_field`] found, as

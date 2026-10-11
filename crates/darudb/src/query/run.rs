@@ -10,6 +10,7 @@ use std::ops::Bound;
 
 use super::ir::{Expr, Ir, Op, Operand};
 use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
+use crate::btree::UNMARKED;
 use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, NameOrder};
 use crate::format::object::names::{index_tree, records};
@@ -311,6 +312,60 @@ struct View<'a> {
     source: &'a dyn Source,
     collection: &'a CollectionDef,
     record: &'a [u8],
+    /// The field the walk marked the record for, and its mark.
+    marked: Option<u64>,
+    mark: u16,
+}
+
+impl<'a> View<'a> {
+    fn new(reader: &'a Reader<'_>, plan: &'a Plan<'_>, lent: Lent<'a>) -> Self {
+        Self {
+            source: reader.source,
+            collection: plan.collection,
+            record: lent.record,
+            marked: plan.marked.map(|field| field.id),
+            mark: lent.mark,
+        }
+    }
+}
+
+/// A record and its mark, [`UNMARKED`] unless a walk over every record lent
+/// it marked for the plan's [`marked`](Plan::marked) field: 0 where the
+/// record leaves the field out, and otherwise where the field's value
+/// starts.
+#[derive(Clone, Copy)]
+struct Lent<'r> {
+    record: &'r [u8],
+    mark: u16,
+}
+
+impl Default for Lent<'_> {
+    fn default() -> Self {
+        Self::unmarked(&[])
+    }
+}
+
+impl<'r> Lent<'r> {
+    fn unmarked(record: &'r [u8]) -> Self {
+        Self {
+            record,
+            mark: UNMARKED,
+        }
+    }
+}
+
+/// What a record holds at a mark that tells the record leaves the field out.
+const ABSENT: u16 = 0;
+
+/// The mark of `record` for field `id`, which a walk keeps with the leaf the
+/// record is in: a record that does not read is left unmarked, for the
+/// query to find its damage when it reads the record.
+fn field_mark(record: &[u8], id: u64) -> u16 {
+    match codec::locate_field(record, id) {
+        Ok(Some(at)) => u16::try_from(at).unwrap_or(UNMARKED),
+        Ok(None) => ABSENT,
+        Err(_) => UNMARKED,
+    }
 }
 
 impl Fields for View<'_> {
@@ -330,7 +385,16 @@ impl Fields for View<'_> {
             self.source
                 .corrupted(format!("an object of `{}`: {reason}", self.collection.name))
         };
-        let found = codec::find_field(self.record, field.id).map_err(damaged)?;
+        // The field the walk marked is read where its mark says, rather
+        // than found by stepping over the fields before it.
+        let found = match self.mark {
+            mark if self.marked != Some(field.id) || mark == UNMARKED => {
+                codec::find_field(self.record, field.id)
+            }
+            ABSENT => Ok(None),
+            at => codec::field_at(self.record, usize::from(at)).map(Some),
+        }
+        .map_err(damaged)?;
 
         Ok(match (found, &field.kind) {
             (None, _) => match &field.default {
@@ -403,15 +467,21 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
 fn walk(
     source: &dyn Source,
     plan: &Plan<'_>,
-    visit: &mut impl FnMut(&[u8], Option<&[u8]>) -> Result<bool>,
+    visit: &mut impl FnMut(&[u8], Option<Lent<'_>>) -> Result<bool>,
 ) -> Result<()> {
     let records = records(plan.collection.id);
 
     match &plan.access {
         Access::Records { range, backward } => {
+            let marked = plan.marked.map(|field| field.id);
+
             source
                 .range_in(&records, as_ref(&range.0), as_ref(&range.1), *backward)?
-                .for_each(&mut |key, record| visit(key, Some(record)))?;
+                .for_each_marked(
+                    marked,
+                    &|record| marked.map_or(UNMARKED, |id| field_mark(record, id)),
+                    &mut |key, record, mark| visit(key, Some(Lent { record, mark })),
+                )?;
         }
         Access::Keys { keys, backward } => {
             for at in 0..keys.len() {
@@ -420,7 +490,7 @@ fn walk(
 
                 // The record is lent where it lies, as a walk lends it.
                 source.get_in_with(&records, key, &mut |record| {
-                    stop = visit(key, Some(record))?;
+                    stop = visit(key, Some(Lent::unmarked(record)))?;
 
                     Ok(())
                 })?;
@@ -861,8 +931,8 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
 
         walk(source, plan, &mut |key, walked| {
             let mut stop = false;
-            let mut each = |record: &[u8]| {
-                if !meets(&reader, plan, Some(record), None)? {
+            let mut each = |lent: Lent<'_>| {
+                if !meets(&reader, plan, Some(lent), None)? {
                     return Ok(());
                 }
 
@@ -872,7 +942,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
                     return Ok(());
                 }
 
-                take(Cow::Borrowed(record))?;
+                take(Cow::Borrowed(lent.record))?;
                 taken += 1;
                 stop = taken >= limit;
 
@@ -881,7 +951,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
 
             // A record the walk lent is tested here, not through a pointer.
             match walked {
-                Some(record) => each(record)?,
+                Some(lent) => each(lent)?,
                 None => with_record(&reader, plan, key, None, &mut each)?,
             }
 
@@ -946,8 +1016,8 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
 
     for hit in found.into_iter().skip(offset).take(limit) {
         if deferred {
-            with_record(&reader, plan, &hit.key, None, &mut |record| {
-                take(Cow::Borrowed(record))
+            with_record(&reader, plan, &hit.key, None, &mut |lent| {
+                take(Cow::Borrowed(lent.record))
             })?;
         } else {
             take(Cow::Owned(hit.record))?;
@@ -987,24 +1057,24 @@ fn read(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
-    walked: Option<&[u8]>,
+    walked: Option<Lent<'_>>,
     bound: Option<(&[Value], &[u8])>,
     values: &mut Vec<Value>,
 ) -> Result<Option<Found>> {
     let mut hit = None;
 
-    with_record(reader, plan, key, walked, &mut |record| {
+    with_record(reader, plan, key, walked, &mut |lent| {
         if let Some(bound) = bound {
-            if !sorts_before(reader, plan, record, key, bound)? {
+            if !sorts_before(reader, plan, lent, key, bound)? {
                 return Ok(());
             }
         }
 
-        if meets(reader, plan, Some(record), Some(values))? {
+        if meets(reader, plan, Some(lent), Some(values))? {
             hit = Some(Found {
                 sort: std::mem::take(values),
                 key: key.to_vec(),
-                record: record.to_vec(),
+                record: lent.record.to_vec(),
             });
         }
 
@@ -1022,13 +1092,14 @@ fn with_record(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
     key: &[u8],
-    walked: Option<&[u8]>,
-    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+    walked: Option<Lent<'_>>,
+    visit: &mut dyn FnMut(Lent<'_>) -> Result<()>,
 ) -> Result<()> {
-    if let Some(record) = walked {
-        return visit(record);
+    if let Some(lent) = walked {
+        return visit(lent);
     }
 
+    let visit = &mut |record: &[u8]| visit(Lent::unmarked(record));
     let tree = records(plan.collection.id);
     let mut records = reader.records.borrow_mut();
     let found = match &mut *records {
@@ -1066,19 +1137,15 @@ fn with_record(
 fn sorts_before(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
-    record: &[u8],
+    lent: Lent<'_>,
     key: &[u8],
     bound: (&[Value], &[u8]),
 ) -> Result<bool> {
-    let view = View {
-        source: reader.source,
-        collection: plan.collection,
-        record,
-    };
+    let view = View::new(reader, plan, lent);
     #[cfg(test)]
     let object = WHOLE
         .with(std::cell::Cell::get)
-        .then(|| objects::decode(reader.source, plan.collection, record))
+        .then(|| objects::decode(reader.source, plan.collection, lent.record))
         .transpose()?;
     #[cfg(test)]
     let fields: &dyn Fields = match &object {
@@ -1115,10 +1182,10 @@ fn sorts_before(
 fn meets(
     reader: &Reader<'_>,
     plan: &Plan<'_>,
-    record: Option<&[u8]>,
+    lent: Option<Lent<'_>>,
     mut sort: Option<&mut Vec<Value>>,
 ) -> Result<bool> {
-    let record = record.unwrap_or_default();
+    let lent = lent.unwrap_or_default();
 
     if let Some(values) = sort.as_deref_mut() {
         values.clear();
@@ -1130,15 +1197,11 @@ fn meets(
         return Ok(true);
     }
 
-    let view = View {
-        source: reader.source,
-        collection: plan.collection,
-        record,
-    };
+    let view = View::new(reader, plan, lent);
     #[cfg(test)]
     let object = WHOLE
         .with(std::cell::Cell::get)
-        .then(|| objects::decode(reader.source, plan.collection, record))
+        .then(|| objects::decode(reader.source, plan.collection, lent.record))
         .transpose()?;
     #[cfg(test)]
     let fields: &dyn Fields = match &object {
@@ -1216,8 +1279,8 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
         let mut found = 0u64;
 
         walk(source, plan, &mut |key, walked| {
-            with_record(&reader, plan, key, walked, &mut |record| {
-                found += u64::from(meets(&reader, plan, Some(record), None)?);
+            with_record(&reader, plan, key, walked, &mut |lent| {
+                found += u64::from(meets(&reader, plan, Some(lent), None)?);
 
                 Ok(())
             })?;

@@ -151,6 +151,6 @@ db.sync()
 
 ## 페이지 캐시
 
-프로세스는 읽은 페이지를 캐시에 두므로, 같은 페이지를 다시 읽을 때는 파일을 읽지도 검사하지도 않습니다. 캐시는 열린 파일마다 기본 32 MiB까지 쓰며 페이지를 읽는 만큼만 차므로, 그보다 작은 데이터베이스는 그만큼을 다 쓰지 않습니다. 크기는 <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" python="cache_size" />에 바이트 단위로 정합니다. 자주 읽는 큰 데이터베이스라면 늘리고, 모바일 앱 확장처럼 메모리가 적은 프로세스라면 줄이세요.
+프로세스는 읽은 페이지를 캐시에 두므로, 같은 페이지를 다시 읽을 때는 파일을 읽지도 검사하지도 않습니다. 캐시는 열린 파일마다 기본 32 MiB까지 쓰며 페이지를 읽는 만큼만 차므로, 그보다 작은 데이터베이스는 그만큼을 다 쓰지 않습니다. 크기는 <LangCode rust="OpenOptions::cache_size" node="cacheSize" dart="cacheSize" python="cache_size" />에 바이트 단위로 정합니다. 자주 읽는 큰 데이터베이스라면 늘리고, 모바일 앱 확장처럼 메모리가 적은 프로세스라면 줄이세요. 캐시는 페이지 말고도, 인덱스 없는 쿼리가 읽은 페이지의 레코드마다 필드가 어디 있는지를 기억해 둡니다. 같은 필드를 검사하거나 정렬하는 다음 쿼리는 그 자리에서 바로 읽습니다. 여기에 캐시 크기의 16분의 1까지 더 씁니다.
 
 프로세스 안에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 두 핸들은 캐시와 쓰기를 함께 씁니다. 나중에 연 핸들이 무엇을 요청하든 <LangCode rust="cache_size" node="cacheSize" dart="cacheSize" python="cache_size" />와 <LangCode rust="busy_timeout" node="busyTimeout" dart="busyTimeout" python="busy_timeout" />는 처음 연 핸들의 값을 따릅니다.
