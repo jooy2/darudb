@@ -1,0 +1,377 @@
+diff --git a/crates/darudb/src/btree/load.rs b/crates/darudb/src/btree/load.rs
+index d0d278c..45e84aa 100644
+--- a/crates/darudb/src/btree/load.rs
++++ b/crates/darudb/src/btree/load.rs
+@@ -1,7 +1,7 @@
+ //! Loading committed nodes and overflow values, verified, through the page
+ //! cache.
+ 
+-use std::collections::{HashMap, VecDeque};
++use std::collections::{HashMap, HashSet, VecDeque};
+ use std::hash::BuildHasherDefault;
+ use std::sync::{Arc, Mutex, PoisonError};
+ 
+@@ -40,10 +40,16 @@ struct Marks {
+     /// a walk that marked every leaf.
+     entries: HashMap<MarksKey, Arc<[u16]>, BuildHasherDefault<Fold>>,
+     order: VecDeque<MarksKey>,
++    /// The trees walks have marked by each kind: the first walk of a tree by
++    /// a kind does not look for marks kept of it.
++    walked: HashSet<(u64, u64), BuildHasherDefault<Fold>>,
+     used: usize,
+     capacity: usize,
+ }
+ 
++/// How many trees and kinds the walks are remembered for.
++const WALKED_TREES: usize = 1024;
++
+ /// What marks are kept by: a leaf's page and check, and the kind of mark.
+ type MarksKey = (u64, Check, u64);
+ 
+@@ -170,25 +176,28 @@ impl Load for Loader {
+         Ok(loaded.into_node())
+     }
+ 
+-    fn marks(
+-        &self,
+-        pointer: &Pointer,
+-        kind: u64,
+-        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
+-    ) -> Option<Arc<[u16]>> {
+-        let key = (pointer.page, pointer.check, kind);
+-
+-        if let Some(kept) = self.lock_marks().entries.get(&key) {
+-            return Some(Arc::clone(kept));
+-        }
++    fn marks(&self, pointer: &Pointer, kind: u64) -> Option<Arc<[u16]>> {
++        self.lock_marks()
++            .entries
++            .get(&(pointer.page, pointer.check, kind))
++            .cloned()
++    }
+ 
+-        let made = make()?;
++    fn keep_marks(&self, kind: u64, made: Vec<(Pointer, Vec<u16>)>) {
++        // Made into what is kept before the lock is taken.
++        let made: Vec<(MarksKey, Arc<[u16]>)> = made
++            .into_iter()
++            .map(|(pointer, marks)| ((pointer.page, pointer.check, kind), marks.into()))
++            .collect();
+         let mut marks = self.lock_marks();
+-        let weight = size_of_val(&*made);
+ 
+-        if marks.entries.insert(key, Arc::clone(&made)).is_none() {
+-            marks.order.push_back(key);
+-            marks.used += weight;
++        for (key, kept) in made {
++            let weight = size_of_val(&*kept);
++
++            if marks.entries.insert(key, kept).is_none() {
++                marks.order.push_back(key);
++                marks.used += weight;
++            }
+         }
+ 
+         while marks.used > marks.capacity {
+@@ -200,8 +209,24 @@ impl Load for Loader {
+                 marks.used -= size_of_val(&*old);
+             }
+         }
++    }
++
++    fn walked_before(&self, tree: u64, kind: u64) -> bool {
++        let mut marks = self.lock_marks();
++
++        if marks.walked.contains(&(tree, kind)) {
++            return true;
++        }
++
++        // Trees are many only where collections and fields are; forgetting
++        // them all costs each one walk that looks for marks no more.
++        if marks.walked.len() >= WALKED_TREES {
++            marks.walked.clear();
++        }
++
++        marks.walked.insert((tree, kind));
+ 
+-        Some(made)
++        false
+     }
+ 
+     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>> {
+diff --git a/crates/darudb/src/btree/mod.rs b/crates/darudb/src/btree/mod.rs
+index d7f2123..7712a31 100644
+--- a/crates/darudb/src/btree/mod.rs
++++ b/crates/darudb/src/btree/mod.rs
+@@ -89,20 +89,27 @@ pub(crate) trait Load {
+     /// reference.
+     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>>;
+ 
+-    /// The marks of kind `kind` of the entries of the committed leaf
+-    /// `pointer` names, one an entry, as a walk over it worked them out with
+-    /// `make`: kept from an earlier walk, or made now and kept, if this
+-    /// `Load` keeps marks at all.
+-    fn marks(
+-        &self,
+-        pointer: &Pointer,
+-        kind: u64,
+-        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
+-    ) -> Option<Arc<[u16]>> {
+-        let _ = (pointer, kind, make);
++    /// The marks of kind `kind` a walk made of the entries of the committed
++    /// leaf `pointer` names, one an entry, if this `Load` kept them.
++    fn marks(&self, pointer: &Pointer, kind: u64) -> Option<Arc<[u16]>> {
++        let _ = (pointer, kind);
+ 
+         None
+     }
++
++    /// Keeps the marks of kind `kind` a walk made of the committed leaves
++    /// the pointers name, if this `Load` keeps marks at all.
++    fn keep_marks(&self, kind: u64, made: Vec<(Pointer, Vec<u16>)>) {
++        let _ = (kind, made);
++    }
++
++    /// Whether a walk of tree `tree` marked by kind `kind` came before this
++    /// one, which this one is noted as for the next.
++    fn walked_before(&self, tree: u64, kind: u64) -> bool {
++        let _ = (tree, kind);
++
++        false
++    }
+ }
+ 
+ /// Where a write transaction gets and gives back pages.
+diff --git a/crates/darudb/src/btree/node.rs b/crates/darudb/src/btree/node.rs
+index a8ef029..d4c6646 100644
+--- a/crates/darudb/src/btree/node.rs
++++ b/crates/darudb/src/btree/node.rs
+@@ -866,22 +866,6 @@ impl NodeRef<'_> {
+         }
+     }
+ 
+-    /// What `mark` makes of the value of each entry of a committed leaf,
+-    /// and [`UNMARKED`] for a value that is not inline; `None` for a branch,
+-    /// or a leaf this transaction holds.
+-    pub(crate) fn make_marks(&self, mark: impl Fn(&[u8]) -> u16) -> Option<Arc<[u16]>> {
+-        let (cells, page) = self.committed_leaf()?;
+-
+-        Some(
+-            (0..self.count())
+-                .map(|index| match leaf_inline(cells, page, index) {
+-                    Some((_, value)) => mark(value),
+-                    None => UNMARKED,
+-                })
+-                .collect(),
+-        )
+-    }
+-
+     /// The layout of a committed leaf's cells, and its page, which a walk
+     /// reads every entry of in place; `None` for a branch, or a leaf this
+     /// transaction holds.
+diff --git a/crates/darudb/src/btree/read.rs b/crates/darudb/src/btree/read.rs
+index ffa8616..dfb508c 100644
+--- a/crates/darudb/src/btree/read.rs
++++ b/crates/darudb/src/btree/read.rs
+@@ -321,6 +321,13 @@ fn holds(node: &NodeRef<'_>, child: usize, key: &[u8]) -> bool {
+         && (child == node.count() || compare(key, node.key(child)) == Ordering::Less)
+ }
+ 
++/// The marks a walk has of a leaf's entries: those the `Load` kept, or those
++/// it is making.
++struct Marks<'m> {
++    kept: Option<&'m [u16]>,
++    making: Option<&'m mut [u16]>,
++}
++
+ /// The entries of a tree from one bound to another, in key order or, walking
+ /// backwards, in reverse.
+ #[derive(Debug)]
+@@ -718,41 +725,89 @@ impl<'a, L: Load> Range<'a, L> {
+ 
+     /// [`for_each`](Self::for_each), giving `visit` each entry's mark of
+     /// kind `kind` as well: what `mark` makes of its value, worked out for
+-    /// every entry of a committed leaf the first time a walk reaches it and
+-    /// kept by the `Load` for the walks after it ([`Load::marks`]), and
+-    /// [`UNMARKED`] where none is kept. Without a kind, every entry is
+-    /// unmarked.
++    /// every entry of a committed leaf the first time a walk goes over the
++    /// whole leaf, and kept by the `Load` for the walks after it
++    /// ([`Load::marks`]); [`UNMARKED`] where none is kept. Without a kind,
++    /// every entry is unmarked.
++    ///
++    /// A walk works the marks out as it reads each entry, in its own loop,
++    /// and gives what it made to the `Load` together when it ends: working
++    /// them out in a pass over each leaf of their own, and keeping each
++    /// leaf's under the lock as it went, made the first run of a scan a
++    /// seventh slower on an x86 processor. The first walk of a tree by a
++    /// kind does not look for kept marks, since it would find none.
+     pub(crate) fn for_each_marked(
+         mut self,
+         kind: Option<u64>,
+         mark: &impl Fn(&[u8]) -> u16,
+         visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
++    ) -> Result<()> {
++        let walked = kind.is_some_and(|kind| self.load.walked_before(self.tree, kind));
++        let mut made = Vec::new();
++        let walk = self.walk_marked(kind, walked, mark, visit, &mut made);
++
++        if let Some(kind) = kind {
++            if !made.is_empty() {
++                self.load.keep_marks(kind, made);
++            }
++        }
++
++        walk
++    }
++
++    /// [`for_each_marked`](Self::for_each_marked) but for keeping the marks
++    /// it made, which it puts in `made`: those of every committed leaf it
++    /// went over whole without kept marks, `walked` saying whether to look
++    /// for kept ones at all.
++    fn walk_marked(
++        &mut self,
++        kind: Option<u64>,
++        walked: bool,
++        mark: &impl Fn(&[u8]) -> u16,
++        visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
++        made: &mut Vec<(Pointer, Vec<u16>)>,
+     ) -> Result<()> {
+         while let Some((node, from, to, done)) = self.left_in_leaf()? {
+-            let marks = kind.and_then(|kind| self.leaf_marks(&node, kind, mark));
+-            let marks = marks.as_deref();
++            let pointer = kind.and_then(|_| self.leaf_pointer(&node));
++            let kept = match (kind, pointer) {
++                (Some(kind), Some(pointer)) if walked => self.load.marks(&pointer, kind),
++                _ => None,
++            };
++            // Marks are made only of a whole leaf.
++            let mut making = (pointer.is_some() && kept.is_none() && from == 0)
++                .then(|| node.count())
++                .filter(|count| *count == to)
++                .map(|count| vec![UNMARKED; count]);
++            let marks = Marks {
++                kept: kept.as_deref(),
++                making: making.as_deref_mut(),
++            };
+             // A committed leaf's layout is settled once for the leaf, and each
+             // entry read with the layout's own code.
+             let stop = match node.committed_leaf() {
+                 Some((Cells::Varint, page)) => {
+-                    self.visit_leaf(&node, from, to, marks, visit, |at| {
++                    self.visit_leaf(&node, from, to, marks, mark, visit, |at| {
+                         leaf_inline(Cells::Varint, page, at)
+                     })?
+                 }
+                 Some((Cells::Fixed, page)) => {
+-                    self.visit_leaf(&node, from, to, marks, visit, |at| {
++                    self.visit_leaf(&node, from, to, marks, mark, visit, |at| {
+                         leaf_inline(Cells::Fixed, page, at)
+                     })?
+                 }
+-                None => {
+-                    self.visit_leaf(&node, from, to, marks, visit, |at| node.inline_entry(at))?
+-                }
++                None => self.visit_leaf(&node, from, to, marks, mark, visit, |at| {
++                    node.inline_entry(at)
++                })?,
+             };
+ 
+             if stop {
+                 return Ok(());
+             }
+ 
++            if let (Some(pointer), Some(making)) = (pointer, making) {
++                made.push((pointer, making));
++            }
++
+             if done {
+                 return Ok(());
+             }
+@@ -767,55 +822,58 @@ impl<'a, L: Load> Range<'a, L> {
+         Ok(())
+     }
+ 
+-    /// The marks of kind `kind` of the leaf `node` on top of the stack, as
+-    /// the `Load` keeps them, when the leaf is committed and so is the
+-    /// branch above it, which names it.
+-    fn leaf_marks(
+-        &self,
+-        node: &NodeRef<'_>,
+-        kind: u64,
+-        mark: &impl Fn(&[u8]) -> u16,
+-    ) -> Option<std::sync::Arc<[u16]>> {
+-        let [.., (parent, index), _] = self.stack.as_slice() else {
++    /// The pointer to the leaf `node` on top of the stack, when the leaf is
++    /// committed and so is the branch above it, which names it.
++    fn leaf_pointer(&self, node: &NodeRef<'_>) -> Option<Pointer> {
++        let [.., (NodeRef::Loaded(parent), index), _] = self.stack.as_slice() else {
+             return None;
+         };
+-        let NodeRef::Loaded(parent) = parent else {
+-            return None;
+-        };
+-        let pointer = parent.child(*index);
+ 
+-        self.load
+-            .marks(&pointer, kind, &mut || node.make_marks(mark))
++        node.committed_leaf()?;
++
++        Some(parent.child(*index))
+     }
+ 
+     /// Gives `visit` the entries `from..to` of the leaf `node`, or the
+     /// reverse walking backwards, each read by `inline` when its value is
+-    /// inline and with its mark among `marks`, and returns whether `visit`
+-    /// asked to stop.
++    /// inline, with its mark: the kept one, or the one `mark` makes now, put
++    /// in the marks being made. Returns whether `visit` asked to stop.
+     #[inline(always)]
++    #[expect(
++        clippy::too_many_arguments,
++        reason = "the walk's parts, kept apart so that each layout's loop is its own"
++    )]
+     fn visit_leaf<'n>(
+         &self,
+         node: &'n NodeRef<'_>,
+         from: usize,
+         to: usize,
+-        marks: Option<&[u16]>,
++        mut marks: Marks<'_>,
++        mark: &impl Fn(&[u8]) -> u16,
+         visit: &mut impl FnMut(&[u8], &[u8], u16) -> Result<bool>,
+         inline: impl Fn(usize) -> Option<(&'n [u8], &'n [u8])>,
+     ) -> Result<bool> {
+         let mut give = |at: usize| -> Result<bool> {
+-            // A leaf's marks were made from a page with the leaf's check, and
+-            // so have an entry for each of its entries, unless a damaged file
+-            // gave two pages one check.
+-            let mark = marks
+-                .and_then(|marks| marks.get(at).copied())
+-                .unwrap_or(UNMARKED);
+-
+             if let Some((key, value)) = inline(at) {
+-                return visit(key, value, mark);
++                // A leaf's marks were made from a page with the leaf's check,
++                // and so have an entry for each of its entries, unless a
++                // damaged file gave two pages one check.
++                let made = match (marks.kept, marks.making.as_deref_mut()) {
++                    (Some(kept), _) => kept.get(at).copied().unwrap_or(UNMARKED),
++                    (None, Some(making)) => {
++                        let made = mark(value);
++
++                        making[at] = made;
++                        made
++                    }
++                    (None, None) => UNMARKED,
++                };
++
++                return visit(key, value, made);
+             }
+ 
+             match node.entry(at)? {
+-                (key, StoredRef::Inline(value)) => visit(key, value, mark),
++                (key, StoredRef::Inline(value)) => visit(key, value, UNMARKED),
+                 (key, StoredRef::Overflow(reference)) => visit(
+                     key,
+                     &self.load.read_overflow(&reference, self.tree)?,
