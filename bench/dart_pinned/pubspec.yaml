@@ -1,0 +1,14 @@
+name: darudb_bench_pinned
+description: Runs the workloads of bench/README.md from Dart against Realm, whose code generator pins an older analyzer and build than DaruDB's, so that the harness of bench/dart cannot resolve it.
+publish_to: none
+
+# The language version of Realm's own examples: its generator's analyzer
+# reads no newer one.
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  realm_dart: ^20.2.0
+
+dev_dependencies:
+  build_runner: ^2.4.14

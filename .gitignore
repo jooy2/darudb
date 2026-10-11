@@ -75,6 +75,9 @@ __pycache__/
 bench/dart/.dart_tool/
 bench/dart/build/
 bench/dart/lib/*.g.dart
+bench/dart_pinned/.dart_tool/
+bench/dart_pinned/build/
+bench/dart_pinned/lib/*.*.dart
 bench/python/.venv/
 bench/results/
 

@@ -75,7 +75,7 @@ const firstRun = {
 };
 
 final class Rows {
-  final List<Map<String, Object>> rows = [];
+  final List<Map<String, Object?>> rows = [];
 
   /// Runs [step] [count] times and records the time each took on average,
   /// and the first run's time on its own for a row of [firstRun], whose
@@ -140,6 +140,11 @@ final class Rows {
 
   /// A row that is checked and not timed.
   void check(String row, Digest digest) => _push(row, 0, digest);
+
+  /// A row the store has no way to do, such as a deferred commit in a store
+  /// whose every commit syncs: a time of null, which leaves its cell empty.
+  void none(String row) =>
+      rows.add({'row': row, 'ns': null, 'count': 0, 'hash': 0});
 
   void _push(String row, num ns, Digest digest) => rows.add({
     'row': row,

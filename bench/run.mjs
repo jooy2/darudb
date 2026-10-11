@@ -28,7 +28,11 @@ const only = option('--only', null)?.split(',');
 const base = option('--dir', os.tmpdir());
 const out = option('--out', null);
 
-/** How each language lists its stores and runs one pass of one. */
+/**
+ * How each language lists its stores and runs one pass of one: the harnesses
+ * of the language, each the command that lists its stores and the command
+ * that runs one pass of one of them.
+ */
 const LANGUAGES = {
   rust: () => {
     const binary = join(
@@ -37,43 +41,54 @@ const LANGUAGES = {
       process.platform === 'win32' ? 'darudb-bench.exe' : 'darudb-bench'
     );
 
-    return {
-      stores: [binary, '--stores'],
-      child: (store, dir) => [binary, '--child', store, '--dir', dir]
-    };
+    return [
+      {
+        stores: [binary, '--stores'],
+        child: (store, dir) => [binary, '--child', store, '--dir', dir]
+      }
+    ];
   },
   node: () => {
     const daru = resolve(option('--daru', join(root, 'packages/node')));
 
-    return {
-      stores: [process.execPath, join(bench, 'node/stores.mjs'), daru],
-      child: (store, dir) => [process.execPath, join(bench, `node/${store}.mjs`), dir, daru]
-    };
+    return [
+      {
+        stores: [process.execPath, join(bench, 'node/stores.mjs'), daru],
+        child: (store, dir) => [process.execPath, join(bench, `node/${store}.mjs`), dir, daru]
+      }
+    ];
   },
   dart: () => {
-    // The harness compiled ahead of time with `dart build cli`, which is how
-    // a Flutter app runs, in the folder named after this platform.
+    // Each harness compiled ahead of time with `dart build cli`, which is how
+    // a Flutter app runs, in the folder named after this platform. The store
+    // whose code generator pins an older analyzer than DaruDB's has a harness
+    // of its own, since one package cannot resolve both generators.
     const target = `${process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'}_${process.arch}`;
-    const binary =
-      process.env.BENCH_DART ??
+    const built = (folder) =>
       join(
         bench,
-        `dart/build/cli/${target}/bundle/bin/bench${process.platform === 'win32' ? '.exe' : ''}`
+        `${folder}/build/cli/${target}/bundle/bin/bench${process.platform === 'win32' ? '.exe' : ''}`
       );
-
-    return {
-      stores: [binary, '--stores', '--lock', join(bench, 'dart/pubspec.lock')],
+    const harness = (folder, binary) => ({
+      stores: [binary, '--stores', '--lock', join(bench, `${folder}/pubspec.lock`)],
       child: (store, dir) => [binary, '--child', store, '--dir', dir]
-    };
+    });
+
+    return [
+      harness('dart', process.env.BENCH_DART ?? built('dart')),
+      harness('dart_pinned', process.env.BENCH_DART_PINNED ?? built('dart_pinned'))
+    ];
   },
   python: () => {
     const python = process.env.BENCH_PYTHON ?? 'python3';
     const script = join(bench, 'python/bench.py');
 
-    return {
-      stores: [python, script, '--stores'],
-      child: (store, dir) => [python, script, '--child', store, '--dir', dir]
-    };
+    return [
+      {
+        stores: [python, script, '--stores'],
+        child: (store, dir) => [python, script, '--child', store, '--dir', dir]
+      }
+    ];
   }
 };
 
@@ -82,7 +97,7 @@ if (!(language in LANGUAGES)) {
   process.exit(2);
 }
 
-const commands = LANGUAGES[language]();
+const harnesses = LANGUAGES[language]();
 
 const run = (command) => {
   const child = spawnSync(command[0], command.slice(1), {
@@ -98,7 +113,17 @@ const run = (command) => {
   return child.stdout;
 };
 
-const stores = JSON.parse(run(commands.stores)).filter((store) => !only || only.includes(store.id));
+// The harness that runs each store.
+const harnessOf = new Map();
+const stores = harnesses
+  .flatMap((harness) =>
+    JSON.parse(run(harness.stores)).map((store) => {
+      harnessOf.set(store.id, harness);
+
+      return store;
+    })
+  )
+  .filter((store) => !only || only.includes(store.id));
 const seen = Object.fromEntries(stores.map((store) => [store.id, new Map()]));
 const problems = [];
 
@@ -106,7 +131,7 @@ for (let pass = 0; pass < runs; pass++) {
   for (let turn = 0; turn < stores.length; turn++) {
     const { id } = stores[(pass + turn) % stores.length];
     const dir = mkdtempSync(join(base, `darudb-bench-${language}-${id}-`));
-    const lines = run(commands.child(id, dir)).trim().split('\n');
+    const lines = run(harnessOf.get(id).child(id, dir)).trim().split('\n');
 
     rmSync(dir, { recursive: true, force: true });
 

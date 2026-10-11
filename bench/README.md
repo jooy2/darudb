@@ -10,12 +10,12 @@ It is the one place in the repository besides the documentation's comparison, pe
 | --- | --- | --- |
 | Rust | The crate, typed by derive | SQLite (rusqlite, bundled), LMDB (heed), redb |
 | Node.js | `packages/node` | SQLite (better-sqlite3), LMDB (lmdb-js), Realm (realm-js) |
-| Dart | `packages/dart/darudb` | SQLite (the `sqlite3` package), Hive CE |
+| Dart | `packages/dart/darudb` | SQLite (the `sqlite3` package), Hive CE, Realm (realm_dart) |
 | Python | `packages/python` | SQLite (the standard library's `sqlite3`), LMDB (py-lmdb) |
 
 Each store is used the way an application in that language would use it: DaruDB through its public API with its schema, SQLite through SQL with prepared statements, and the key-value stores with a record and indexes written by hand. Every read is made into an object of the language, with all its fields. An update that changes one field sets that field where the language's package can, as SQL sets one column: DaruDB's Node.js, Python and Dart passes use `update`, where writing the whole object back would build it again in the language first, and the Rust pass writes the typed struct back with `put`, which is faster there than an `update`, whose changes are a dynamic `Object`.
 
-Realm is there for applications moving from it, though its vendor deprecated it in September 2024 and ended support in September 2025. It assigns no keys, so its pass gives each object the key the other stores assign; it has no unique index besides the primary key, so `email` has a plain index; its queries are Realm Query Language strings, which it parses on every call, since it has no prepared queries; and an update sets the one property.
+Realm is there for applications moving from it, in Node.js and in Dart, though its vendor deprecated it in September 2024 and ended support in September 2025. In Dart its pass is a harness of its own, `bench/dart_pinned`, since its code generator pins an older analyzer than DaruDB's and one package cannot resolve both; it reads the workloads from `bench/dart/lib/common.dart` by path, and `bench/run.mjs` runs both harnesses as one. It assigns no keys, so its pass gives each object the key the other stores assign; it has no unique index besides the primary key, so `email` has a plain index; its queries are Realm Query Language strings, which it parses on every call, since it has no prepared queries; and an update sets the one property.
 
 ## The data
 
@@ -97,8 +97,11 @@ node bench/run.mjs node --runs 9 --out bench/results/node.json
 
 ```bash
 (cd bench/dart && dart pub get && dart run build_runner build && dart build cli)
+(cd bench/dart_pinned && export REALM_DISABLE_ANALYTICS=1 && dart pub get && dart run build_runner build && dart run realm_dart install && dart build cli && dart run tool/bundle.dart)
 node bench/run.mjs dart --runs 9 --out bench/results/dart.json
 ```
+
+`dart run realm_dart install` downloads Realm's library for this system into the package's folder, and `tool/bundle.dart` copies it beside the compiled harness, where a compiled program looks for it. `REALM_DISABLE_ANALYTICS` keeps Realm's tools from sending usage data.
 
 ```bash
 python3 -m venv bench/python/.venv && bench/python/.venv/bin/pip install maturin -r bench/python/requirements.txt

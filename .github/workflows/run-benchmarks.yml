@@ -98,7 +98,23 @@ jobs:
           dart pub get
           dart run build_runner build --delete-conflicting-outputs
           dart build cli
+      # Realm's code generator pins an older analyzer than DaruDB's, so its
+      # harness is a package of its own. Its install command downloads its
+      # library into the package's folder, and the compiled harness looks for
+      # it beside itself, where `tool/bundle.dart` copies it.
+      - name: Build the harness for Realm
+        working-directory: bench/dart_pinned
+        env:
+          REALM_DISABLE_ANALYTICS: '1'
+        run: |
+          dart pub get
+          dart run build_runner build --delete-conflicting-outputs
+          dart run realm_dart install
+          dart build cli
+          dart run tool/bundle.dart
       - name: Run
+        env:
+          REALM_DISABLE_ANALYTICS: '1'
         run: node bench/run.mjs dart --runs "$RUNS" --out dart.json
       - uses: actions/upload-artifact@v7
         with:
