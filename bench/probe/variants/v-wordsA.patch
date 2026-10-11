@@ -1,5 +1,5 @@
 diff --git a/crates/darudb/src/query/run.rs b/crates/darudb/src/query/run.rs
-index 2671e1c..7bbd60d 100644
+index 2671e1c..ee329da 100644
 --- a/crates/darudb/src/query/run.rs
 +++ b/crates/darudb/src/query/run.rs
 @@ -249,8 +249,8 @@ impl ValueRef<'_> {
@@ -64,11 +64,3 @@ index 2671e1c..7bbd60d 100644
  fn passes(test: &Test, value: ValueRef<'_>) -> bool {
      match test {
          Test::Compare(Op::Eq, other) | Test::Element(other) => value.equals(other),
-@@ -1192,6 +1229,7 @@ fn sorts_before(
- /// `sort` held: one vector serves every object a query tests, where one made
- /// for each and dropped with the objects not kept cost most of a sort's
- /// allocations.
-+#[inline(always)]
- fn meets(
-     reader: &Reader<'_>,
-     plan: &Plan<'_>,
