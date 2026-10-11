@@ -6,6 +6,7 @@
 //! first, releases the GIL for the engine's work, and converts the result
 //! once it has the GIL back.
 
+use std::slice;
 use std::sync::{Mutex, PoisonError};
 
 use darudb::{
@@ -296,10 +297,9 @@ impl NativeTransaction {
         layout: &Bound<'py, Layout>,
         object: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let object = layout.get().to_object(object)?;
-        let key = self.with(py, |txn| txn.writer(collection)?.insert(object))?;
+        let keys = self.write(py, collection, layout.get(), slice::from_ref(object), false)?;
 
-        to_python(py, &key)
+        to_python(py, &keys[0])
     }
 
     /// Inserts `objects` and returns their keys. Every object is converted
@@ -324,10 +324,9 @@ impl NativeTransaction {
         layout: &Bound<'py, Layout>,
         object: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let object = layout.get().to_object(object)?;
-        let key = self.with(py, |txn| txn.writer(collection)?.put(object))?;
+        let keys = self.write(py, collection, layout.get(), slice::from_ref(object), true)?;
 
-        to_python(py, &key)
+        to_python(py, &keys[0])
     }
 
     /// `put` of each of `objects`, as `insert_many` inserts them.
@@ -475,6 +474,75 @@ impl NativeTransaction {
 }
 
 impl NativeTransaction {
+    /// Writes `objects`, instances of `layout`'s class, and returns their
+    /// keys, replacing the objects with those keys when `replace`. Every
+    /// object is converted before any is written.
+    ///
+    /// The objects of a class whose fields all hold scalars are written as
+    /// records, through the shape of the class in the collection: their
+    /// values are read with the GIL, and written into each record without
+    /// it, with no engine `Object` between, whose strings and field names
+    /// took a third of the native call of an insert. Any other object is
+    /// converted into an `Object`, as is a batch with a value of the wrong
+    /// kind, so that the engine's message names the field.
+    fn write(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        layout: &Layout,
+        objects: &[Bound<'_, PyAny>],
+        replace: bool,
+    ) -> PyResult<Vec<Value>> {
+        let mut values = Vec::with_capacity(objects.len() * layout.len());
+        let mut flat = true;
+
+        for object in objects {
+            if !layout.attributes(object, &mut values)? {
+                flat = false;
+                break;
+            }
+        }
+
+        let mut held = Vec::with_capacity(values.len());
+
+        if flat && layout.held(&values, &mut held)? {
+            return self.with(py, |txn| {
+                let mut writer = txn.writer(collection)?;
+
+                held.chunks(layout.len())
+                    .map(|fields| {
+                        writer.write_shaped(
+                            layout.shape_key(),
+                            || layout.shape_fields(),
+                            replace,
+                            |slot, value| fields[slot].write(value),
+                        )
+                    })
+                    .collect()
+            });
+        }
+
+        let objects = objects
+            .iter()
+            .map(|object| layout.to_object(object))
+            .collect::<PyResult<Vec<_>>>()?;
+
+        self.with(py, |txn| {
+            let mut writer = txn.writer(collection)?;
+
+            objects
+                .into_iter()
+                .map(|object| {
+                    if replace {
+                        writer.put(object)
+                    } else {
+                        writer.insert(object)
+                    }
+                })
+                .collect()
+        })
+    }
+
     fn write_many<'py>(
         &self,
         py: Python<'py>,
@@ -491,22 +559,8 @@ impl NativeTransaction {
                     format!("a batch is an iterable of objects, not {objects}"),
                 )
             })?
-            .map(|object| layout.get().to_object(&object?))
             .collect::<PyResult<Vec<_>>>()?;
-        let keys = self.with(py, |txn| {
-            let mut writer = txn.writer(collection)?;
-
-            objects
-                .into_iter()
-                .map(|object| {
-                    if replace {
-                        writer.put(object)
-                    } else {
-                        writer.insert(object)
-                    }
-                })
-                .collect::<darudb::Result<Vec<_>>>()
-        })?;
+        let keys = self.write(py, collection, layout.get(), &objects, replace)?;
         let list = PyList::empty(py);
 
         for key in &keys {

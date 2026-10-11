@@ -13,13 +13,18 @@
 //! the instance is made with `object.__new__` and its fields are put in its
 //! `__dict__`, which a frozen dataclass allows. Calling `__init__` would cost
 //! a call and an attribute assignment per field for every object read.
+//!
+//! An object of a class whose fields all hold scalars is written the other
+//! way: its values are read as [`Held`] scalars with the GIL, and the engine
+//! writes them into the record through the class's shape without it.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use darudb::__binding::{Scalar, Shape, ShapeField};
-use darudb::{FieldReader, Object, Value, ValueReader};
+use darudb::{FieldReader, Object, Value, ValueReader, ValueWriter};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -69,6 +74,10 @@ pub(crate) struct Layout {
     /// The fields as the engine matches them with a stored collection's, by
     /// the names the file stores, in the layout's order.
     shape: Vec<ShapeField>,
+    /// Whether every field holds a scalar, so that an object's record is
+    /// written through the shape: the engine reads a record with a list, an
+    /// embedded object or a link into an `Object` anyway.
+    flat: bool,
 }
 
 /// The number the next layout's shape is kept under.
@@ -108,12 +117,21 @@ impl Layout {
                 },
             })
             .collect();
+        let flat = !built.is_empty()
+            && built.iter().all(|field| {
+                matches!(
+                    field.kind,
+                    Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+                )
+            });
+
         Ok(Self {
             class: class.unbind(),
             fields: built,
             by_attr,
             key: NEXT_KEY.fetch_add(1, Ordering::Relaxed),
             shape,
+            flat,
         })
     }
 }
@@ -166,16 +184,7 @@ impl Layout {
     pub(crate) fn to_object(&self, instance: &Bound<'_, PyAny>) -> PyResult<Object> {
         let py = instance.py();
 
-        if !instance.is_instance(self.class.bind(py))? {
-            return Err(invalid(
-                py,
-                format!(
-                    "expected a {}, not {}",
-                    self.class_name(py),
-                    type_name(instance)
-                ),
-            ));
-        }
+        self.check_instance(instance)?;
 
         let mut object = Object::new();
 
@@ -215,6 +224,87 @@ impl Layout {
 }
 
 impl Layout {
+    /// Refuses `instance` unless it is an instance of the class.
+    fn check_instance(&self, instance: &Bound<'_, PyAny>) -> PyResult<()> {
+        let py = instance.py();
+
+        if instance.is_instance(self.class.bind(py))? {
+            return Ok(());
+        }
+
+        Err(invalid(
+            py,
+            format!(
+                "expected a {}, not {}",
+                self.class_name(py),
+                type_name(instance)
+            ),
+        ))
+    }
+
+    /// How many fields the layout has.
+    pub(crate) fn len(&self) -> usize {
+        self.fields.len()
+    }
+
+    /// The values of the fields of `instance`, an instance of the class, put
+    /// after `values` in the layout's order, for [`held`](Self::held) to
+    /// read, when every field holds a scalar. Returns whether they were put
+    /// there; an object of another layout is converted with
+    /// [`to_object`](Self::to_object).
+    pub(crate) fn attributes<'py>(
+        &self,
+        instance: &Bound<'py, PyAny>,
+        values: &mut Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<bool> {
+        if !self.flat {
+            return Ok(false);
+        }
+
+        let py = instance.py();
+
+        self.check_instance(instance)?;
+
+        for field in &self.fields {
+            values.push(instance.getattr(field.attr.bind(py))?);
+        }
+
+        Ok(true)
+    }
+
+    /// The scalars `values` hold, the values of the fields of objects one
+    /// after another as [`attributes`](Self::attributes) put them, borrowed
+    /// where Python keeps the bytes, so that the engine writes them without
+    /// the GIL. Returns whether each value is of its field's kind, or null;
+    /// a value that is not, which the engine refuses, is left to
+    /// [`to_object`](Self::to_object), so that the engine's message names
+    /// the field, which a refused record's does not.
+    pub(crate) fn held<'a>(
+        &self,
+        values: &'a [Bound<'_, PyAny>],
+        held: &mut Vec<Held<'a>>,
+    ) -> PyResult<bool> {
+        for (value, field) in values.iter().zip(self.fields.iter().cycle()) {
+            let value = held_value(&field.kind, value)?;
+            let fits = matches!(
+                (&field.kind, &value),
+                (_, Some(Held::Null))
+                    | (Kind::Bool, Some(Held::Bool(_)))
+                    | (Kind::Int, Some(Held::Int(_)))
+                    | (Kind::Float, Some(Held::Float(_)))
+                    | (Kind::String, Some(Held::Str(_)))
+                    | (Kind::Bytes, Some(Held::Bytes(_)))
+            );
+
+            match value {
+                Some(value) if fits => held.push(value),
+                _ => return Ok(false),
+            }
+        }
+
+        Ok(true)
+    }
+
     /// What the engine keeps the layout's shape under.
     pub(crate) fn shape_key(&self) -> u64 {
         self.key
@@ -348,6 +438,72 @@ fn read_value<'py>(
             layout.instance_of(py, &mut values)?
         }
     })
+}
+
+/// A scalar of an object, read from its Python value with the GIL and
+/// written into the record without it. A string or `bytes` is borrowed from
+/// the Python object, which the caller keeps; a `bytearray` or a
+/// `memoryview`, which Python code may change meanwhile, is copied.
+#[derive(Debug)]
+pub(crate) enum Held<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(&'a str),
+    Bytes(Cow<'a, [u8]>),
+}
+
+impl Held<'_> {
+    /// Writes the value as a field of a record.
+    pub(crate) fn write(&self, writer: ValueWriter<'_>) -> darudb::Result<()> {
+        match self {
+            Held::Null => writer.null(),
+            Held::Bool(value) => writer.bool(*value),
+            Held::Int(value) => writer.int(*value),
+            Held::Float(value) => writer.float(*value),
+            Held::Str(value) => writer.string(value),
+            Held::Bytes(value) => writer.bytes(value),
+        }
+    }
+}
+
+/// A value of a field of the scalar kind `kind`, as [`to_value`] converts
+/// it, or `None` for a value that is no scalar.
+fn held_value<'a>(kind: &Kind, value: &'a Bound<'_, PyAny>) -> PyResult<Option<Held<'a>>> {
+    let py = value.py();
+
+    Ok(Some(if value.is_none() {
+        Held::Null
+    } else if value.is_instance_of::<PyBool>() {
+        Held::Bool(value.extract()?)
+    } else if value.is_instance_of::<PyInt>() {
+        // A float field takes an int, as `to_value` says.
+        if matches!(kind, Kind::Float) && value.is_exact_instance_of::<PyInt>() {
+            Held::Float(value.extract()?)
+        } else {
+            Held::Int(
+                value
+                    .extract()
+                    .map_err(|_| invalid(py, format!("{value} is beyond a 64-bit int")))?,
+            )
+        }
+    } else if value.is_instance_of::<PyFloat>() {
+        Held::Float(value.extract()?)
+    } else if let Ok(string) = value.cast::<PyString>() {
+        Held::Str(string.to_str()?)
+    } else if let Ok(bytes) = value.cast::<PyBytes>() {
+        Held::Bytes(Cow::Borrowed(bytes.as_bytes()))
+    } else if is_bytes(value) {
+        Held::Bytes(Cow::Owned(bytes_of(value)?))
+    } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        return Ok(None);
+    } else {
+        return Err(invalid(
+            py,
+            format!("DaruDB cannot store {}", type_name(value)),
+        ));
+    }))
 }
 
 /// The Python type of `value`, for messages.
