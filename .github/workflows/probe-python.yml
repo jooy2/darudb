@@ -1,0 +1,58 @@
+name: probe-python
+
+# Probe only, on a branch that is never merged: where a one-object deferred
+# commit through the Python package spends the time it takes beyond the
+# Rust harness's, on a Linux runner.
+
+on:
+  push:
+    branches: [investigate/linux-perf]
+    paths: [bench/probe/py_defer.py, .github/workflows/probe-python.yml]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q linux-tools-common "linux-tools-$(uname -r)" \
+            || sudo apt-get install -y -q linux-tools-common linux-tools-azure
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+      - name: Build
+        run: |
+          python -m venv bench/python/.venv
+          source bench/python/.venv/bin/activate
+          pip install -q maturin -r bench/python/requirements.txt
+          (cd packages/python && CARGO_PROFILE_RELEASE_STRIP=none CARGO_PROFILE_RELEASE_DEBUG=line-tables-only maturin develop --release)
+          (cd bench/rust && cargo build --release -q)
+      - name: Probe
+        run: |
+          lscpu | grep -E 'Model name'
+          mkdir -p out
+          d=$(mktemp -d)
+          BENCH_SKIP=insert-sync BENCH_FOCUS=insert-deferred bench/rust/target/release/darudb-bench --child daru --dir "$d" | tee out/rust.txt
+          bench/python/.venv/bin/python bench/probe/py_defer.py 20000 | tee out/python.txt
+          strace -c -f bench/python/.venv/bin/python bench/probe/py_defer.py 20000 2> out/strace-python.txt
+          BENCH_SKIP=insert-sync BENCH_FOCUS=insert-deferred strace -c -f bench/rust/target/release/darudb-bench --child daru --dir "$(mktemp -d)" 2> out/strace-rust.txt
+          perf record -q -e cpu-clock -F 9999 --call-graph dwarf,16384 -o perf.data bench/python/.venv/bin/python bench/probe/py_defer.py 30000
+          perf report -i perf.data --no-children --sort dso --stdio -g none 2> /dev/null | grep -v '^#' | grep -v '^$' | head -12 > out/profile.txt
+          perf report -i perf.data --no-children --sort symbol --stdio -g none --percent-limit 0.5 2> /dev/null | grep -v '^#' | grep -v '^$' | head -70 >> out/profile.txt
+          perf report -i perf.data --children --sort symbol --stdio -g none 2> /dev/null | grep -E '\[k\] (__x64_sys_|__do_sys_)' | head -20 >> out/profile.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: probe-python
+          path: out
