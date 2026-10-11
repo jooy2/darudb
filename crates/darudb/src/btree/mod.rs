@@ -89,19 +89,26 @@ pub(crate) trait Load {
     /// reference.
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>>;
 
-    /// The marks of kind `kind` of the entries of the committed leaf
-    /// `pointer` names, one an entry, as a walk over it worked them out with
-    /// `make`: kept from an earlier walk, or made now and kept, if this
-    /// `Load` keeps marks at all.
-    fn marks(
-        &self,
-        pointer: &Pointer,
-        kind: u64,
-        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
-    ) -> Option<Arc<[u16]>> {
-        let _ = (pointer, kind, make);
+    /// The marks of kind `kind` a walk made of the entries of the committed
+    /// leaf `pointer` names, one an entry, if this `Load` kept them.
+    fn marks(&self, pointer: &Pointer, kind: u64) -> Option<Arc<[u16]>> {
+        let _ = (pointer, kind);
 
         None
+    }
+
+    /// Keeps the marks of kind `kind` a walk made of the committed leaves
+    /// the pointers name, if this `Load` keeps marks at all.
+    fn keep_marks(&self, kind: u64, made: Vec<(Pointer, Vec<u16>)>) {
+        let _ = (kind, made);
+    }
+
+    /// Whether a walk of tree `tree` marked by kind `kind` came before this
+    /// one, which this one is noted as for the next.
+    fn walked_before(&self, tree: u64, kind: u64) -> bool {
+        let _ = (tree, kind);
+
+        false
     }
 }
 

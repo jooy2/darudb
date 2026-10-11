@@ -1,7 +1,7 @@
 //! Loading committed nodes and overflow values, verified, through the page
 //! cache.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -40,9 +40,15 @@ struct Marks {
     /// a walk that marked every leaf.
     entries: HashMap<MarksKey, Arc<[u16]>, BuildHasherDefault<Fold>>,
     order: VecDeque<MarksKey>,
+    /// The trees walks have marked by each kind: the first walk of a tree by
+    /// a kind does not look for marks kept of it.
+    walked: HashSet<(u64, u64), BuildHasherDefault<Fold>>,
     used: usize,
     capacity: usize,
 }
+
+/// How many trees and kinds the walks are remembered for.
+const WALKED_TREES: usize = 1024;
 
 /// What marks are kept by: a leaf's page and check, and the kind of mark.
 type MarksKey = (u64, Check, u64);
@@ -170,25 +176,28 @@ impl Load for Loader {
         Ok(loaded.into_node())
     }
 
-    fn marks(
-        &self,
-        pointer: &Pointer,
-        kind: u64,
-        make: &mut dyn FnMut() -> Option<Arc<[u16]>>,
-    ) -> Option<Arc<[u16]>> {
-        let key = (pointer.page, pointer.check, kind);
+    fn marks(&self, pointer: &Pointer, kind: u64) -> Option<Arc<[u16]>> {
+        self.lock_marks()
+            .entries
+            .get(&(pointer.page, pointer.check, kind))
+            .cloned()
+    }
 
-        if let Some(kept) = self.lock_marks().entries.get(&key) {
-            return Some(Arc::clone(kept));
-        }
-
-        let made = make()?;
+    fn keep_marks(&self, kind: u64, made: Vec<(Pointer, Vec<u16>)>) {
+        // Made into what is kept before the lock is taken.
+        let made: Vec<(MarksKey, Arc<[u16]>)> = made
+            .into_iter()
+            .map(|(pointer, marks)| ((pointer.page, pointer.check, kind), marks.into()))
+            .collect();
         let mut marks = self.lock_marks();
-        let weight = size_of_val(&*made);
 
-        if marks.entries.insert(key, Arc::clone(&made)).is_none() {
-            marks.order.push_back(key);
-            marks.used += weight;
+        for (key, kept) in made {
+            let weight = size_of_val(&*kept);
+
+            if marks.entries.insert(key, kept).is_none() {
+                marks.order.push_back(key);
+                marks.used += weight;
+            }
         }
 
         while marks.used > marks.capacity {
@@ -200,8 +209,24 @@ impl Load for Loader {
                 marks.used -= size_of_val(&*old);
             }
         }
+    }
 
-        Some(made)
+    fn walked_before(&self, tree: u64, kind: u64) -> bool {
+        let mut marks = self.lock_marks();
+
+        if marks.walked.contains(&(tree, kind)) {
+            return true;
+        }
+
+        // Trees are many only where collections and fields are; forgetting
+        // them all costs each one walk that looks for marks no more.
+        if marks.walked.len() >= WALKED_TREES {
+            marks.walked.clear();
+        }
+
+        marks.walked.insert((tree, kind));
+
+        false
     }
 
     fn read_overflow(&self, reference: &OverflowRef, tree: u64) -> Result<Vec<u8>> {

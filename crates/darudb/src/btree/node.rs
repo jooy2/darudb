@@ -866,22 +866,6 @@ impl NodeRef<'_> {
         }
     }
 
-    /// What `mark` makes of the value of each entry of a committed leaf,
-    /// and [`UNMARKED`] for a value that is not inline; `None` for a branch,
-    /// or a leaf this transaction holds.
-    pub(crate) fn make_marks(&self, mark: impl Fn(&[u8]) -> u16) -> Option<Arc<[u16]>> {
-        let (cells, page) = self.committed_leaf()?;
-
-        Some(
-            (0..self.count())
-                .map(|index| match leaf_inline(cells, page, index) {
-                    Some((_, value)) => mark(value),
-                    None => UNMARKED,
-                })
-                .collect(),
-        )
-    }
-
     /// The layout of a committed leaf's cells, and its page, which a walk
     /// reads every entry of in place; `None` for a branch, or a leaf this
     /// transaction holds.
