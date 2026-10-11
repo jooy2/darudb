@@ -81,12 +81,12 @@ From the repository root, after building what each language needs:
 
 ```bash
 cd bench/rust && cargo build --release && cd ../..
-node bench/run.mjs rust --runs 5 --out bench/results/rust.json
+node bench/run.mjs rust --runs 9 --out bench/results/rust.json
 ```
 
 ```bash
 (cd packages/node && npm ci && npm run build) && (cd bench/node && REALM_DISABLE_ANALYTICS=1 npm ci)
-node bench/run.mjs node --runs 5 --out bench/results/node.json
+node bench/run.mjs node --runs 9 --out bench/results/node.json
 ```
 
 `REALM_DISABLE_ANALYTICS` keeps Realm's postinstall script from sending usage data. Its install script downloads its library, which npm 12 and later skip, since they run no install scripts unless allowed; then download it by hand:
@@ -97,13 +97,13 @@ node bench/run.mjs node --runs 5 --out bench/results/node.json
 
 ```bash
 (cd bench/dart && dart pub get && dart run build_runner build && dart build cli)
-node bench/run.mjs dart --runs 5 --out bench/results/dart.json
+node bench/run.mjs dart --runs 9 --out bench/results/dart.json
 ```
 
 ```bash
 python3 -m venv bench/python/.venv && bench/python/.venv/bin/pip install maturin -r bench/python/requirements.txt
 (cd packages/python && VIRTUAL_ENV=../../bench/python/.venv PATH=../../bench/python/.venv/bin:$PATH maturin develop --release)
-BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --runs 5 --out bench/results/python.json
+BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --runs 9 --out bench/results/python.json
 ```
 
 `--only daru,sqlite` limits the stores, and `--dir` chooses where the files go. `node bench/merge.mjs bench/results/*.json` writes the results into `docs/.vitepress/theme/performance.json`, which the documentation reads.

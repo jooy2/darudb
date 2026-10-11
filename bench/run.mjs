@@ -3,7 +3,7 @@
 // process of its own on new files, the stores taking turns in an order that
 // moves by one every run.
 //
-//   node bench/run.mjs <rust|node|dart|python> [--runs 5] [--only daru,sqlite] [--dir DIR] [--out FILE]
+//   node bench/run.mjs <rust|node|dart|python> [--runs 9] [--only daru,sqlite] [--dir DIR] [--out FILE]
 //
 // A cell is the median of the runs, with the fastest and the slowest beside
 // it. A row whose results differ between stores, or between runs, fails the
@@ -23,7 +23,7 @@ const option = (name, fallback) => {
 
   return at < 0 ? fallback : args[at + 1];
 };
-const runs = Number(option('--runs', '5'));
+const runs = Number(option('--runs', '9'));
 const only = option('--only', null)?.split(',');
 const base = option('--dir', os.tmpdir());
 const out = option('--out', null);

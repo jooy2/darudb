@@ -74,5 +74,5 @@ The harness is in [`bench/`](https://github.com/jooy2/darudb/tree/main/bench) of
 
 ```bash
 cd bench/rust && cargo build --release && cd ../..
-node bench/run.mjs rust --runs 5 --out bench/results/rust.json
+node bench/run.mjs rust --runs 9 --out bench/results/rust.json
 ```

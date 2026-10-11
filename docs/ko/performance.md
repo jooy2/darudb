@@ -74,5 +74,5 @@ Realm에서 옮기려는 애플리케이션이라면 Node.js 표를 보면 됩�
 
 ```bash
 cd bench/rust && cargo build --release && cd ../..
-node bench/run.mjs rust --runs 5 --out bench/results/rust.json
+node bench/run.mjs rust --runs 9 --out bench/results/rust.json
 ```

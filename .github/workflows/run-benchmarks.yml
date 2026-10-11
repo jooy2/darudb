@@ -18,7 +18,7 @@ on:
     inputs:
       runs:
         description: Passes of each store; a cell is their median
-        default: '5'
+        default: '9'
 
 permissions:
   contents: read
