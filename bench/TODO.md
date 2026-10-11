@@ -83,6 +83,8 @@ Measured on 2026-10-11:
 
 - **A sync commit's barrier costs more after scattered writes** (`probe-syncscatter.yml`): twelve 4 KiB pages written over a 64 MiB file and then synced with `fdatasync` took 570 to 600 µs on EPYC 7763 runners, whose disk is `sda`, and 178 to 205 µs written as one run; on EPYC 9V45 runners, whose disk is `nvme`, 264 to 300 µs against 183 to 234 µs. Appending them to a file that grows took longer still, since the file's size changes. So on the first kind of runner, a sync commit's scattered pages, not its writes, are what puts SQLite's log ahead in `insert-sync`.
 
+- **Starting the writeback early does not help** (`probe-syncscatter.yml`, `sync_file_range` with `SYNC_FILE_RANGE_WRITE`): starting each scattered page's writeback as soon as it was written, or the whole file's in one call before the barrier, left the sync as long as before on EPYC 7763 runners (573 against 590 µs for twelve pages) and made it longer on others. What costs is the number of separate writes the disk makes, not when they start.
+
 Directions not tried yet:
 
 - **A sync commit's pages in runs.** A small sync commit whose pages lay in one or two runs would make its barrier a third as long on `sda` runners. The pages are allocated as the transaction changes nodes, before it knows whether it commits with a sync, so either every small commit would place its pages in runs, with the file growth the prototypes above ran into, or a sync commit would move its pages at commit time, which changes how the allocator trees settle.
@@ -122,6 +124,19 @@ Directions not tried yet:
 ### 6. A lookup through a unique index in Node.js
 
 SQLite took 0.81 to 0.89 times DaruDB's time in `get-email` through the Node.js package. A profile on the M1 Max with the addon's symbols (2026-10-11) puts 81% of a lookup in the native call: the two tree lookups, the email index and the records, take 60%, and finding each tree by name under the lock every read transaction shares 5%. Decoding the record into an object takes the 19% left, in JavaScript. The kept roots and the key on the stack took 4% off through the package on the M1 Max; on Linux they took 8% off the Rust harness's `get-email`.
+
+### 6b. Reads and commits through the Python package
+
+On EPYC 7763 runners a one-object deferred commit took 55.6 µs through Python and 37.4 µs through Rust (run 38121829420). A profile on a runner (`probe-python.yml`) put a fifth of it in the interpreter, about 11 µs, running the write block, and most of the rest in the engine and the kernel as in Rust.
+
+Done (2026-10-11):
+
+- **Reads through a shape** (`darudb::__binding`, `Layout::read_record` in `packages/python/src/values.rs`): the binding copies the records out of the engine and reads each straight into Python values, rather than into an engine `Object` it then built the instance from, which was more than half of reading an object through an index. On the M1 Max, `age-equal` 21% and `age-range` 28% faster through the package, `get-key` 15% and `get-email` 13%.
+- **The write block** no longer imports the asynchronous module or takes its lock while no asynchronous write runs: a one-object commit 4% faster on the M1 Max.
+
+Directions not tried yet:
+
+- **Writes as records.** An insert still reads the object's attributes by name into an engine `Object`, which the engine checks against the schema by name. Encoding the record through `ValueWriter` with the shape's layout, as a derived type's `write` does, would leave the engine only the checks of a typed write.
 
 ### 7. The benchmark itself
 
