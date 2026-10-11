@@ -794,6 +794,103 @@ impl<'a> ValueReader<'a> {
             damaged: self.damaged,
         })
     }
+
+    /// The value as a scalar of whatever type it holds, for a language
+    /// binding, which has no Rust type to read it as: a link's key is read
+    /// this way, since the binding does not know its type.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Corrupted`] for a list, an object, a link, or a string that
+    /// is not UTF-8.
+    #[doc(hidden)]
+    pub fn scalar(self) -> Result<Scalar<'a>> {
+        Ok(match self.bytes.first() {
+            None => Scalar::Null,
+            Some(&TRUE) => Scalar::Bool(true),
+            Some(&FALSE) => Scalar::Bool(false),
+            Some(&INT) => Scalar::Int(self.int()?),
+            Some(&FLOAT) => Scalar::Float(self.float()?),
+            Some(&STRING) => Scalar::Str(self.str()?),
+            Some(&BYTES) => Scalar::Bytes(self.bytes()?),
+            Some(_) => return Err(self.fail(wrong_type())),
+        })
+    }
+
+    /// The elements of a list, for a language binding, which has no Rust
+    /// type to read them as.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Corrupted`] for a value of another type.
+    #[doc(hidden)]
+    pub fn elements(self) -> Result<Vec<ValueReader<'a>>> {
+        let rest = self.tagged(LIST)?;
+        let (count, mut at) = codec::quick_varint(rest, 0).map_err(|reason| self.fail(reason))?;
+        // A byte an element at least.
+        let count = usize::try_from(count)
+            .ok()
+            .filter(|&count| count <= rest.len() - at)
+            .ok_or_else(|| self.fail("a record counts more than it holds"))?;
+        let mut elements = Vec::with_capacity(count);
+
+        for _ in 0..count {
+            let end = codec::skip_scalar(rest, at).map_err(|reason| self.fail(reason))?;
+
+            elements.push(ValueReader {
+                bytes: &rest[at..end],
+                layout: None,
+                damaged: self.damaged,
+            });
+            at = end;
+        }
+
+        Ok(elements)
+    }
+
+    /// The fields of an embedded object, for a language binding, which has
+    /// no Rust type to read them as.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Corrupted`] for a value of another type.
+    #[doc(hidden)]
+    pub fn fields(self) -> Result<FieldReader<'a>> {
+        let layout = self
+            .layout
+            .ok_or_else(|| self.fail("an embedded object is read from a field that holds none"))?;
+        let record = self.counted(OBJECT)?;
+
+        FieldReader::new(record, layout, self.damaged)
+    }
+
+    /// The key a link holds, for a language binding, which reads it with
+    /// [`scalar`](Self::scalar).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Corrupted`] for a value of another type.
+    #[doc(hidden)]
+    pub fn linked(self) -> Result<ValueReader<'a>> {
+        Ok(ValueReader {
+            bytes: self.tagged(LINK)?,
+            layout: None,
+            damaged: self.damaged,
+        })
+    }
+}
+
+/// A scalar of a record, borrowed from it, as [`ValueReader::scalar`] reads
+/// it for a language binding.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Scalar<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(&'a str),
+    Bytes(&'a [u8]),
 }
 
 impl FieldType for bool {
@@ -1157,6 +1254,191 @@ fn typed_of<T: CollectionType>(schema: &OpenSchema) -> Result<Arc<Typed>> {
     schema.keep_typed(id, Arc::clone(&typed) as Arc<dyn Any + Send + Sync>);
 
     Ok(typed)
+}
+
+/// A field of a type a language binding declares at run time, which has no
+/// Rust type for [`TypedReader`]: the name the file stores it under, and the
+/// fields of an embedded object. A field's slot is its place in the list
+/// that holds it.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct ShapeField {
+    pub name: String,
+    pub fields: Option<Vec<ShapeField>>,
+}
+
+/// How a type a language binding declares at run time lies in a stored
+/// collection, as [`Typed`] is for a Rust type: a binding reads the records
+/// of the collection through it, field by field, rather than through an
+/// [`Object`](crate::Object) it would have to take apart again, which cost
+/// a binding about as much as the rest of reading an object. Made for one
+/// handle's schema; the records of another handle's collection do not read
+/// through it.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct Shape {
+    layout: Arc<Layout>,
+    collection: Arc<str>,
+    path: Arc<std::path::Path>,
+}
+
+impl Shape {
+    /// Gives `read` the fields of `record`, a record of the shape's
+    /// collection, as [`FieldReader`] gives them: by slot, each once.
+    ///
+    /// # Errors
+    ///
+    /// What `read` returns, and [`Error::Corrupted`] for a damaged record.
+    pub fn read<R>(
+        &self,
+        record: &[u8],
+        read: impl FnOnce(FieldReader<'_>) -> Result<R>,
+    ) -> Result<R> {
+        let damaged = |reason: &str| Error::Corrupted {
+            path: self.path.to_path_buf(),
+            reason: format!("an object of `{}`: {reason}", self.collection),
+        };
+
+        read(FieldReader::new(record, &self.layout, &damaged)?)
+    }
+}
+
+/// The shape of the type `key` stands for, whose fields `fields` gives, in
+/// the collection at `position` of `schema`: kept with the schema the first
+/// time, as a typed collection's layout is.
+fn shape_of(
+    source: &dyn Source,
+    schema: &OpenSchema,
+    position: usize,
+    key: u64,
+    fields: impl FnOnce() -> Vec<ShapeField>,
+) -> Result<Shape> {
+    if let Some(Ok(shape)) = schema.shape((key, position)).map(Arc::downcast::<Shape>) {
+        return Ok(Shape::clone(&shape));
+    }
+
+    let stored = &schema.schema.collections[position];
+    let layout = shape_layout(&fields(), &stored.fields, &schema.schema, &stored.name).map_err(
+        |reason| Error::InvalidArgument {
+            message: format!(
+                "the class does not match the collection `{}` the database holds: {reason}",
+                stored.name
+            ),
+        },
+    )?;
+    // The path of the file, which a damaged record names.
+    let path = match source.corrupted(String::new()) {
+        Error::Corrupted { path, .. } => path,
+        _ => std::path::PathBuf::new(),
+    };
+    let shape = Shape {
+        layout: Arc::new(layout),
+        collection: Arc::from(stored.name.as_str()),
+        path: Arc::from(path.as_path()),
+    };
+
+    schema.keep_shape((key, position), Arc::new(shape.clone()));
+
+    Ok(shape)
+}
+
+/// [`layout_of`] for the fields of a binding's type, matched with the stored
+/// ones by name alone: the binding reads each value as its own type says,
+/// and the reader checks the value's tag.
+fn shape_layout(
+    declared: &[ShapeField],
+    stored: &Fields,
+    schema: &StoredSchema,
+    owner: &str,
+) -> std::result::Result<Layout, String> {
+    if let Some(field) = declared
+        .iter()
+        .find(|field| stored.by_name(&field.name).is_none())
+    {
+        return Err(format!(
+            "the class has a field `{}` that `{owner}` does not",
+            field.name
+        ));
+    }
+
+    let mut fields = Vec::with_capacity(stored.list.len());
+
+    for field in &stored.list {
+        let slot = declared
+            .iter()
+            .position(|declared| declared.name == field.name)
+            .ok_or_else(|| {
+                format!(
+                    "`{owner}` has a field `{}` that the class does not",
+                    field.name
+                )
+            })?;
+        let path = format!("{owner}.{}", field.name);
+        let nested = match (&declared[slot].fields, &field.kind) {
+            (Some(inner), Kind::Object(stored)) => {
+                Some(Box::new(shape_layout(inner, stored, schema, &path)?))
+            }
+            (None, Kind::Object(_)) => {
+                return Err(format!(
+                    "`{path}` is an embedded object, which the class does not read as one"
+                ));
+            }
+            (Some(_), _) => return Err(format!("`{path}` is not an embedded object")),
+            (None, _) => None,
+        };
+        let default = field
+            .default
+            .as_ref()
+            .map(|value| {
+                let mut bytes = Vec::new();
+
+                codec::encode_value(value, &field.kind, &|id| schema.key_kind(id), &mut bytes)
+                    .map(|()| bytes)
+            })
+            .transpose()
+            .map_err(|expected| format!("the default of `{path}` holds {expected}"))?;
+
+        fields.push(Slot {
+            id: field.id,
+            slot,
+            optional: field.optional,
+            default,
+            nested,
+        });
+    }
+
+    Ok(Layout { fields })
+}
+
+impl CollectionReader<'_> {
+    /// The shape of the type `key` stands for in this collection, for a
+    /// language binding: worked out from `fields` the first time a
+    /// transaction of the handle asks for `key`, and kept after that.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when the fields do not match the
+    /// collection's.
+    #[doc(hidden)]
+    pub fn shape(&self, key: u64, fields: impl FnOnce() -> Vec<ShapeField>) -> Result<Shape> {
+        let (source, schema, position) = self.place();
+
+        shape_of(source, schema, position, key, fields)
+    }
+}
+
+impl CollectionWriter<'_> {
+    /// [`CollectionReader::shape`], for a write transaction's collection.
+    ///
+    /// # Errors
+    ///
+    /// As [`CollectionReader::shape`].
+    #[doc(hidden)]
+    pub fn shape(&self, key: u64, fields: impl FnOnce() -> Vec<ShapeField>) -> Result<Shape> {
+        let (source, schema, position) = self.place();
+
+        shape_of(source, schema, position, key, fields)
+    }
 }
 
 /// The error for damage found in an object of `collection` that `source`

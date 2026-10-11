@@ -1216,3 +1216,189 @@ fn a_migration_can_stop_for_its_caller_between_its_steps() {
         Opening::Open(_)
     ));
 }
+
+/// What a language binding reads into a type it declares at run time: each
+/// field of a record by its slot, as the engine's `Object` of the same
+/// record holds it, with defaults and nulls for the fields a record leaves
+/// out, and an embedded object, a list and a link read through the value.
+/// A shape whose fields do not match the collection's is refused.
+#[test]
+fn a_shape_reads_records_as_objects_hold_them() {
+    use darudb::__binding::{Scalar, ShapeField};
+
+    let dir = TestDir::new();
+    let schema = v1().collection(
+        Collection::new("places")
+            .primary_key("code", Type::String)
+            .field("name", Type::String)
+            .field("owner", Type::link("users"))
+            .optional(
+                "address",
+                Type::object(
+                    darudb::Embedded::new()
+                        .field("city", Type::String)
+                        .with_default("floor", Type::Int, 1),
+                ),
+            )
+            .optional("tags", Type::list(Type::String)),
+    );
+    let db = open(&dir, schema, &[]).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.collection("users")
+        .unwrap()
+        .insert(user("Alice"))
+        .unwrap();
+
+    let mut places = txn.collection("places").unwrap();
+
+    places
+        .insert(
+            Object::new()
+                .with("code", "a")
+                .with("name", "Hall")
+                .with("owner", 1)
+                .with("address", Object::new().with("city", "Seoul"))
+                .with("tags", Value::List(vec!["old".into(), "big".into()])),
+        )
+        .unwrap();
+    places
+        .insert(
+            Object::new()
+                .with("code", "b")
+                .with("name", "Shed")
+                .with("owner", 1),
+        )
+        .unwrap();
+    drop(places);
+    txn.commit().unwrap();
+
+    // The class's fields in an order of its own, as a binding's class has
+    // them.
+    let field = |name: &str| ShapeField {
+        name: name.to_owned(),
+        fields: None,
+    };
+    let fields = || {
+        vec![
+            field("tags"),
+            field("name"),
+            ShapeField {
+                name: "address".to_owned(),
+                fields: Some(vec![field("floor"), field("city")]),
+            },
+            field("code"),
+            field("owner"),
+        ]
+    };
+    let read = db.begin_read().unwrap();
+    let places = read.collection("places").unwrap();
+    let shape = places.shape(1, fields).unwrap();
+    let mut found = Vec::new();
+
+    places
+        .query_records_with(&darudb::Query::new(), |record| {
+            shape.read(record, |mut fields| {
+                let mut object = Object::new();
+
+                while let Some((slot, value)) = fields.next()? {
+                    let read = match slot {
+                        0 if value.is_null() => Value::Null,
+                        0 => Value::List(
+                            value
+                                .elements()?
+                                .into_iter()
+                                .map(|element| element.str().map(Value::from))
+                                .collect::<darudb::Result<_>>()?,
+                        ),
+                        1 | 3 => value.str()?.into(),
+                        2 if value.is_null() => Value::Null,
+                        2 => {
+                            let mut address = Object::new();
+                            let mut inner = value.fields()?;
+
+                            while let Some((slot, value)) = inner.next()? {
+                                match slot {
+                                    0 => address.set("floor", value.int()?),
+                                    _ => address.set("city", value.str()?),
+                                };
+                            }
+
+                            Value::Object(address)
+                        }
+                        _ => match value.linked()?.scalar()? {
+                            Scalar::Int(key) => key.into(),
+                            other => panic!("a link to users holds {other:?}"),
+                        },
+                    };
+                    let name = ["tags", "name", "address", "code", "owner"][slot];
+
+                    object.set(name, read);
+                }
+
+                found.push(object);
+                Ok(())
+            })
+        })
+        .unwrap();
+
+    let objects: Vec<Object> = places
+        .query(&darudb::Query::new())
+        .unwrap()
+        .into_iter()
+        .map(|mut object| {
+            // `Object` leaves a missing optional field out where the shape
+            // gives it as null.
+            for name in ["address", "tags"] {
+                if object.get(name).is_none() {
+                    object.set(name, Value::Null);
+                }
+            }
+
+            object
+        })
+        .collect();
+
+    assert_eq!(found, objects);
+    assert_eq!(
+        found[0].get("address"),
+        Some(&Value::Object(
+            Object::new().with("city", "Seoul").with("floor", 1)
+        ))
+    );
+
+    // A field the collection lacks, one the class lacks, and an embedded
+    // object read as a scalar.
+    for (key, fields) in [
+        (
+            2,
+            vec![
+                field("name"),
+                field("code"),
+                field("owner"),
+                field("tags"),
+                field("address"),
+                field("rooms"),
+            ],
+        ),
+        (
+            3,
+            vec![field("name"), field("code"), field("owner"), field("tags")],
+        ),
+        (
+            4,
+            vec![
+                field("name"),
+                field("code"),
+                field("owner"),
+                field("tags"),
+                field("address"),
+            ],
+        ),
+    ] {
+        assert_eq!(
+            places.shape(key, || fields).unwrap_err().code(),
+            "INVALID_ARGUMENT"
+        );
+    }
+}

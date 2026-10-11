@@ -149,7 +149,18 @@ pub(crate) struct OpenSchema {
     /// stored schema the first time, and kept for the life of the schema.
     /// The object layer above knows what each holds.
     typed: Mutex<Vec<(TypeId, Arc<dyn Any + Send + Sync>)>>,
+    /// How each type a language binding declares at run time lies in a
+    /// collection, by the key the binding gives the type and the
+    /// collection's position, kept as `typed` is.
+    shapes: Mutex<Vec<(ShapeKey, Kept)>>,
 }
+
+/// What a binding's type's shape is kept under: the binding's key for the
+/// type, and the collection's position.
+type ShapeKey = (u64, usize);
+
+/// Something the object layer above keeps with the schema.
+type Kept = Arc<dyn Any + Send + Sync>;
 
 impl OpenSchema {
     pub(crate) fn new(schema: StoredSchema, encoded: Vec<u8>) -> Self {
@@ -166,6 +177,7 @@ impl OpenSchema {
             orders,
             names,
             typed: Mutex::new(Vec::new()),
+            shapes: Mutex::new(Vec::new()),
         }
     }
 
@@ -188,6 +200,25 @@ impl OpenSchema {
             .iter()
             .find(|(kept, _)| *kept == id)
             .map(|(_, typed)| Arc::clone(typed))
+    }
+
+    /// What [`keep_shape`](Self::keep_shape) kept for `key`.
+    pub(crate) fn shape(&self, key: ShapeKey) -> Option<Kept> {
+        self.shapes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(kept, _)| *kept == key)
+            .map(|(_, shape)| Arc::clone(shape))
+    }
+
+    /// Keeps `shape` for `key`, unless another thread kept one first.
+    pub(crate) fn keep_shape(&self, key: ShapeKey, shape: Kept) {
+        let mut kept = self.shapes.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if kept.iter().all(|(other, _)| *other != key) {
+            kept.push((key, shape));
+        }
     }
 
     /// Keeps `typed` for the type `id`, unless another thread kept one

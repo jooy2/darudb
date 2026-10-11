@@ -28,8 +28,8 @@ pub use objects::{CollectionReader, CollectionWriter};
 pub use open::Migrating;
 pub(crate) use open::{Opened, Pending, check, open};
 pub use typed::{
-    CollectionType, ElementType, EmbeddedType, FieldReader, FieldType, KeyType, Link, TypedReader,
-    TypedWriter, ValueReader, ValueWriter,
+    CollectionType, ElementType, EmbeddedType, FieldReader, FieldType, KeyType, Link, Scalar,
+    Shape, ShapeField, TypedReader, TypedWriter, ValueReader, ValueWriter,
 };
 
 use crate::error::Result;

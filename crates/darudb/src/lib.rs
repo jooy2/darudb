@@ -89,6 +89,13 @@ pub use query::{Filter, Query, QueryRequest};
 /// What the code of `#[derive(Object)]` and `#[derive(Embedded)]` calls.
 #[doc(hidden)]
 pub use schema::typed::derive as __derive;
+/// For the language bindings in this repository: reading a collection's
+/// records into a type the binding declares at run time. Not part of the
+/// documented API.
+#[doc(hidden)]
+pub mod __binding {
+    pub use crate::schema::{Scalar, Shape, ShapeField};
+}
 pub use schema::{
     Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
     EmbeddedType, FieldReader, FieldType, KeyType, Link, Migrating, Migration, Schema, Type,

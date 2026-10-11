@@ -862,6 +862,12 @@ impl<'a> CollectionReader<'a> {
         (self.txn, &self.schema.schema, self.definition())
     }
 
+    /// The transaction, the handle's schema and the collection's position in
+    /// it.
+    pub(crate) fn place(&self) -> (&dyn Source, &OpenSchema, usize) {
+        (self.txn, &self.schema, self.position)
+    }
+
     /// The order of the collection's fields by name.
     pub(crate) fn order(&self) -> Option<&codec::NameOrder> {
         self.schema.order(self.position)
@@ -1237,6 +1243,12 @@ impl<'a> CollectionWriter<'a> {
     /// The transaction, the schema and the collection, for running a query.
     pub(crate) fn parts(&self) -> (&dyn Source, &StoredSchema, &CollectionDef) {
         (&*self.txn, &self.schema.schema, self.definition())
+    }
+
+    /// The transaction, the handle's schema and the collection's position in
+    /// it.
+    pub(crate) fn place(&self) -> (&dyn Source, &OpenSchema, usize) {
+        (&*self.txn, &self.schema, self.position)
     }
 
     /// The order of the collection's fields by name.
