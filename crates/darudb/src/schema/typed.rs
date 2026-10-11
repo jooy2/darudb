@@ -36,7 +36,7 @@ use crate::format::object::codec::{
     self, BYTES, FALSE, FLOAT, INT, LINK, LIST, OBJECT, STRING, TRUE,
 };
 use crate::format::object::names::records;
-use crate::format::object::schema::{Fields, Kind, OpenSchema, StoredSchema};
+use crate::format::object::schema::{CollectionDef, Fields, Kind, OpenSchema, StoredSchema};
 use crate::txn::{ReadTransaction, WriteTransaction, kept};
 
 use super::declare::{Collection, Embedded, Field, Type};
@@ -1221,23 +1221,27 @@ fn typed_layout<T: CollectionType>(schema: &StoredSchema) -> Result<Typed> {
         &declared.name,
     )
     .map_err(|reason| refuse(&reason))?;
-    // The layout lists the stored fields in the stored order.
-    let auto = stored
-        .auto
-        .then(|| {
-            stored
-                .fields
-                .list
-                .iter()
-                .position(|field| field.id == stored.key)
-        })
-        .flatten();
-
     Ok(Typed {
         position,
         layout,
-        auto,
+        auto: auto_position(stored),
     })
+}
+
+/// The position of `collection`'s auto-increment key in the layout of its
+/// fields, which lists the stored fields in the stored order, in a
+/// collection keyed by one.
+fn auto_position(collection: &CollectionDef) -> Option<usize> {
+    collection
+        .auto
+        .then(|| {
+            collection
+                .fields
+                .list
+                .iter()
+                .position(|field| field.id == collection.key)
+        })
+        .flatten()
 }
 
 /// How `T` lies in the collection of `schema`, worked out the first time a
@@ -1278,6 +1282,9 @@ pub struct ShapeField {
 #[derive(Debug, Clone)]
 pub struct Shape {
     layout: Arc<Layout>,
+    /// The position in the layout of the auto-increment key, in a
+    /// collection keyed by one.
+    auto: Option<usize>,
     collection: Arc<str>,
     path: Arc<std::path::Path>,
 }
@@ -1333,6 +1340,7 @@ fn shape_of(
     };
     let shape = Shape {
         layout: Arc::new(layout),
+        auto: auto_position(stored),
         collection: Arc::from(stored.name.as_str()),
         path: Arc::from(path.as_path()),
     };
@@ -1438,6 +1446,32 @@ impl CollectionWriter<'_> {
         let (source, schema, position) = self.place();
 
         shape_of(source, schema, position, key, fields)
+    }
+
+    /// Writes an object of the type `key` stands for, as
+    /// [`shape`](Self::shape) matches it with the collection, and returns
+    /// its primary key, replacing the object with that key when `replace`.
+    /// `write_field` writes each field by its slot, as a typed writer's
+    /// object does, so that a language binding writes the record the file
+    /// holds rather than an [`Object`](crate::Object) the engine would
+    /// encode again by the names of its fields; the engine checks the
+    /// record as it checks [`insert_record`](Self::insert_record)'s.
+    ///
+    /// # Errors
+    ///
+    /// What `write_field` returns, and as [`insert`](Self::insert) and
+    /// [`put`](Self::put) fail.
+    #[doc(hidden)]
+    pub fn write_shaped(
+        &mut self,
+        key: u64,
+        fields: impl FnOnce() -> Vec<ShapeField>,
+        replace: bool,
+        write_field: impl FnMut(usize, ValueWriter<'_>) -> Result<()>,
+    ) -> Result<Value> {
+        let shape = self.shape(key, fields)?;
+
+        write_encoded(self, &shape.layout, shape.auto, replace, write_field)
     }
 }
 
@@ -1557,6 +1591,59 @@ impl<'a, T: CollectionType> TypedReader<'a, T> {
     }
 }
 
+/// Writes into `inner` the object whose fields, laid out as `layout` says,
+/// `write_field` writes by slot, and returns its primary key, replacing the
+/// object with that key when `replace`. `auto` is the position in the layout
+/// of an auto-increment key.
+///
+/// The record is written in the form the file holds: an object without a key
+/// in a collection keyed by an auto-increment gets the next number in it
+/// here, rather than the engine writing the record again to put the number
+/// in, and where each field lies goes with it, so that the engine does not
+/// read the record again to find them. Both are written in buffers the
+/// transaction lends, since a writer is often made for one write.
+fn write_encoded(
+    inner: &mut CollectionWriter<'_>,
+    layout: &Layout,
+    auto: Option<usize>,
+    replace: bool,
+    write_field: impl FnMut(usize, ValueWriter<'_>) -> Result<()>,
+) -> Result<Value> {
+    let spare = inner.spare();
+    let mut record = std::mem::take(&mut spare.record);
+    let mut placed = std::mem::take(&mut spare.placed);
+    let mut assigned = None;
+    let fields = layout.fields.len();
+
+    // Room for most records at once: growing the buffers from nothing took
+    // an eighth of a write.
+    record.reserve(16 * (fields + 1));
+    placed.reserve(fields);
+    encode(
+        layout,
+        &mut record,
+        write_field,
+        |position, value| {
+            if auto != Some(position) {
+                return Ok(());
+            }
+
+            let number = inner.auto_number()?;
+
+            assigned = Some(number);
+            value.int(number)
+        },
+        |position, at| placed.push((position, at)),
+    )?;
+
+    let key = inner.write_typed(&record, &placed, assigned, replace);
+    let spare = inner.spare();
+
+    spare.record = kept(record);
+    spare.placed = kept(placed);
+    key
+}
+
 /// A collection of a write transaction, as `T`: its objects read straight
 /// into `T`, and `T`'s values written as its objects.
 pub struct TypedWriter<'a, T> {
@@ -1609,48 +1696,15 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
 
     /// Writes `object` and returns its primary key, replacing the object
     /// with that key when `replace`.
-    ///
-    /// The record is written in the form the file holds: an object without
-    /// a key in a collection keyed by an auto-increment gets the next number
-    /// in it here, rather than the engine writing the record again to put
-    /// the number in, and where each field lies goes with it, so that the
-    /// engine does not read the record again to find them. Both are written
-    /// in buffers the transaction lends, since a writer is often made for
-    /// one write.
     fn write(&mut self, object: &T, replace: bool) -> Result<T::Key> {
-        let Self { inner, typed, .. } = self;
-        let spare = inner.spare();
-        let mut record = std::mem::take(&mut spare.record);
-        let mut placed = std::mem::take(&mut spare.placed);
-        let mut assigned = None;
-        let fields = typed.layout.fields.len();
-
-        // Room for most records at once: growing the buffers from nothing
-        // took an eighth of a write.
-        record.reserve(16 * (fields + 1));
-        placed.reserve(fields);
-        encode(
-            &typed.layout,
-            &mut record,
+        let key = write_encoded(
+            &mut self.inner,
+            &self.typed.layout,
+            self.typed.auto,
+            replace,
             |slot, value| object.write_field(slot, value),
-            |position, value| {
-                if typed.auto != Some(position) {
-                    return Ok(());
-                }
+        );
 
-                let number = inner.auto_number()?;
-
-                assigned = Some(number);
-                value.int(number)
-            },
-            |position, at| placed.push((position, at)),
-        )?;
-
-        let key = inner.write_typed(&record, &placed, assigned, replace);
-        let spare = inner.spare();
-
-        spare.record = kept(record);
-        spare.placed = kept(placed);
         T::Key::from_value(key?)
     }
 

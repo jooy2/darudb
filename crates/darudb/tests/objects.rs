@@ -1402,3 +1402,178 @@ fn a_shape_reads_records_as_objects_hold_them() {
         );
     }
 }
+
+/// A binding writes an object through a shape as `insert` and `put` write
+/// the `Object` it would have made: an auto-increment number for a key left
+/// out, a field's default, its index entries, and the same refusals.
+#[test]
+fn a_shape_writes_objects_as_insert_does() {
+    use darudb::__binding::ShapeField;
+    use darudb::ValueWriter;
+
+    /// A field's value, as a binding holds it before writing it.
+    #[derive(Clone)]
+    enum Held {
+        Null,
+        Int(i64),
+        Str(&'static str),
+        Link(i64),
+        Tags(Vec<String>),
+    }
+
+    fn write(value: &Held, writer: ValueWriter<'_>) -> darudb::Result<()> {
+        match value {
+            Held::Null => writer.null(),
+            Held::Int(value) => writer.int(*value),
+            Held::Str(value) => writer.string(value),
+            Held::Link(key) => writer.link(key),
+            Held::Tags(tags) => writer.list(tags),
+        }
+    }
+
+    let field = |name: &str| ShapeField {
+        name: name.to_owned(),
+        fields: None,
+    };
+    // In an order of the class's own.
+    let users = || vec![field("age"), field("id"), field("name"), field("email")];
+    let posts = || vec![field("tags"), field("author"), field("slug")];
+    let dir = TestDir::new();
+    let db = open(&dir, v1(), &[]).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut writer = txn.collection("users").unwrap();
+    let mut user = |values: [Held; 4], replace: bool| {
+        writer.write_shaped(1, users, replace, |slot, value| write(&values[slot], value))
+    };
+
+    assert_eq!(
+        user(
+            [
+                Held::Int(30),
+                Held::Null,
+                Held::Str("Alice"),
+                Held::Str("a@x")
+            ],
+            false
+        )
+        .unwrap(),
+        Value::Int(1)
+    );
+    assert_eq!(
+        user(
+            [Held::Null, Held::Null, Held::Str("Bob"), Held::Null],
+            false
+        )
+        .unwrap(),
+        Value::Int(2)
+    );
+    assert_eq!(
+        user(
+            [
+                Held::Int(41),
+                Held::Int(2),
+                Held::Str("Bea"),
+                Held::Str("b@x")
+            ],
+            true
+        )
+        .unwrap(),
+        Value::Int(2)
+    );
+    // A unique value taken, a key taken, a value of another type, and a
+    // required field left out.
+    for (values, refused) in [
+        (
+            [Held::Null, Held::Null, Held::Str("Cy"), Held::Str("a@x")],
+            "DUPLICATE_KEY",
+        ),
+        (
+            [Held::Null, Held::Int(1), Held::Str("Cy"), Held::Null],
+            "DUPLICATE_KEY",
+        ),
+        (
+            [Held::Str("old"), Held::Null, Held::Str("Cy"), Held::Null],
+            "INVALID_ARGUMENT",
+        ),
+        (
+            [Held::Int(5), Held::Null, Held::Null, Held::Null],
+            "INVALID_ARGUMENT",
+        ),
+    ] {
+        assert_eq!(code(user(values, false)), refused);
+    }
+
+    assert_eq!(
+        user(
+            [Held::Int(5), Held::Null, Held::Str("Cy"), Held::Null],
+            false
+        )
+        .unwrap(),
+        Value::Int(3)
+    );
+
+    // A collection with a link and a list, whose record the engine reads
+    // into an object to check it.
+    let mut writer = txn.collection("posts").unwrap();
+
+    writer
+        .write_shaped(1, posts, false, |slot, value| {
+            write(
+                &[
+                    Held::Tags(vec!["new".to_owned()]),
+                    Held::Link(2),
+                    Held::Str("hello"),
+                ][slot],
+                value,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        code(writer.write_shaped(1, posts, false, |slot, value| {
+            write(
+                &[Held::Null, Held::Str("Bea"), Held::Str("named")][slot],
+                value,
+            )
+        })),
+        "INVALID_ARGUMENT"
+    );
+    drop(writer);
+    txn.commit().unwrap();
+
+    assert_eq!(
+        objects(&db, "users"),
+        [
+            Object::new()
+                .with("id", 1)
+                .with("name", "Alice")
+                .with("email", "a@x")
+                .with("age", 30),
+            Object::new()
+                .with("id", 2)
+                .with("name", "Bea")
+                .with("email", "b@x")
+                .with("age", 41),
+            Object::new()
+                .with("id", 3)
+                .with("name", "Cy")
+                .with("email", Value::Null)
+                .with("age", 5),
+        ]
+    );
+    assert_eq!(
+        objects(&db, "posts"),
+        [Object::new()
+            .with("slug", "hello")
+            .with("author", 2)
+            .with("tags", Value::List(vec!["new".into()]))]
+    );
+
+    let read = db.begin_read().unwrap();
+    let found = read
+        .collection("users")
+        .unwrap()
+        .query(&darudb::Query::new().filter(darudb::Filter::ge("age", 30)))
+        .unwrap();
+
+    assert_eq!(found.len(), 2);
+}
