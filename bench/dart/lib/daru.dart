@@ -109,10 +109,8 @@ void run(String directory, Rows rows) {
 
       for (var round = 0; round < 10000; round++) {
         final id = ids[round];
-        final found = people.get(id);
-
-        if (found != null) {
-          people.put(found.copyWith(age: (id + 1) % 80));
+        if (people.get(id) != null) {
+          people.update(id, (q) => [q.age.set((id + 1) % 80)]);
         }
       }
     });
