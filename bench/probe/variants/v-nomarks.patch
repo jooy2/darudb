@@ -1,0 +1,13 @@
+diff --git a/crates/darudb/src/query/run.rs b/crates/darudb/src/query/run.rs
+index 2671e1c..7a74db8 100644
+--- a/crates/darudb/src/query/run.rs
++++ b/crates/darudb/src/query/run.rs
+@@ -483,7 +483,7 @@ fn walk(
+ 
+     match &plan.access {
+         Access::Records { range, backward } => {
+-            let marked = plan.marked.map(|field| field.id);
++            let marked: Option<u64> = None;
+ 
+             source
+                 .range_in(&records, as_ref(&range.0), as_ref(&range.1), *backward)?
