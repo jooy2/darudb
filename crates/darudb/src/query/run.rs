@@ -828,7 +828,9 @@ pub(crate) fn point(
     let records = records(collection.id);
 
     if field.id == collection.key {
-        source.get_in_with(&records, &objects::key_bytes(collection, value)?, take)?;
+        objects::with_key_bytes(collection, value, |key| {
+            source.get_in_with(&records, key, take)
+        })?;
 
         return Ok(true);
     }
@@ -841,20 +843,21 @@ pub(crate) fn point(
         return Ok(false);
     };
     // A unique index keys a value that is not null by the value alone.
-    let entry = key::encoded(value).map_err(|reason| Error::Internal {
+    key::with_encoded(value, |entry| {
+        source.get_in_with(&index_tree(index.id), entry, &mut |key| {
+            if source.get_in_with(&records, key, take)? {
+                Ok(())
+            } else {
+                Err(source.corrupted(format!(
+                    "an index of `{}` names an object that is not there",
+                    collection.name
+                )))
+            }
+        })
+    })
+    .map_err(|reason| Error::Internal {
         message: reason.to_owned(),
-    })?;
-
-    source.get_in_with(&index_tree(index.id), &entry, &mut |key| {
-        if source.get_in_with(&records, key, take)? {
-            Ok(())
-        } else {
-            Err(source.corrupted(format!(
-                "an index of `{}` names an object that is not there",
-                collection.name
-            )))
-        }
-    })?;
+    })??;
 
     Ok(true)
 }

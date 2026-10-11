@@ -83,6 +83,40 @@ pub(crate) fn encoded(value: &Value) -> Result<Vec<u8>, &'static str> {
     Ok(out)
 }
 
+/// Gives `use_key` the encoding of `value`, on the stack for an int, and for
+/// a string or bytes of up to [`STACK_KEY`] bytes with no zero in them, and
+/// in a vector of its own otherwise: a lookup by a key it encodes for itself
+/// spent more on allocating the encoding than on making it.
+pub(crate) fn with_encoded<R>(
+    value: &Value,
+    use_key: impl FnOnce(&[u8]) -> R,
+) -> Result<R, &'static str> {
+    let (tag, bytes) = match value {
+        Value::Int(value) => {
+            let (bytes, len) = int_bytes(*value);
+
+            return Ok(use_key(&bytes[..len]));
+        }
+        Value::String(text) => (STRING, text.as_bytes()),
+        Value::Bytes(bytes) => (BYTES, bytes.as_slice()),
+        _ => return encoded(value).map(|key| use_key(&key)),
+    };
+
+    if bytes.len() > STACK_KEY || bytes.contains(&0) {
+        return encoded(value).map(|key| use_key(&key));
+    }
+
+    let mut key = [0u8; STACK_KEY + 3];
+
+    key[0] = tag;
+    key[1..=bytes.len()].copy_from_slice(bytes);
+
+    Ok(use_key(&key[..bytes.len() + 3]))
+}
+
+/// The longest string or bytes [`with_encoded`] encodes on the stack.
+const STACK_KEY: usize = 61;
+
 /// Reads the key encoding at the start of `bytes`. Returns the value and how
 /// many bytes it took.
 pub(crate) fn decode(bytes: &[u8]) -> Result<(Value, usize), &'static str> {
@@ -272,11 +306,25 @@ fn number(tag: u8, number: u64, out: &mut Vec<u8>) {
 /// int, with an int primary key, 18 bytes, mostly zeros: a leaf held about
 /// half the entries it holds now, and the heads of a branch's keys, the four
 /// bytes after the prefix they share, were those zeros.
+fn int(value: i64, out: &mut Vec<u8>) {
+    let (bytes, len) = int_bytes(value);
+    let start = out.len();
+
+    // All nine bytes are appended and the rest cut off: a copy of a length
+    // known only here was a call to copy memory, which cost a lookup by an
+    // int key more than the rest of encoding it.
+    out.extend_from_slice(&bytes);
+    out.truncate(start + len);
+}
+
+/// The encoding of the int `value`, in the first of the nine bytes as many
+/// as the second number says, for a caller that keeps it on the stack.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "an int takes at most eight bytes"
 )]
-fn int(value: i64, out: &mut Vec<u8>) {
+#[inline(always)]
+pub(crate) fn int_bytes(value: i64) -> ([u8; 9], usize) {
     let negative = value < 0;
     let magnitude = if negative { !value } else { value };
     // A negative int takes one byte at least, which tells it from zero.
@@ -288,19 +336,15 @@ fn int(value: i64, out: &mut Vec<u8>) {
     } else {
         ZERO + used as u8
     };
-    // The bytes kept are moved to the front and all nine appended, then the
-    // rest cut off: a copy of a length known only here was a call to copy
-    // memory, which cost a lookup by an int key more than the rest of
-    // encoding it.
+    // The bytes kept are moved to the front.
     let kept = u64::from_be_bytes(value.to_be_bytes())
         .checked_shl(8 * (8 - used) as u32)
         .unwrap_or(0);
     let mut bytes = [tag; 9];
-    let start = out.len();
 
     bytes[1..].copy_from_slice(&kept.to_be_bytes());
-    out.extend_from_slice(&bytes);
-    out.truncate(start + 1 + used);
+
+    (bytes, 1 + used)
 }
 
 /// Reads the bytes of an int whose tag is `tag` at the start of `rest`, as
@@ -448,6 +492,37 @@ mod tests {
 
     /// A scalar encoded where a record holds it gives the encoding of the
     /// value it reads as.
+    /// A key encoded on the stack is the one encoded into a vector, short or
+    /// long, with zeros or without, and of every type.
+    #[test]
+    fn a_key_encoded_on_the_stack_is_the_same_encoding() {
+        let mut rng = Rng::new(9);
+        let mut values: Vec<Value> = (0..2000).map(|n| random(&mut rng, n % 5)).collect();
+
+        for len in [0, 1, STACK_KEY - 1, STACK_KEY, STACK_KEY + 1, 200] {
+            values.push(Value::String("x".repeat(len)));
+            values.push(Value::Bytes(vec![7; len]));
+
+            let mut zero = vec![7; len];
+
+            if let Some(last) = zero.last_mut() {
+                *last = 0;
+            }
+
+            values.push(Value::Bytes(zero));
+        }
+
+        for value in values {
+            assert_eq!(
+                with_encoded(&value, <[u8]>::to_vec).unwrap(),
+                encoded(&value).unwrap(),
+                "{value:?}"
+            );
+        }
+
+        assert!(with_encoded(&Value::List(Vec::new()), <[u8]>::to_vec).is_err());
+    }
+
     #[test]
     fn a_scalar_in_a_record_encodes_as_its_value() {
         let mut rng = Rng::new(6);

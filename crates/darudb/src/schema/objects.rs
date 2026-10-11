@@ -218,6 +218,29 @@ pub(crate) fn key_bytes(collection: &CollectionDef, key: &Value) -> Result<Vec<u
     key_bytes_into(collection, key, &mut out).map(|()| out)
 }
 
+/// Gives `use_key` [`key_bytes`] of `key`, encoded on the stack when it is
+/// short, as [`key::with_encoded`] encodes it.
+pub(crate) fn with_key_bytes<R>(
+    collection: &CollectionDef,
+    key: &Value,
+    use_key: impl FnOnce(&[u8]) -> Result<R>,
+) -> Result<R> {
+    let fits = matches!(
+        (collection.key_field().map(|field| &field.kind), key),
+        (Some(Kind::Int), Value::Int(_))
+            | (Some(Kind::String), Value::String(_))
+            | (Some(Kind::Bytes), Value::Bytes(_))
+    );
+
+    if !fits {
+        return Err(Error::InvalidArgument {
+            message: format!("{key:?} is not a primary key of `{}`", collection.name),
+        });
+    }
+
+    key::with_encoded(key, use_key).map_err(internal)?
+}
+
 /// Writes [`key_bytes`] into `out`.
 pub(crate) fn key_bytes_into(
     collection: &CollectionDef,
@@ -311,14 +334,16 @@ pub(crate) fn get(
 ) -> Result<Option<Object>> {
     let mut object = None;
 
-    source.get_in_with(records, &key_bytes(collection, key)?, &mut |bytes| {
-        object = Some(match order {
-            Some(order) => codec::object_in_order(bytes, &collection.fields, order)
-                .map_err(|reason| damaged(source, collection, reason))?,
-            None => decode(source, collection, bytes)?,
-        });
+    with_key_bytes(collection, key, |key| {
+        source.get_in_with(records, key, &mut |bytes| {
+            object = Some(match order {
+                Some(order) => codec::object_in_order(bytes, &collection.fields, order)
+                    .map_err(|reason| damaged(source, collection, reason))?,
+                None => decode(source, collection, bytes)?,
+            });
 
-        Ok(())
+            Ok(())
+        })
     })?;
 
     Ok(object)
@@ -331,7 +356,7 @@ fn get_record(
     records: &str,
     key: &Value,
 ) -> Result<Option<Vec<u8>>> {
-    source.get_in(records, &key_bytes(collection, key)?)
+    with_key_bytes(collection, key, |key| source.get_in(records, key))
 }
 
 /// Gives `visit` the record of the object of `collection` whose primary key
@@ -343,7 +368,9 @@ fn get_record_with(
     key: &Value,
     visit: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<bool> {
-    source.get_in_with(records, &key_bytes(collection, key)?, visit)
+    with_key_bytes(collection, key, |key| {
+        source.get_in_with(records, key, visit)
+    })
 }
 
 /// Every object of `collection`, in primary key order or its reverse, with
