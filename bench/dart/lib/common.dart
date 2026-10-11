@@ -66,15 +66,33 @@ final class Digest {
   void number(int n) => add(n, 0);
 }
 
+/// The rows whose first run is a row of its own as well: queries a store may
+/// answer faster once it has run them, which an application that runs one
+/// once does not see.
+const firstRun = {
+  'city-scan': 'city-scan-first',
+  'top-score': 'top-score-first',
+};
+
 final class Rows {
   final List<Map<String, Object>> rows = [];
 
-  /// Runs [step] [count] times and records the time each took on average.
+  /// Runs [step] [count] times and records the time each took on average,
+  /// and the first run's time on its own for a row of [firstRun], whose
+  /// digest then leaves the first run out.
   void each(String row, int count, void Function(int round, Digest d) step) {
-    final digest = Digest();
+    var digest = Digest();
     final watch = Stopwatch()..start();
+    var round = 0;
+    final first = firstRun[row];
 
-    for (var round = 0; round < count; round++) {
+    if (first != null) {
+      step(round++, digest);
+      _push(first, watch.elapsedMicroseconds * 1000, digest);
+      digest = Digest();
+    }
+
+    for (; round < count; round++) {
       step(round, digest);
     }
 

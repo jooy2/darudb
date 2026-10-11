@@ -76,16 +76,31 @@ class Digest:
         self.add(n, 0)
 
 
+# The rows whose first run is a row of its own as well: queries a store may
+# answer faster once it has run them, which an application that runs one once
+# does not see.
+FIRST_RUN = {"city-scan": "city-scan-first", "top-score": "top-score-first"}
+
+
 class Rows:
     def __init__(self) -> None:
         self.rows: list[dict[str, object]] = []
 
     def each(self, row: str, count: int, step: Callable[[int, Digest], None]) -> None:
-        """Runs ``step`` ``count`` times and records the time each took on average."""
+        """Runs ``step`` ``count`` times and records the time each took on average,
+        and the first run's time on its own for a row of ``FIRST_RUN``, whose
+        digest then leaves the first run out."""
         digest = Digest()
         started = time.perf_counter_ns()
+        first = 0
 
-        for round_ in range(count):
+        if row in FIRST_RUN:
+            step(0, digest)
+            self._push(FIRST_RUN[row], time.perf_counter_ns() - started, digest)
+            digest = Digest()
+            first = 1
+
+        for round_ in range(first, count):
             step(round_, digest)
 
         self._push(row, (time.perf_counter_ns() - started) / count, digest)

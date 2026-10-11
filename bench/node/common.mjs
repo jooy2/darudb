@@ -51,15 +51,33 @@ export class Digest {
   }
 }
 
+/**
+ * The rows whose first run is a row of its own as well: queries a store may
+ * answer faster once it has run them, which an application that runs one
+ * once does not see.
+ */
+export const FIRST_RUN = { 'city-scan': 'city-scan-first', 'top-score': 'top-score-first' };
+
 export class Rows {
   rows = [];
 
-  /** Runs `step` `count` times and records the time each took on average. */
+  /**
+   * Runs `step` `count` times and records the time each took on average, and
+   * the first run's time on its own for a row of `FIRST_RUN`, whose digest
+   * then leaves the first run out.
+   */
   each(row, count, step) {
-    const digest = new Digest();
+    let digest = new Digest();
     const started = process.hrtime.bigint();
+    let round = 0;
 
-    for (let round = 0; round < count; round++) {
+    if (row in FIRST_RUN) {
+      step(round++, digest);
+      this.push(FIRST_RUN[row], Number(process.hrtime.bigint() - started), digest);
+      digest = new Digest();
+    }
+
+    for (; round < count; round++) {
       step(round, digest);
     }
 

@@ -80,8 +80,18 @@ pub struct Row {
 #[derive(Default)]
 pub struct Rows(pub Vec<Row>);
 
+/// The rows whose first run is a row of its own as well: queries a store may
+/// answer faster once it has run them, which an application that runs one
+/// once does not see.
+const FIRST_RUN: [(&str, &str); 2] = [
+    ("city-scan", "city-scan-first"),
+    ("top-score", "top-score-first"),
+];
+
 impl Rows {
-    /// Runs `step` `count` times and records the time each took on average.
+    /// Runs `step` `count` times and records the time each took on average,
+    /// and the first run's time on its own for a row of `FIRST_RUN`, whose
+    /// digest then leaves the first run out.
     pub fn each<E: std::fmt::Debug>(
         &mut self,
         id: &'static str,
@@ -90,8 +100,19 @@ impl Rows {
     ) {
         let mut digest = Digest::default();
         let started = Instant::now();
+        let mut first = 0;
 
-        for round in 0..count {
+        if let Some((_, first_id)) = FIRST_RUN.iter().find(|(row, _)| *row == id) {
+            step(0, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
+            self.0.push(Row {
+                id: first_id,
+                nanos_each: started.elapsed().as_nanos() as f64,
+                digest: std::mem::take(&mut digest),
+            });
+            first = 1;
+        }
+
+        for round in first..count {
             step(round, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
         }
 

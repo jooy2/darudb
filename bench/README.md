@@ -44,11 +44,13 @@ Random reads go in the order a 64-bit mix of the read's number gives, the same i
 | `age-range` | Finding the first 20 objects of a range of five ages, sorted by `age` descending, then by key | 5,000 |
 | `count` | Counting the objects with `age >= 40`, through the index | 200 |
 | `city-scan` | Finding the 1,000 objects of one `city`, which has no index | 10 |
+| `city-scan-first` | The first of the ten runs of `city-scan` alone | 1 |
 | `top-score` | Finding the 10 objects with the highest `score`, which has no index | 10 |
+| `top-score-first` | The first of the ten runs of `top-score` alone | 1 |
 | `update` | Reading 10,000 objects and writing each back with a new `age`, in one transaction, the commit included | 10,000 |
 | `delete` | Deleting 10,000 objects in one transaction, the commit included | 10,000 |
 
-Reads run in one read transaction. A query that runs many times is prepared once, as a statement would be. A row's time is the time of all its operations divided by their number.
+Reads run in one read transaction. A query that runs many times is prepared once, as a statement would be. A row's time is the time of all its operations divided by their number. The first run of each query without an index is timed as a row of its own as well (`FIRST_RUN` in each harness's common code), since a store may answer such a query faster once it has run it; the digest of the row of ten then covers the nine runs after the first.
 
 ## Durability
 
