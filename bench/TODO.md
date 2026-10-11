@@ -60,12 +60,12 @@ Tried and not kept:
 
 - `parking_lot::Mutex` for the page cache: within ±1% on Apple silicon, within ±1.4% on every row on an EPYC 9V45, and on an EPYC 7763 −5% on `get-key` and +5% on `city-scan`, with the ranges overlapping. No lock type removes the atomic operations of a lookup.
 - A per-thread memo of 64 branch nodes in front of the page cache (`memo.patch`, in the branch's history): `get-key` −5.4%, but one-object deferred commits +14%, because a writer cannot take a branch the memo holds and copies it, and `age-equal` +3.8%, since storing into the memo on a miss costs atomics too. The kept roots avoid that by ending with the transaction.
+- Decoding in layout order: a fast path in `FieldReader::next` for a record whose next field is the layout's next, small enough to be inlined into a derived type's `read`, alone and with the scalar readers inlined as well. On the M1 Max, `get-key`, `get-email` and `age-equal` were 3 to 5% slower with either, and the other rows level. With one key read over and over, so that every byte stays in the caches, decoding is about 80 of a lookup's 230 ns there, and `FieldReader::next` 30 of them; but the benchmark reads each record cold, and the first touch of it, not the matching, is what `read_record`'s time is. In that loop a third of the time is the allocator of macOS, for the struct's three strings, whose `free` reads the clock on every call.
 
 Directions not tried yet:
 
 - **The levels below the root.** Random keys share the branch below the root once in about twenty lookups, so keeping the path, as `btree::read::Seeker` does for a query, saves little beyond the root for them.
 - **Integer primary keys.** An int key of the records tree is three or four bytes, which the head after the node's prefix covers whole, so a search reads a key only to confirm the head it found; a node whose keys all end inside their heads could skip that read. The record's cell is beside the key, so the cache miss would move rather than go.
-- **Decoding in layout order.** `read_record` walks the record and the layout together by field id; a fast path for a record whose fields are the layout's could skip the matching, a few percent of a lookup at most.
 - **Readers without reference counts.** Readers that borrow nodes for the life of the transaction, reclaimed through epochs or hazard pointers, so that a lookup takes no lock and touches no count. It needs `unsafe` beyond `sys/`, or a crate whose API does, and it touches every read path.
 
 ### 2. Updates in Rust
@@ -106,6 +106,7 @@ Done (2026-10-11):
 - **A number is compared with a number of its type directly** in a filter and a sort, without a `Value` made for it: `top-score` 7 to 11% faster on Linux runners.
 - **Field marks per leaf, kept beside the page cache** (`Marks` in `btree/load.rs`): the first scan of a leaf marks where the plan's first field lies in each record, and the next one reads it there. On Linux runners, `city-scan` 16 to 21% and `top-score` 19 to 23% faster on top of the comparison, on the M1 Max a quarter. Through Node.js and Python on the M1 Max, 22 to 29%.
 - **Short strings compared by words** in an equality, rather than through a call to compare memory: through the Python package, whose build had made the comparison a call, `city-scan` a tenth faster on the M1 Max; level in the Rust harness on Linux. Forcing the filter's functions inline as well made the Rust harness's `top-score` 3 to 4% slower on an EPYC 7763, through what moved where, and was left out.
+- **An equality made in the direct test** (`direct` in `query/run.rs`), rather than through a call to `passes` for every record: `city-scan` 6% faster on an EPYC 9V45 and on the M1 Max, the other rows within the 6% that two builds of one engine differ by.
 - **Marks made in the walk's own loop and kept together when it ends**, with no lookup on the first walk of a tree by a field: the first run of a scan took 14% (`city-scan`) and 8% (`top-score`) longer with marks than without on an EPYC 7763 when a pass over each leaf of their own made them and each leaf's were kept under the lock in turn, and takes 2 and 4% longer now. The rows `city-scan-first` and `top-score-first` show it.
 
 Tried and not kept:
@@ -115,10 +116,11 @@ Tried and not kept:
 - **Marks made from a tree's second walk on**: the first run as fast as without marks, but the rows of ten runs 5.6% slower on an EPYC 7763, since the second run pays for them.
 - **Hashing the marks' keys with SipHash** took a tenth of a first scan; they are hashed as the page cache's keys are.
 - **Batching the field search a leaf at a time** (a micro-benchmark): no faster than record by record on the M1 Max, whose processor already overlaps the records' searches.
+- **`meets` inlined into the walk's closure**, on top of the equality: on the M1 Max, `city-scan` a point faster than with the equality alone, and `top-score` 2% slower.
 
 Directions not tried yet:
 
-- **The walk's layers.** A scan hands each record through the range walk, the plan's walk, the gathering of results, the filter's tree and the record view, which took 30% of a profile of `city-scan` on an EPYC 7763 before the marks, more than finding the field took (22%). A filter that is one test of one field now skips the filter's tree, which took 7 to 10% off `city-scan`; making `Reader::any_in` generic over its test instead made `city-scan` 12% slower on the M1 Max, through what the compiler inlined. What is left is the range walk, the gathering of results and the record view.
+- **The walk's layers.** A scan hands each record through the range walk, the plan's walk, the gathering of results, the filter's tree and the record view, which took 30% of a profile of `city-scan` on an EPYC 7763 before the marks, more than finding the field took (22%). A filter that is one test of one field now skips the filter's tree, which took 7 to 10% off `city-scan`; making `Reader::any_in` generic over its test instead made `city-scan` 12% slower on the M1 Max, through what the compiler inlined. What is left is the range walk, the gathering of results and the record view: in a profile of `city-scan` with marks on the M1 Max, `meets`, which reads the field at its mark and tests it, took 46%, the leaf's walk (`visit_leaf`) 17%, `found`'s closure 13% and the call to `passes` 8%, which the equality now skips.
 - **The first run.** A scan that runs once still pays 2 to 4% for the marks: a vector for each leaf, and the batch kept at the end.
 
 ### 6. A lookup through a unique index in Node.js
