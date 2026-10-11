@@ -81,8 +81,11 @@ Measured on 2026-10-11:
 - **Where a deferred commit's time goes on Linux** (`probe-profile.yml` on an EPYC 9V74, by system call): of 34 µs, the writes take 8.4 µs, against LMDB's 6.4 µs of its 12 µs, and the writer lock, the lock tests and the header read 2.8 µs. The rest is the processor's work in user space: encoding and sealing the pages, with the page hash about 5%, changing three trees, and settling the allocator trees. Writing the pages in runs could save the 2 µs the writes cost more than LMDB's, not the gap.
 - **io_uring is slower, not faster** (`probe-uring.yml`): ten scattered 4 KiB writes into the page cache took 12 µs as ten `pwrite` calls and 27 to 46 µs submitted together, on EPYC 7763 and 9V74 runners, since io_uring hands buffered writes to its worker threads. Not worth a dependency, raw system calls or a fallback.
 
+- **A sync commit's barrier costs more after scattered writes** (`probe-syncscatter.yml`): twelve 4 KiB pages written over a 64 MiB file and then synced with `fdatasync` took 570 to 600 µs on EPYC 7763 runners, whose disk is `sda`, and 178 to 205 µs written as one run; on EPYC 9V45 runners, whose disk is `nvme`, 264 to 300 µs against 183 to 234 µs. Appending them to a file that grows took longer still, since the file's size changes. So on the first kind of runner, a sync commit's scattered pages, not its writes, are what puts SQLite's log ahead in `insert-sync`.
+
 Directions not tried yet:
 
+- **A sync commit's pages in runs.** A small sync commit whose pages lay in one or two runs would make its barrier a third as long on `sda` runners. The pages are allocated as the transaction changes nodes, before it knows whether it commits with a sync, so either every small commit would place its pages in runs, with the file growth the prototypes above ran into, or a sync commit would move its pages at commit time, which changes how the allocator trees settle.
 - **A bounded area for small commits.** Keep a few runs of free pages near the end of the file for small commits, grown by a fixed amount, so that their pages land in runs without the file growing as the prototypes did. Worth at most the 2 µs above.
 
 ### 4. The other system calls of a commit
@@ -100,6 +103,7 @@ Done (2026-10-11):
 
 - **A number is compared with a number of its type directly** in a filter and a sort, without a `Value` made for it: `top-score` 7 to 11% faster on Linux runners.
 - **Field marks per leaf, kept beside the page cache** (`Marks` in `btree/load.rs`): the first scan of a leaf marks where the plan's first field lies in each record, and the next one reads it there. On Linux runners, `city-scan` 16 to 21% and `top-score` 19 to 23% faster on top of the comparison, on the M1 Max a quarter. Through Node.js and Python on the M1 Max, 22 to 29%.
+- **Short strings compared by words** in an equality, rather than through a call to compare memory: through the Python package, whose build had made the comparison a call, `city-scan` a tenth faster on the M1 Max; level in the Rust harness on Linux. Forcing the filter's functions inline as well made the Rust harness's `top-score` 3 to 4% slower on an EPYC 7763, through what moved where, and was left out.
 - **Marks made in the walk's own loop and kept together when it ends**, with no lookup on the first walk of a tree by a field: the first run of a scan took 14% (`city-scan`) and 8% (`top-score`) longer with marks than without on an EPYC 7763 when a pass over each leaf of their own made them and each leaf's were kept under the lock in turn, and takes 2 and 4% longer now. The rows `city-scan-first` and `top-score-first` show it.
 
 Tried and not kept:
