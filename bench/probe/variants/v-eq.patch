@@ -1,0 +1,14 @@
+diff --git a/crates/darudb/src/query/run.rs b/crates/darudb/src/query/run.rs
+index bb4c18de..70ba7f5a 100644
+--- a/crates/darudb/src/query/run.rs
++++ b/crates/darudb/src/query/run.rs
+@@ -467,6 +467,9 @@ impl Fields for View<'_> {
+ fn direct(test: &Test<'_>, value: ValueRef<'_>) -> bool {
+     match test {
+         Test::IsNull => value.is_null(),
++        // The commonest test, made here rather than through a call to
++        // `passes` for every object a walk tests.
++        Test::Compare(Op::Eq, other) => !value.is_null() && value.equals(other),
+         test => !value.is_null() && passes(test, value),
+     }
+ }
