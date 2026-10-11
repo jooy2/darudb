@@ -1,0 +1,55 @@
+name: probe-linux
+
+# Probe only, on a branch that is never merged: the engine as the branch has
+# it against the engine with each patch of `bench/probe/variants` applied, on
+# a Linux runner, through the Rust harness's DaruDB passes run in turn.
+
+on:
+  push:
+    branches: [investigate/linux-perf]
+    paths: [bench/probe/variants/**]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: base
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Machine
+        run: |
+          mkdir out
+          { lscpu | grep -E 'Model name|^CPU\(s\)'; findmnt -T /tmp; } | tee out/machine.txt
+      - name: Build every side
+        run: |
+          sides="base=base/bench/rust/target/release/darudb-bench:daru"
+          for patch in base/bench/probe/variants/*.patch; do
+            name=$(basename "$patch" .patch)
+            cp -r base "$name"
+            git -C "$name" apply "$PWD/$patch"
+            git -C "$name" diff --stat
+            sides="$sides $name=$name/bench/rust/target/release/darudb-bench:daru"
+          done
+          for side in $sides; do
+            dir=${side#*=}
+            (cd "${dir%%/bench/*}/bench/rust" && cargo build --release -q)
+          done
+          echo "SIDES=$sides" >> "$GITHUB_ENV"
+      - name: A/B
+        run: node base/bench/probe/ab.mjs 15 $SIDES | tee out/ab.txt
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: probe
+          path: out

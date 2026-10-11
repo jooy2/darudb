@@ -71,6 +71,30 @@ impl Digest {
     }
 }
 
+/// Probe only: a path a syscall trace shows when each row starts.
+fn mark(id: &str) {
+    let _ = std::fs::metadata(format!("/bench-marker/{id}"));
+}
+
+/// Probe only: `BENCH_FOCUS=<row>` runs that row `BENCH_REPEAT` times over,
+/// then ends the pass, so that a profile is mostly that row.
+fn focus(id: &str) -> Option<u64> {
+    match std::env::var("BENCH_FOCUS") {
+        Ok(focus) if focus == id => Some(
+            std::env::var("BENCH_REPEAT")
+                .ok()
+                .and_then(|repeat| repeat.parse().ok())
+                .unwrap_or(1),
+        ),
+        _ => None,
+    }
+}
+
+/// Probe only: `BENCH_SKIP=<row>,<row>` leaves those rows out.
+fn skipped(id: &str) -> bool {
+    std::env::var("BENCH_SKIP").is_ok_and(|skip| skip.split(',').any(|row| row == id))
+}
+
 pub struct Row {
     pub id: &'static str,
     pub nanos_each: f64,
@@ -98,7 +122,15 @@ impl Rows {
         count: u64,
         mut step: impl FnMut(u64, &mut Digest) -> Result<(), E>,
     ) {
+        if skipped(id) {
+            return;
+        }
+
         let mut digest = Digest::default();
+        let repeat = focus(id);
+
+        mark(id);
+
         let started = Instant::now();
         let mut first = 0;
 
@@ -112,8 +144,10 @@ impl Rows {
             first = 1;
         }
 
-        for round in first..count {
-            step(round, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
+        for repeat in 0..repeat.unwrap_or(1) {
+            for round in if repeat == 0 { first } else { 0 }..count {
+                step(round, &mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
+            }
         }
 
         let nanos = started.elapsed().as_nanos() as f64;
@@ -123,6 +157,11 @@ impl Rows {
             nanos_each: nanos / count as f64,
             digest,
         });
+
+        if repeat.is_some() {
+            self.print();
+            std::process::exit(0);
+        }
     }
 
     /// Runs `work` once, which does `count` operations and commits them, and
@@ -133,7 +172,14 @@ impl Rows {
         count: u64,
         work: impl FnOnce(&mut Digest) -> Result<(), E>,
     ) {
+        if skipped(id) {
+            return;
+        }
+
         let mut digest = Digest::default();
+
+        mark(id);
+
         let started = Instant::now();
 
         work(&mut digest).unwrap_or_else(|error| panic!("{id}: {error:?}"));
@@ -145,6 +191,11 @@ impl Rows {
             nanos_each: nanos / count as f64,
             digest,
         });
+
+        if focus(id).is_some() {
+            self.print();
+            std::process::exit(0);
+        }
     }
 
     /// A row that is checked and not timed.
