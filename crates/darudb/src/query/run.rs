@@ -425,6 +425,16 @@ impl Fields for View<'_> {
     }
 }
 
+/// Whether `test` holds for `value`, null or not, as a filter's test of one
+/// value has it hold.
+#[inline(always)]
+fn direct(test: &Test<'_>, value: ValueRef<'_>) -> bool {
+    match test {
+        Test::IsNull => value.is_null(),
+        test => !value.is_null() && passes(test, value),
+    }
+}
+
 /// Whether `test` holds for the value `value`, which is not null.
 fn passes(test: &Test, value: ValueRef<'_>) -> bool {
     match test {
@@ -1215,7 +1225,28 @@ fn meets(
     let fields = &view;
 
     if let Some(filter) = &plan.filter {
-        if !reader.holds(filter, fields)? {
+        // A filter that is one test of a field of the collection itself is
+        // made here rather than through the filter's tree, which passed the
+        // test to the field through a pointer: a walk over every object
+        // makes it of each.
+        let held = match filter {
+            Cond::Test {
+                path:
+                    Resolved {
+                        steps,
+                        direct: Some(field),
+                        many: false,
+                        ..
+                    },
+                test,
+            } if steps.len() == 1 => match fields.field_of(field)? {
+                Current::Borrowed(value) => direct(test, value),
+                Current::Owned(value) => direct(test, ValueRef::Value(&value)),
+            },
+            _ => reader.holds(filter, fields)?,
+        };
+
+        if !held {
             return Ok(false);
         }
     }
