@@ -1,0 +1,9 @@
+diff --git a/crates/darudb/src/space.rs b/crates/darudb/src/space.rs
+index 3f4ab29..d67543a 100644
+--- a/crates/darudb/src/space.rs
++++ b/crates/darudb/src/space.rs
+@@ -1,3 +1,4 @@
++// Probe only: the same engine, built again, to calibrate.
+ //! Free space during one write transaction.
+ //!
+ //! The free tree says which pages the commit a transaction starts from does
