@@ -31,7 +31,6 @@ import inspect
 import os
 import threading
 import weakref
-from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -45,6 +44,8 @@ from ._database import (
     Key,
     QueryInput,
     _held,
+    _holders,
+    _holders_lock,
     check_migrations,
     check_options,
     file_key_of,
@@ -101,9 +102,6 @@ _queues: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[FileKey, asyn
 _inside: contextvars.ContextVar[frozenset[FileKey]] = contextvars.ContextVar(
     "darudb_inside", default=frozenset()
 )
-# The threads whose event loop holds a file for an asynchronous write.
-_holders: Counter[tuple[FileKey, int]] = Counter()
-_holders_lock = threading.Lock()
 
 
 def _queue(file_key: FileKey) -> asyncio.Lock:

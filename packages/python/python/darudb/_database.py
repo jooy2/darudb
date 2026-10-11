@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import os
 import threading
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from types import TracebackType
@@ -206,6 +207,13 @@ _EVERY = Query()
 # one fails at once rather than wait for itself until the busy timeout.
 _writing = threading.local()
 
+# The threads whose event loop holds a file for an asynchronous write, and
+# how many writes each holds it for, which `_async` keeps. Kept here so that
+# a synchronous write in a process that has made no asynchronous one sees it
+# empty without importing `_async` or taking its lock.
+_holders: Counter[tuple[FileKey, int]] = Counter()
+_holders_lock = threading.Lock()
+
 
 def _held(file_key: FileKey) -> set[FileKey]:
     held: set[FileKey] | None = getattr(_writing, "files", None)
@@ -215,6 +223,17 @@ def _held(file_key: FileKey) -> set[FileKey]:
         _writing.files = held
 
     return held
+
+
+def _refuse_on_loop(file_key: FileKey, what: str) -> None:
+    """Refuses ``what`` on a thread whose event loop holds the file for an
+    asynchronous write. A process that has none running finds that out here,
+    without the lock: an entry for this thread could only come from this
+    thread's loop, which is not running while this call is."""
+    if _holders:
+        from ._async import refuse_on_loop
+
+        refuse_on_loop(file_key, what)
 
 
 def file_key_of(path: str) -> FileKey:
@@ -440,7 +459,7 @@ class _ReadScope:
 class _WriteScope:
     """``with db.write() as txn``."""
 
-    __slots__ = ("_db", "_deferred", "_txn")
+    __slots__ = ("_db", "_deferred", "_held", "_txn")
 
     def __init__(self, db: Database, durability: Durability) -> None:
         if durability not in ("sync", "deferred"):
@@ -452,18 +471,20 @@ class _WriteScope:
 
     def __enter__(self) -> WriteTransaction:
         db = self._db
-        held = _held(db._file_key)
+        file_key = db._file_key
+        held = _held(file_key)
 
-        if db._file_key in held:
+        if file_key in held:
             raise invalid("write transactions on one file do not nest")
 
-        db._refuse_while_async_writes("write")
-        held.add(db._file_key)
+        _refuse_on_loop(file_key, "write")
+        held.add(file_key)
+        self._held = held
 
         try:
             self._txn = db._handle().begin_write()
         except BaseException:
-            held.discard(db._file_key)
+            held.discard(file_key)
             raise
 
         return WriteTransaction(self._txn, db.schema)
@@ -476,7 +497,7 @@ class _WriteScope:
     ) -> None:
         txn = self._txn
         self._txn = None
-        _held(self._db._file_key).discard(self._db._file_key)
+        self._held.discard(self._db._file_key)
 
         if txn is None:
             return
@@ -768,15 +789,13 @@ class Database:
     def _refuse_while_async_writes(self, what: str) -> None:
         """Refuses ``what``, which waits for the writer, where the writer it
         would wait for is one this thread or this event loop holds."""
-        from ._async import refuse_on_loop
-
         if self._file_key in _held(self._file_key):
             raise invalid(
                 f"{what} would wait for the write transaction this thread holds on the file: "
                 "call it after the write block"
             )
 
-        refuse_on_loop(self._file_key, what)
+        _refuse_on_loop(self._file_key, what)
 
     def __repr__(self) -> str:
         state = "open" if self.is_open else "closed"
