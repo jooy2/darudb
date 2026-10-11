@@ -16,7 +16,11 @@
 
 use std::collections::HashMap;
 
-use darudb::{Object, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use darudb::__binding::{Scalar, Shape, ShapeField};
+use darudb::{FieldReader, Object, Value, ValueReader};
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{
@@ -24,7 +28,7 @@ use pyo3::types::{
     PyType,
 };
 
-use crate::invalid;
+use crate::{OrRaise, invalid};
 
 /// What a field holds, as far as converting it needs to know.
 #[derive(Debug)]
@@ -59,7 +63,16 @@ pub(crate) struct Layout {
     fields: Vec<Field>,
     /// Each field by its Python attribute, for the changes of an update.
     by_attr: HashMap<String, usize>,
+    /// What the engine keeps the layout's shape under, in each handle's
+    /// schema: a number no other layout of the process has.
+    key: u64,
+    /// The fields as the engine matches them with a stored collection's, by
+    /// the names the file stores, in the layout's order.
+    shape: Vec<ShapeField>,
 }
+
+/// The number the next layout's shape is kept under.
+static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 
 #[pymethods]
 impl Layout {
@@ -85,10 +98,22 @@ impl Layout {
             });
         }
 
+        let shape = built
+            .iter()
+            .map(|field| ShapeField {
+                name: field.stored.clone(),
+                fields: match &field.kind {
+                    Kind::Object(layout) => Some(layout.get().shape.clone()),
+                    _ => None,
+                },
+            })
+            .collect();
         Ok(Self {
             class: class.unbind(),
             fields: built,
             by_attr,
+            key: NEXT_KEY.fetch_add(1, Ordering::Relaxed),
+            shape,
         })
     }
 }
@@ -187,12 +212,77 @@ impl Layout {
 
         Ok(object)
     }
+}
 
-    /// An instance of the class holding `object`, as read from the file.
-    pub(crate) fn to_instance<'py>(
+impl Layout {
+    /// What the engine keeps the layout's shape under.
+    pub(crate) fn shape_key(&self) -> u64 {
+        self.key
+    }
+
+    /// The fields the engine works the layout's shape out from.
+    pub(crate) fn shape_fields(&self) -> Vec<ShapeField> {
+        self.shape.clone()
+    }
+
+    /// An instance of the class holding the object whose record is
+    /// `record`, read through `shape` straight into Python values, with no
+    /// engine `Object` made of it first. `values` is room for the fields'
+    /// values, which a caller reading many objects lends each.
+    pub(crate) fn read_record<'py>(
         &self,
         py: Python<'py>,
-        object: &Object,
+        shape: &Shape,
+        record: &[u8],
+        values: &mut Vec<Option<Bound<'py, PyAny>>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut failed = None;
+        let read = shape.read(record, |fields| {
+            if let Err(error) = self.read_fields(py, fields, values) {
+                failed = Some(error);
+            }
+
+            Ok(())
+        });
+
+        if let Some(error) = failed {
+            return Err(error);
+        }
+
+        read.or_raise(py)?;
+        self.instance_of(py, values)
+    }
+
+    /// Reads each field `fields` gives into `values`, at its slot, which is
+    /// the field's place in the layout.
+    fn read_fields<'py>(
+        &self,
+        py: Python<'py>,
+        mut fields: FieldReader<'_>,
+        values: &mut Vec<Option<Bound<'py, PyAny>>>,
+    ) -> PyResult<()> {
+        values.clear();
+        values.resize(self.fields.len(), None);
+
+        while let Some((slot, value)) = fields.next().or_raise(py)? {
+            let field = self
+                .fields
+                .get(slot)
+                .ok_or_else(|| invalid(py, "a record holds a field the class does not"))?;
+
+            values[slot] = Some(read_value(py, &field.kind, value)?);
+        }
+
+        Ok(())
+    }
+
+    /// An instance of the class whose fields hold `values`, set in the
+    /// layout's order, as `__init__` would set them, so that instances share
+    /// the keys of their `__dict__`.
+    fn instance_of<'py>(
+        &self,
+        py: Python<'py>,
+        values: &mut [Option<Bound<'py, PyAny>>],
     ) -> PyResult<Bound<'py, PyAny>> {
         let new = OBJECT_NEW.get_or_try_init(py, || {
             py.import("builtins")?
@@ -201,19 +291,63 @@ impl Layout {
                 .map(Bound::unbind)
         })?;
         let instance = new.bind(py).call1((self.class.bind(py),))?;
-        let fields = instance.getattr("__dict__")?.cast_into::<PyDict>()?;
+        let dict = instance
+            .getattr(intern!(py, "__dict__"))?
+            .cast_into::<PyDict>()?;
 
-        for field in &self.fields {
-            let value = match object.get(&field.stored) {
-                Some(value) => from_value(py, &field.kind, value)?,
-                None => py.None().into_bound(py),
-            };
-
-            fields.set_item(field.attr.bind(py), value)?;
+        for (field, value) in self.fields.iter().zip(values.iter_mut()) {
+            match value.take() {
+                Some(value) => dict.set_item(field.attr.bind(py), value)?,
+                None => dict.set_item(field.attr.bind(py), py.None())?,
+            }
         }
 
         Ok(instance)
     }
+}
+
+/// A value of a field of kind `kind` as Python holds it, read where the
+/// record holds it.
+fn read_value<'py>(
+    py: Python<'py>,
+    kind: &Kind,
+    value: ValueReader<'_>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if value.is_null() {
+        return Ok(py.None().into_bound(py));
+    }
+
+    Ok(match kind {
+        Kind::Bool => PyBool::new(py, value.bool().or_raise(py)?)
+            .to_owned()
+            .into_any(),
+        Kind::Int => value.int().or_raise(py)?.into_pyobject(py)?.into_any(),
+        Kind::Float => PyFloat::new(py, value.float().or_raise(py)?).into_any(),
+        Kind::String => PyString::new(py, value.str().or_raise(py)?).into_any(),
+        Kind::Bytes => PyBytes::new(py, value.bytes().or_raise(py)?).into_any(),
+        Kind::Key => match value.linked().or_raise(py)?.scalar().or_raise(py)? {
+            Scalar::Int(key) => key.into_pyobject(py)?.into_any(),
+            Scalar::Str(key) => PyString::new(py, key).into_any(),
+            Scalar::Bytes(key) => PyBytes::new(py, key).into_any(),
+            _ => return Err(invalid(py, "a link holds a key of another type")),
+        },
+        Kind::List(element) => {
+            let list = PyList::empty(py);
+
+            for item in value.elements().or_raise(py)? {
+                list.append(read_value(py, element, item)?)?;
+            }
+
+            list.into_any()
+        }
+        Kind::Object(layout) => {
+            let layout = layout.get();
+            let mut values = Vec::new();
+
+            layout.read_fields(py, value.fields().or_raise(py)?, &mut values)?;
+            layout.instance_of(py, &mut values)?
+        }
+    })
 }
 
 /// The Python type of `value`, for messages.
@@ -334,23 +468,6 @@ pub(crate) fn key(value: &Bound<'_, PyAny>) -> PyResult<Value> {
                 type_name(value)
             ),
         )),
-    }
-}
-
-/// A value read from the file, as Python holds a field of kind `kind`.
-fn from_value<'py>(py: Python<'py>, kind: &Kind, value: &Value) -> PyResult<Bound<'py, PyAny>> {
-    match (kind, value) {
-        (Kind::Object(layout), Value::Object(object)) => layout.get().to_instance(py, object),
-        (Kind::List(element), Value::List(items)) => {
-            let list = PyList::empty(py);
-
-            for item in items {
-                list.append(from_value(py, element, item)?)?;
-            }
-
-            Ok(list.into_any())
-        }
-        _ => to_python(py, value),
     }
 }
 

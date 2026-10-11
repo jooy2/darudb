@@ -9,7 +9,7 @@
 use std::sync::{Mutex, PoisonError};
 
 use darudb::{
-    CollectionReader, CollectionWriter, Object, PendingMigration, Query, ReadTransaction, Value,
+    CollectionReader, CollectionWriter, PendingMigration, Query, ReadTransaction, Value,
     WriteTransaction,
 };
 use pyo3::prelude::*;
@@ -19,6 +19,7 @@ use crate::database::NativeDatabase;
 use crate::query::{NativeQuery, parameters_of};
 use crate::values::{Layout, dict_of, key, to_python};
 use crate::{OrRaise, failure, invalid};
+use darudb::__binding::Shape;
 
 /// The engine's transaction: a read, a write, or the write transaction of a
 /// migration under way.
@@ -35,17 +36,42 @@ enum Reader<'a> {
 }
 
 impl Reader<'_> {
-    fn get(&self, key: Value) -> darudb::Result<Option<Object>> {
+    /// The shape of `layout` in the collection.
+    fn shape(&self, layout: &Layout) -> darudb::Result<Shape> {
         match self {
-            Reader::Read(collection) => collection.get(key),
-            Reader::Write(collection) => collection.get(key),
+            Reader::Read(collection) => {
+                collection.shape(layout.shape_key(), || layout.shape_fields())
+            }
+            Reader::Write(collection) => {
+                collection.shape(layout.shape_key(), || layout.shape_fields())
+            }
         }
     }
 
-    fn query(&self, query: &Query) -> darudb::Result<Vec<Object>> {
+    /// Copies the record of the object with primary key `key` into
+    /// `records`, and returns whether there was one.
+    fn record(&self, key: Value, records: &mut Records) -> darudb::Result<bool> {
+        let mut copy = |record: &[u8]| {
+            records.push(record);
+            Ok(())
+        };
+
         match self {
-            Reader::Read(collection) => collection.query(query),
-            Reader::Write(collection) => collection.query(query),
+            Reader::Read(collection) => collection.get_record_with(key, &mut copy),
+            Reader::Write(collection) => collection.get_record_with(key, &mut copy),
+        }
+    }
+
+    /// Copies the records of the objects `query` finds into `records`.
+    fn records(&self, query: &Query, records: &mut Records) -> darudb::Result<()> {
+        let copy = |record: &[u8]| {
+            records.push(record);
+            Ok(())
+        };
+
+        match self {
+            Reader::Read(collection) => collection.query_records_with(query, copy),
+            Reader::Write(collection) => collection.query_records_with(query, copy),
         }
     }
 
@@ -86,6 +112,34 @@ impl Txn {
                 message: "the transaction is not a migration's".into(),
             }),
         }
+    }
+}
+
+/// Records copied out of the engine one after another into one buffer, read
+/// into Python objects once the GIL is back: copying each record costs less
+/// than the engine's `Object` it was read into before, with an allocation
+/// for each of its strings.
+#[derive(Default)]
+struct Records {
+    bytes: Vec<u8>,
+    ends: Vec<usize>,
+}
+
+impl Records {
+    fn push(&mut self, record: &[u8]) {
+        self.bytes.extend_from_slice(record);
+        self.ends.push(self.bytes.len());
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        let mut start = 0;
+
+        self.ends.iter().map(move |&end| {
+            let record = &self.bytes[start..end];
+
+            start = end;
+            record
+        })
     }
 }
 
@@ -153,10 +207,17 @@ impl NativeTransaction {
         key_value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let key = key(key_value)?;
-        let found = self.with(py, |txn| txn.reader(collection)?.get(key))?;
+        let layout = layout.get();
+        let (shape, records) = self.with(py, |txn| {
+            let reader = txn.reader(collection)?;
+            let mut records = Records::default();
 
-        match found {
-            Some(object) => layout.get().to_instance(py, &object),
+            reader.record(key, &mut records)?;
+            Ok((reader.shape(layout)?, records))
+        })?;
+
+        match records.iter().next() {
+            Some(record) => layout.read_record(py, &shape, record, &mut Vec::new()),
             None => Ok(py.None().into_bound(py)),
         }
     }
@@ -171,11 +232,19 @@ impl NativeTransaction {
         parameters: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyList>> {
         let query = query.bound(py, &parameters_of(parameters)?, false)?;
-        let found = self.with(py, |txn| txn.reader(collection)?.query(&query))?;
-        let list = PyList::empty(py);
+        let layout = layout.get();
+        let (shape, records) = self.with(py, |txn| {
+            let reader = txn.reader(collection)?;
+            let mut records = Records::default();
 
-        for object in &found {
-            list.append(layout.get().to_instance(py, object)?)?;
+            reader.records(&query, &mut records)?;
+            Ok((reader.shape(layout)?, records))
+        })?;
+        let list = PyList::empty(py);
+        let mut values = Vec::new();
+
+        for record in records.iter() {
+            list.append(layout.read_record(py, &shape, record, &mut values)?)?;
         }
 
         Ok(list)
@@ -191,10 +260,17 @@ impl NativeTransaction {
         parameters: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = query.bound(py, &parameters_of(parameters)?, true)?;
-        let found = self.with(py, |txn| txn.reader(collection)?.query(&query))?;
+        let layout = layout.get();
+        let (shape, records) = self.with(py, |txn| {
+            let reader = txn.reader(collection)?;
+            let mut records = Records::default();
 
-        match found.first() {
-            Some(object) => layout.get().to_instance(py, object),
+            reader.records(&query, &mut records)?;
+            Ok((reader.shape(layout)?, records))
+        })?;
+
+        match records.iter().next() {
+            Some(record) => layout.read_record(py, &shape, record, &mut Vec::new()),
             None => Ok(py.None().into_bound(py)),
         }
     }
