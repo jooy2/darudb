@@ -249,8 +249,8 @@ impl ValueRef<'_> {
     #[inline(always)]
     fn equals(self, other: &Value) -> bool {
         match (self, other) {
-            (ValueRef::String(value), Value::String(other)) => value == other.as_bytes(),
-            (ValueRef::Bytes(value), Value::Bytes(other)) => value == other.as_slice(),
+            (ValueRef::String(value), Value::String(other)) => same_bytes(value, other.as_bytes()),
+            (ValueRef::Bytes(value), Value::Bytes(other)) => same_bytes(value, other),
             _ => self.compare(other).is_eq(),
         }
     }
@@ -276,6 +276,42 @@ impl ValueRef<'_> {
             (ValueRef::Float(value), _) => key::compare(&Value::Float(value), other),
         }
     }
+}
+
+/// Whether two byte strings are the same, compared a word at a time in
+/// place when they are no longer than sixteen bytes: a call to compare
+/// memory for each object an equality on a short string tests cost more
+/// than the comparison.
+#[inline(always)]
+fn same_bytes(a: &[u8], b: &[u8]) -> bool {
+    let len = a.len();
+
+    if len != b.len() {
+        return false;
+    }
+
+    // Two words that overlap where the length is not a multiple of one.
+    match len {
+        0..=3 => a == b,
+        4..=8 => word4(a, 0) == word4(b, 0) && word4(a, len - 4) == word4(b, len - 4),
+        9..=16 => word8(a, 0) == word8(b, 0) && word8(a, len - 8) == word8(b, len - 8),
+        _ => a == b,
+    }
+}
+
+/// The four bytes of `bytes` from `at`, as a number.
+#[inline(always)]
+fn word4(bytes: &[u8], at: usize) -> u32 {
+    u32::from_ne_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+/// The eight bytes of `bytes` from `at`, as a number.
+#[inline(always)]
+fn word8(bytes: &[u8], at: usize) -> u64 {
+    let mut word = [0u8; 8];
+
+    word.copy_from_slice(&bytes[at..at + 8]);
+    u64::from_ne_bytes(word)
 }
 
 /// A field's value as [`Fields::field`] gives it.
@@ -1327,4 +1363,33 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
     let found = found.saturating_sub(plan.offset);
 
     Ok(plan.limit.map_or(found, |limit| found.min(limit)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_bytes;
+
+    /// Byte strings of every length up to past two words are the same exactly
+    /// when they are equal, whichever byte differs.
+    #[test]
+    fn byte_strings_compare_by_words_as_they_do_by_bytes() {
+        for len in 0..40u8 {
+            let a: Vec<u8> = (0..len).map(|n| n ^ 0x5A).collect();
+            let len = usize::from(len);
+
+            assert!(same_bytes(&a, &a.clone()));
+
+            if len > 0 {
+                assert!(!same_bytes(&a, &a[..len - 1]), "{len} bytes and one fewer");
+            }
+
+            for at in 0..len {
+                let mut b = a.clone();
+
+                b[at] ^= 1;
+
+                assert!(!same_bytes(&a, &b), "{len} bytes, differing at {at}");
+            }
+        }
+    }
 }
