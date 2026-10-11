@@ -1,13 +1,13 @@
 //! Read transactions.
 
 use std::ops::RangeBounds;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use super::{
     Descriptors, Range, Seeker, catalog_names, engine_tree, root_child, tree_key, user_tree,
 };
-use crate::btree::{self, Load};
+use crate::btree::{self, Load, LoadedNode};
 use crate::error::{Error, Result};
 use crate::format::CommitRecord;
 use crate::format::object::schema::OpenSchema;
@@ -32,7 +32,31 @@ pub struct ReadTransaction {
     schema_checked: AtomicBool,
     /// The trees looked up in the catalog so far.
     descriptors: Descriptors,
+    /// The trees this transaction has looked keys up in, with their roots.
+    roots: Mutex<Vec<KeptRoot>>,
 }
+
+/// A tree a read transaction has looked a key up in: its name, its id, and
+/// its root node, `None` for an empty tree, or one that does not exist.
+///
+/// A lookup after the first finds the tree here, under a lock of the
+/// transaction's own, and starts from its root without asking the page
+/// cache: finding the tree under the lock that every read transaction of the
+/// commit shares, and then its root in the page cache under the cache's
+/// lock, took a tenth of a lookup by key on an x86 processor. The roots are
+/// held until the transaction ends, so a writer in this process that changes
+/// one of them in the meantime copies it rather than taking it from the
+/// cache.
+#[derive(Debug)]
+struct KeptRoot {
+    name: Box<[u8]>,
+    id: u64,
+    root: Option<Arc<LoadedNode>>,
+}
+
+/// How many trees a read transaction keeps the roots of; the few a query
+/// reads fit.
+const KEPT_ROOTS: usize = 16;
 
 impl ReadTransaction {
     pub(crate) fn begin(shared: &Arc<Shared>, schema: Option<Arc<OpenSchema>>) -> Result<Self> {
@@ -44,6 +68,7 @@ impl ReadTransaction {
             schema,
             schema_checked: AtomicBool::new(false),
             descriptors: Descriptors::shared(shared.learned(record.txn)),
+            roots: Mutex::new(Vec::new()),
         })
     }
 
@@ -126,19 +151,43 @@ impl ReadTransaction {
     ) -> Result<bool> {
         let loader = &self.shared.loader;
         let name = tree_key(tree, loader.page_size())?;
+
+        match self.root_of(name)? {
+            Some((id, root)) => btree::get_with_root(loader, id, root, key, visit),
+            None => Ok(false),
+        }
+    }
+
+    /// The id and the root node of tree `name`, kept from the last lookup in
+    /// it, or found and kept now; `None` for a tree that is empty or does not
+    /// exist.
+    fn root_of(&self, name: &[u8]) -> Result<Option<(u64, Arc<LoadedNode>)>> {
+        let lock = || self.roots.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if let Some(kept) = lock().iter().find(|kept| *kept.name == *name) {
+            return Ok(kept.root.clone().map(|root| (kept.id, root)));
+        }
+
+        let loader = &self.shared.loader;
         let catalog = root_child(self.record.catalog);
-
-        let Some(descriptor) = self.descriptors.find(loader, catalog.as_ref(), name)? else {
-            return Ok(false);
+        let (id, root) = match self.descriptors.find(loader, catalog.as_ref(), name)? {
+            Some(descriptor) if !descriptor.root.is_null() => (
+                descriptor.id,
+                Some(loader.load(&descriptor.root, descriptor.id, None)?),
+            ),
+            _ => (0, None),
         };
+        let mut roots = lock();
 
-        btree::get_with(
-            loader,
-            descriptor.id,
-            root_child(descriptor.root).as_ref(),
-            key,
-            visit,
-        )
+        if roots.len() < KEPT_ROOTS && roots.iter().all(|kept| *kept.name != *name) {
+            roots.push(KeptRoot {
+                name: name.into(),
+                id,
+                root: root.clone(),
+            });
+        }
+
+        Ok(root.map(|root| (id, root)))
     }
 
     /// Lookups in tree `tree` of one key after another, each from where the
@@ -247,5 +296,85 @@ impl ReadTransaction {
 impl Drop for ReadTransaction {
     fn drop(&mut self) {
         self.shared.end_snapshot(self.record.txn);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KEPT_ROOTS;
+    use crate::OpenOptions;
+
+    /// Lookups by key in more trees than a read transaction keeps the roots
+    /// of find what its commit holds, the first time and again, while a
+    /// writer changes every tree and deletes one; a tree that is empty or
+    /// not there holds nothing.
+    #[test]
+    fn a_reader_looks_up_its_own_commit_from_the_roots_it_keeps() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OpenOptions::new()
+            .open(dir.path().join("roots.darudb"))
+            .unwrap();
+        let trees: Vec<String> = (0..KEPT_ROOTS + 4).map(|n| format!("tree {n}")).collect();
+        let mut txn = db.begin_write().unwrap();
+
+        for tree in &trees {
+            for key in 0..300u32 {
+                txn.insert(tree, &key.to_be_bytes(), tree.as_bytes())
+                    .unwrap();
+            }
+        }
+
+        txn.insert("emptied", b"key", b"value").unwrap();
+        txn.remove("emptied", b"key").unwrap();
+        txn.commit().unwrap();
+
+        let read = db.begin_read().unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        for tree in &trees {
+            for key in 0..300u32 {
+                txn.insert(tree, &key.to_be_bytes(), b"changed").unwrap();
+            }
+        }
+
+        txn.delete_tree(&trees[0]).unwrap();
+        txn.commit().unwrap();
+
+        let found = |tree: &str, key: &[u8]| {
+            let mut value = None;
+
+            let there = read
+                .get_in_with(tree, key, &mut |found| {
+                    value = Some(found.to_vec());
+                    Ok(())
+                })
+                .unwrap();
+
+            assert_eq!(there, value.is_some());
+            value
+        };
+
+        for _ in 0..2 {
+            for tree in &trees {
+                for key in [0u32, 1, 150, 299] {
+                    assert_eq!(found(tree, &key.to_be_bytes()).unwrap(), tree.as_bytes());
+                }
+
+                assert_eq!(found(tree, &300u32.to_be_bytes()), None);
+            }
+
+            assert_eq!(found("emptied", b"key"), None);
+            assert_eq!(found("missing", b"key"), None);
+        }
+
+        drop(read);
+
+        let read = db.begin_read().unwrap();
+
+        assert_eq!(
+            read.get(&trees[1], &0u32.to_be_bytes()).unwrap().unwrap(),
+            b"changed"
+        );
+        assert_eq!(read.get(&trees[0], &0u32.to_be_bytes()).unwrap(), None);
     }
 }

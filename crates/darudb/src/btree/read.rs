@@ -2,9 +2,10 @@
 
 use std::cmp::Ordering;
 use std::ops::Bound;
+use std::sync::Arc;
 
 use super::Load;
-use super::node::{Child, Node, NodeRef, UNMARKED, compare};
+use super::node::{Child, LoadedNode, Node, NodeRef, UNMARKED, compare};
 use crate::error::{Error, Result};
 use crate::format::{Cells, Pointer, StoredRef, StoredValue, leaf_inline};
 
@@ -83,8 +84,18 @@ fn find_below<'a, L: Load>(
     level: Option<u8>,
     key: &[u8],
 ) -> Result<Option<(NodeRef<'a>, usize)>> {
-    let mut node = resolve(load, child, tree, level)?;
+    let node = resolve(load, child, tree, level)?;
 
+    find_from(load, tree, node, key)
+}
+
+/// [`find`] from the node `node` down.
+fn find_from<'a, L: Load>(
+    load: &L,
+    tree: u64,
+    mut node: NodeRef<'a>,
+    key: &[u8],
+) -> Result<Option<(NodeRef<'a>, usize)>> {
     loop {
         if node.is_leaf() {
             let index = node.rank(key, false);
@@ -140,6 +151,26 @@ pub(crate) fn get_with<L: Load>(
     visit: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<bool> {
     let Some((node, index)) = find(load, tree, root, key)? else {
+        return Ok(false);
+    };
+
+    match node.value(index)? {
+        StoredRef::Inline(value) => visit(value)?,
+        StoredRef::Overflow(reference) => visit(&load.read_overflow(&reference, tree)?)?,
+    }
+
+    Ok(true)
+}
+
+/// [`get_with`] in the tree whose root is the committed node `root`.
+pub(crate) fn get_with_root<L: Load>(
+    load: &L,
+    tree: u64,
+    root: Arc<LoadedNode>,
+    key: &[u8],
+    visit: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<bool> {
+    let Some((node, index)) = find_from(load, tree, NodeRef::Loaded(root), key)? else {
         return Ok(false);
     };
 

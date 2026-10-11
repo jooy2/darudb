@@ -28,7 +28,7 @@ use crate::format::{Cells, Check, OverflowRef, Pointer};
 pub(crate) use finish::{FinishedPage, finish};
 pub(crate) use load::Loader;
 pub(crate) use node::{Child, LoadedNode, Node, NodeRef, UNMARKED};
-pub(crate) use read::{Range, Seeker, get, get_with, resolve};
+pub(crate) use read::{Range, Seeker, get, get_with, get_with_root, resolve};
 pub(crate) use repack::{occupancy, repack};
 pub(crate) use write::{
     Change, Inserted, Removed, delete_tree, insert, insert_with, relocate, remove, remove_present,
