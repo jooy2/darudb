@@ -258,6 +258,11 @@ impl ValueRef<'_> {
     fn compare(self, other: &Value) -> Ordering {
         match (self, other) {
             (ValueRef::Value(value), _) => key::compare(value, other),
+            // A number compared with a number of its own type, as a sort or
+            // a range on a numeric field compares every object it reads,
+            // without a value made for it to go through `key::compare`.
+            (ValueRef::Int(value), Value::Int(other)) => value.cmp(other),
+            (ValueRef::Float(value), Value::Float(other)) => key::compare_floats(value, *other),
             (ValueRef::String(value), Value::String(other)) => value.cmp(other.as_bytes()),
             (ValueRef::Bytes(value), Value::Bytes(other)) => value.cmp(other.as_slice()),
             // Values of two types are ordered by their types alone, as an

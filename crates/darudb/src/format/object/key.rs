@@ -187,11 +187,17 @@ pub(crate) fn compare(a: &Value, b: &Value) -> Ordering {
 
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => a.cmp(b),
-        (Value::Float(a), Value::Float(b)) => ordered_float(*a).cmp(&ordered_float(*b)),
+        (Value::Float(a), Value::Float(b)) => compare_floats(*a, *b),
         (Value::String(a), Value::String(b)) => a.as_bytes().cmp(b.as_bytes()),
         (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
         _ => rank(a).cmp(&rank(b)),
     }
+}
+
+/// The order of two floats, as [`compare`] gives it to two float values.
+#[inline]
+pub(crate) fn compare_floats(a: f64, b: f64) -> Ordering {
+    ordered_float(a).cmp(&ordered_float(b))
 }
 
 /// The bytes that the encoding of every string starting with `prefix` starts
