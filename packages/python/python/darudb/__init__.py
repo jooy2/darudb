@@ -95,7 +95,7 @@ __all__ = [
     "where",
 ]
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 """The version of this package."""
 
 ENGINE_VERSION: str = _native.engine_version()
