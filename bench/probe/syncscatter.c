@@ -58,6 +58,31 @@ int main(int argc, char **argv) {
       fdatasync(fd);
     }
     double run = (now() - start) / ROUNDS;
+
+    // Scattered again, each page's writeback started as soon as it is
+    // written, so that the barrier waits for writes already under way.
+    start = now();
+    for (int r = 0; r < ROUNDS; r++) {
+      for (int i = 0; i < count; i++) {
+        off_t at = (off_t)(rand() % FILE_PAGES) * PAGE;
+        pwrite(fd, pages[i], PAGE, at);
+        sync_file_range(fd, at, PAGE, SYNC_FILE_RANGE_WRITE);
+      }
+      pwrite(fd, pages[0], 64, 0);
+      fdatasync(fd);
+    }
+    double started = (now() - start) / ROUNDS;
+
+    // Scattered, with one call that starts the writeback of the whole file
+    // before the barrier.
+    start = now();
+    for (int r = 0; r < ROUNDS; r++) {
+      for (int i = 0; i < count; i++) pwrite(fd, pages[i], PAGE, (off_t)(rand() % FILE_PAGES) * PAGE);
+      sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE);
+      pwrite(fd, pages[0], 64, 0);
+      fdatasync(fd);
+    }
+    double started_once = (now() - start) / ROUNDS;
     close(fd);
 
     int lf = open(log, O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -73,8 +98,9 @@ int main(int argc, char **argv) {
     double appended = (now() - start) / ROUNDS;
     close(lf);
 
-    printf("%2d pages: scattered %.0f us, one run %.0f us, appended to a log %.0f us\n", count,
-           scattered / 1000, run / 1000, appended / 1000);
+    printf("%2d pages: scattered %.0f us, one run %.0f us, scattered with writeback started per page %.0f us, "
+           "scattered with one call to start it %.0f us, appended to a log %.0f us\n",
+           count, scattered / 1000, run / 1000, started / 1000, started_once / 1000, appended / 1000);
   }
   return 0;
 }
