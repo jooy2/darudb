@@ -68,7 +68,7 @@ npm install darudb
 
 ```yaml
 dependencies:
-  darudb: ^1.1.0
+  darudb: ^1.2.0
 
 dev_dependencies:
   build_runner: ^2.10.0

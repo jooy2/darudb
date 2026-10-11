@@ -360,7 +360,7 @@ sqlite.close();
 
 ```yaml
 dependencies:
-  darudb: ^1.1.0
+  darudb: ^1.2.0
   sqlite3: ^3.7.0
 ```
 
