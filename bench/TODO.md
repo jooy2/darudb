@@ -133,10 +133,7 @@ Done (2026-10-11):
 
 - **Reads through a shape** (`darudb::__binding`, `Layout::read_record` in `packages/python/src/values.rs`): the binding copies the records out of the engine and reads each straight into Python values, rather than into an engine `Object` it then built the instance from, which was more than half of reading an object through an index. On the M1 Max, `age-equal` 21% and `age-range` 28% faster through the package, `get-key` 15% and `get-email` 13%.
 - **The write block** no longer imports the asynchronous module or takes its lock while no asynchronous write runs: a one-object commit 4% faster on the M1 Max.
-
-Directions not tried yet:
-
-- **Writes as records.** An insert still reads the object's attributes by name into an engine `Object`, which the engine checks against the schema by name. Encoding the record through `ValueWriter` with the shape's layout, as a derived type's `write` does, would leave the engine only the checks of a typed write.
+- **Writes as records** (`CollectionWriter::write_shaped`, `Layout::held` in `packages/python/src/values.rs`): an object of a class whose fields all hold scalars has its attributes read into scalars with the GIL, and the engine encodes the record through the class's shape without it, as a derived type's `write` does, rather than an engine `Object` made by name. On the M1 Max, `insert-bulk` 13 to 15% faster through the package; `insert-deferred` within the 6% that two runs of one build differ by, since the interpreter and the commit are most of it. A class with a list, an embedded object or a link still goes through an `Object`, since the engine reads such a record into one to check it.
 
 ### 7. The benchmark itself
 
@@ -144,4 +141,4 @@ Directions not tried yet:
 - **Rows that spread.** A Dart sync commit spread 599% between passes in one run. More passes, or fewer commits per pass with more passes, would steady the commit rows.
 - **Realm in Dart.** Realm is measured through Node.js only. Its Dart package downloads its library with `dart run realm install` and is built for Flutter; adding it would need that step in the workflow.
 - **`update` in Rust and Dart.** The Node.js and Python passes set the field with `update`; Rust and Dart write the typed object back with `put`, which costs little there. Measuring `update` there too would show whether the engine's update path is as fast.
-- **Scans run ten times in a pass.** `city-scan` and `top-score` scan the collection ten times, and every run after the first reads the field from the marks the first left. A row of one scan on a new handle would show what a query that runs once takes.
+- **Scans run ten times in a pass.** `city-scan` and `top-score` scan the collection ten times, and every run after the first reads the field from the marks the first left. The rows `city-scan-first` and `top-score-first` (`FIRST_RUN` in each harness) time the first run on its own, which shows what a query that runs once on a new handle takes.
