@@ -27,10 +27,14 @@ One collection of 100,000 objects, each with a name, an email under a unique ind
 | Query an indexed value, 1,250 objects | The objects of one age |
 | Query an indexed range, sorted, first 20 | The first 20 objects of five ages, sorted by age descending, then by key |
 | Count through an index | The objects with an age of 40 or more |
-| Query without an index, 1,000 objects | The objects of one city |
-| Top 10 by a field without an index | The 10 objects with the highest score |
+| Query without an index, 1,000 objects | The objects of one city, ten times over |
+| Query without an index, 1,000 objects, first run | The first of those ten |
+| Top 10 by a field without an index | The 10 objects with the highest score, ten times over |
+| Top 10 by a field without an index, first run | The first of those ten |
 | Read and update 10,000 objects | Each read, given a new age and written back, in one transaction with its commit |
 | Delete 10,000 objects | In one transaction with its commit |
+
+The two queries without an index each have a row of their own for their first run, since DaruDB answers such a query faster once it has run: it remembers where the field it tests or sorts by lies in each record it read, and reads it there the next time. A query that an application runs once takes the time of the first run.
 
 Every database is used the way an application in that language would use it. DaruDB runs through its public API with a schema, SQLite through SQL with prepared statements, and the key-value stores keep a record and the indexes an application would write for them. Every read is made into an object of the language with all its fields, and a query that runs many times is prepared once. An update sets the one field it changes where the language's DaruDB package can, as SQL sets one column: through Node.js and Python with `update`, where writing the whole object back would build it again in the language first, and through Rust and Dart by writing the typed object back.
 

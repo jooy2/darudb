@@ -91,8 +91,22 @@ export const ROWS: { id: string; label: Localized }[] = [
     label: { en: 'Query without an index, 1,000 objects', ko: '인덱스 없는 쿼리, 객체 1,000개' }
   },
   {
+    id: 'city-scan-first',
+    label: {
+      en: 'Query without an index, 1,000 objects, first run',
+      ko: '인덱스 없는 쿼리, 객체 1,000개, 처음 실행'
+    }
+  },
+  {
     id: 'top-score',
     label: { en: 'Top 10 by a field without an index', ko: '인덱스 없는 필드로 상위 10개' }
+  },
+  {
+    id: 'top-score-first',
+    label: {
+      en: 'Top 10 by a field without an index, first run',
+      ko: '인덱스 없는 필드로 상위 10개, 처음 실행'
+    }
   },
   {
     id: 'update',
