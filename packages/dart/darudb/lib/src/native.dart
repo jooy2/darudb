@@ -90,6 +90,9 @@ external int darudb_schema_record(
   Pointer<Buf> out,
 );
 
+@Native<Int32 Function(Pointer<NativeDatabase>)>()
+external int darudb_without_schema(Pointer<NativeDatabase> database);
+
 @Native<
   Int32 Function(Pointer<NativeDatabase>, Pointer<Pointer<NativeTransaction>>)
 >()

@@ -394,8 +394,9 @@ pub unsafe extern "C" fn darudb_database_info(database: *const Database, info: *
     })
 }
 
-/// The stored schema the database was opened with, as its record. Returns 1
-/// with it in `out`, or 0 for a database opened without a schema.
+/// The schema the database works with, as its record: the declared one, or
+/// the file's own for a database opened without one. Returns 1 with it in
+/// `out`, or 0 for a database that has neither.
 ///
 /// # Safety
 ///
@@ -420,6 +421,34 @@ pub unsafe extern "C" fn darudb_schema_record(database: *const Database, out: *m
                     })
                 })
             }
+        })
+    })
+}
+
+/// Fails with the engine's error for reaching a collection of a database
+/// without a schema: the file holds none, the one it holds does not read, or
+/// it stored one after the database opened. Returns 0 for a database with a
+/// schema, which reaches its collections.
+///
+/// # Safety
+///
+/// `database` came from this library and has not been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_without_schema(database: *const Database) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `database`.
+        let database = unsafe { at(database, closed) }?;
+
+        database.with(|database| {
+            if database.schema_record().is_some() {
+                return Ok(0);
+            }
+
+            // Any name: a transaction without a schema fails before it looks
+            // the collection up.
+            database.begin_read()?.collection("")?;
+
+            Ok(0)
         })
     })
 }

@@ -75,6 +75,7 @@ export 'src/query.dart'
         StringField,
         StringListField,
         ValueField;
+export 'src/stored.dart' show MapCollection, MapQuery;
 export 'src/schema.dart'
     show
         BoolKind,

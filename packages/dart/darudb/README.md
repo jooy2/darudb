@@ -84,6 +84,18 @@ await db.closeAsync();
 
 The calls of one transaction run in the order they were made, awaited or not. An isolate's asynchronous writes on one file take turns, and a synchronous `write`, `sync` or `close` on the file while one runs is refused with `INVALID_ARGUMENT`, since it would hold the isolate the running write needs.
 
+A program that opens a file it did not write needs no generated classes. Opened without a schema, a database works with the one the file holds: `storedSchema` describes its collections through their `FieldSpec`s, and `storedCollection` gives each as a collection whose objects are maps by the names the file stores, queried with `MapQuery`, with the file's checks and indexes kept as ever.
+
+```dart
+final db = Database.open('app.darudb');
+
+for (final collection in db.storedSchema?.collections ?? const []) {
+  final users = db.storedCollection(collection.name);
+
+  print('${users.name}: ${db.read((txn) => txn.collection(users).count())}');
+}
+```
+
 ## The native library
 
 The package's build hook gives the application the engine as a native library for its target, in one of two ways:

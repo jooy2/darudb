@@ -2,6 +2,18 @@
 
 > This package's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Added
+
+- A database opened without a schema works with the one the file holds, as it is. `Database.storedCollection` gives each of its collections as a `MapCollection`, whose objects are maps by the names the file stores, read and written with the stored schema's checks and indexes kept as ever, and queried with `MapQuery`, which names a field by its stored name and says what it holds. A float field takes an `int`, a link a primary key or a `Link`, and a name the schema lacks is refused rather than dropped. A generated schema whose fields are the stored ones reaches its collection too. Nothing is stored, checked or migrated, so a program can open a file whose schema it does not know. A file that holds no schema has no collections then, as before.
+- `Database.storedSchema`, the schema a database works with: the declared one, or the file's own as `MapCollection`s, whose `FieldSpec`s describe each field's name, kind, whether it is optional, its default and its index, and whether it is the primary key. It is still there after the database closes.
+
+### Changed
+
+- `schemaVersion` gives the version of the file's own schema for a database opened without one, where it gave `null`.
+- Reaching a collection of a database without a schema fails with the engine's error, as in every other language: `INVALID_ARGUMENT` when the file holds no schema, or stored one after the database opened, and `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION` when the one it holds does not read.
+
 ## v1.2.0 (2026-10-11)
 
 ### Changed

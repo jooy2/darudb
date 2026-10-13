@@ -20,6 +20,7 @@ import 'errors.dart';
 import 'native.dart';
 import 'query.dart';
 import 'schema.dart';
+import 'stored.dart';
 
 part 'async.dart';
 part 'tools.dart';
@@ -562,18 +563,20 @@ final class Database implements Finalizable {
 
     if (record != null) {
       final stored = StoredSchema.decode(record);
+      // Without a declared schema, the file's own, whose objects are maps.
+      final works = schema ?? mapSchemaOf(record);
 
       _schemaVersion = stored.version;
+      _stored = works;
+      _layouts = stored;
+      _ownSchema = schema == null;
 
-      for (final collection in schema?.collections ?? const <Never>[]) {
-        final name = _NameHandle(collection.name).pointer;
+      for (final collection in works.collections) {
+        _register(collection, stored);
 
-        _nameFinalizer.attach(this, name.cast(), detach: this);
-        _collections[collection] = _Collection(
-          collection,
-          stored.layoutOf(collection),
-          name,
-        );
+        if (schema == null) {
+          _byName[collection.name] = collection as MapCollection;
+        }
       }
     }
   }
@@ -763,6 +766,16 @@ final class Database implements Finalizable {
 
   Pointer<NativeDatabase> _handle;
   int? _schemaVersion;
+  Schema? _stored;
+
+  /// Whether the database works with the file's own schema, opened without
+  /// one of its own.
+  bool _ownSchema = false;
+
+  /// The stored schema as the layouts read it, kept for a type a database
+  /// opened without a schema reaches a collection through later.
+  StoredSchema? _layouts;
+  final Map<String, MapCollection> _byName = {};
   final Map<Object, _Collection> _collections = Map.identity();
   final Map<String, Prepared<Object?>> _kept = {};
 
@@ -793,8 +806,49 @@ final class Database implements Finalizable {
   /// Whether the file is encrypted.
   bool get isEncrypted => _info().encrypted != 0;
 
-  /// The schema version the file holds, or `null` without a schema.
+  /// The version of the schema the database works with: the declared one,
+  /// or the file's own for a database opened without one. `null` when it has
+  /// neither.
   int? get schemaVersion => _schemaVersion;
+
+  /// The schema the database works with: the one it was opened with, or,
+  /// for a database opened without one, the one the file held when it
+  /// opened, whose collections are [MapCollection]s with maps for objects.
+  /// A program that opens a file it did not write learns its collections
+  /// here, through their [FieldSpec]s, and reaches each with
+  /// [storedCollection]. `null` when the file holds no schema, or one that
+  /// does not read, which reaching a collection reports. Still readable
+  /// after [close].
+  Schema? get storedSchema => _stored;
+
+  /// The collection [name] of the file's own schema, for a database opened
+  /// without a schema: its objects are maps by the names the file stores,
+  /// and [MapQuery] queries them.
+  ///
+  /// It fails with the engine's error when the database has no schema: the
+  /// file holds none, the one it holds does not read, or it stored one after
+  /// the database opened. A database opened with a schema reaches its
+  /// collections through their schema constants instead.
+  MapCollection storedCollection(String name) {
+    final found = _byName[name];
+
+    if (found != null) {
+      return found;
+    }
+
+    final handle = _live();
+
+    if (_stored == null) {
+      _check(darudb_without_schema(handle));
+    } else if (!_ownSchema) {
+      throw invalidArgument(
+        'the database was opened with a schema, whose collections are '
+        'reached through their schema constants',
+      );
+    }
+
+    throw invalidArgument('the schema has no collection called `$name`');
+  }
 
   /// Runs [fn] in a read transaction and returns what it returns. The
   /// transaction sees one commit for as long as it lives.
@@ -1275,15 +1329,40 @@ final class Database implements Finalizable {
   _Collection _collection(Object schema) {
     final found = _collections[schema];
 
-    if (found == null) {
-      _live();
-
-      throw invalidArgument(
-        'the database was opened without this collection in its schema',
-      );
+    if (found != null) {
+      return found;
     }
 
-    return found;
+    final handle = _live();
+    final layouts = _layouts;
+
+    if (layouts == null) {
+      // The engine's error, the same in every language.
+      _check(darudb_without_schema(handle));
+    } else if (_ownSchema &&
+        schema is CollectionSchema<Object?, QueryBuilder<Object?>, Object>) {
+      // A type reaches a collection of the file's own schema as it would a
+      // declared one's, when its fields are the stored ones.
+      return _register(schema, layouts);
+    }
+
+    throw invalidArgument(
+      'the database was opened without this collection in its schema',
+    );
+  }
+
+  /// Makes [collection] a collection of the database, laid out as [stored]
+  /// holds it.
+  _Collection _register(
+    CollectionSchema<Object?, QueryBuilder<Object?>, Object> collection,
+    StoredSchema stored,
+  ) {
+    final layout = stored.layoutOf(collection);
+    final name = _NameHandle(collection.name).pointer;
+
+    _nameFinalizer.attach(this, name.cast(), detach: this);
+
+    return _collections[collection] = _Collection(collection, layout, name);
   }
 }
 
