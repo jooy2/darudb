@@ -48,13 +48,42 @@ impl Type {
     }
 }
 
-/// A field of a collection or of an embedded object.
+/// A field of a collection or of an embedded object, as a schema declares it.
+///
+/// The builders of [`Collection`] and [`Embedded`] make fields; reading one
+/// back is for a program that looks at a schema it did not declare, such as
+/// the one [`Database::stored_schema`](crate::Database::stored_schema) gives
+/// for a file opened without a schema.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Field {
+pub struct Field {
     pub(crate) name: String,
     pub(crate) kind: Type,
     pub(crate) optional: bool,
     pub(crate) default: Option<Value>,
+}
+
+impl Field {
+    /// The field's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The field's type.
+    pub fn kind(&self) -> &Type {
+        &self.kind
+    }
+
+    /// Whether the field may be null, which it is when an object leaves it
+    /// out.
+    pub fn is_optional(&self) -> bool {
+        self.optional
+    }
+
+    /// The value an object that leaves the field out holds, for a required
+    /// field that has one.
+    pub fn default(&self) -> Option<&Value> {
+        self.default.as_ref()
+    }
 }
 
 /// The fields of an embedded object.
@@ -64,6 +93,12 @@ pub struct Embedded {
 }
 
 impl Embedded {
+    /// The fields, in the order they were declared, or in the file's order
+    /// for a schema read from a file.
+    pub fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+
     /// The fields `E` declares, as `#[derive(Embedded)]` declares them.
     pub fn of<E: EmbeddedType>() -> Self {
         E::embedded()
@@ -195,6 +230,36 @@ impl Collection {
         self
     }
 
+    /// The collection's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The fields, in the order they were declared, or in the file's order
+    /// for a schema read from a file. The primary key's field is one of them,
+    /// unless the key is the auto-increment, whose `id` is not declared.
+    pub fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+
+    /// The name of the primary key's field: `id` for the auto-increment.
+    pub fn key(&self) -> &str {
+        self.key_name()
+    }
+
+    /// Whether the primary key is the auto-increment: an `int` field called
+    /// `id`, which the engine assigns in increasing order.
+    pub fn is_auto_increment(&self) -> bool {
+        self.key.is_none()
+    }
+
+    /// The indexed fields, each with whether its index is unique.
+    pub fn indexes(&self) -> impl ExactSizeIterator<Item = (&str, bool)> + '_ {
+        self.indexes
+            .iter()
+            .map(|(field, unique)| (field.as_str(), *unique))
+    }
+
     /// The fields, the auto-increment key included.
     pub(crate) fn all_fields(&self) -> Vec<Field> {
         let mut fields = Vec::with_capacity(self.fields.len() + 1);
@@ -260,6 +325,17 @@ impl Schema {
         self
     }
 
+    /// The schema's version.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The collections, in the order they were declared, or in the file's
+    /// order for a schema read from a file.
+    pub fn collections(&self) -> &[Collection] {
+        &self.collections
+    }
+
     /// Reads a schema that another language declared, encoded the way the
     /// file stores a schema (`design/objects.md`, "The stored schema"), with
     /// ids of the encoder's choosing: a language binding builds its schema
@@ -276,6 +352,15 @@ impl Schema {
                 reason.unwrap_or("it is in an object format this build does not read")
             ),
         })?;
+
+        Self::from_stored(&stored)
+    }
+
+    /// The schema `stored` is, as an application would declare it: the
+    /// names in place of the ids. It fails with [`Error::InvalidArgument`]
+    /// for what a declaration cannot say, such as an auto-increment key that
+    /// is not an `int` called `id`, which the engine never stores.
+    pub(crate) fn from_stored(stored: &StoredSchema) -> Result<Self> {
         let mut collections = Vec::new();
 
         for definition in &stored.collections {
@@ -297,7 +382,7 @@ impl Schema {
                 .list
                 .iter()
                 .filter(|field| !(definition.auto && field.id == definition.key))
-                .map(|field| declared_field(field, &stored))
+                .map(|field| declared_field(field, stored))
                 .collect::<Result<_>>()?;
             let indexes = definition
                 .indexes

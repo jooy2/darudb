@@ -44,6 +44,11 @@ fn open(dir: &TestDir, schema: Schema, migrations: &[Migration]) -> darudb::Resu
     options.open(dir.path("app.darudb"))
 }
 
+/// Opens the file at `path` with `schema`.
+fn open_at(path: &std::path::Path, schema: Schema) -> darudb::Result<Database> {
+    OpenOptions::new().schema(schema).open(path)
+}
+
 fn code<T>(result: darudb::Result<T>) -> &'static str {
     result.err().map_or("OK", |error| error.code())
 }
@@ -696,7 +701,9 @@ fn a_database_without_a_schema_keeps_its_trees_to_itself() {
     let db = Database::open(dir.path("app.darudb")).unwrap();
     let mut txn = db.begin_write().unwrap();
 
-    assert_eq!(code(txn.collection("users")), "INVALID_ARGUMENT");
+    // The file's own schema gives the handle its collections, and the trees
+    // that hold them stay the engine's.
+    assert_eq!(txn.collection("users").unwrap().len().unwrap(), 2);
     assert_eq!(code(txn.get("\0meta", b"schema")), "INVALID_ARGUMENT");
     assert_eq!(code(txn.insert("\0rec/1", b"k", b"v")), "INVALID_ARGUMENT");
 
@@ -705,6 +712,194 @@ fn a_database_without_a_schema_keeps_its_trees_to_itself() {
 
     assert_eq!(db.begin_read().unwrap().tree_names().unwrap(), ["cache"]);
     assert_eq!(objects(&open(&dir, v1(), &[]).unwrap(), "users").len(), 2);
+}
+
+#[test]
+fn a_file_opened_without_a_schema_is_read_and_written_with_its_own() {
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let db = Database::open(dir.path("app.darudb")).unwrap();
+    let schema = db.stored_schema().unwrap();
+
+    assert_eq!(schema.version(), 1);
+    assert_eq!(
+        schema
+            .collections()
+            .iter()
+            .map(|collection| collection.name())
+            .collect::<Vec<_>>(),
+        ["users", "posts"]
+    );
+
+    let users = &schema.collections()[0];
+    let posts = &schema.collections()[1];
+
+    assert_eq!(users.key(), "id");
+    assert!(users.is_auto_increment());
+    assert_eq!(
+        users
+            .fields()
+            .iter()
+            .map(|field| (field.name(), field.kind().clone(), field.is_optional()))
+            .collect::<Vec<_>>(),
+        [
+            ("name", Type::String, false),
+            ("email", Type::String, true),
+            ("age", Type::Int, false),
+        ]
+    );
+    assert_eq!(users.fields()[2].default(), Some(&Value::Int(0)));
+    assert_eq!(users.fields()[0].default(), None);
+    assert_eq!(
+        users.indexes().collect::<Vec<_>>(),
+        [("email", true), ("age", false)]
+    );
+    assert_eq!(posts.key(), "slug");
+    assert!(!posts.is_auto_increment());
+    assert_eq!(posts.fields()[1].kind(), &Type::link("users"));
+    assert_eq!(posts.fields()[2].kind(), &Type::list(Type::String));
+    assert_eq!(
+        posts.indexes().collect::<Vec<_>>(),
+        [("author", false), ("tags", false)]
+    );
+    // The record is the one a handle that declares the schema gets.
+    assert_eq!(
+        db.schema_record(),
+        open(&dir, v1(), &[]).unwrap().schema_record()
+    );
+
+    // Objects read as they were written, and the stored schema's checks and
+    // indexes hold for what is written now.
+    assert_eq!(
+        objects(&db, "users")
+            .iter()
+            .map(|object| object.get("name").cloned())
+            .collect::<Vec<_>>(),
+        [Some(Value::from("Alice")), Some(Value::from("Bob"))]
+    );
+
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+
+    assert_eq!(
+        users.insert(user("Carol").with("age", 41)).unwrap(),
+        3.into()
+    );
+    assert_eq!(
+        code(users.insert(user("Mallory").with("email", "alice@example.com"))),
+        "DUPLICATE_KEY"
+    );
+    assert_eq!(code(users.insert(Object::new())), "INVALID_ARGUMENT");
+    assert!(users.update(2, Object::new().with("age", 7)).unwrap());
+    assert_eq!(
+        users
+            .count(&darudb::Query::new().filter(darudb::Filter::ge("age", 7)))
+            .unwrap(),
+        3
+    );
+    txn.commit().unwrap();
+
+    // A handle that declares the schema reads what was written without it.
+    let declared = open(&dir, v1(), &[]).unwrap();
+    let ages = objects(&declared, "users")
+        .iter()
+        .map(|object| object.get("age").cloned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ages,
+        [
+            Some(Value::Int(30)),
+            Some(Value::Int(7)),
+            Some(Value::Int(41))
+        ]
+    );
+}
+
+#[test]
+fn a_file_that_holds_no_schema_gives_a_handle_without_one_no_collections() {
+    let dir = TestDir::new();
+    let db = Database::open(dir.path("plain.darudb")).unwrap();
+
+    assert!(db.stored_schema().is_none());
+    assert!(db.schema_record().is_none());
+
+    let error = db.begin_read().unwrap().collection("users").err().unwrap();
+
+    assert_eq!(error.code(), "INVALID_ARGUMENT");
+    assert!(error.to_string().contains("holds none"), "{error}");
+
+    // A schema stored after the handle opened the file is not its own: it
+    // keeps the schema it opened with, which was none.
+    open_at(&dir.path("plain.darudb"), v1()).unwrap();
+
+    let error = db.begin_read().unwrap().collection("users").err().unwrap();
+
+    assert_eq!(error.code(), "INVALID_ARGUMENT");
+    assert!(error.to_string().contains("open it again"), "{error}");
+    assert_eq!(
+        Database::open(dir.path("plain.darudb"))
+            .unwrap()
+            .stored_schema(),
+        Some(v1())
+    );
+}
+
+#[test]
+fn a_handle_without_a_schema_notices_that_the_file_was_migrated_under_it() {
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let own = Database::open(dir.path("app.darudb")).unwrap();
+    let v2 = Schema::new(2)
+        .collection(users_v1().optional("nickname", Type::String))
+        .collection(posts_v1());
+
+    open(&dir, v2.clone(), &[]).unwrap();
+
+    assert_eq!(
+        code(own.begin_read().unwrap().collection("users")),
+        "SCHEMA_MISMATCH"
+    );
+    // Its description stays the schema it opened with.
+    assert_eq!(own.stored_schema().unwrap().version(), 1);
+    assert_eq!(
+        Database::open(dir.path("app.darudb"))
+            .unwrap()
+            .stored_schema(),
+        Some(v2)
+    );
+}
+
+#[test]
+fn an_encrypted_file_opened_without_a_schema_needs_its_key_as_ever() {
+    let dir = TestDir::new();
+    let path = dir.path("secret.darudb");
+    let mut options = OpenOptions::new();
+
+    options.schema(v1()).password("correct horse");
+    options
+        .open(&path)
+        .unwrap()
+        .begin_write()
+        .and_then(|mut txn| {
+            txn.collection("users")?.insert(user("Alice"))?;
+            txn.commit()
+        })
+        .unwrap();
+
+    assert_eq!(code(Database::open(&path)), "KEY_REQUIRED");
+
+    let db = OpenOptions::new()
+        .password("correct horse")
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(db.stored_schema(), Some(v1()));
+    assert_eq!(objects(&db, "users").len(), 1);
 }
 
 #[test]

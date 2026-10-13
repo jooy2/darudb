@@ -1,6 +1,7 @@
 //! Opening a file with a declared schema: storing it the first time, checking
 //! it every time, and migrating the file from an older version
-//! (`design/objects.md`, "Migrations").
+//! (`design/objects.md`, "Migrations"). And opening one without: the handle
+//! takes the schema the file holds, as it is.
 //!
 //! A migration is one write transaction: the new stored schema, the indexes
 //! it builds and drops, the application's migration functions and the
@@ -137,6 +138,52 @@ pub(crate) fn open(
         steps,
         delete: plan.delete,
     })))
+}
+
+/// The schema the file behind `shared` holds, for a handle that declared
+/// none, read once as the handle opens.
+///
+/// `None` when the file holds no schema, or one that does not read. Opening
+/// goes ahead either way, since the integrity check and the other tools work
+/// without one and are what a damaged file needs; reaching a collection says
+/// why there is none ([`without_schema`]). Nothing is written: a handle
+/// without a declared schema never stores, checks or migrates one.
+pub(crate) fn stored(shared: &Arc<Shared>) -> Option<Arc<OpenSchema>> {
+    let read = ReadTransaction::begin(shared, None).ok()?;
+    let encoded = read.get_in(META, SCHEMA_KEY).ok()??;
+    let schema = StoredSchema::decode(&encoded).ok()?;
+
+    // A schema the declared form cannot say, which the engine never stores,
+    // reads as damaged: `Database::stored_schema` gives it in that form.
+    Schema::from_stored(&schema).ok()?;
+
+    Some(Arc::new(OpenSchema::new(schema, encoded)))
+}
+
+/// Why a transaction of a handle without a schema has no collections, as the
+/// error that reaching one fails with: the file holds no schema, the one it
+/// holds does not read, or it stored one after the handle opened it.
+pub(crate) fn without_schema(source: &dyn Source) -> Error {
+    let encoded = match source.get_in(META, SCHEMA_KEY) {
+        Ok(Some(encoded)) => encoded,
+        Ok(None) => {
+            return Error::InvalidArgument {
+                message: "the database was opened without a schema, and the file holds none, so it has no collections; declare one with `OpenOptions::schema`".to_owned(),
+            };
+        }
+        Err(error) => return error,
+    };
+    let stored = match decode(source.path(), source, &encoded) {
+        Ok(stored) => stored,
+        Err(error) => return error,
+    };
+
+    match Schema::from_stored(&stored) {
+        Err(error) => source.corrupted(format!("the stored schema: {error}")),
+        Ok(_) => Error::InvalidArgument {
+            message: "the file held no schema when this handle opened it; open it again to use the schema it holds now".to_owned(),
+        },
+    }
 }
 
 /// A migration in its write transaction, with the version steps still to

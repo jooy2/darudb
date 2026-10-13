@@ -23,10 +23,10 @@ mod resolve;
 mod tests;
 pub(crate) mod typed;
 
-pub use declare::{Collection, Embedded, Migration, Schema, Type};
+pub use declare::{Collection, Embedded, Field, Migration, Schema, Type};
 pub use objects::{CollectionReader, CollectionWriter};
 pub use open::Migrating;
-pub(crate) use open::{Opened, Pending, check, open};
+pub(crate) use open::{Opened, Pending, check, open, stored};
 pub use typed::{
     CollectionType, ElementType, EmbeddedType, FieldReader, FieldType, KeyType, Link, Scalar,
     Shape, ShapeField, TypedReader, TypedWriter, ValueReader, ValueWriter,

@@ -2,6 +2,17 @@
 
 > This crate's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Added
+
+- A database opened without a schema works with the one the file holds, as it is. Its collections are read and written by name through `ReadTransaction::collection` and `WriteTransaction::collection`, or through a derived type whose collection matches, with the stored schema's checks and indexes kept as ever, and nothing is stored, checked or migrated: a program can open a file whose schema it does not know. A file that holds no schema has no collections then, as before. A stored schema that does not read still leaves the file open, for `check` and the other tools, and reaching a collection fails with `CORRUPTED`, or with `UNSUPPORTED_FORMAT_VERSION` for an object format this build does not know.
+- `Database::stored_schema`, which gives the schema a handle works with in the form an application declares one: the declared schema, or the file's own for a handle opened without one. `Schema::version`, `Schema::collections`, `Collection::name`, `Collection::fields`, `Collection::key`, `Collection::is_auto_increment`, `Collection::indexes` and `Embedded::fields` read a schema back, and so does the type `Field` that `fields` gives, with `name`, `kind`, `is_optional` and `default`.
+
+### Changed
+
+- `Database::schema_record` gives the record of the file's own schema for a handle opened without one, where it gave `None`.
+
 ## v1.2.0 (2026-10-11)
 
 ### Changed

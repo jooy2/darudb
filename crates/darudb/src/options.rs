@@ -229,8 +229,14 @@ impl OpenOptions {
     /// ([`migration`](Self::migration)) before the open returns, and one
     /// holding a newer version fails with [`Error::SchemaTooNew`].
     ///
-    /// Without a schema, the database has no collections, and only its trees
-    /// of bytes are reachable.
+    /// Without a schema, the database works with the one the file holds, as
+    /// it is: the collections are reached by name, objects are read and
+    /// written as [`Object`](crate::Object)s, and
+    /// [`Database::stored_schema`](crate::Database::stored_schema) describes
+    /// them. Nothing is stored, checked or migrated, so a program can open a
+    /// file whose schema it does not know. A file that holds no schema, such
+    /// as a new one, has no collections then, and only its trees of bytes are
+    /// reachable.
     ///
     /// ```no_run
     /// use darudb::{Collection, Object, OpenOptions, Schema, Type};

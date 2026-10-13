@@ -98,7 +98,7 @@ pub mod __binding {
 }
 pub use schema::{
     Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
-    EmbeddedType, FieldReader, FieldType, KeyType, Link, Migrating, Migration, Schema, Type,
+    EmbeddedType, Field, FieldReader, FieldType, KeyType, Link, Migrating, Migration, Schema, Type,
     TypedReader, TypedWriter, ValueReader, ValueWriter,
 };
 

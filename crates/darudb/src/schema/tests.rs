@@ -297,6 +297,57 @@ fn a_handle_opened_without_a_schema_can_open_one_later() {
     assert!(typed.begin_read().unwrap().collection("players").is_ok());
 }
 
+/// A handle opened without a schema on a file whose stored schema does not
+/// read opens all the same, for the tools, and says why it has no
+/// collections when one is reached: `CORRUPTED` for a damaged record, and
+/// `UNSUPPORTED_FORMAT_VERSION` for an object format this build does not know.
+#[test]
+fn a_stored_schema_that_does_not_read_leaves_a_handle_without_one() {
+    use crate::format::object::codec;
+    use crate::format::object::names::{META, SCHEMA_KEY};
+
+    let damaged = vec![0x80];
+    let newer = codec::write(&[(1, Raw::Int(2))]);
+
+    for (record, expected) in [
+        (damaged, "CORRUPTED"),
+        (newer, "UNSUPPORTED_FORMAT_VERSION"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("objects.darudb");
+
+        {
+            let db = OpenOptions::new().schema(schema()).open(&path).unwrap();
+            let mut txn = db.begin_write().unwrap();
+
+            txn.insert_in(META, SCHEMA_KEY, &record).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let db = Database::open(&path).unwrap();
+
+        assert!(db.stored_schema().is_none());
+        assert!(db.schema_record().is_none());
+        assert_eq!(
+            db.begin_read()
+                .unwrap()
+                .collection("players")
+                .err()
+                .map(|error| error.code()),
+            Some(expected)
+        );
+        // The integrity check still runs, and names the schema.
+        assert!(
+            db.check()
+                .unwrap()
+                .problems
+                .iter()
+                .any(|problem| problem.message.contains("its schema")),
+            "the check missed the damaged schema"
+        );
+    }
+}
+
 /// The schema of [`schema`] at version 2, with a field more.
 fn schema_v2() -> Schema {
     let mut schema = schema();

@@ -112,6 +112,43 @@ fn grace() -> Person {
 }
 
 #[test]
+fn a_derived_type_reads_and_writes_a_file_opened_with_its_own_schema() {
+    let dir = TestDir::new();
+
+    {
+        let db = open(&dir, schema());
+        let mut txn = db.begin_write().unwrap();
+
+        txn.collection_of::<Person>()
+            .unwrap()
+            .insert(&ada())
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
+    // Opened without a schema, the file's own is the one the derive was
+    // declared with, so the type matches its collection as it would have.
+    let db = Database::open(dir.path("app.darudb")).unwrap();
+
+    assert_eq!(db.stored_schema(), Some(schema()));
+
+    let mut txn = db.begin_write().unwrap();
+    let mut people = txn.collection_of::<Person>().unwrap();
+
+    people.insert(&grace()).unwrap();
+
+    let names = people
+        .query(&Query::new().filter(Filter::ge("age", 0)))
+        .unwrap()
+        .into_iter()
+        .map(|person| person.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, ["Ada", "Grace"]);
+    txn.commit().unwrap();
+}
+
+#[test]
 fn the_derived_collection_is_the_one_a_builder_declares() {
     let built = Collection::new("people")
         .field("name", Type::String)

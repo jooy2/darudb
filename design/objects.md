@@ -301,6 +301,8 @@ Opening a file with a declared schema compares it with the stored one:
 
 The comparison happens again inside the write transaction that stores or migrates the schema, so two processes that open an old file at once migrate it once: the second finds the new schema stored and has nothing to do.
 
+Opening a file without a declared schema compares nothing. The handle takes the stored schema as it is, read once in a read transaction while it opens, and reads and writes objects under it as a handle that declared it would: the same checks, the same indexes, and the same `SCHEMA_MISMATCH` once another handle migrates the file. Nothing is written. A file with no stored schema leaves the handle without collections. So does a stored schema that does not decode, or that says what a declaration cannot, such as an auto-increment key that is not an `int` called `id`, which the engine never writes; the handle opens all the same, since the integrity check and the other tools need it and report the damage, and reaching a collection fails with the reason: `CORRUPTED`, or `UNSUPPORTED_FORMAT_VERSION` for an object format the build does not know. A schema stored after the handle opened is not its own: it has to open the file again.
+
 A migration from version `m` to version `n` runs in one write transaction, and the file is untouched if any part of it fails:
 
 1. **Renames.** Each version step from `m + 1` to `n` may name collections and fields that it renames. The stored schema takes the new names, and the ids stay.

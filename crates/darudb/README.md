@@ -84,6 +84,26 @@ fn main() -> Result<(), darudb::Error> {
 
 A query reads through the primary key or an index when a condition of its filter allows it, and gives the same objects either way. Results are plain objects that outlive the transaction.
 
+A program that opens a file it did not write needs no schema of its own. Opened without one, a database works with the schema the file holds: `stored_schema` describes its collections, fields, keys and indexes, and the collections are read and written by name, with the file's checks and indexes kept as ever.
+
+```rust
+use darudb::Database;
+
+fn main() -> Result<(), darudb::Error> {
+    let db = Database::open("app.darudb")?;
+
+    if let Some(schema) = db.stored_schema() {
+        let read = db.begin_read()?;
+
+        for collection in schema.collections() {
+            println!("{}: {} objects", collection.name(), read.collection(collection.name())?.len()?);
+        }
+    }
+
+    Ok(())
+}
+```
+
 ### Objects as Rust types
 
 With the `derive` feature, `#[derive(Object)]` makes a struct the objects of a collection. A typed read decodes the record straight into the struct, without the `Object` of named values in between.

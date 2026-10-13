@@ -1,6 +1,7 @@
 //! Read transactions.
 
 use std::ops::RangeBounds;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -91,6 +92,11 @@ impl ReadTransaction {
     /// The error for damage found in the file.
     pub(crate) fn corrupted(&self, reason: String) -> Error {
         self.shared.loader.corrupted_file(reason)
+    }
+
+    /// The path the database was opened at, for an error that names the file.
+    pub(crate) fn path(&self) -> &Path {
+        &self.shared.path
     }
 
     /// The transaction id of the commit this transaction sees.

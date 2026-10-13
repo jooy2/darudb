@@ -16,7 +16,7 @@ use crate::format::{
 use crate::instance::{Entry, FileKey, Hold, Shared, find, held_by_tool, registry};
 use crate::lock::{Access, LockError, Locks, on_network_file_system};
 use crate::options::OpenOptions;
-use crate::schema::{self, Migrating, Opened, Pending};
+use crate::schema::{self, Migrating, Opened, Pending, Schema};
 use crate::storage::{self, Created, DbFile, FileIo, Pager};
 use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 
@@ -29,9 +29,10 @@ use crate::txn::{ReadTransaction, WriteTransaction, recovery};
 #[derive(Debug, Clone)]
 pub struct Database {
     shared: Arc<Shared>,
-    /// The schema this handle opened the file with, if it declared one.
+    /// The schema this handle works with: the one it declared, or the one
+    /// the file held when the handle opened it without declaring one.
     /// Handles to one file in a process share its instance but not this: each
-    /// works with the schema it declared.
+    /// works with the schema it opened the file with.
     schema: Option<Arc<OpenSchema>>,
 }
 
@@ -97,11 +98,30 @@ impl Database {
     }
 
     /// The schema this handle opened the file with, as the record the file
-    /// holds it in (`design/objects.md`, "The stored schema"), or `None`
-    /// without a schema. A language binding reads the ids of collections and
-    /// fields from it, to write and read records.
+    /// holds it in (`design/objects.md`, "The stored schema"): the declared
+    /// one, or the file's own for a handle opened without a schema. `None`
+    /// when there is neither, as for [`stored_schema`](Self::stored_schema).
+    /// A language binding reads the ids of collections and fields from it, to
+    /// write and read records.
     pub fn schema_record(&self) -> Option<&[u8]> {
         self.schema.as_ref().map(|schema| schema.encoded.as_slice())
+    }
+
+    /// The schema this handle works with, as the file stores it, in the form
+    /// an application declares one: the schema it was opened with
+    /// ([`OpenOptions::schema`]), or, for a handle opened without one, the
+    /// schema the file held when it opened.
+    ///
+    /// A program that opens a file it did not write learns its collections,
+    /// their fields and types, their primary keys and their indexes here, and
+    /// reaches the collections by name with
+    /// [`ReadTransaction::collection`](crate::ReadTransaction::collection).
+    /// It is `None` when the handle has no schema: the file holds none, or the
+    /// one it holds does not read, which reaching a collection reports.
+    pub fn stored_schema(&self) -> Option<Schema> {
+        self.schema
+            .as_ref()
+            .and_then(|schema| Schema::from_stored(&schema.schema).ok())
     }
 
     /// Whether the database is encrypted.
@@ -268,10 +288,9 @@ impl Database {
     /// take long, and its functions may open other databases.
     fn with_schema(shared: Arc<Shared>, options: &OpenOptions) -> Result<Opening> {
         let Some((declared, migrations)) = options.declared() else {
-            return Ok(Opening::Open(Self {
-                shared,
-                schema: None,
-            }));
+            let schema = schema::stored(&shared);
+
+            return Ok(Opening::Open(Self { shared, schema }));
         };
 
         Ok(match schema::open(&shared, declared, migrations)? {

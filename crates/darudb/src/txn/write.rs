@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::{Bound, RangeBounds};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -376,6 +377,11 @@ impl WriteTransaction {
     /// The error for damage found in the file.
     pub(crate) fn corrupted(&self, reason: String) -> Error {
         self.shared.loader.corrupted_file(reason)
+    }
+
+    /// The path the database was opened at, for an error that names the file.
+    pub(crate) fn path(&self) -> &Path {
+        &self.shared.path
     }
 
     /// Stores `value` under `key` in tree `tree`, replacing any value already

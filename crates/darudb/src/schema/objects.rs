@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 use std::ops::Bound;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -54,6 +55,9 @@ pub(crate) trait Source {
     /// The error for damage found in the file.
     fn corrupted(&self, reason: String) -> Error;
 
+    /// The path the database was opened at.
+    fn path(&self) -> &Path;
+
     /// Whether the file holds the schema whose record is `encoded`.
     fn holds_schema(&self, encoded: &[u8]) -> Result<bool> {
         Ok(self.get_in(META, SCHEMA_KEY)?.as_deref() == Some(encoded))
@@ -96,6 +100,10 @@ impl Source for ReadTransaction {
         ReadTransaction::corrupted(self, reason)
     }
 
+    fn path(&self) -> &Path {
+        ReadTransaction::path(self)
+    }
+
     fn holds_schema(&self, encoded: &[u8]) -> Result<bool> {
         Ok(self.get_in_kept(META, SCHEMA_KEY)?.as_deref() == Some(encoded))
     }
@@ -136,6 +144,10 @@ impl Source for WriteTransaction {
     fn corrupted(&self, reason: String) -> Error {
         WriteTransaction::corrupted(self, reason)
     }
+
+    fn path(&self) -> &Path {
+        WriteTransaction::path(self)
+    }
 }
 
 /// The schema a transaction's objects are read and written with, once the
@@ -146,9 +158,9 @@ pub(crate) fn checked_schema(
     schema: Option<&Arc<OpenSchema>>,
     checked: &AtomicBool,
 ) -> Result<Arc<OpenSchema>> {
-    let schema = schema.ok_or_else(|| Error::InvalidArgument {
-        message: "the database was opened without a schema, so it has no collections; declare one with `OpenOptions::schema`".to_owned(),
-    })?;
+    let Some(schema) = schema else {
+        return Err(super::open::without_schema(source));
+    };
 
     if checked.load(Ordering::Relaxed) {
         return Ok(Arc::clone(schema));
