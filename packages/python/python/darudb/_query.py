@@ -242,9 +242,10 @@ class Query:
         self._sort: tuple[tuple[tuple[str, ...], bool], ...] = ()
         self._offset = 0
         self._limit: int | None = None
-        # By class and schema rather than by name: two classes of one collection,
-        # an old schema's and a new one's, may store their fields differently.
-        self._compiled: dict[tuple[type, Schema | None], _native.NativeQuery] = {}
+        # By class and schema as well as by name: two classes of one
+        # collection, an old schema's and a new one's, may store their fields
+        # differently.
+        self._compiled: dict[tuple[type, str, Schema | None], _native.NativeQuery] = {}
 
     def _with(self, **changes: Any) -> Query:
         query = Query()
@@ -291,7 +292,9 @@ class Query:
 
     def compile(self, resolved: Resolved, schema: Schema | None) -> _native.NativeQuery:
         """The query on ``resolved``'s collection, compiled once."""
-        compiled = self._compiled.get((resolved.cls, schema))
+        # The name as well as the class: every collection reached by name has
+        # the class `dict`.
+        compiled = self._compiled.get((resolved.cls, resolved.name, schema))
 
         if compiled is None:
             translate = _Translator(resolved, schema)
@@ -302,7 +305,7 @@ class Query:
                 self._offset,
                 self._limit,
             )
-            self._compiled[(resolved.cls, schema)] = compiled
+            self._compiled[(resolved.cls, resolved.name, schema)] = compiled
 
         return compiled
 

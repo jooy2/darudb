@@ -58,6 +58,14 @@ async with db.read_async() as txn:
 await db.close_async()
 ```
 
+A program that opens a file it did not write needs no classes of its own. Opened without a schema, a database works with the one the file holds: `db.stored_schema` describes its collections, fields, keys and indexes, and the collections are reached by name, with objects read and written as `dict`s by the names the file stores, and the file's checks and indexes kept as ever.
+
+```python
+with darudb.Database.open("app.darudb") as db, db.read() as txn:
+    for collection in db.stored_schema.collections if db.stored_schema else ():
+        print(collection.name, txn.collection(collection.name).count())
+```
+
 Raising the schema's version migrates the file when it opens, with renames, deletions and a Python function of your own. Encryption, the integrity check, backup, compaction and salvage are all there; [the guide](https://darudb.cdget.com/guide/getting-started) has the details.
 
 ## License

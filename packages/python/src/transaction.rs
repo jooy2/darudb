@@ -7,18 +7,18 @@
 //! once it has the GIL back.
 
 use std::slice;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use darudb::{
-    CollectionReader, CollectionWriter, PendingMigration, Query, ReadTransaction, Value,
-    WriteTransaction,
+    CollectionReader, CollectionWriter, Object, PendingMigration, Query, ReadTransaction, Schema,
+    Value, WriteTransaction,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::database::NativeDatabase;
 use crate::query::{NativeQuery, parameters_of};
-use crate::values::{Layout, dict_of, key, to_python};
+use crate::values::{Layout, dict_of, key, object_of, to_python};
 use crate::{OrRaise, failure, invalid};
 use darudb::__binding::Shape;
 
@@ -80,6 +80,23 @@ impl Reader<'_> {
         match self {
             Reader::Read(collection) => collection.count(query),
             Reader::Write(collection) => collection.count(query),
+        }
+    }
+
+    /// The object with primary key `key` as the engine reads it, for a
+    /// collection reached by name, whose objects are `dict`s.
+    fn object(&self, key: Value) -> darudb::Result<Option<Object>> {
+        match self {
+            Reader::Read(collection) => collection.get(key),
+            Reader::Write(collection) => collection.get(key),
+        }
+    }
+
+    /// The objects `query` finds as the engine reads them, as `object` does.
+    fn objects(&self, query: &Query) -> darudb::Result<Vec<Object>> {
+        match self {
+            Reader::Read(collection) => collection.query(query),
+            Reader::Write(collection) => collection.query(query),
         }
     }
 }
@@ -148,13 +165,33 @@ impl Records {
 #[pyclass(frozen, module = "darudb._native")]
 pub(crate) struct NativeTransaction {
     held: Mutex<Option<Txn>>,
+    /// The schema of the database the transaction is of, for writing the
+    /// `dict`s of a collection reached by name; `None` for a migration's,
+    /// whose collections are reached through classes.
+    stored: Option<Arc<Schema>>,
 }
 
 impl NativeTransaction {
-    pub(crate) fn new(txn: Txn) -> Self {
+    pub(crate) fn new(txn: Txn, stored: Option<Arc<Schema>>) -> Self {
         Self {
             held: Mutex::new(Some(txn)),
+            stored,
         }
+    }
+
+    /// The fields of `collection` in the database's schema, to convert a
+    /// `dict` for: none for a collection the schema lacks, which the engine
+    /// refuses when it is reached.
+    fn fields_of(&self, collection: &str) -> &[darudb::Field] {
+        self.stored
+            .as_deref()
+            .and_then(|schema| {
+                schema
+                    .collections()
+                    .iter()
+                    .find(|each| each.name() == collection)
+            })
+            .map_or(&[], darudb::Collection::fields)
     }
 
     /// Runs `work` on the transaction without the GIL. A transaction that
@@ -199,16 +236,38 @@ impl NativeTransaction {
             .is_some()
     }
 
-    /// The object of `collection` whose primary key is `key`, or `None`.
+    /// Raises the engine's error for reaching a collection in a transaction
+    /// of a database without a schema: the file holds none, the one it holds
+    /// does not read, or it stored one after the database opened. Does
+    /// nothing in a transaction of a database with one.
+    fn without_schema(&self, py: Python<'_>) -> PyResult<()> {
+        if self.stored.is_some() {
+            return Ok(());
+        }
+
+        // Any name: a transaction without a schema fails before it looks the
+        // collection up.
+        self.with(py, |txn| txn.reader("").map(|_| ()))
+    }
+
+    /// The object of `collection` whose primary key is `key`, or `None`: an
+    /// instance of `layout`'s class, or a `dict` without a layout.
     fn get<'py>(
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         key_value: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let key = key(key_value)?;
-        let layout = layout.get();
+        let Some(layout) = layout.map(Bound::get) else {
+            let found = self.with(py, |txn| txn.reader(collection)?.object(key))?;
+
+            return match found {
+                Some(object) => Ok(dict_of(py, &object)?.into_any()),
+                None => Ok(py.None().into_bound(py)),
+            };
+        };
         let (shape, records) = self.with(py, |txn| {
             let reader = txn.reader(collection)?;
             let mut records = Records::default();
@@ -228,12 +287,21 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         query: &NativeQuery,
         parameters: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyList>> {
         let query = query.bound(py, &parameters_of(parameters)?, false)?;
-        let layout = layout.get();
+        let Some(layout) = layout.map(Bound::get) else {
+            let found = self.with(py, |txn| txn.reader(collection)?.objects(&query))?;
+            let list = PyList::empty(py);
+
+            for object in &found {
+                list.append(dict_of(py, object)?)?;
+            }
+
+            return Ok(list);
+        };
         let (shape, records) = self.with(py, |txn| {
             let reader = txn.reader(collection)?;
             let mut records = Records::default();
@@ -256,12 +324,19 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         query: &NativeQuery,
         parameters: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = query.bound(py, &parameters_of(parameters)?, true)?;
-        let layout = layout.get();
+        let Some(layout) = layout.map(Bound::get) else {
+            let found = self.with(py, |txn| txn.reader(collection)?.objects(&query))?;
+
+            return match found.first() {
+                Some(object) => Ok(dict_of(py, object)?.into_any()),
+                None => Ok(py.None().into_bound(py)),
+            };
+        };
         let (shape, records) = self.with(py, |txn| {
             let reader = txn.reader(collection)?;
             let mut records = Records::default();
@@ -294,10 +369,16 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         object: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let keys = self.write(py, collection, layout.get(), slice::from_ref(object), false)?;
+        let keys = self.write(
+            py,
+            collection,
+            layout.map(Bound::get),
+            slice::from_ref(object),
+            false,
+        )?;
 
         to_python(py, &keys[0])
     }
@@ -309,7 +390,7 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         objects: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyList>> {
         self.write_many(py, collection, layout, objects, false)
@@ -321,10 +402,16 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         object: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let keys = self.write(py, collection, layout.get(), slice::from_ref(object), true)?;
+        let keys = self.write(
+            py,
+            collection,
+            layout.map(Bound::get),
+            slice::from_ref(object),
+            true,
+        )?;
 
         to_python(py, &keys[0])
     }
@@ -334,24 +421,28 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         objects: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyList>> {
         self.write_many(py, collection, layout, objects, true)
     }
 
-    /// Sets the fields `changes` has, by Python attribute, in the object
-    /// whose primary key is `key`, and says whether there was one.
+    /// Sets the fields `changes` has, by Python attribute, or by the names
+    /// the file stores without a layout, in the object whose primary key is
+    /// `key`, and says whether there was one.
     fn update(
         &self,
         py: Python<'_>,
         collection: &str,
-        layout: &Bound<'_, Layout>,
+        layout: Option<&Bound<'_, Layout>>,
         key_value: &Bound<'_, PyAny>,
         changes: &Bound<'_, PyDict>,
     ) -> PyResult<bool> {
         let key = key(key_value)?;
-        let changes = layout.get().to_changes(changes)?;
+        let changes = match layout {
+            Some(layout) => layout.get().to_changes(changes)?,
+            None => object_of(changes, self.fields_of(collection))?,
+        };
 
         self.with(py, |txn| txn.writer(collection)?.update(key, changes))
     }
@@ -489,10 +580,19 @@ impl NativeTransaction {
         &self,
         py: Python<'_>,
         collection: &str,
-        layout: &Layout,
+        layout: Option<&Layout>,
         objects: &[Bound<'_, PyAny>],
         replace: bool,
     ) -> PyResult<Vec<Value>> {
+        let Some(layout) = layout else {
+            let fields = self.fields_of(collection);
+            let objects = objects
+                .iter()
+                .map(|object| object_of(object, fields))
+                .collect::<PyResult<Vec<_>>>()?;
+
+            return self.write_objects(py, collection, objects, replace);
+        };
         let mut values = Vec::with_capacity(objects.len() * layout.len());
         let mut flat = true;
 
@@ -527,6 +627,17 @@ impl NativeTransaction {
             .map(|object| layout.to_object(object))
             .collect::<PyResult<Vec<_>>>()?;
 
+        self.write_objects(py, collection, objects, replace)
+    }
+
+    /// Writes `objects`, engine objects already, and returns their keys.
+    fn write_objects(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        objects: Vec<Object>,
+        replace: bool,
+    ) -> PyResult<Vec<Value>> {
         self.with(py, |txn| {
             let mut writer = txn.writer(collection)?;
 
@@ -547,7 +658,7 @@ impl NativeTransaction {
         &self,
         py: Python<'py>,
         collection: &str,
-        layout: &Bound<'py, Layout>,
+        layout: Option<&Bound<'py, Layout>>,
         objects: &Bound<'py, PyAny>,
         replace: bool,
     ) -> PyResult<Bound<'py, PyList>> {
@@ -560,7 +671,7 @@ impl NativeTransaction {
                 )
             })?
             .collect::<PyResult<Vec<_>>>()?;
-        let keys = self.write(py, collection, layout.get(), &objects, replace)?;
+        let keys = self.write(py, collection, layout.map(Bound::get), &objects, replace)?;
         let list = PyList::empty(py);
 
         for key in &keys {

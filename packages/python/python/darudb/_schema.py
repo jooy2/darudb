@@ -214,14 +214,140 @@ class _Field:
 
 @dataclasses.dataclass(frozen=True)
 class Resolved:
-    """A class read for the schema: its fields, its layout and its key."""
+    """A class read for the schema: its fields, its layout and its key. Or a
+    collection reached by name in the file's own schema, whose objects are
+    ``dict``s: no fields, so that a query's names pass as they are, and no
+    layout."""
 
     cls: type
     name: str
     fields: tuple[_Field, ...]
-    layout: _native.Layout
+    layout: _native.Layout | None
     key: str | None
-    """The stored name of the primary key, ``"id"`` for an auto-increment."""
+    """The stored name of the primary key, ``"id"`` for an auto-increment,
+    or None for a collection reached by name."""
+
+
+_BY_NAME: dict[str, Resolved] = {}
+
+
+def by_name(name: str) -> Resolved:
+    """The collection ``name`` of a database that works with the file's own
+    schema, whose objects are ``dict``s by the names the file stores."""
+    if not isinstance(name, str):
+        raise invalid(
+            "a database opened without a schema reaches its collections by name, "
+            f"as the file's own schema has them, not by {name!r}"
+        )
+
+    found = _BY_NAME.get(name)
+
+    if found is None:
+        found = Resolved(dict, name, (), None, None)
+        _BY_NAME[name] = found
+
+    return found
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredType:
+    """A field's type, as ``StoredField`` gives it."""
+
+    kind: Literal["bool", "int", "float", "string", "bytes", "link", "list", "object"]
+    collection: str | None = None
+    """The collection a link holds the primary key of."""
+    element: StoredType | None = None
+    """The type of a list's values, a scalar type or a link."""
+    fields: tuple[StoredField, ...] = ()
+    """An embedded object's fields."""
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredField:
+    """A field of a collection or an embedded object, as
+    ``Database.stored_schema`` gives it."""
+
+    name: str
+    type: StoredType
+    optional: bool
+    """Whether the field may be None, which it is when an object leaves it out."""
+    default: object = None
+    """The value an object that leaves the field out holds, for a required
+    field that has one; None otherwise."""
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredIndex:
+    """An index of a collection: the field it is on, and whether it is unique."""
+
+    field: str
+    unique: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredCollection:
+    """A collection, as ``Database.stored_schema`` gives it."""
+
+    name: str
+    key: str
+    """The stored name of the primary key's field: ``"id"`` for the auto-increment."""
+    auto_increment: bool
+    """Whether the primary key is the auto-increment, an int ``id`` the engine assigns."""
+    fields: tuple[StoredField, ...]
+    """The fields, in the file's order. The primary key's field is one of
+    them, unless the key is the auto-increment, whose ``id`` is not declared."""
+    indexes: tuple[StoredIndex, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredSchema:
+    """A schema as the file stores it, by the names it stores, as
+    ``Database.stored_schema`` gives it: the declared one, or the file's own
+    for a database opened without one."""
+
+    version: int
+    collections: tuple[StoredCollection, ...]
+
+
+def _stored_type(raw: dict[str, Any]) -> StoredType:
+    return StoredType(
+        kind=raw["kind"],
+        collection=raw.get("collection"),
+        element=None if "element" not in raw else _stored_type(raw["element"]),
+        fields=_stored_fields(raw.get("fields", ())),
+    )
+
+
+def _stored_fields(raw: Sequence[dict[str, Any]]) -> tuple[StoredField, ...]:
+    return tuple(
+        StoredField(
+            name=field["name"],
+            type=_stored_type(field["type"]),
+            optional=field["optional"],
+            default=field.get("default"),
+        )
+        for field in raw
+    )
+
+
+def stored_schema_of(raw: dict[str, Any] | None) -> StoredSchema | None:
+    """The schema the native layer describes as nested ``dict``s."""
+    if raw is None:
+        return None
+
+    return StoredSchema(
+        version=raw["version"],
+        collections=tuple(
+            StoredCollection(
+                name=collection["name"],
+                key=collection["key"],
+                auto_increment=collection["auto_increment"],
+                fields=_stored_fields(collection["fields"]),
+                indexes=tuple(StoredIndex(**index) for index in collection["indexes"]),
+            )
+            for collection in raw["collections"]
+        ),
+    )
 
 
 _RESOLVED: dict[type, Resolved] = {}

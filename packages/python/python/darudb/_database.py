@@ -21,7 +21,7 @@ from . import _native
 from ._errors import DaruError, invalid
 from ._native import NativeDatabase
 from ._query import Condition, Prepared, Query, parse
-from ._schema import Migration, Resolved, Schema
+from ._schema import Migration, Resolved, Schema, StoredSchema, by_name, stored_schema_of
 
 if TYPE_CHECKING:
     from typing import Self
@@ -246,11 +246,15 @@ def file_key_of(path: str) -> FileKey:
 
 
 class ReadCollection(Generic[T]):
-    """A collection of a transaction, for reading its objects."""
+    """A collection of a transaction, for reading its objects: instances of
+    its class, or ``dict``s by the names the file stores for a collection
+    reached by name in the file's own schema."""
 
     __slots__ = ("_resolved", "_schema", "_txn")
 
-    def __init__(self, txn: _native.NativeTransaction, resolved: Resolved, schema: Schema) -> None:
+    def __init__(
+        self, txn: _native.NativeTransaction, resolved: Resolved, schema: Schema | None
+    ) -> None:
         self._txn = txn
         self._resolved = resolved
         self._schema = schema
@@ -357,9 +361,14 @@ class ReadTransaction:
         self._native = native
         self._schema = schema
 
-    def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema]:
+    def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema | None]:
         if self._schema is None:
-            raise invalid("the database was opened without a schema, so it has no collections")
+            # The file's own schema, whose collections are reached by name.
+            resolved = by_name(collection)  # type: ignore[arg-type]
+
+            self._native.without_schema()
+
+            return resolved, None
 
         return self._schema.resolved(collection), self._schema
 
@@ -608,12 +617,22 @@ class Database:
     process's writer. A database is a context manager that closes it.
     """
 
-    __slots__ = ("_file_key", "_native", "path", "schema")
+    __slots__ = ("_file_key", "_native", "path", "schema", "stored_schema")
 
     path: str
     """The path the database was opened at. Still readable after ``close``."""
     schema: Schema | None
-    """The schema the database was opened with, or None."""
+    """The schema the database was opened with, or None. Without one, the
+    database works with the schema the file holds: its collections are
+    reached by name, and their objects are ``dict``s by the names the file
+    stores."""
+    stored_schema: StoredSchema | None
+    """The schema the database works with, by the names the file stores: the
+    one it was opened with, or, for a database opened without one, the one
+    the file held when it opened. A program that opens a file it did not
+    write learns its collections here, and reaches them by name. None when
+    the file holds no schema, or one that does not read, which reaching a
+    collection reports. Still readable after ``close``."""
     _native: NativeDatabase
     _file_key: FileKey
 
@@ -626,6 +645,7 @@ class Database:
         db._native = native
         db.path = path
         db.schema = schema
+        db.stored_schema = stored_schema_of(native.stored_schema)
         db._file_key = file_key_of(path)
 
         return db
@@ -847,8 +867,13 @@ class Database:
 
     @property
     def schema_version(self) -> int | None:
-        """The schema version the file holds, or None without a schema."""
-        return None if self.schema is None else self.schema.version
+        """The version of the schema the database works with: the declared
+        one, or the file's own for a database opened without one. None when it
+        has neither."""
+        if self.schema is not None:
+            return self.schema.version
+
+        return None if self.stored_schema is None else self.stored_schema.version
 
     def prepare(self, collection: type[T] | str, query: Query | Condition | str) -> Prepared[T]:
         """Prepares a query on ``collection``: text in the query language with
@@ -859,7 +884,12 @@ class Database:
             raise DaruError("CLOSED", "the database is closed")
 
         if self.schema is None:
-            raise invalid("the database was opened without a schema, so it has no collections")
+            # The file's own schema, whose collections are reached by name.
+            resolved = by_name(collection)  # type: ignore[arg-type]
+
+            self._native.without_schema()
+
+            return Prepared(resolved.name, native_query(query, resolved, None))
 
         resolved = self.schema.resolved(collection)
 

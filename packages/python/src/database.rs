@@ -8,10 +8,10 @@
 //! makes into its dataclasses.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use darudb::{BackupOptions, CheckReport, Database, OpenOptions, Opening};
+use darudb::{BackupOptions, CheckReport, Database, Field, OpenOptions, Opening, Schema, Type};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
@@ -19,19 +19,26 @@ use zeroize::Zeroizing;
 
 use crate::schema::{MigrationSpec, NativeSchema, migration_of};
 use crate::transaction::{NativeTransaction, Txn};
-use crate::values::{bytes_of, is_bytes};
+use crate::values::{bytes_of, is_bytes, to_python};
 use crate::{OrRaise, failure, invalid};
 
 /// An open database, until it is closed.
 #[pyclass(frozen, module = "darudb._native")]
 pub(crate) struct NativeDatabase {
     db: Mutex<Option<Database>>,
+    /// The schema the database works with, in the form a declaration has,
+    /// made once as it opens: the transactions write a collection reached
+    /// by name through it, so that each value takes its field's type.
+    stored: Option<Arc<Schema>>,
 }
 
 impl NativeDatabase {
     pub(crate) fn new(db: Database) -> Self {
+        let stored = db.stored_schema().map(Arc::new);
+
         Self {
             db: Mutex::new(Some(db)),
+            stored,
         }
     }
 
@@ -86,7 +93,7 @@ impl NativeDatabase {
     /// Begins a read transaction.
     fn begin_read(&self, py: Python<'_>) -> PyResult<NativeTransaction> {
         self.with(py, |db| db.begin_read().map(|txn| Txn::Read(Box::new(txn))))
-            .map(NativeTransaction::new)
+            .map(|txn| NativeTransaction::new(txn, self.stored.clone()))
     }
 
     /// Begins the write transaction, waiting for the one running.
@@ -94,7 +101,36 @@ impl NativeDatabase {
         self.with(py, |db| {
             db.begin_write().map(|txn| Txn::Write(Box::new(txn)))
         })
-        .map(NativeTransaction::new)
+        .map(|txn| NativeTransaction::new(txn, self.stored.clone()))
+    }
+
+    /// The schema the database works with, the declared one or the file's
+    /// own, as nested `dict`s, which `_schema.py` makes into its
+    /// dataclasses; `None` when there is neither.
+    #[getter]
+    fn stored_schema<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.handle(py)?;
+
+        self.stored
+            .as_deref()
+            .map(|schema| schema_dict(py, schema))
+            .transpose()
+    }
+
+    /// Raises the engine's error for reaching a collection of a database
+    /// without a schema: the file holds none, the one it holds does not
+    /// read, or it stored one after the database opened. Does nothing for a
+    /// database with a schema.
+    fn without_schema(&self, py: Python<'_>) -> PyResult<()> {
+        self.with(py, |db| {
+            if db.schema_record().is_some() {
+                return Ok(());
+            }
+
+            // Any name: a transaction without a schema fails before it looks
+            // the collection up.
+            db.begin_read()?.collection("").map(|_| ())
+        })
     }
 
     /// Makes every commit durable.
@@ -356,7 +392,7 @@ fn open<'py>(
     match opening {
         Opening::Open(db) => NativeDatabase::new(db).into_bound_py_any(py),
         Opening::Migrating(pending) => {
-            NativeTransaction::new(Txn::Migration(pending)).into_bound_py_any(py)
+            NativeTransaction::new(Txn::Migration(pending), None).into_bound_py_any(py)
         }
     }
 }
@@ -405,6 +441,86 @@ fn salvage<'py>(
     dict.set_item("trees", report.trees)?;
     dict.set_item("entries", report.entries)?;
     dict.set_item("bytes", report.bytes)?;
+
+    Ok(dict)
+}
+
+/// `schema` as `NativeDatabase.stored_schema` gives it.
+fn schema_dict<'py>(py: Python<'py>, schema: &Schema) -> PyResult<Bound<'py, PyDict>> {
+    let collections = PyList::empty(py);
+
+    for collection in schema.collections() {
+        let indexes = PyList::empty(py);
+
+        for (field, unique) in collection.indexes() {
+            let index = PyDict::new(py);
+
+            index.set_item("field", field)?;
+            index.set_item("unique", unique)?;
+            indexes.append(index)?;
+        }
+
+        let dict = PyDict::new(py);
+
+        dict.set_item("name", collection.name())?;
+        dict.set_item("key", collection.key())?;
+        dict.set_item("auto_increment", collection.is_auto_increment())?;
+        dict.set_item("fields", fields_list(py, collection.fields())?)?;
+        dict.set_item("indexes", indexes)?;
+        collections.append(dict)?;
+    }
+
+    let dict = PyDict::new(py);
+
+    dict.set_item("version", schema.version())?;
+    dict.set_item("collections", collections)?;
+
+    Ok(dict)
+}
+
+fn fields_list<'py>(py: Python<'py>, fields: &[Field]) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+
+    for field in fields {
+        let dict = PyDict::new(py);
+
+        dict.set_item("name", field.name())?;
+        dict.set_item("type", type_dict(py, field.kind())?)?;
+        dict.set_item("optional", field.is_optional())?;
+
+        if let Some(default) = field.default() {
+            dict.set_item("default", to_python(py, default)?)?;
+        }
+
+        list.append(dict)?;
+    }
+
+    Ok(list)
+}
+
+fn type_dict<'py>(py: Python<'py>, kind: &Type) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    let name = match kind {
+        Type::Bool => "bool",
+        Type::Int => "int",
+        Type::Float => "float",
+        Type::String => "string",
+        Type::Bytes => "bytes",
+        Type::Link(collection) => {
+            dict.set_item("collection", collection)?;
+            "link"
+        }
+        Type::List(element) => {
+            dict.set_item("element", type_dict(py, element)?)?;
+            "list"
+        }
+        Type::Object(embedded) => {
+            dict.set_item("fields", fields_list(py, embedded.fields())?)?;
+            "object"
+        }
+    };
+
+    dict.set_item("kind", name)?;
 
     Ok(dict)
 }

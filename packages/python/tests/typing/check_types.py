@@ -85,6 +85,23 @@ def opening() -> None:
         assert_type(db.check(), darudb.CheckReport)
 
 
+def the_file_s_own_schema() -> None:
+    with darudb.Database.open("app.darudb") as db:
+        stored = db.stored_schema
+
+        assert_type(stored, darudb.StoredSchema | None)
+
+        if stored is not None:
+            collection = stored.collections[0]
+
+            assert_type(collection, darudb.StoredCollection)
+            assert_type(collection.fields[0].type, darudb.StoredType)
+            assert_type(collection.indexes, tuple[darudb.StoredIndex, ...])
+
+        with db.read() as txn:
+            assert_type(txn.collection("users").get(1), Any | None)
+
+
 def migration(migrating: darudb.Migrating) -> None:
     assert_type(migrating.previous("people", 1), dict[str, Any] | None)
     assert_type(migrating.collection(User), darudb.WriteCollection[User])

@@ -554,6 +554,83 @@ fn to_value(kind: &Kind, value: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 }
 
+/// An object from a `dict` by the names the file stores, as a collection
+/// reached by name takes one: each value is converted for its field's type in
+/// `fields`, the stored schema's, so that a float field takes an int and an
+/// embedded object a `dict`, as they do through a class. A name the schema
+/// lacks passes as it is, for the engine to refuse with its own message.
+pub(crate) fn object_of(value: &Bound<'_, PyAny>, fields: &[darudb::Field]) -> PyResult<Object> {
+    let py = value.py();
+    let dict = value.cast::<PyDict>().map_err(|_| {
+        invalid(
+            py,
+            format!(
+                "an object of a collection reached by name is a dict, not {}",
+                type_name(value)
+            ),
+        )
+    })?;
+    let mut object = Object::new();
+
+    for (name, item) in dict.iter() {
+        let name = name.cast::<PyString>().map_err(|_| {
+            invalid(
+                py,
+                format!("a field's name is a str, not {}", type_name(&name)),
+            )
+        })?;
+        let name = name.to_str()?;
+        let kind = fields
+            .iter()
+            .find(|field| field.name() == name)
+            .map(darudb::Field::kind);
+
+        object.set(name, value_for(kind, &item)?);
+    }
+
+    Ok(object)
+}
+
+/// `value` as the engine's, for a field of `kind` when the schema has one.
+fn value_for(kind: Option<&darudb::Type>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    let py = value.py();
+
+    if value.is_none() {
+        return Ok(Value::Null);
+    }
+
+    match kind {
+        Some(darudb::Type::Float) if value.is_exact_instance_of::<PyInt>() => {
+            Ok(Value::Float(value.extract::<f64>()?))
+        }
+        Some(darudb::Type::Object(embedded)) => {
+            Ok(Value::Object(object_of(value, embedded.fields())?))
+        }
+        Some(darudb::Type::List(element)) => {
+            if value.is_instance_of::<PyString>() || is_bytes(value) {
+                return Err(invalid(
+                    py,
+                    format!("a list field holds a list, not {}", type_name(value)),
+                ));
+            }
+
+            value
+                .try_iter()
+                .map_err(|_| {
+                    invalid(
+                        py,
+                        format!("a list field holds a list, not {}", type_name(value)),
+                    )
+                })?
+                .map(|item| value_for(Some(element), &item?))
+                .collect::<PyResult<_>>()
+                .map(Value::List)
+        }
+        _ if value.is_instance_of::<PyDict>() => Ok(Value::Object(object_of(value, &[])?)),
+        _ => plain(value),
+    }
+}
+
 /// Whether `value` is bytes of one of the types Python keeps them in.
 pub(crate) fn is_bytes(value: &Bound<'_, PyAny>) -> bool {
     value.is_instance_of::<PyBytes>()

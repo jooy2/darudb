@@ -52,7 +52,7 @@ from ._database import (
     native_query,
 )
 from ._errors import invalid
-from ._schema import Migration, Resolved, Schema
+from ._schema import Migration, Resolved, Schema, by_name
 
 if TYPE_CHECKING:
     from ._database import Database, PasswordHashing
@@ -186,7 +186,9 @@ class _Ordered:
 
 
 class AsyncReadCollection(Generic[T]):
-    """A collection of an asynchronous transaction, for reading its objects."""
+    """A collection of an asynchronous transaction, for reading its objects:
+    instances of its class, or ``dict``s by the names the file stores for a
+    collection reached by name in the file's own schema."""
 
     __slots__ = ("_order", "_resolved", "_schema", "_txn")
 
@@ -195,7 +197,7 @@ class AsyncReadCollection(Generic[T]):
         txn: _native.NativeTransaction,
         order: _Ordered,
         resolved: Resolved,
-        schema: Schema,
+        schema: Schema | None,
     ) -> None:
         self._txn = txn
         self._order = order
@@ -313,9 +315,14 @@ class AsyncReadTransaction:
         self._schema = schema
         self._order = _Ordered()
 
-    def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema]:
+    def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema | None]:
         if self._schema is None:
-            raise invalid("the database was opened without a schema, so it has no collections")
+            # The file's own schema, whose collections are reached by name.
+            resolved = by_name(collection)  # type: ignore[arg-type]
+
+            self._native.without_schema()
+
+            return resolved, None
 
         return self._schema.resolved(collection), self._schema
 

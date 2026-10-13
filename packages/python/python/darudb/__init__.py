@@ -53,7 +53,18 @@ from ._database import (
 )
 from ._errors import DaruError
 from ._query import Condition, F, FieldRef, Param, Prepared, Query, param, where
-from ._schema import Migration, Schema, collection, embedded, field
+from ._schema import (
+    Migration,
+    Schema,
+    StoredCollection,
+    StoredField,
+    StoredIndex,
+    StoredSchema,
+    StoredType,
+    collection,
+    embedded,
+    field,
+)
 
 __all__ = [
     "ENGINE_VERSION",
@@ -85,6 +96,11 @@ __all__ = [
     "ReadTransaction",
     "SalvageReport",
     "Schema",
+    "StoredCollection",
+    "StoredField",
+    "StoredIndex",
+    "StoredSchema",
+    "StoredType",
     "WriteCollection",
     "WriteTransaction",
     "__version__",
