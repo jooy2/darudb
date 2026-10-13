@@ -585,6 +585,163 @@ describe('transactions', () => {
   });
 });
 
+describe('a file opened without a schema', () => {
+  /** What `storedSchema` says of `v1`. */
+  const described = {
+    version: 1,
+    collections: [
+      {
+        name: 'teams',
+        key: 'name',
+        autoIncrement: false,
+        fields: [
+          { name: 'name', type: { kind: 'string' }, optional: false },
+          { name: 'city', type: { kind: 'string' }, optional: true }
+        ],
+        indexes: []
+      },
+      {
+        name: 'users',
+        key: 'id',
+        autoIncrement: true,
+        fields: [
+          { name: 'name', type: { kind: 'string' }, optional: false },
+          { name: 'email', type: { kind: 'string' }, optional: true },
+          { name: 'age', type: { kind: 'int' }, optional: false, default: 0 },
+          { name: 'score', type: { kind: 'float' }, optional: true },
+          { name: 'tags', type: { kind: 'list', element: { kind: 'string' } }, optional: true },
+          { name: 'team', type: { kind: 'link', collection: 'teams' }, optional: true },
+          {
+            name: 'address',
+            type: {
+              kind: 'object',
+              fields: [
+                { name: 'city', type: { kind: 'string' }, optional: false },
+                { name: 'zip', type: { kind: 'int' }, optional: true }
+              ]
+            },
+            optional: true
+          },
+          { name: 'avatar', type: { kind: 'bytes' }, optional: true },
+          { name: 'big', type: { kind: 'int' }, optional: true }
+        ],
+        indexes: [
+          { field: 'email', unique: true },
+          { field: 'age', unique: false },
+          { field: 'tags', unique: false }
+        ]
+      }
+    ]
+  };
+
+  it('works with the schema the file holds, and describes it', (context) => {
+    const { path, db } = withData(context);
+
+    db.close();
+
+    const own = Database.open(path);
+
+    context.after(() => own.close());
+    assert.equal(own.schemaVersion, 1);
+    assert.deepEqual(own.storedSchema, described);
+    assert.ok(Object.isFrozen(own.storedSchema), 'the description cannot be changed');
+    assert.equal(own.storedSchema, own.storedSchema, 'the same object every time');
+
+    const read = own.read((txn) => txn.collection('users').find((q) => q.sortBy('name')));
+
+    assert.deepEqual(
+      read.map((user) => user.name),
+      ['Alice', 'Bob', 'Carol']
+    );
+    assert.deepEqual(read[0].address, { city: 'Seoul', zip: null });
+    assert.deepEqual(read[0].avatar, new Uint8Array([1, 2, 3]));
+    // No declaration says a field is a `bigint`, so an int reads as a number
+    // up to 2^53 and as a `bigint` beyond, losing nothing.
+    assert.equal(read[0].age, 31);
+    assert.equal(read[2].big, 2n ** 60n);
+
+    // Writes keep the file's checks and indexes.
+    own.write((txn) => {
+      const people = txn.collection('users');
+
+      assert.equal(people.insert({ name: 'Dave', age: 50, team: 'north', big: 2n ** 55n }), 4);
+      assertCode(() => people.insert({ name: 'Eve', email: 'alice@example.com' }), 'DUPLICATE_KEY');
+      assertCode(() => people.insert({ age: 3 }), 'INVALID_ARGUMENT');
+      assert.equal(people.update(2, { age: 18 }), true);
+    });
+    assert.equal(
+      own.read((txn) => txn.collection('users').count('age >= $0', [18])),
+      4
+    );
+
+    // A database that declares the schema reads what was written without it.
+    own.close();
+
+    const declared = Database.open(path, { schema: v1 });
+
+    context.after(() => declared.close());
+    assert.deepEqual(declared.storedSchema, described);
+    assert.equal(declared.read((txn) => txn.collection('users').get(4)).big, 2n ** 55n);
+  });
+
+  it('works with it through the asynchronous API too', async (context) => {
+    const { path, db } = withData(context);
+
+    db.close();
+
+    const own = await Database.openAsync(path);
+
+    context.after(() => own.close());
+    assert.deepEqual(own.storedSchema, described);
+    assert.equal(await own.readAsync((txn) => txn.collection('teams').count()), 2);
+    await own.writeAsync(async (txn) => {
+      await txn.collection('teams').put({ name: 'east' });
+    });
+    assert.deepEqual(
+      (await own.readAsync((txn) => txn.collection('teams').find())).map((team) => team.name),
+      ['east', 'north', 'south']
+    );
+  });
+
+  it("has no collections in a file without a schema, with the engine's reason", (context) => {
+    const path = tempPath(context);
+    const plain = Database.open(path);
+
+    context.after(() => plain.close());
+    assert.equal(plain.storedSchema, null);
+    assert.throws(
+      () => plain.read((txn) => txn.collection('users')),
+      (error) => error.code === 'INVALID_ARGUMENT' && /holds none/.test(error.message)
+    );
+
+    // A schema stored later is not the handle's: it opened with none.
+    Database.open(path, { schema: v1 }).close();
+    assert.throws(
+      () => plain.read((txn) => txn.collection('users')),
+      (error) => error.code === 'INVALID_ARGUMENT' && /open it again/.test(error.message)
+    );
+    assertCode(() => plain.prepare('users', 'age >= 0'), 'INVALID_ARGUMENT');
+  });
+
+  it('notices a migration under it as a database with a schema does', (context) => {
+    const { path, db } = withData(context);
+
+    db.close();
+
+    const own = Database.open(path);
+
+    context.after(() => own.close());
+    Database.open(path, {
+      schema: schema(2, {
+        teams,
+        users: collection({ ...users.fields, nick: t.string().optional() })
+      })
+    }).close();
+    assertCode(() => own.read((txn) => txn.collection('users').count()), 'SCHEMA_MISMATCH');
+    assert.equal(own.storedSchema.version, 1);
+  });
+});
+
 describe('schemas', () => {
   it('are checked every time the file opens', (context) => {
     const { path, db } = withData(context);

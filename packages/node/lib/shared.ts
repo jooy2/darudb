@@ -15,9 +15,17 @@ import {
   encodeParameters,
   writeParameters
 } from './codec.js';
-import type { CollectionLayout, IntKind, Layout, SchemaLayout } from './codec.js';
+import type {
+  CollectionLayout,
+  FieldLayout,
+  IntKind,
+  Kind,
+  Layout,
+  SchemaLayout
+} from './codec.js';
 import { Query } from './query.js';
 import type { DeclaredFields, DeclaredSchema, Spec } from './schema.js';
+import type { StoredCollection, StoredField, StoredSchema, StoredType } from './types.js';
 
 /** A primary key as the native layer takes one: an int, a string or bytes. */
 export type Key = number | bigint | string | Uint8Array;
@@ -413,12 +421,35 @@ function nameOf(layout: CollectionLayout): native.ExternalObject<'CollectionName
   return (layout.native ??= native.collectionName(layout.name));
 }
 
+/**
+ * What a database without a schema record has in place of a layout: the
+ * engine's error for reaching a collection, asked for when one is reached,
+ * so that the code and the message are those of every other language. The
+ * database opened without a schema, and the file holds none, holds one that
+ * does not read, or stored one after the database opened.
+ */
+class NoSchema {
+  readonly #database: native.NativeDatabase;
+
+  constructor(database: native.NativeDatabase) {
+    this.#database = database;
+  }
+
+  error(): Error {
+    const failure = this.#database.withoutSchema();
+
+    // Only a database with a schema record gives no failure, and that one has
+    // a layout rather than this.
+    return failure === null
+      ? invalid('the database has no collections')
+      : codeError(failure.code, failure.message);
+  }
+}
+
 /** The collection `name` of `layout`, or an error. */
-function collectionOf(layout: SchemaLayout | null, name: string): CollectionLayout {
-  if (layout === null) {
-    throw invalid(
-      'the database was opened without a schema, so it has no collections; declare one with the `schema` option'
-    );
+function collectionOf(layout: SchemaLayout | NoSchema, name: string): CollectionLayout {
+  if (layout instanceof NoSchema) {
+    throw layout.error();
   }
 
   const collection = layout.collections.get(name);
@@ -430,7 +461,66 @@ function collectionOf(layout: SchemaLayout | null, name: string): CollectionLayo
   return collection;
 }
 
+/** A field's type, as `StoredType` describes it. */
+function storedTypeOf(kind: Kind): StoredType {
+  switch (kind.type) {
+    case 'link':
+      return Object.freeze({ kind: 'link', collection: kind.target.name });
+    case 'list':
+      return Object.freeze({ kind: 'list', element: storedTypeOf(kind.element) });
+    case 'object':
+      return Object.freeze({ kind: 'object', fields: storedFieldsOf(kind.fields.list, null) });
+    default:
+      return Object.freeze({ kind: kind.type });
+  }
+}
+
+/** The fields of `list` but `left`, in the file's order, as `StoredField`s. */
+function storedFieldsOf(list: FieldLayout[], left: FieldLayout | null): readonly StoredField[] {
+  return Object.freeze(
+    list
+      .filter((field) => field !== left)
+      .map((field) =>
+        Object.freeze({
+          name: field.name,
+          type: storedTypeOf(field.kind),
+          optional: field.optional,
+          ...(field.default === undefined ? {} : { default: field.default })
+        })
+      )
+  );
+}
+
+/**
+ * The schema of `layout` in plain data, as `Database.storedSchema` gives it:
+ * what a declaration would say, without the ids the file adds. The
+ * auto-increment `id` is not among the fields, as it is not declared, and
+ * `autoIncrement` says it is there.
+ */
+function describeSchema(layout: SchemaLayout): StoredSchema {
+  const collections = [...layout.collections.values()].map((collection): StoredCollection =>
+    Object.freeze({
+      name: collection.name,
+      key: collection.key.name,
+      autoIncrement: collection.auto,
+      fields: storedFieldsOf(collection.fields.list, collection.auto ? collection.key : null),
+      indexes: Object.freeze(
+        collection.indexes.map((index) =>
+          Object.freeze({ field: index.field.name, unique: index.unique })
+        )
+      )
+    })
+  );
+
+  return Object.freeze({
+    version: Number(layout.version),
+    collections: Object.freeze(collections)
+  });
+}
+
 export {
+  NoSchema,
+  describeSchema,
   toBuffer,
   scratch,
   synchronous,

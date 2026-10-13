@@ -619,14 +619,38 @@ impl NativeDatabase {
         }))
     }
 
-    /// The stored schema's record, or `null` for a database opened without
-    /// a schema.
+    /// The record of the schema the database works with: the declared one,
+    /// or the file's own for a database opened without one. `null` when it
+    /// has neither: see `withoutSchema`.
     #[napi(getter)]
     pub fn schema_record(&self) -> Result<Option<Buffer>> {
         Ok(self
             .database()?
             .schema_record()
             .map(|record| record.to_vec().into()))
+    }
+
+    /// Why a database without a schema record has no collections, as the
+    /// engine says it when one is reached: the file holds no schema, the one
+    /// it holds does not read, or it was stored after the database opened.
+    /// `null` for a database with a schema. The JavaScript side throws it,
+    /// so that the code and the message are the engine's in every language.
+    #[napi]
+    pub fn without_schema(&self) -> Result<Option<NativeFailure>> {
+        let database = self.database()?;
+
+        if database.schema_record().is_some() {
+            return Ok(None);
+        }
+
+        // Any name: a transaction without a schema fails before it looks the
+        // collection up.
+        let read = database.begin_read().map_err(to_js_error)?;
+
+        Ok(read
+            .collection("")
+            .err()
+            .map(|error| failure(to_js_error(error))))
     }
 
     #[napi]

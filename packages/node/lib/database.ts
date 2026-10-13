@@ -29,7 +29,10 @@ import {
 } from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
 import type { DeclaredSchema } from './schema.js';
+import type { StoredSchema } from './types.js';
 import {
+  NoSchema,
+  describeSchema,
   toBuffer,
   scratch,
   synchronous,
@@ -269,9 +272,9 @@ class WriteCollection extends ReadCollection {
 /** A read transaction: one commit, for as long as its function runs. */
 class ReadTransaction {
   #txn: Handle;
-  #layout: SchemaLayout | null;
+  #layout: SchemaLayout | NoSchema;
 
-  constructor(txn: Handle, layout: SchemaLayout | null) {
+  constructor(txn: Handle, layout: SchemaLayout | NoSchema) {
     this.#txn = txn;
     this.#layout = layout;
   }
@@ -285,9 +288,9 @@ class ReadTransaction {
 /** A write transaction: changes that commit together when its function returns. */
 class WriteTransaction {
   #txn: Handle;
-  #layout: SchemaLayout | null;
+  #layout: SchemaLayout | NoSchema;
 
-  constructor(txn: Handle, layout: SchemaLayout | null) {
+  constructor(txn: Handle, layout: SchemaLayout | NoSchema) {
     this.#txn = txn;
     this.#layout = layout;
   }
@@ -446,14 +449,15 @@ function fileKeyOf(path: string): string {
 class Database {
   #native: native.NativeDatabase | null;
   #path: string;
-  #layout: SchemaLayout | null;
+  #layout: SchemaLayout | NoSchema;
   #file: string;
+  #stored: StoredSchema | null | undefined;
 
   constructor(
     token: symbol,
     database: native.NativeDatabase,
     path: string,
-    layout: SchemaLayout | null
+    layout: SchemaLayout | NoSchema
   ) {
     if (token !== CREATE) {
       throw invalid('a database is opened with `Database.open` or `Database.openAsync`');
@@ -582,14 +586,29 @@ class Database {
     return Database.#of(database, path, options.schema);
   }
 
+  /**
+   * The database `database`, with the layout of the schema it works with:
+   * the declared one, or the file's own when none was declared, which no
+   * declaration describes, so that an int beyond 2^53 reads as a `bigint`
+   * rather than losing digits.
+   */
   static #of(
     database: native.NativeDatabase,
     path: string,
     schema: DeclaredSchema | undefined
   ): Database {
     const record = database.schemaRecord;
+    let layout: SchemaLayout | NoSchema;
 
-    return new Database(CREATE, database, path, record === null ? null : layoutOf(record, schema));
+    if (record === null) {
+      layout = new NoSchema(database);
+    } else if (schema === undefined) {
+      layout = looseLayoutOf(record);
+    } else {
+      layout = layoutOf(record, schema);
+    }
+
+    return new Database(CREATE, database, path, layout);
   }
 
   /** The path the database was opened at. Still readable after `close`. */
@@ -684,15 +703,32 @@ class Database {
   }
 
   /**
-   * The schema version the file holds, or `null` without a schema. The
-   * layout is the schema this handle declared, whose version `schema` only
-   * takes as a safe integer, so it is a number even where the record's
+   * The version of the schema the database works with: the declared one, or
+   * the file's own for a database opened without one. `null` when it has
+   * neither. A declared version is a safe integer, as `schema` takes it, and
+   * so is any the engine stores, so it is a number even where the record's
    * decoder would allow a `bigint`.
    */
   get schemaVersion(): number | null {
     this.#database();
 
-    return this.#layout === null ? null : Number(this.#layout.version);
+    return this.#layout instanceof NoSchema ? null : Number(this.#layout.version);
+  }
+
+  /**
+   * The schema the database works with, in plain data: the one it was opened
+   * with, or the file's own for a database opened without one. `null` when
+   * it has neither, as `schemaVersion` is. Made the first time it is asked
+   * for, and the same frozen object after that.
+   */
+  get storedSchema(): StoredSchema | null {
+    this.#database();
+
+    if (this.#stored === undefined) {
+      this.#stored = this.#layout instanceof NoSchema ? null : describeSchema(this.#layout);
+    }
+
+    return this.#stored;
   }
 
   /**

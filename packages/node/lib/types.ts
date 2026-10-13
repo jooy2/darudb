@@ -600,8 +600,21 @@ export interface Database<S extends Schema<any> = Schema> {
   readonly formatVersion: number;
   /** Whether the file is encrypted. */
   readonly isEncrypted: boolean;
-  /** The schema version the file holds, or `null` without a schema. */
+  /**
+   * The version of the schema the database works with: the declared one, or
+   * the file's own for a database opened without one. `null` when it has
+   * neither.
+   */
   readonly schemaVersion: number | null;
+  /**
+   * The schema the database works with, in plain data: the one it was opened
+   * with, or, for a database opened without a schema, the one the file held
+   * when it opened. A program that opens a file it did not write learns its
+   * collections here, and reaches them by name. `null` when the file holds
+   * no schema, or one that does not read, which reaching a collection
+   * reports.
+   */
+  readonly storedSchema: StoredSchema | null;
   /**
    * Prepares a query on collection `collection`: text in the query language
    * with `$0`, `$1` and on, or a query built with `param` in place of values.
@@ -704,6 +717,61 @@ export interface Database<S extends Schema<any> = Schema> {
    * database refuses new work at once.
    */
   closeAsync(): Promise<void>;
+}
+
+/** A field's type, as `StoredField` gives it. */
+export type StoredType =
+  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' }
+  /** A link to an object of `collection`: its primary key. */
+  | { readonly kind: 'link'; readonly collection: string }
+  /** A list of values of `element`, a scalar type or a link. */
+  | { readonly kind: 'list'; readonly element: StoredType }
+  /** An embedded object with fields of its own. */
+  | { readonly kind: 'object'; readonly fields: readonly StoredField[] };
+
+/** A field of a collection or an embedded object, as `Database.storedSchema` gives it. */
+export interface StoredField {
+  readonly name: string;
+  readonly type: StoredType;
+  /** Whether the field may be null, which it is when an object leaves it out. */
+  readonly optional: boolean;
+  /**
+   * The value an object that leaves the field out holds, for a required
+   * field that has one. Absent otherwise.
+   */
+  readonly default?: unknown;
+}
+
+/** An index of a collection: the field it is on, and whether it is unique. */
+export interface StoredIndex {
+  readonly field: string;
+  readonly unique: boolean;
+}
+
+/** A collection, as `Database.storedSchema` gives it. */
+export interface StoredCollection {
+  readonly name: string;
+  /** The name of the primary key's field: `id` for the auto-increment. */
+  readonly key: string;
+  /** Whether the primary key is the auto-increment, an int `id` the engine assigns. */
+  readonly autoIncrement: boolean;
+  /**
+   * The fields, in the file's order. The primary key's field is one of them,
+   * unless the key is the auto-increment, whose `id` is not declared.
+   */
+  readonly fields: readonly StoredField[];
+  readonly indexes: readonly StoredIndex[];
+}
+
+/**
+ * A schema in plain data, as `Database.storedSchema` gives it: what a
+ * declaration with `schema`, `collection` and `t` says, without the ids the
+ * file adds. An int field is `int` whether it was declared with `t.int()` or
+ * `t.bigint()`, since the file stores one type of int.
+ */
+export interface StoredSchema {
+  readonly version: number;
+  readonly collections: readonly StoredCollection[];
 }
 
 /** What `Database.check` found: the commit it checked and every problem. */

@@ -34,6 +34,7 @@ import {
 } from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
 import { toBuffer, keyOf, irOf, collectionOf } from './shared.js';
+import type { NoSchema } from './shared.js';
 import type { Key, QueryInput } from './shared.js';
 
 /**
@@ -583,9 +584,9 @@ class AsyncWriteCollection extends AsyncReadCollection {
 /** An asynchronous read transaction: one commit, for as long as its function runs. */
 class AsyncReadTransaction {
   #serial: Serial;
-  #layout: SchemaLayout | null;
+  #layout: SchemaLayout | NoSchema;
 
-  constructor(serial: Serial, layout: SchemaLayout | null) {
+  constructor(serial: Serial, layout: SchemaLayout | NoSchema) {
     this.#serial = serial;
     this.#layout = layout;
   }
@@ -599,9 +600,9 @@ class AsyncReadTransaction {
 /** An asynchronous write transaction: changes that commit together when its function settles. */
 class AsyncWriteTransaction {
   #serial: Serial;
-  #layout: SchemaLayout | null;
+  #layout: SchemaLayout | NoSchema;
 
-  constructor(serial: Serial, layout: SchemaLayout | null) {
+  constructor(serial: Serial, layout: SchemaLayout | NoSchema) {
     this.#serial = serial;
     this.#layout = layout;
   }

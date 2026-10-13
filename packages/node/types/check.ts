@@ -5,7 +5,7 @@
  * marked `@ts-expect-error` stays an error. Nothing here runs.
  */
 import { collection, conditions, Database, param, Query, schema, t } from '../dist/index.js';
-import type { CheckReport, Key, SalvageReport } from '../dist/index.js';
+import type { CheckReport, Key, SalvageReport, StoredSchema, StoredType } from '../dist/index.js';
 
 const app = schema(1, {
   teams: collection({ name: t.string().primaryKey(), city: t.string().optional() }),
@@ -138,6 +138,16 @@ const preparedCount: number = db.read((txn) => {
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 
+// Opened without a schema, a database works with the file's own, which it
+// describes in plain data; its collections are reached by any name.
+const stored: StoredSchema | null = plain.storedSchema;
+const firstType: StoredType | undefined = stored?.collections[0]?.fields[0]?.type;
+const anyCollection: Record<string, unknown>[] = plain.read((txn) =>
+  txn.collection('anything').find()
+);
+// @ts-expect-error the description is read-only.
+plain.storedSchema = null;
+
 // The asynchronous API has the same types, resolved.
 async function asynchronous() {
   const opened = await Database.openAsync('app.darudb', {
@@ -226,6 +236,9 @@ export {
   friends,
   embeddedId,
   version,
+  stored,
+  firstType,
+  anyCollection,
   preparedCount,
   asynchronous,
   firstPage,

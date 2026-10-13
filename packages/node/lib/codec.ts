@@ -146,7 +146,15 @@ export interface CollectionLayout {
   fields: Layout;
   key: FieldLayout;
   auto: boolean;
+  /** The indexes, each on a field of `fields`, for describing the schema. */
+  indexes: IndexLayout[];
   native?: ExternalObject<'CollectionName'>;
+}
+
+/** An index of a stored schema: the field it is on, and whether it is unique. */
+export interface IndexLayout {
+  field: FieldLayout;
+  unique: boolean;
 }
 
 /** A stored schema as `decodeSchema` reads it: its version and its collections by name. */
@@ -1760,12 +1768,26 @@ function decodeSchemaFields(bytes: Uint8Array): SchemaLayout {
     const fields = raw.value as AnyRecord;
     const list = field(fields, 3, 'list').map(fieldOf);
     const key = field(fields, 5, 'int');
+    const name = field(fields, 2, 'string');
+    const indexes = field(fields, 7, 'list').map((raw) => {
+      // A value that is not an object fails at `get`, as above.
+      const index = raw.value as AnyRecord;
+      const on = field(index, 2, 'int');
+      const indexed = list.find((each) => each.id === on);
+
+      if (indexed === undefined) {
+        throw corrupted(`\`${name}\` indexes a field it lacks`);
+      }
+
+      return { field: indexed, unique: field(index, 3, 'bool') };
+    });
     const collection = {
       id: field(fields, 1, 'int'),
-      name: field(fields, 2, 'string'),
+      name,
       fields: fieldsOf(list),
       key: list.find((each) => each.id === key),
-      auto: field(fields, 6, 'bool')
+      auto: field(fields, 6, 'bool'),
+      indexes
     };
 
     if (collection.key === undefined) {

@@ -56,6 +56,19 @@ await db.writeAsync(async (txn) => {
 const count = await db.readAsync((txn) => txn.collection('users').count());
 ```
 
+A program that opens a file it did not write needs no schema of its own. Opened without one, a database works with the schema the file holds: `storedSchema` describes its collections, fields, keys and indexes in plain data, and the collections are read and written by name, with the file's checks and indexes kept as ever. An int reads as a number up to 2^53 and as a `bigint` beyond, since no declaration says which.
+
+```ts
+const db = Database.open('app.darudb');
+
+for (const { name } of db.storedSchema?.collections ?? []) {
+  console.log(
+    name,
+    db.read((txn) => txn.collection(name).count())
+  );
+}
+```
+
 Objects and queries cross into the engine as bytes, one buffer per call, so a batch of objects costs one call. Raising the schema's version migrates the file when it opens, with renames, deletions and a JavaScript function of your own; [the guide](https://darudb.cdget.com/guide/nodejs) has the details.
 
 A `key` of 32 bytes or a `password` in the options encrypts a new database, every page of it, and opens an encrypted one: `Database.open('secret.darudb', { schema: app, password })`.
