@@ -10,7 +10,7 @@ counterpart: /api/rust/derive
 
 ```yaml
 dependencies:
-  darudb: ^1.2.0
+  darudb: ^1.3.0
 
 dev_dependencies:
   build_runner: ^2.10.0

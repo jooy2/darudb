@@ -10,7 +10,7 @@ The annotations make a Dart class the objects of a collection, or an embedded ob
 
 ```yaml
 dependencies:
-  darudb: ^1.2.0
+  darudb: ^1.3.0
 
 dev_dependencies:
   build_runner: ^2.10.0
