@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "darudb"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "argon2",
  "blake2",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "darudb-derive"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "darudb",
  "proc-macro2",
