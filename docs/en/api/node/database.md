@@ -123,7 +123,29 @@ Whether the file is encrypted.
 readonly schemaVersion: number | null;
 ```
 
-The version of the schema the file held when this handle opened it, or `null` when it was opened without a schema.
+The version of the schema the database works with: the declared one, or the file's own for a database opened without one. It is `null` when the database has neither.
+
+### storedSchema
+
+```ts
+readonly storedSchema: StoredSchema | null;
+```
+
+The schema the database works with, in plain data: the one it was opened with, or, for a database opened without one, the one the file held when it opened. A program that opens a file it did not write learns its collections here, with their fields, types, primary keys and indexes, as a [StoredSchema](../../types/node/stored-schema.md), and reaches each by name with [`collection`](./read-transaction.md#collection). It is `null` when the file holds no schema, or one that does not read, which reaching a collection reports. The object is made the first time it is read, and is the same frozen object after that.
+
+```ts
+const db = Database.open('app.darudb');
+
+for (const { name, fields } of db.storedSchema?.collections ?? []) {
+  const count = db.read((txn) => txn.collection(name).count());
+
+  console.log(
+    name,
+    count,
+    fields.map((field) => field.name)
+  );
+}
+```
 
 ## Methods
 

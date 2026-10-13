@@ -36,7 +36,7 @@ def collection(self, collection: type[T]) -> WriteCollection[T]: ...
 def collection(self, collection: str) -> WriteCollection[Any]: ...
 ```
 
-클래스 `collection`의 컬렉션이나 그 이름의 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. 이 컬렉션은 트랜잭션 자신의 변경까지 읽고, 변경을 더합니다. 스키마에 없는 클래스나 이름이거나 스키마 없이 연 데이터베이스이면 `INVALID_ARGUMENT`를 일으킵니다.
+클래스 `collection`의 컬렉션이나 그 이름의 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. 이 컬렉션은 트랜잭션 자신의 변경까지 읽고, 변경을 더합니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션에 이름으로 접근하고, 객체를 파일에 저장된 이름을 키로 한 `dict`로 씁니다. 각 값은 클래스로 쓸 때처럼 필드 타입에 맞게 바뀌어서, float 필드에 `int`를 넣어도 됩니다. 스키마에 없는 클래스나 이름이거나, 스키마 없이 연 데이터베이스에 클래스를 주거나, 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 일으킵니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`을 일으킵니다.
 
 ## AsyncWriteTransaction
 

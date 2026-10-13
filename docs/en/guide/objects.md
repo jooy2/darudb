@@ -398,6 +398,109 @@ An `Option` field is optional, `Vec<T>` a list, `Link<T>` a link, and a struct w
 
 :::
 
+## Open a file without its schema
+
+A program that opens a file it did not write, such as a tool that shows what a database holds, needs no schema of its own. Opened without one, a database works with the schema the file holds, as it is: nothing is stored, compared or migrated, the collections are reached by name, and a description of the schema says what each one holds, its fields with their types, its primary key and its indexes. Objects are the language's dynamic objects, read and written with the file's checks and indexes kept as ever.
+
+::: lang rust
+
+`Database::stored_schema` gives the schema in the form a program declares one, and each collection is reached by name, with `Object`s.
+
+```rust
+use darudb::{Database, Object};
+
+fn main() -> darudb::Result<()> {
+    let db = Database::open("app.darudb")?;
+    let Some(schema) = db.stored_schema() else {
+        return Ok(());
+    };
+
+    for collection in schema.collections() {
+        let fields: Vec<_> = collection.fields().iter().map(|field| field.name()).collect();
+
+        println!("{} keyed by {}: {fields:?}", collection.name(), collection.key());
+    }
+
+    let mut txn = db.begin_write()?;
+
+    txn.collection("users")?.insert(Object::new().with("name", "Carol"))?;
+    txn.commit()
+}
+```
+
+:::
+
+::: lang node
+
+`storedSchema` gives the schema in plain data, and each collection is reached by name, with plain objects. An int reads as a number up to 2^53 and as a `bigint` beyond, since no declaration says which.
+
+```ts
+import { Database } from 'darudb';
+
+const db = Database.open('app.darudb');
+
+for (const { name, key, fields } of db.storedSchema?.collections ?? []) {
+  console.log(
+    `${name} keyed by ${key}:`,
+    fields.map((field) => field.name)
+  );
+}
+
+db.write((txn) => {
+  txn.collection('users').insert({ name: 'Carol' });
+});
+```
+
+:::
+
+::: lang dart
+
+`storedSchema` gives the schema, whose collections are `MapCollection`s with maps for objects, and `storedCollection` gives each by name. `MapQuery` names a field by its stored name and says what it holds.
+
+```dart
+import 'package:darudb/darudb.dart';
+
+void main() {
+  final db = Database.open('app.darudb');
+
+  for (final collection in db.storedSchema?.collections ?? const []) {
+    print('${collection.name}: ${collection.fields.map((field) => field.name)}');
+  }
+
+  final users = db.storedCollection('users');
+
+  db.write((txn) => txn.collection(users).insert({'name': 'Carol'}));
+
+  final adults = db.read(
+    (txn) => txn.collection(users).find((q) => q.where(q.intField('age').atLeast(18))),
+  );
+
+  print(adults.length);
+  db.close();
+}
+```
+
+:::
+
+::: lang python
+
+`stored_schema` gives the schema by the names the file stores, and each collection is reached by name, with `dict`s for objects.
+
+```python
+import darudb
+
+with darudb.Database.open("app.darudb") as db:
+    for collection in db.stored_schema.collections if db.stored_schema else ():
+        print(collection.name, "keyed by", collection.key, [field.name for field in collection.fields])
+
+    with db.write() as txn:
+        txn.collection("users").insert({"name": "Carol"})
+```
+
+:::
+
+A file that holds no schema, such as a new one, has no collections then, and reaching one fails with `INVALID_ARGUMENT`. A stored schema that does not read still leaves the file open, so that the [integrity check](./tools.md) can say what is wrong, and reaching a collection fails with `CORRUPTED`, or with `UNSUPPORTED_FORMAT_VERSION` for an object format the build does not know.
+
 ## Several handles and processes
 
-Each handle keeps the schema it was opened with. When another process, or another handle in the same process, migrates the file, the next transaction to reach a collection through the old handle fails with `SCHEMA_MISMATCH`, and the handle has to be opened again with the new schema. A read transaction that began before the migration goes on reading under the old schema, since it sees the commit it began at.
+Each handle keeps the schema it was opened with, and one opened without a schema keeps the file's own as it was when the handle opened. When another process, or another handle in the same process, migrates the file, the next transaction to reach a collection through the old handle fails with `SCHEMA_MISMATCH`, and the handle has to be opened again with the new schema. A read transaction that began before the migration goes on reading under the old schema, since it sees the commit it began at.

@@ -31,7 +31,7 @@ ReadCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Objec
 );
 ```
 
-The collection of `schema`, as a [ReadCollection](./read-collection.md) whose objects are of the class `T`, whose queries `Q` builds and whose primary key is a `K`. The type arguments come from the schema constant, such as `userSchema`, so they are never written out. It throws `INVALID_ARGUMENT` for a collection the database was not opened with. If another process or handle has migrated the file since this handle opened it, reading the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
+The collection of `schema`, as a [ReadCollection](./read-collection.md) whose objects are of the class `T`, whose queries `Q` builds and whose primary key is a `K`. The type arguments come from the schema constant, such as `userSchema`, so they are never written out. A database opened without a schema takes the [MapCollection](../../types/dart/map-collection.md)s of the file's own, and a schema constant whose fields are the stored ones. It throws `INVALID_ARGUMENT` for a collection the database was not opened with, and when the database has no schema at all, as when the file holds none. If another process or handle has migrated the file since this handle opened it, reading the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
 
 ## AsyncReadTransaction
 

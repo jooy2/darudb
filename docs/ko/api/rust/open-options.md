@@ -42,18 +42,18 @@ fn main() -> darudb::Result<()> {
 
 ## 기본값
 
-| 옵션                 | 기본값                                   |
-| -------------------- | ---------------------------------------- |
-| `create`             | `true`                                   |
-| `page_size`          | 4096바이트                               |
-| `busy_timeout`       | 5초                                      |
-| `cache_size`         | 32 MiB                                   |
-| `max_unsynced_pages` | 16384페이지                              |
-| `max_unsynced_time`  | 1초                                      |
-| `password_hashing`   | 19456 KiB, 반복 2회, 레인 1개            |
-| `upgrade_format`     | `true`                                   |
-| `key`, `password`    | 없음. 데이터베이스를 암호화하지 않습니다 |
-| `schema`             | 없음. 데이터베이스에 컬렉션이 없습니다   |
+| 옵션                 | 기본값                                            |
+| -------------------- | ------------------------------------------------- |
+| `create`             | `true`                                            |
+| `page_size`          | 4096바이트                                        |
+| `busy_timeout`       | 5초                                               |
+| `cache_size`         | 32 MiB                                            |
+| `max_unsynced_pages` | 16384페이지                                       |
+| `max_unsynced_time`  | 1초                                               |
+| `password_hashing`   | 19456 KiB, 반복 2회, 레인 1개                     |
+| `upgrade_format`     | `true`                                            |
+| `key`, `password`    | 없음. 데이터베이스를 암호화하지 않습니다          |
+| `schema`             | 없음. 파일에 저장된 스키마가 있으면 그것을 씁니다 |
 
 ## 연관 함수
 
@@ -171,7 +171,9 @@ pub fn password_hashing(
 pub fn schema(&mut self, schema: Schema) -> &mut Self
 ```
 
-데이터베이스의 컬렉션과 그 객체가 담는 내용을 버전과 함께 선언합니다. [`Schema`](./schema.md)를 보세요. 처음 열 때 스키마를 파일에 저장합니다. 그 뒤로 같은 버전인 파일은 스키마가 같으면 열리고 다르면 `SCHEMA_MISMATCH`로 실패하므로, 스키마를 바꾸려면 버전을 올려야 합니다. 더 낮은 버전을 가진 파일은 `open`이 반환하기 전에 마이그레이션하고, 더 높은 버전을 가진 파일은 `SCHEMA_TOO_NEW`로 실패합니다. 스키마 없이 연 데이터베이스에는 컬렉션이 없고 바이트 트리만 쓸 수 있습니다.
+데이터베이스의 컬렉션과 그 객체가 담는 내용을 버전과 함께 선언합니다. [`Schema`](./schema.md)를 보세요. 처음 열 때 스키마를 파일에 저장합니다. 그 뒤로 같은 버전인 파일은 스키마가 같으면 열리고 다르면 `SCHEMA_MISMATCH`로 실패하므로, 스키마를 바꾸려면 버전을 올려야 합니다. 더 낮은 버전을 가진 파일은 `open`이 반환하기 전에 마이그레이션하고, 더 높은 버전을 가진 파일은 `SCHEMA_TOO_NEW`로 실패합니다.
+
+스키마 없이 열면 파일에 저장된 스키마를 그대로 씁니다. 저장하거나 비교하거나 마이그레이션하는 일은 없고, 컬렉션에는 이름으로 접근하며, [`Database::stored_schema`](./database.md#stored-schema)가 그 컬렉션들을 알려 줍니다. 스키마를 모르는 파일도 이렇게 열 수 있습니다. 새 파일처럼 저장된 스키마가 없는 파일이면 컬렉션이 없고 바이트 트리만 쓸 수 있습니다.
 
 스키마를 쓰는 예는 [컬렉션과 객체](../../guide/objects.md)에 있습니다.
 

@@ -74,7 +74,7 @@ An error from a step ends the migration. Dropping the `PendingMigration`, whethe
 
 ## Field ids
 
-Records hold field ids rather than names. `Database::schema_record` returns the schema a handle was opened with as the record the file holds it in, with the file's ids for every collection, field and index, or `None` for a handle opened without a schema. The binding decodes it once, and maps names to ids from then on.
+Records hold field ids rather than names. `Database::schema_record` returns the schema a handle was opened with as the record the file holds it in, with the file's ids for every collection, field and index. A handle opened without a schema gets the file's own, so a binding reads a file it has no declaration for the same way; it is `None` only when the handle has no schema at all, and the binding then asks the engine why, rather than writing an error of its own. The binding decodes it once, and maps names to ids from then on.
 
 ```rust
 pub fn schema_record(&self) -> Option<&[u8]>

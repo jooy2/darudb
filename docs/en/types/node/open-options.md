@@ -101,7 +101,7 @@ The collections the database holds, as [`schema`](../../api/node/schema.md) decl
 - A file holding a newer version fails with `SCHEMA_TOO_NEW`.
 - A file holding an older version is migrated before `open` returns, with `migrations`.
 
-A declaration the engine cannot store, such as a link to a collection the schema does not have, fails with `INVALID_ARGUMENT`. Without a schema the database has no collections: `schemaVersion` is `null`, and `collection` fails with `INVALID_ARGUMENT`. [Collections and objects](../../guide/objects.md) has the rules a schema follows.
+A declaration the engine cannot store, such as a link to a collection the schema does not have, fails with `INVALID_ARGUMENT`. Without a schema, the database works with the one the file holds, as it is: nothing is stored, checked or migrated, the collections are reached by name, their objects are plain objects whose ints read as numbers up to 2^53 and as `bigint`s beyond, and [`storedSchema`](../../api/node/database.md#storedschema) describes them. A file that holds no schema, such as a new one, has no collections then: `schemaVersion` is `null`, and `collection` fails with `INVALID_ARGUMENT`. [Collections and objects](../../guide/objects.md) has the rules a schema follows.
 
 ### migrations
 

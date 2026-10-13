@@ -34,7 +34,7 @@ WriteCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Obje
 );
 ```
 
-The collection of `schema`, as a [WriteCollection](./write-collection.md), which reads the transaction's own changes and makes more. It throws `INVALID_ARGUMENT` for a collection the database was not opened with.
+The collection of `schema`, as a [WriteCollection](./write-collection.md), which reads the transaction's own changes and makes more. A database opened without a schema takes the [MapCollection](../../types/dart/map-collection.md)s of the file's own, and a schema constant whose fields are the stored ones. It throws `INVALID_ARGUMENT` for a collection the database was not opened with, and when the database has no schema at all, as when the file holds none.
 
 ## AsyncWriteTransaction
 

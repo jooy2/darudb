@@ -34,7 +34,7 @@ collection<N extends NameOf<S>>(
 ): WriteCollection<ObjectOf<FieldsOf<S, N>>, InsertOf<FieldsOf<S, N>>>;
 ```
 
-스키마의 `name` 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. `N`은 스키마에 있는 컬렉션 이름 중 하나이고, `FieldsOf<S, N>`은 그 컬렉션의 필드입니다. 읽은 객체의 타입은 [ObjectOf](../../types/node/object-types.md)가, 쓰는 객체의 타입은 `InsertOf`가 이 필드로 만듭니다. 스키마에 없는 이름이거나 스키마 없이 연 데이터베이스이면 `INVALID_ARGUMENT`를 던집니다.
+스키마의 `name` 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. `N`은 스키마에 있는 컬렉션 이름 중 하나이고, `FieldsOf<S, N>`은 그 컬렉션의 필드입니다. 읽은 객체의 타입은 [ObjectOf](../../types/node/object-types.md)가, 쓰는 객체의 타입은 `InsertOf`가 이 필드로 만듭니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션에 이름으로 접근하고, 객체는 일반 객체입니다. 스키마에 없는 이름이거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 던집니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다.
 
 ## AsyncWriteTransaction
 

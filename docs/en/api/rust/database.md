@@ -14,7 +14,7 @@ pub struct Database
 
 A program gets one from `Database::open`, or from [`OpenOptions::open`](./open-options.md#open) when it needs options. Cloning a handle, or opening the same file again in the same process, gives another handle to one shared instance: one file handle, one page cache, and one write transaction at a time. The file is closed when the last handle is dropped, and deferred commits are made durable then; [`close`](#close) does the same and reports a failure. `Database` is `Send` and `Sync`, so handles can be cloned into other threads or shared between them.
 
-Each handle keeps the schema it was opened with, and its transactions reach collections through that schema. When another handle or another process migrates the file, the old handle's next transaction to reach a collection fails with `SCHEMA_MISMATCH`, and the file has to be opened again with the new schema.
+Each handle keeps the schema it was opened with, and its transactions reach collections through that schema. A handle opened without a schema keeps the one the file held as it opened, so a program can read and write a file whose schema it does not know; [`stored_schema`](#stored-schema) describes it. When another handle or another process migrates the file, the old handle's next transaction to reach a collection fails with `SCHEMA_MISMATCH`, and the file has to be opened again with the new schema.
 
 ## Associated functions
 
@@ -175,4 +175,34 @@ Closes this handle, making deferred commits durable first. It fails with `SYNC_F
 pub fn schema_record(&self) -> Option<&[u8]>
 ```
 
-The schema this handle opened the file with, encoded as the file stores it, or `None` for a handle opened without a schema. It is for language bindings, which read the ids of collections and fields from it to encode and decode records themselves; [Bindings](../../engine/bindings.md) explains how they use it, and [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#the-stored-schema) specifies the encoding. A Rust program has no need of it.
+The schema this handle opened the file with, encoded as the file stores it: the declared one, or the file's own for a handle opened without a schema. It is `None` when the handle has neither, as [`stored_schema`](#stored-schema) is. It is for language bindings, which read the ids of collections and fields from it to encode and decode records themselves; [Bindings](../../engine/bindings.md) explains how they use it, and [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#the-stored-schema) specifies the encoding. A Rust program has no need of it.
+
+### stored_schema
+
+```rust
+pub fn stored_schema(&self) -> Option<Schema>
+```
+
+The schema this handle works with, as the file stores it, in the form an application declares one: the [`Schema`](./schema.md) the handle was opened with, or, for a handle opened without one, the schema the file held when it opened. A program that opens a file it did not write learns its collections here, with their fields, primary keys and indexes, which [`Schema`](./schema.md#version), [`Collection`](./collection.md#name) and [`Field`](../../types/rust/field.md) read back, and reaches each by name with [`ReadTransaction::collection`](./read-transaction.md#collection).
+
+It is `None` when the handle has no schema: the file holds none, or the one it holds does not read. A file opened without a schema opens either way, so that [`check`](#check) can report the damage, and reaching a collection fails then with the reason: `CORRUPTED`, or `UNSUPPORTED_FORMAT_VERSION` for an object format this build does not know.
+
+```rust
+use darudb::Database;
+
+fn main() -> darudb::Result<()> {
+    let db = Database::open("app.darudb")?;
+
+    if let Some(schema) = db.stored_schema() {
+        let read = db.begin_read()?;
+
+        for collection in schema.collections() {
+            let objects = read.collection(collection.name())?.len()?;
+
+            println!("{}: {objects} objects", collection.name());
+        }
+    }
+
+    Ok(())
+}
+```

@@ -101,7 +101,7 @@ schema?: S;
 - 파일의 버전이 더 높으면 `SCHEMA_TOO_NEW`로 실패합니다.
 - 파일의 버전이 더 낮으면 `open`이 반환하기 전에 `migrations`로 마이그레이션합니다.
 
-스키마에 없는 컬렉션을 가리키는 링크처럼 엔진이 저장할 수 없는 선언은 `INVALID_ARGUMENT`로 실패합니다. 스키마가 없으면 컬렉션도 없어서 `schemaVersion`은 `null`이고, `collection`은 `INVALID_ARGUMENT`로 실패합니다. 스키마가 지키는 규칙은 [컬렉션과 객체](../../guide/objects.md)에 있습니다.
+스키마에 없는 컬렉션을 가리키는 링크처럼 엔진이 저장할 수 없는 선언은 `INVALID_ARGUMENT`로 실패합니다. 스키마 없이 열면 파일에 저장된 스키마를 그대로 씁니다. 저장하거나 비교하거나 마이그레이션하는 일은 없고, 컬렉션에는 이름으로 접근합니다. 객체는 일반 객체이며, int 값은 2^53까지는 number로, 그보다 크면 `bigint`로 읽힙니다. 어떤 컬렉션이 있는지는 [`storedSchema`](../../api/node/database.md#storedschema)가 알려 줍니다. 새 파일처럼 저장된 스키마가 없는 파일이면 컬렉션이 없어서 `schemaVersion`은 `null`이고, `collection`은 `INVALID_ARGUMENT`로 실패합니다. 스키마가 지키는 규칙은 [컬렉션과 객체](../../guide/objects.md)에 있습니다.
 
 ### migrations
 

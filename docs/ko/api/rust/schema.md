@@ -66,3 +66,19 @@ pub fn collection(mut self, collection: Collection) -> Self
 ```
 
 `collection`을 더합니다. 이름이 같은 컬렉션이 둘이면 `open`이 `INVALID_ARGUMENT`로 실패합니다.
+
+### version
+
+```rust
+pub fn version(&self) -> u64
+```
+
+스키마의 버전입니다.
+
+### collections
+
+```rust
+pub fn collections(&self) -> &[Collection]
+```
+
+컬렉션들을 선언한 순서대로 돌려줍니다. [`Database::stored_schema`](./database.md#stored-schema)가 파일에서 읽은 스키마라면 파일에 저장된 순서입니다. [`Collection`](./collection.md#name)을 읽는 메서드와 함께 쓰면, 직접 선언하지 않은 스키마도 살펴볼 수 있습니다.

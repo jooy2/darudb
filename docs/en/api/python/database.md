@@ -11,7 +11,7 @@ order: 1
 class Database: ...
 ```
 
-There is no constructor: `Database.open` and `Database.open_async` return one, and calling `Database()` raises `TypeError`. A database opened without a [schema](./schema.md) has no collections, and one opened with a schema reaches each collection through its class, as `txn.collection(User)`.
+There is no constructor: `Database.open` and `Database.open_async` return one, and calling `Database()` raises `TypeError`. A database opened with a [schema](./schema.md) reaches each collection through its class, as `txn.collection(User)`. One opened without a schema works with the schema the file holds: it reaches each collection by name, as `txn.collection("users")`, its objects are `dict`s by the names the file stores, and [`stored_schema`](#stored-schema) describes them. A file that holds no schema has no collections then.
 
 A `Database` works until `close` or `close_async` has closed it. After that `path`, `schema`, `schema_version` and `is_open` can still be read, and every member that uses the file raises a [DaruError](../../types/python/error.md) with the code `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. Some options belong to the file rather than to one handle: `busy_timeout`, `cache_size`, `upgrade_format` and `password_hashing` stay those of the first handle.
 
@@ -167,6 +167,20 @@ schema: Schema | None
 
 The [Schema](./schema.md) the database was opened with, or `None`. It can still be read after `close`.
 
+### stored_schema
+
+```python
+stored_schema: StoredSchema | None
+```
+
+The schema the database works with, by the names the file stores, as a [StoredSchema](../../types/python/stored-schema.md): the one it was opened with, or, for a database opened without one, the one the file held when it opened. A program that opens a file it did not write learns its collections here, with their fields, types, primary keys and indexes, and reaches each by name. It is `None` when the file holds no schema, or one that does not read, which reaching a collection reports. It can still be read after `close`.
+
+```python
+with darudb.Database.open("app.darudb") as db, db.read() as txn:
+    for collection in db.stored_schema.collections if db.stored_schema else ():
+        print(collection.name, txn.collection(collection.name).count())
+```
+
 ### is_open
 
 ```python
@@ -210,7 +224,7 @@ Whether the file is encrypted.
 def schema_version(self) -> int | None: ...
 ```
 
-The version of the schema the database was opened with, which is the version the file held once it opened, or `None` when it was opened without a schema. It comes from `schema`, so it can still be read after `close`.
+The version of the schema the database works with: the one it was opened with, which is the version the file held once it opened, or the file's own for a database opened without one. It is `None` when the database has neither. It comes from `schema` and `stored_schema`, so it can still be read after `close`.
 
 ## Methods
 
@@ -222,7 +236,7 @@ def prepare(self, collection: type[T] | str, query: Query | Condition | str) -> 
 
 Prepares a query once on `collection`, given as its class or its name, so that each run gives only the values of its parameters. The query is text in the query language with `$0`, `$1` and on, or a [Query](./query.md) or a [condition](./conditions.md) built with [param](./param.md) in place of values. The [Prepared](../../types/python/prepared.md) query holds no database or transaction, so it runs in any transaction on that collection, synchronous or asynchronous.
 
-It fails with `INVALID_ARGUMENT` for a collection the schema does not have, and when the database was opened without a schema, with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed. A field the collection does not have is found when the query runs.
+A database opened without a schema prepares a query on a collection of the file's own, given by its name. It fails with `INVALID_ARGUMENT` for a collection the schema does not have, and when the database has no schema at all, with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION` when the schema the file holds does not read, with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed. A field the collection does not have is found when the query runs.
 
 ```python
 from darudb import F, param

@@ -14,7 +14,7 @@ pub struct Database
 
 `Database::open`으로 얻고, 옵션이 필요하면 [`OpenOptions::open`](./open-options.md#open)으로 얻습니다. 핸들을 복제하거나 같은 프로세스에서 같은 파일을 다시 열면, 공유 인스턴스 하나를 가리키는 핸들이 하나 더 생깁니다. 파일 핸들과 페이지 캐시는 하나씩이고, 쓰기 트랜잭션도 한 번에 하나입니다. 마지막 핸들을 버리면 지연 커밋을 디스크에 기록하고 파일을 닫습니다. [`close`](#close)도 같은 일을 하지만, 실패하면 알려 준다는 점이 다릅니다. `Database`는 `Send`이자 `Sync`이므로 핸들을 복제해 다른 스레드로 넘기거나 여러 스레드가 함께 써도 됩니다.
 
-핸들은 열 때 받은 스키마를 계속 쓰고, 그 핸들의 트랜잭션은 이 스키마로 컬렉션에 접근합니다. 다른 핸들이나 다른 프로세스가 파일을 마이그레이션하면, 예전 핸들로 컬렉션에 접근하는 다음 트랜잭션은 `SCHEMA_MISMATCH`로 실패합니다. 그때는 새 스키마로 파일을 다시 열어야 합니다.
+핸들은 열 때 받은 스키마를 계속 쓰고, 그 핸들의 트랜잭션은 이 스키마로 컬렉션에 접근합니다. 스키마 없이 연 핸들은 열 때 파일에 저장돼 있던 스키마를 씁니다. 그래서 스키마를 모르는 파일도 읽고 쓸 수 있고, 그 스키마는 [`stored_schema`](#stored-schema)로 알 수 있습니다. 다른 핸들이나 다른 프로세스가 파일을 마이그레이션하면, 예전 핸들로 컬렉션에 접근하는 다음 트랜잭션은 `SCHEMA_MISMATCH`로 실패합니다. 그때는 새 스키마로 파일을 다시 열어야 합니다.
 
 ## 연관 함수
 
@@ -175,4 +175,34 @@ pub fn close(self) -> Result<()>
 pub fn schema_record(&self) -> Option<&[u8]>
 ```
 
-이 핸들이 파일을 열 때 쓴 스키마를 파일이 저장하는 형식으로 인코딩해 돌려줍니다. 스키마 없이 연 핸들이면 `None`입니다. 언어 바인딩을 위한 메서드입니다. 바인딩은 여기서 컬렉션과 필드의 ID를 읽어 레코드를 직접 인코딩하고 디코딩합니다. 바인딩이 이를 어떻게 쓰는지는 [바인딩](../../engine/bindings.md)에, 인코딩 형식은 [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#the-stored-schema)에 있습니다. Rust 프로그램에서는 쓸 일이 없습니다.
+이 핸들이 파일을 열 때 쓴 스키마를 파일이 저장하는 형식으로 인코딩해 돌려줍니다. 선언한 스키마이거나, 스키마 없이 연 핸들이면 파일에 저장된 스키마입니다. 둘 다 없으면 [`stored_schema`](#stored-schema)처럼 `None`입니다. 언어 바인딩을 위한 메서드입니다. 바인딩은 여기서 컬렉션과 필드의 ID를 읽어 레코드를 직접 인코딩하고 디코딩합니다. 바인딩이 이를 어떻게 쓰는지는 [바인딩](../../engine/bindings.md)에, 인코딩 형식은 [design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#the-stored-schema)에 있습니다. Rust 프로그램에서는 쓸 일이 없습니다.
+
+### stored_schema
+
+```rust
+pub fn stored_schema(&self) -> Option<Schema>
+```
+
+이 핸들이 쓰는 스키마를 애플리케이션이 선언하는 형태로 돌려줍니다. 핸들을 열 때 준 [`Schema`](./schema.md)이거나, 스키마 없이 연 핸들이면 열 때 파일에 저장돼 있던 스키마입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션과 각 컬렉션의 필드, 기본 키, 인덱스를 알아냅니다. 읽는 방법은 [`Schema`](./schema.md#version)와 [`Collection`](./collection.md#name), [`Field`](../../types/rust/field.md)에 있고, 각 컬렉션에는 [`ReadTransaction::collection`](./read-transaction.md#collection)에 이름을 넘겨 접근합니다.
+
+핸들에 스키마가 없으면 `None`입니다. 파일에 스키마가 없거나, 저장된 스키마를 읽을 수 없는 경우입니다. 스키마 없이 열 때는 어느 쪽이든 파일이 열리므로 [`check`](#check)로 손상을 확인할 수 있습니다. 이때 컬렉션에 접근하면 그 이유로 실패합니다. 저장된 스키마가 손상됐으면 `CORRUPTED`이고, 이 빌드가 모르는 객체 형식이면 `UNSUPPORTED_FORMAT_VERSION`입니다.
+
+```rust
+use darudb::Database;
+
+fn main() -> darudb::Result<()> {
+    let db = Database::open("app.darudb")?;
+
+    if let Some(schema) = db.stored_schema() {
+        let read = db.begin_read()?;
+
+        for collection in schema.collections() {
+            let objects = read.collection(collection.name())?.len()?;
+
+            println!("{}: {objects} objects", collection.name());
+        }
+    }
+
+    Ok(())
+}
+```

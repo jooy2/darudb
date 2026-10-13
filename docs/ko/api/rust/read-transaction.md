@@ -115,7 +115,7 @@ pub fn collection(&self, name: &str) -> Result<CollectionReader<'_>>
 
 핸들을 열 때 쓴 스키마에서 `name` 컬렉션을 꺼내 객체를 읽을 수 있게 합니다. [`CollectionReader`](./collection-reader.md)를 보세요. 트랜잭션을 빌려 쓰며, 여러 컬렉션을 한꺼번에 읽어도 됩니다.
 
-스키마에 그런 컬렉션이 없거나 스키마 없이 연 데이터베이스면 `INVALID_ARGUMENT`로 실패합니다. 이 핸들을 연 뒤에 다른 핸들이나 프로세스가 파일을 마이그레이션해서, 이 트랜잭션이 보는 커밋에 다른 스키마가 있으면 `SCHEMA_MISMATCH`로 실패합니다.
+스키마 없이 연 핸들은 파일에 저장된 스키마의 컬렉션에 접근합니다. 스키마에 그런 컬렉션이 없거나, 열 때 파일에 스키마가 없어서 핸들에 스키마가 전혀 없으면 `INVALID_ARGUMENT`로 실패합니다. 파일에 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 이 핸들을 연 뒤에 다른 핸들이나 프로세스가 파일을 마이그레이션해서, 이 트랜잭션이 보는 커밋에 다른 스키마가 있으면 `SCHEMA_MISMATCH`로 실패합니다.
 
 ### collection_of
 

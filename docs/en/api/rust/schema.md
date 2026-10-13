@@ -66,3 +66,19 @@ pub fn collection(mut self, collection: Collection) -> Self
 ```
 
 Adds `collection`. Two collections with one name fail `open` with `INVALID_ARGUMENT`.
+
+### version
+
+```rust
+pub fn version(&self) -> u64
+```
+
+The schema's version.
+
+### collections
+
+```rust
+pub fn collections(&self) -> &[Collection]
+```
+
+The collections, in the order they were declared, or in the file's order for the schema [`Database::stored_schema`](./database.md#stored-schema) reads from a file. Together with the methods that read a [`Collection`](./collection.md#name) back, they let a program look at a schema it did not declare.

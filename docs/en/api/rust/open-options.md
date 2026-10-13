@@ -42,18 +42,18 @@ Every handle to a file in one process shares one instance, and some options belo
 
 ## Defaults
 
-| Option               | Default                               |
-| -------------------- | ------------------------------------- |
-| `create`             | `true`                                |
-| `page_size`          | 4096 bytes                            |
-| `busy_timeout`       | 5 seconds                             |
-| `cache_size`         | 32 MiB                                |
-| `max_unsynced_pages` | 16384 pages                           |
-| `max_unsynced_time`  | 1 second                              |
-| `password_hashing`   | 19456 KiB, 2 iterations, 1 lane       |
-| `upgrade_format`     | `true`                                |
-| `key`, `password`    | None: the database is not encrypted   |
-| `schema`             | None: the database has no collections |
+| Option               | Default                                     |
+| -------------------- | ------------------------------------------- |
+| `create`             | `true`                                      |
+| `page_size`          | 4096 bytes                                  |
+| `busy_timeout`       | 5 seconds                                   |
+| `cache_size`         | 32 MiB                                      |
+| `max_unsynced_pages` | 16384 pages                                 |
+| `max_unsynced_time`  | 1 second                                    |
+| `password_hashing`   | 19456 KiB, 2 iterations, 1 lane             |
+| `upgrade_format`     | `true`                                      |
+| `key`, `password`    | None: the database is not encrypted         |
+| `schema`             | None: the one the file holds, if it has one |
 
 ## Associated functions
 
@@ -171,7 +171,9 @@ A file records the cost it was made with, so opening it takes that cost whatever
 pub fn schema(&mut self, schema: Schema) -> &mut Self
 ```
 
-Declares the collections of the database, and what their objects hold, at a version; see [`Schema`](./schema.md). The first open stores the schema in the file. Later, a file holding the same version opens if the schema is the same and fails with `SCHEMA_MISMATCH` if it is not, so a changed schema needs a new version. A file holding an older version is migrated before `open` returns, and one holding a newer version fails with `SCHEMA_TOO_NEW`. Without a schema, the database has no collections, and only its trees of bytes are reachable.
+Declares the collections of the database, and what their objects hold, at a version; see [`Schema`](./schema.md). The first open stores the schema in the file. Later, a file holding the same version opens if the schema is the same and fails with `SCHEMA_MISMATCH` if it is not, so a changed schema needs a new version. A file holding an older version is migrated before `open` returns, and one holding a newer version fails with `SCHEMA_TOO_NEW`.
+
+Without a schema, the database works with the one the file holds, as it is: nothing is stored, checked or migrated, its collections are reached by name, and [`Database::stored_schema`](./database.md#stored-schema) describes them. A program can open a file whose schema it does not know this way. A file that holds no schema, such as a new one, has no collections then, and only its trees of bytes are reachable.
 
 [Collections and objects](../../guide/objects.md) shows a schema in use.
 

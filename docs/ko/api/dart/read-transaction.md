@@ -31,7 +31,7 @@ ReadCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Objec
 );
 ```
 
-`schema`의 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. 객체는 클래스 `T`이고, 쿼리는 `Q`로 만들며, 기본 키는 `K`입니다. 타입 인자는 `userSchema` 같은 스키마 상수에서 나오므로 직접 적을 일이 없습니다. 데이터베이스를 열 때 주지 않은 컬렉션이면 `INVALID_ARGUMENT`를 던집니다. 이 핸들이 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했으면 컬렉션을 읽을 때 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
+`schema`의 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. 객체는 클래스 `T`이고, 쿼리는 `Q`로 만들며, 기본 키는 `K`입니다. 타입 인자는 `userSchema` 같은 스키마 상수에서 나오므로 직접 적을 일이 없습니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 [MapCollection](../../types/dart/map-collection.md)을 받고, 필드가 저장된 것과 같은 스키마 상수도 받습니다. 데이터베이스를 열 때 주지 않은 컬렉션이거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 던집니다. 이 핸들이 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했으면 컬렉션을 읽을 때 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
 
 ## AsyncReadTransaction
 

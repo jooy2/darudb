@@ -11,7 +11,7 @@ order: 1
 final class Database implements Finalizable
 ```
 
-생성자는 없습니다. `Database.open`이나 `Database.openAsync`가 만들어 돌려줍니다. [스키마](./schema.md) 없이 연 데이터베이스에는 컬렉션이 없고, 스키마를 주고 열면 `darudb_generator`가 클래스마다 써 준 상수로 컬렉션에 접근합니다. `userSchema`가 그런 상수입니다.
+생성자는 없습니다. `Database.open`이나 `Database.openAsync`가 만들어 돌려줍니다. [스키마](./schema.md)를 주고 열면 `darudb_generator`가 클래스마다 써 준 상수로 컬렉션에 접근합니다. `userSchema`가 그런 상수입니다. 스키마 없이 열면 파일에 저장된 스키마를 씁니다. 이때는 [`storedCollection`](#storedcollection)이 각 컬렉션을 [MapCollection](../../types/dart/map-collection.md)으로 돌려주는데, 객체는 파일에 저장된 이름을 키로 한 맵입니다. 어떤 컬렉션이 있는지는 [`storedSchema`](#storedschema)가 알려 줍니다. 파일에 저장된 스키마도 없으면 컬렉션이 없습니다.
 
 `close`나 `closeAsync`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에는 `path`와 `isOpen`, `schemaVersion`만 읽을 수 있고, `close`와 `closeAsync`는 아무 일도 하지 않으며, 나머지는 모두 코드가 `CLOSED`인 [DaruException](../../types/dart/error.md)을 던집니다. 프로세스가 이미 연 파일을 이 isolate에서든 다른 isolate에서든 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다. 닫지 않은 핸들은 가비지 컬렉터가 거둘 때 닫히지만, 그 시점에 기대면 안 됩니다.
 
@@ -170,9 +170,38 @@ bool get isEncrypted;
 int? get schemaVersion;
 ```
 
-이 핸들이 파일을 열 때 파일에 있던 스키마의 버전입니다. 스키마 없이 열었으면 `null`입니다.
+데이터베이스가 쓰는 스키마의 버전입니다. 선언한 스키마의 버전이거나, 스키마 없이 열었으면 파일에 저장된 스키마의 버전입니다. 둘 다 없으면 `null`입니다.
+
+### storedSchema
+
+```dart
+Schema? get storedSchema;
+```
+
+데이터베이스가 쓰는 스키마입니다. 열 때 준 [Schema](./schema.md)이거나, 스키마 없이 열었으면 열 때 파일에 저장돼 있던 스키마이며, 이때 컬렉션은 [MapCollection](../../types/dart/map-collection.md)입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션을 알아냅니다. 각 컬렉션의 [`FieldSpec`](../../types/dart/field-types.md)에 필드마다 이름과 종류, null 허용 여부, 기본값, 인덱스가 있고, 각 컬렉션에는 [`storedCollection`](#storedcollection)으로 접근합니다. 파일에 스키마가 없거나 저장된 스키마를 읽을 수 없으면 `null`이고, 읽을 수 없는 경우는 컬렉션에 접근할 때 알려 줍니다. `close` 뒤에도 읽을 수 있습니다.
 
 ## 메서드
+
+### storedCollection
+
+```dart
+MapCollection storedCollection(String name);
+```
+
+스키마 없이 연 데이터베이스에서, 파일에 저장된 스키마의 `name` 컬렉션을 [MapCollection](../../types/dart/map-collection.md)으로 돌려줍니다. 객체는 파일에 저장된 이름을 키로 한 맵이고, 파일의 검사와 인덱스를 그대로 지키며 읽고 씁니다. 쿼리는 [MapQuery](../../types/dart/map-collection.md#mapquery)로 만듭니다. 스키마를 주고 연 데이터베이스는 스키마 상수로 컬렉션에 접근하므로, 거기서는 `INVALID_ARGUMENT`를 던집니다. 스키마에 없는 이름이거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 던집니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다.
+
+```dart
+final db = Database.open('app.darudb');
+final users = db.storedCollection('users');
+
+final adults = db.read(
+  (txn) => txn
+      .collection(users)
+      .find((q) => q.where(q.intField('age').atLeast(18)).sortBy(q.stringField('name'))),
+);
+
+db.write((txn) => txn.collection(users).insert({'name': 'Ada', 'age': 36}));
+```
 
 ### prepare
 

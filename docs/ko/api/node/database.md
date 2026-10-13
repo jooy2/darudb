@@ -123,7 +123,29 @@ readonly isEncrypted: boolean;
 readonly schemaVersion: number | null;
 ```
 
-이 핸들이 파일을 열 때 파일에 있던 스키마의 버전입니다. 스키마 없이 열었으면 `null`입니다.
+데이터베이스가 쓰는 스키마의 버전입니다. 선언한 스키마의 버전이거나, 스키마 없이 열었으면 파일에 저장된 스키마의 버전입니다. 둘 다 없으면 `null`입니다.
+
+### storedSchema
+
+```ts
+readonly storedSchema: StoredSchema | null;
+```
+
+데이터베이스가 쓰는 스키마를 일반 데이터로 돌려줍니다. 열 때 준 스키마이거나, 스키마 없이 열었으면 열 때 파일에 저장돼 있던 스키마입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션과 각 컬렉션의 필드, 타입, 기본 키, 인덱스를 [StoredSchema](../../types/node/stored-schema.md)로 알아내고, [`collection`](./read-transaction.md#collection)에 이름을 넘겨 각 컬렉션에 접근합니다. 파일에 스키마가 없거나 저장된 스키마를 읽을 수 없으면 `null`이고, 읽을 수 없는 경우는 컬렉션에 접근할 때 알려 줍니다. 처음 읽을 때 만든 객체를 얼려 두고, 그 뒤로는 같은 객체를 돌려줍니다.
+
+```ts
+const db = Database.open('app.darudb');
+
+for (const { name, fields } of db.storedSchema?.collections ?? []) {
+  const count = db.read((txn) => txn.collection(name).count());
+
+  console.log(
+    name,
+    count,
+    fields.map((field) => field.name)
+  );
+}
+```
 
 ## 메서드
 

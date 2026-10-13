@@ -33,7 +33,7 @@ def collection(self, collection: type[T]) -> ReadCollection[T]: ...
 def collection(self, collection: str) -> ReadCollection[Any]: ...
 ```
 
-클래스 `collection`의 컬렉션이나 그 이름의 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. 이 컬렉션의 객체는 클래스의 인스턴스입니다. 클래스로 가져오면 타입 검사기가 읽는 객체마다 타입을 압니다. 스키마에 없는 클래스나 이름이거나 스키마 없이 연 데이터베이스이면 `INVALID_ARGUMENT`를 일으킵니다. 이 핸들을 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했다면 컬렉션의 작업이 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
+클래스 `collection`의 컬렉션이나 그 이름의 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. 이 컬렉션의 객체는 클래스의 인스턴스입니다. 클래스로 가져오면 타입 검사기가 읽는 객체마다 타입을 압니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션에 이름으로 접근하고, 객체는 파일에 저장된 이름을 키로 한 `dict`입니다. 스키마에 없는 클래스나 이름이거나, 스키마 없이 연 데이터베이스에 클래스를 주거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 일으킵니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`을 일으킵니다. 이 핸들을 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했다면 컬렉션의 작업이 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
 
 ## AsyncReadTransaction
 

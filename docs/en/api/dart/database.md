@@ -11,7 +11,7 @@ order: 1
 final class Database implements Finalizable
 ```
 
-There is no constructor: `Database.open` and `Database.openAsync` return one. A database opened without a [schema](./schema.md) has no collections, and one opened with a schema reaches each collection through the constant `darudb_generator` wrote for its class, such as `userSchema`.
+There is no constructor: `Database.open` and `Database.openAsync` return one. A database opened with a [schema](./schema.md) reaches each collection through the constant `darudb_generator` wrote for its class, such as `userSchema`. One opened without a schema works with the schema the file holds: [`storedCollection`](#storedcollection) gives each of its collections as a [MapCollection](../../types/dart/map-collection.md), whose objects are maps by the names the file stores, and [`storedSchema`](#storedschema) describes them. A file that holds no schema has no collections then.
 
 A `Database` works until `close` or `closeAsync` has closed it. After that only `path`, `isOpen` and `schemaVersion` can be read, `close` and `closeAsync` do nothing, and every other member throws a [DaruException](../../types/dart/error.md) with the code `CLOSED`. Opening a file that the process already has open, from this isolate or another, gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. A handle that is never closed is closed when the garbage collector reclaims it, but a program should not count on when that happens.
 
@@ -170,9 +170,38 @@ Whether the file is encrypted.
 int? get schemaVersion;
 ```
 
-The version of the schema the file held when this handle opened it, or `null` when it was opened without a schema.
+The version of the schema the database works with: the declared one, or the file's own for a database opened without one. It is `null` when the database has neither.
+
+### storedSchema
+
+```dart
+Schema? get storedSchema;
+```
+
+The schema the database works with: the [Schema](./schema.md) it was opened with, or, for a database opened without one, the schema the file held when it opened, whose collections are [MapCollection](../../types/dart/map-collection.md)s. A program that opens a file it did not write learns its collections here, through the [`FieldSpec`](../../types/dart/field-types.md)s of each, which give every field's name, kind, whether it is optional, its default and its index, and reaches each with [`storedCollection`](#storedcollection). It is `null` when the file holds no schema, or one that does not read, which reaching a collection reports. It can still be read after `close`.
 
 ## Methods
+
+### storedCollection
+
+```dart
+MapCollection storedCollection(String name);
+```
+
+The collection `name` of the file's own schema, for a database opened without a schema: a [MapCollection](../../types/dart/map-collection.md), whose objects are maps by the names the file stores, read and written with the file's checks and indexes, and queried with [MapQuery](../../types/dart/map-collection.md#mapquery). A database opened with a schema reaches its collections through their schema constants instead, and this throws `INVALID_ARGUMENT` there. It throws `INVALID_ARGUMENT` for a name the schema does not have, and when the database has no schema at all, as when the file holds none; a stored schema that does not read fails with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`.
+
+```dart
+final db = Database.open('app.darudb');
+final users = db.storedCollection('users');
+
+final adults = db.read(
+  (txn) => txn
+      .collection(users)
+      .find((q) => q.where(q.intField('age').atLeast(18)).sortBy(q.stringField('name'))),
+);
+
+db.write((txn) => txn.collection(users).insert({'name': 'Ada', 'age': 36}));
+```
 
 ### prepare
 

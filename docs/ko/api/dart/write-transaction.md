@@ -34,7 +34,7 @@ WriteCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Obje
 );
 ```
 
-`schema`의 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. 트랜잭션의 변경을 읽고, 변경을 더합니다. 데이터베이스를 열 때 주지 않은 컬렉션이면 `INVALID_ARGUMENT`를 던집니다.
+`schema`의 컬렉션을 [WriteCollection](./write-collection.md)으로 돌려줍니다. 트랜잭션의 변경을 읽고, 변경을 더합니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 [MapCollection](../../types/dart/map-collection.md)을 받고, 필드가 저장된 것과 같은 스키마 상수도 받습니다. 데이터베이스를 열 때 주지 않은 컬렉션이거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 던집니다.
 
 ## AsyncWriteTransaction
 

@@ -33,7 +33,7 @@ def collection(self, collection: type[T]) -> ReadCollection[T]: ...
 def collection(self, collection: str) -> ReadCollection[Any]: ...
 ```
 
-The collection of the class `collection`, or of that name, as a [ReadCollection](./read-collection.md) whose objects are instances of the class. Given the class, a type checker knows the type of every object it reads. It raises `INVALID_ARGUMENT` for a class or a name the schema does not have, and when the database was opened without a schema. If another process or handle has migrated the file since this handle opened it, an operation on the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
+The collection of the class `collection`, or of that name, as a [ReadCollection](./read-collection.md) whose objects are instances of the class. Given the class, a type checker knows the type of every object it reads. A database opened without a schema reaches the collections of the file's own by name, and their objects are `dict`s by the names the file stores. It raises `INVALID_ARGUMENT` for a class or a name the schema does not have, for a class when the database was opened without a schema, and when the database has no schema at all, as when the file holds none; a stored schema that does not read raises `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`. If another process or handle has migrated the file since this handle opened it, an operation on the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
 
 ## AsyncReadTransaction
 

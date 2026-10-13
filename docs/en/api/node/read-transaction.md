@@ -32,7 +32,7 @@ const names = db.read((txn) =>
 collection<N extends NameOf<S>>(name: N): ReadCollection<ObjectOf<FieldsOf<S, N>>>;
 ```
 
-Collection `name` of the schema, as a [ReadCollection](./read-collection.md). `N` is one of the schema's collection names, and `FieldsOf<S, N>` its fields, of which [ObjectOf](../../types/node/object-types.md) makes the type of its objects. It throws `INVALID_ARGUMENT` for a name the schema does not have, and when the database was opened without a schema. If another process or handle has migrated the file since this handle opened it, reading the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
+Collection `name` of the schema, as a [ReadCollection](./read-collection.md). `N` is one of the schema's collection names, and `FieldsOf<S, N>` its fields, of which [ObjectOf](../../types/node/object-types.md) makes the type of its objects. A database opened without a schema reaches the collections of the file's own by name, with plain objects. It throws `INVALID_ARGUMENT` for a name the schema does not have, and when the database has no schema at all, as when the file holds none; a stored schema that does not read fails with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`. If another process or handle has migrated the file since this handle opened it, reading the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
 
 ## AsyncReadTransaction
 

@@ -34,7 +34,7 @@ collection<N extends NameOf<S>>(
 ): WriteCollection<ObjectOf<FieldsOf<S, N>>, InsertOf<FieldsOf<S, N>>>;
 ```
 
-Collection `name` of the schema, as a [WriteCollection](./write-collection.md). `N` is one of the schema's collection names, and `FieldsOf<S, N>` its fields: [ObjectOf](../../types/node/object-types.md) makes the type of an object read from them, and `InsertOf` the type of one written. It throws `INVALID_ARGUMENT` for a name the schema does not have, and when the database was opened without a schema.
+Collection `name` of the schema, as a [WriteCollection](./write-collection.md). `N` is one of the schema's collection names, and `FieldsOf<S, N>` its fields: [ObjectOf](../../types/node/object-types.md) makes the type of an object read from them, and `InsertOf` the type of one written. A database opened without a schema reaches the collections of the file's own by name, with plain objects. It throws `INVALID_ARGUMENT` for a name the schema does not have, and when the database has no schema at all, as when the file holds none; a stored schema that does not read fails with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`.
 
 ## AsyncWriteTransaction
 

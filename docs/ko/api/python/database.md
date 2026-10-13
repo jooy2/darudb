@@ -11,7 +11,7 @@ order: 1
 class Database: ...
 ```
 
-생성자는 없습니다. `Database.open`이나 `Database.open_async`가 만들어 돌려주고, `Database()`를 부르면 `TypeError`가 납니다. [스키마](./schema.md) 없이 연 데이터베이스에는 컬렉션이 없고, 스키마를 주고 열면 `txn.collection(User)`처럼 클래스로 컬렉션에 접근합니다.
+생성자는 없습니다. `Database.open`이나 `Database.open_async`가 만들어 돌려주고, `Database()`를 부르면 `TypeError`가 납니다. [스키마](./schema.md)를 주고 열면 `txn.collection(User)`처럼 클래스로 컬렉션에 접근합니다. 스키마 없이 열면 파일에 저장된 스키마를 씁니다. 이때는 `txn.collection("users")`처럼 이름으로 컬렉션에 접근하고, 객체는 파일에 저장된 이름을 키로 한 `dict`이며, 어떤 컬렉션이 있는지는 [`stored_schema`](#stored-schema)가 알려 줍니다. 파일에 저장된 스키마도 없으면 컬렉션이 없습니다.
 
 `close`나 `close_async`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에도 `path`, `schema`, `schema_version`, `is_open`은 읽을 수 있지만, 파일에 접근하는 멤버는 모두 코드가 `CLOSED`인 [DaruError](../../types/python/error.md)를 일으킵니다. 프로세스가 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다. 몇몇 옵션은 핸들이 아니라 파일에 딸려서, `busy_timeout`, `cache_size`, `upgrade_format`, `password_hashing`은 처음 연 핸들의 값을 따릅니다.
 
@@ -167,6 +167,20 @@ schema: Schema | None
 
 데이터베이스를 열 때 준 [Schema](./schema.md)이고, 주지 않았으면 `None`입니다. `close` 뒤에도 읽을 수 있습니다.
 
+### stored_schema
+
+```python
+stored_schema: StoredSchema | None
+```
+
+데이터베이스가 쓰는 스키마를 파일에 저장된 이름으로 [StoredSchema](../../types/python/stored-schema.md)에 담아 둡니다. 열 때 준 스키마이거나, 스키마 없이 열었으면 열 때 파일에 저장돼 있던 스키마입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션과 각 컬렉션의 필드, 타입, 기본 키, 인덱스를 알아내고, 이름으로 각 컬렉션에 접근합니다. 파일에 스키마가 없거나 저장된 스키마를 읽을 수 없으면 `None`이고, 읽을 수 없는 경우는 컬렉션에 접근할 때 알려 줍니다. `close` 뒤에도 읽을 수 있습니다.
+
+```python
+with darudb.Database.open("app.darudb") as db, db.read() as txn:
+    for collection in db.stored_schema.collections if db.stored_schema else ():
+        print(collection.name, txn.collection(collection.name).count())
+```
+
 ### is_open
 
 ```python
@@ -210,7 +224,7 @@ def is_encrypted(self) -> bool: ...
 def schema_version(self) -> int | None: ...
 ```
 
-데이터베이스를 열 때 준 스키마의 버전이고, 스키마 없이 열었으면 `None`입니다. 파일이 열린 뒤에는 파일에 있는 버전과 같습니다. `schema`에서 가져오는 값이므로 `close` 뒤에도 읽을 수 있습니다.
+데이터베이스가 쓰는 스키마의 버전입니다. 열 때 준 스키마의 버전이며 파일이 열린 뒤에는 파일에 있는 버전과 같고, 스키마 없이 열었으면 파일에 저장된 스키마의 버전입니다. 둘 다 없으면 `None`입니다. `schema`와 `stored_schema`에서 가져오는 값이므로 `close` 뒤에도 읽을 수 있습니다.
 
 ## 메서드
 
@@ -222,7 +236,7 @@ def prepare(self, collection: type[T] | str, query: Query | Condition | str) -> 
 
 클래스나 이름으로 가리킨 `collection`에서 실행할 쿼리를 한 번 준비해 두고, 실행할 때마다 매개변수 값만 넘기게 합니다. 쿼리는 `$0`, `$1` 같은 매개변수를 쓴 쿼리 언어 문자열이거나, 값 자리에 [param](./param.md)을 넣어 만든 [Query](./query.md)나 [조건](./conditions.md)입니다. 준비한 쿼리인 [Prepared](../../types/python/prepared.md)는 데이터베이스나 트랜잭션에 묶이지 않으므로, 그 컬렉션이라면 동기든 비동기든 어느 트랜잭션에서나 실행할 수 있습니다.
 
-스키마에 없는 컬렉션이거나 스키마 없이 연 데이터베이스이면 `INVALID_ARGUMENT`로, 해석할 수 없는 문자열이면 `INVALID_QUERY`로, 데이터베이스를 닫은 뒤라면 `CLOSED`로 실패합니다. 컬렉션에 없는 필드는 쿼리를 실행할 때 드러납니다.
+스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션을 이름으로 받아 쿼리를 준비합니다. 스키마에 없는 컬렉션이거나 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`로, 파일에 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`으로, 해석할 수 없는 문자열이면 `INVALID_QUERY`로, 데이터베이스를 닫은 뒤라면 `CLOSED`로 실패합니다. 컬렉션에 없는 필드는 쿼리를 실행할 때 드러납니다.
 
 ```python
 from darudb import F, param

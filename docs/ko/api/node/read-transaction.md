@@ -32,7 +32,7 @@ const names = db.read((txn) =>
 collection<N extends NameOf<S>>(name: N): ReadCollection<ObjectOf<FieldsOf<S, N>>>;
 ```
 
-스키마의 `name` 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. `N`은 스키마에 있는 컬렉션 이름 중 하나이고, `FieldsOf<S, N>`은 그 컬렉션의 필드입니다. [ObjectOf](../../types/node/object-types.md)가 이 필드로 객체의 타입을 만듭니다. 스키마에 없는 이름이거나 스키마 없이 연 데이터베이스이면 `INVALID_ARGUMENT`를 던집니다. 이 핸들을 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했다면 컬렉션을 읽을 때 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
+스키마의 `name` 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. `N`은 스키마에 있는 컬렉션 이름 중 하나이고, `FieldsOf<S, N>`은 그 컬렉션의 필드입니다. [ObjectOf](../../types/node/object-types.md)가 이 필드로 객체의 타입을 만듭니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션에 이름으로 접근하고, 객체는 일반 객체입니다. 스키마에 없는 이름이거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 던집니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다. 이 핸들을 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했다면 컬렉션을 읽을 때 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
 
 ## AsyncReadTransaction
 

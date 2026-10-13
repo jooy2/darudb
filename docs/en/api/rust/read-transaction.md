@@ -115,7 +115,7 @@ pub fn collection(&self, name: &str) -> Result<CollectionReader<'_>>
 
 Collection `name` of the schema the handle was opened with, for reading its objects; see [`CollectionReader`](./collection-reader.md). It borrows the transaction, and several collections can be read at once.
 
-It fails with `INVALID_ARGUMENT` if the schema has no such collection or the database was opened without a schema, and with `SCHEMA_MISMATCH` if the commit this transaction sees holds another schema, because another handle or process has migrated the file since this handle opened it.
+A handle opened without a schema reaches the collections of the file's own. It fails with `INVALID_ARGUMENT` if the schema has no such collection, or the handle has no schema at all because the file held none when it opened; with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION` if the schema the file holds does not read; and with `SCHEMA_MISMATCH` if the commit this transaction sees holds another schema, because another handle or process has migrated the file since this handle opened it.
 
 ### collection_of
 

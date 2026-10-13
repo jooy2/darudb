@@ -117,3 +117,43 @@ pub fn unique(mut self, name: impl Into<String>) -> Self
 ```
 
 `name` 필드에 인덱스를 두고 값이 겹치지 않게 합니다. 같은 값을 가진 객체는 둘일 수 없지만, null은 몇 개가 있어도 됩니다. 다른 객체가 가진 값을 쓰려는 쓰기는 `DUPLICATE_KEY`로 실패합니다. 새 버전에서 고유 인덱스를 더했는데 파일의 객체에 같은 값이 둘 있으면, 파일을 열 때도 `DUPLICATE_KEY`로 실패합니다.
+
+### name
+
+```rust
+pub fn name(&self) -> &str
+```
+
+컬렉션의 이름입니다. 이 메서드와 아래 네 메서드는 컬렉션을 다시 읽습니다. 직접 쓰지 않은 파일에서 [`Database::stored_schema`](./database.md#stored-schema)가 돌려준 스키마를 살펴볼 때 씁니다.
+
+### fields
+
+```rust
+pub fn fields(&self) -> &[Field]
+```
+
+필드들을 [`Field`](../../types/rust/field.md)로 돌려줍니다. 순서는 선언한 순서이고, 파일에서 읽은 스키마라면 파일에 저장된 순서입니다. 기본 키 필드도 여기에 들어 있습니다. 다만 키가 자동 증가라면 `id`는 선언한 필드가 아니므로 빠집니다.
+
+### key
+
+```rust
+pub fn key(&self) -> &str
+```
+
+기본 키 필드의 이름입니다. 자동 증가 키라면 `id`입니다.
+
+### is_auto_increment
+
+```rust
+pub fn is_auto_increment(&self) -> bool
+```
+
+기본 키가 자동 증가인지 알려 줍니다. 자동 증가 키는 엔진이 차례로 매기는 `id`라는 `int` 필드입니다.
+
+### indexes
+
+```rust
+pub fn indexes(&self) -> impl ExactSizeIterator<Item = (&str, bool)> + '_
+```
+
+인덱스를 둔 필드의 이름과, 그 인덱스가 고유 인덱스인지를 선언한 순서대로 돌려줍니다.

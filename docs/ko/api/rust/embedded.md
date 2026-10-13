@@ -83,3 +83,11 @@ pub fn with_default(
 ```
 
 내장 객체에서 빠지면 `value`가 들어가는 필수 필드를 더합니다.
+
+### fields
+
+```rust
+pub fn fields(&self) -> &[Field]
+```
+
+필드들을 [`Field`](../../types/rust/field.md)로 돌려줍니다. 순서는 선언한 순서이고, 파일에서 읽은 스키마라면 파일에 저장된 순서입니다.

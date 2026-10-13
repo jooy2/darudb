@@ -398,6 +398,109 @@ fn write_and_read(db: &Database) -> darudb::Result<()> {
 
 :::
 
+## 스키마 없이 파일 열기
+
+데이터베이스에 무엇이 들었는지 보여 주는 도구처럼, 직접 쓰지 않은 파일을 여는 프로그램에는 자기 스키마가 필요 없습니다. 스키마 없이 열면 파일에 저장된 스키마를 그대로 씁니다. 저장하거나 비교하거나 마이그레이션하는 일은 없고, 컬렉션에는 이름으로 접근합니다. 각 컬렉션이 무엇을 담는지는 스키마 설명이 알려 줍니다. 필드와 그 타입, 기본 키, 인덱스가 들어 있습니다. 객체는 각 언어의 동적 객체이며, 파일의 검사와 인덱스를 그대로 지키며 읽고 씁니다.
+
+::: lang rust
+
+`Database::stored_schema`가 프로그램이 선언하는 형태로 스키마를 돌려주고, 각 컬렉션에는 이름으로 접근해 `Object`로 읽고 씁니다.
+
+```rust
+use darudb::{Database, Object};
+
+fn main() -> darudb::Result<()> {
+    let db = Database::open("app.darudb")?;
+    let Some(schema) = db.stored_schema() else {
+        return Ok(());
+    };
+
+    for collection in schema.collections() {
+        let fields: Vec<_> = collection.fields().iter().map(|field| field.name()).collect();
+
+        println!("{} keyed by {}: {fields:?}", collection.name(), collection.key());
+    }
+
+    let mut txn = db.begin_write()?;
+
+    txn.collection("users")?.insert(Object::new().with("name", "Carol"))?;
+    txn.commit()
+}
+```
+
+:::
+
+::: lang node
+
+`storedSchema`가 스키마를 일반 데이터로 돌려주고, 각 컬렉션에는 이름으로 접근해 일반 객체로 읽고 씁니다. 어느 쪽인지 알려 줄 선언이 없으므로 int 값은 2^53까지는 number로, 그보다 크면 `bigint`로 읽힙니다.
+
+```ts
+import { Database } from 'darudb';
+
+const db = Database.open('app.darudb');
+
+for (const { name, key, fields } of db.storedSchema?.collections ?? []) {
+  console.log(
+    `${name} keyed by ${key}:`,
+    fields.map((field) => field.name)
+  );
+}
+
+db.write((txn) => {
+  txn.collection('users').insert({ name: 'Carol' });
+});
+```
+
+:::
+
+::: lang dart
+
+`storedSchema`가 스키마를 돌려주는데, 그 컬렉션은 객체가 맵인 `MapCollection`입니다. `storedCollection`은 이름으로 컬렉션 하나를 돌려줍니다. `MapQuery`는 필드를 저장된 이름으로 가리키고, 어떤 메서드로 가리키느냐로 그 필드의 타입을 정합니다.
+
+```dart
+import 'package:darudb/darudb.dart';
+
+void main() {
+  final db = Database.open('app.darudb');
+
+  for (final collection in db.storedSchema?.collections ?? const []) {
+    print('${collection.name}: ${collection.fields.map((field) => field.name)}');
+  }
+
+  final users = db.storedCollection('users');
+
+  db.write((txn) => txn.collection(users).insert({'name': 'Carol'}));
+
+  final adults = db.read(
+    (txn) => txn.collection(users).find((q) => q.where(q.intField('age').atLeast(18))),
+  );
+
+  print(adults.length);
+  db.close();
+}
+```
+
+:::
+
+::: lang python
+
+`stored_schema`가 파일에 저장된 이름으로 스키마를 돌려주고, 각 컬렉션에는 이름으로 접근해 객체를 `dict`로 읽고 씁니다.
+
+```python
+import darudb
+
+with darudb.Database.open("app.darudb") as db:
+    for collection in db.stored_schema.collections if db.stored_schema else ():
+        print(collection.name, "keyed by", collection.key, [field.name for field in collection.fields])
+
+    with db.write() as txn:
+        txn.collection("users").insert({"name": "Carol"})
+```
+
+:::
+
+새 파일처럼 저장된 스키마가 없는 파일이면 컬렉션이 없고, 컬렉션에 접근하면 `INVALID_ARGUMENT`로 실패합니다. 저장된 스키마를 읽을 수 없어도 파일은 열리므로 [무결성 검사](./tools.md)로 무엇이 잘못됐는지 확인할 수 있습니다. 이때 컬렉션에 접근하면 `CORRUPTED`로 실패하고, 빌드가 모르는 객체 형식이면 `UNSUPPORTED_FORMAT_VERSION`으로 실패합니다.
+
 ## 여러 핸들과 프로세스
 
-핸들은 열 때 받은 스키마를 계속 씁니다. 다른 프로세스나 같은 프로세스의 다른 핸들이 파일을 마이그레이션하면, 예전 핸들로 컬렉션에 접근하는 다음 트랜잭션은 `SCHEMA_MISMATCH`로 실패합니다. 그러면 새 스키마로 다시 열어야 합니다. 마이그레이션 전에 시작한 읽기 트랜잭션은 시작할 때의 커밋을 보므로 예전 스키마로 계속 읽습니다.
+핸들은 열 때 받은 스키마를 계속 씁니다. 스키마 없이 연 핸들은 열 때 파일에 저장돼 있던 스키마를 계속 씁니다. 다른 프로세스나 같은 프로세스의 다른 핸들이 파일을 마이그레이션하면, 예전 핸들로 컬렉션에 접근하는 다음 트랜잭션은 `SCHEMA_MISMATCH`로 실패합니다. 그러면 새 스키마로 다시 열어야 합니다. 마이그레이션 전에 시작한 읽기 트랜잭션은 시작할 때의 커밋을 보므로 예전 스키마로 계속 읽습니다.

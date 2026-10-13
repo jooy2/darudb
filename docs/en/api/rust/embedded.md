@@ -83,3 +83,11 @@ pub fn with_default(
 ```
 
 Adds a required field that holds `value` when the embedded object leaves it out.
+
+### fields
+
+```rust
+pub fn fields(&self) -> &[Field]
+```
+
+The fields, as [`Field`](../../types/rust/field.md)s, in the order they were declared, or in the file's order for a schema read from a file.

@@ -117,3 +117,43 @@ pub fn unique(mut self, name: impl Into<String>) -> Self
 ```
 
 Indexes field `name` and keeps its values unique: two objects cannot hold the same value, though any number may hold null. A write that would take a value another object holds fails with `DUPLICATE_KEY`, and so does opening a file whose objects hold one value twice when a new version adds the unique index.
+
+### name
+
+```rust
+pub fn name(&self) -> &str
+```
+
+The collection's name. This method and the four below read a collection back, as a program does with the schema [`Database::stored_schema`](./database.md#stored-schema) gives for a file it did not write.
+
+### fields
+
+```rust
+pub fn fields(&self) -> &[Field]
+```
+
+The fields, as [`Field`](../../types/rust/field.md)s, in the order they were declared, or in the file's order for a schema read from a file. The primary key's field is one of them, unless the key is the auto-increment, whose `id` is not declared.
+
+### key
+
+```rust
+pub fn key(&self) -> &str
+```
+
+The name of the primary key's field: `id` for the auto-increment.
+
+### is_auto_increment
+
+```rust
+pub fn is_auto_increment(&self) -> bool
+```
+
+Whether the primary key is the auto-increment: an `int` field called `id`, which the engine assigns in increasing order.
+
+### indexes
+
+```rust
+pub fn indexes(&self) -> impl ExactSizeIterator<Item = (&str, bool)> + '_
+```
+
+The indexed fields, each with whether its index is unique, in the order they were declared.
