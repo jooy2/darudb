@@ -15,6 +15,8 @@ A database created with a key or a password is encrypted for its whole life: eve
 
 A plain database stays plain. It cannot be encrypted in place: its data has to be copied into a new database created with a key or a password, which is what a backup given a key or a password does, for the application to put in the plain file's place ([Back up under a new key](../guide/tools.md#back-up-under-a-new-key)).
 
+An encrypted database stays encrypted the same way. No call writes a plain copy of it, and its backup is always encrypted, under its own data key or a new one, so a plain database is made by copying the objects through the API into a new database created without a key ([Decrypt a database](../guide/encryption.md#decrypt-a-database)).
+
 ## Pages
 
 Each page is encrypted under the file's data key with an authenticated cipher:

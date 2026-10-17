@@ -7,6 +7,20 @@ order: 9
 
 키나 비밀번호로 만든 데이터베이스는 모든 페이지가 암호화되고 인증되며, 같은 키나 비밀번호로만 열립니다.
 
+## 파일을 암호화하는 방식
+
+암호화한 데이터베이스를 만들면 엔진은 무작위 32바이트로 데이터 키를 만들고, 그 뒤로 쓰는 모든 페이지를 이 키로 봉인합니다. 사용자가 주는 키나 비밀번호로 페이지를 직접 암호화하지는 않습니다. 그 키는 데이터 키를 감싸는 데만 쓰이고, 파일에는 감싼 데이터 키만 저장됩니다.
+
+- **페이지.** 페이지는 인증 암호인 XAES-256-GCM이나 XChaCha20-Poly1305로 암호화하고, 24바이트 논스는 페이지를 쓸 때마다 새로 뽑습니다. 어느 쪽을 쓸지는 파일을 만드는 컴퓨터가 자기 프로세서에서 빠른 쪽으로 골라 파일에 기록합니다. 어느 쪽으로 만든 파일이든 어떤 컴퓨터에서나 열립니다.
+- **검사.** 암호의 16바이트 인증 태그가 곧 페이지의 검사값이고, 페이지 안과 그 페이지를 가리키는 포인터에 함께 들어 있습니다. 누가 바꾼 페이지나 예전 사본으로 되돌려 놓은 페이지는 읽지 않고 `CORRUPTED`로 실패합니다. 헤더의 커밋 레코드에도 데이터 키에서 끌어낸 키로 만든 MAC이 붙습니다.
+- **데이터 키.** 사용자의 32바이트 키, 또는 비밀번호를 Argon2id로 해시한 값이 데이터 키를 감싸고, 감싼 데이터 키는 모든 커밋 레코드에 저장됩니다. 키나 비밀번호를 바꾸면 같은 데이터 키를 다시 감쌀 뿐이라 페이지를 다시 암호화하지 않습니다.
+- **가려지는 것과 보이는 것.** 키와 값, 컬렉션과 트리의 이름은 모두 페이지 안에 있어서 암호화됩니다. 헤더 페이지는 평문이라 페이지 크기, 암호 방식, 트랜잭션 ID, 파일 크기는 키 없이도 읽힙니다.
+- **메모리.** 엔진은 파일에서 페이지를 읽을 때 복호화하고 평문을 페이지 캐시에 둡니다. 그래서 캐시에서 바로 답하는 읽기는 평문 파일과 비용이 같습니다.
+
+<Diagram name="encryption" alt="비밀번호는 Argon2id를 거치고, 32바이트 키는 그대로 쓰여 키 암호화 키가 됩니다. 이 키는 저장하지 않습니다. 키 암호화 키는 데이터 키를 감싸고, 무작위로 만든 데이터 키는 감싼 채로 모든 커밋 레코드에 저장됩니다. 데이터 키는 XAES-256-GCM이나 XChaCha20-Poly1305와 새 논스로 모든 페이지를 봉인합니다. 비밀번호나 키를 바꾸면 같은 데이터 키를 다시 감쌀 뿐이라 페이지는 다시 암호화하지 않습니다." />
+
+자세한 내용은 엔진 섹션의 [암호화](../engine/encryption.md)에 있습니다. 두 암호 방식을 고른 이유, 감싼 데이터 키를 저장하고 찾는 방법, 커밋 레코드에 MAC이 필요한 이유를 다룹니다.
+
 ## 데이터베이스 암호화하기
 
 ::: lang rust
@@ -98,18 +112,85 @@ darudb.Database.open("secret.darudb", schema=darudb.Schema(1, [User]))  # KEY_RE
 
 :::
 
-페이지 안의 모든 것이 암호화됩니다. 키와 값, 컬렉션과 트리의 이름도 마찬가지입니다. 모든 페이지와 헤더에 기록된 커밋 정보도 인증되므로, 바이트 하나라도 바뀌면 그대로 읽지 않고 `CORRUPTED`로 알립니다. 키 없이 열면 `KEY_REQUIRED`, 틀린 키로 열면 `WRONG_KEY`로 실패합니다.
+키 없이 열면 `KEY_REQUIRED`, 틀린 키로 열면 `WRONG_KEY`로 실패합니다. 평문 파일을 키나 비밀번호와 함께 열면 `INVALID_ARGUMENT`로 실패합니다.
 
 ## 키와 비밀번호
 
-- **키**는 무작위 32바이트입니다. [아래](#운영체제-키-저장소에-키-보관하기)처럼 운영체제의 키 저장소에 보관한 키가 그런 예입니다.
-- **비밀번호**는 Argon2id로 키를 만듭니다. 기본 비용은 19 MiB, 반복 2회, 병렬 1이고 수십 밀리초가 걸립니다. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" />으로 새 파일과 비밀번호 변경에 쓸 비용을 올리거나 내립니다. 파일은 만들 때의 비용을 기록해 두므로, 열 때는 옵션과 관계없이 그 비용이 듭니다.
-- **키나 비밀번호를 바꿔도** 페이지를 다시 암호화하지 않고, 바꾸기가 끝나면 이전 것으로는 파일을 열 수 없습니다.
-- 평문 데이터베이스는 [키를 주고 백업](./tools.md#새-키로-백업하기)해 그 자리를 대신할 암호화 사본을 만들기 전까지 평문으로 남습니다. 암호화한 데이터베이스는 키 없이 열 수 없습니다. 키나 비밀번호를 잃어버리지 않을 곳에 보관하세요. 잃어버리면 데이터를 읽을 방법이 없습니다.
+- **키**는 무작위 32바이트입니다. 파일이 곧바로 열리므로, [아래](#운영체제-키-저장소에-키-보관하기)처럼 운영체제의 키 저장소에 사용자 대신 키를 보관하는 앱이나, 다른 비밀 값과 함께 키를 두는 서버에 맞습니다.
+- **비밀번호**는 파일을 열 때마다 Argon2id로 키를 만듭니다. 기본 비용은 19 MiB, 반복 2회, 병렬 1이고 수십 밀리초가 걸립니다. 사람이 직접 입력해서 여는 파일에 맞습니다. <LangCode rust="OpenOptions::password_hashing" node="passwordHashing" dart="passwordHashing" python="password_hashing" />으로 새 파일과 비밀번호 변경에 쓸 비용을 올리거나 내립니다. 파일은 만들 때의 비용을 기록해 두므로, 열 때는 옵션과 관계없이 그 비용이 듭니다.
+- 한쪽으로 만든 파일을 다른 쪽으로 바꿀 수 있습니다. 비밀번호로 만든 파일에 <LangCode rust="Database::set_key" node="setKey" dart="setKey" python="set_key" />로 키를 주거나, 반대로 <LangCode rust="Database::set_password" node="setPassword" dart="setPassword" python="set_password" />로 비밀번호를 줍니다.
 
-<Diagram name="encryption" alt="비밀번호는 Argon2id를 거치고, 32바이트 키는 그대로 쓰여 키 암호화 키가 됩니다. 이 키는 저장하지 않습니다. 키 암호화 키는 데이터 키를 감싸고, 무작위로 만든 데이터 키는 감싼 채로 모든 커밋 레코드에 저장됩니다. 데이터 키는 XAES-256-GCM이나 XChaCha20-Poly1305와 새 논스로 모든 페이지를 봉인합니다. 비밀번호나 키를 바꾸면 같은 데이터 키를 다시 감쌀 뿐이라 페이지는 다시 암호화하지 않습니다." />
+## 키 만들기
 
-페이지를 어떻게 암호화하고 키를 파일에 어떻게 보관하는지는 엔진 섹션의 [암호화](../engine/encryption.md)에 있습니다.
+키는 무작위여야 합니다. 안전한 난수 생성기에서 얻은 32바이트를 쓰고, 이름이나 날짜, 비밀번호에서 계산한 바이트는 키로 쓰지 않습니다. 앱은 [다음 절](#운영체제-키-저장소에-키-보관하기)처럼 코드에서 키를 만듭니다. 테스트에 쓸 키나 서버가 비밀 값과 함께 보관할 키라면 아래 버튼으로 만들 수 있습니다.
+
+<KeyGenerator />
+
+키는 이 브라우저 안에서 Web Crypto API의 `crypto.getRandomValues`로 만들고, 어디로도 보내지 않습니다. 두 형식에는 같은 32바이트가 들어 있으며, 16진수로는 64자, Base64로는 44자입니다. 서버가 키를 환경 변수에 둔다면 데이터베이스를 열기 전에 디코딩합니다. 아래 예제는 Base64로 담은 `DATABASE_KEY`를 읽습니다.
+
+::: lang rust
+
+```rust
+use base64::Engine as _;
+
+fn database_key() -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let text = std::env::var("DATABASE_KEY")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(text)?;
+
+    Ok(bytes.try_into().map_err(|_| "DATABASE_KEY is not 32 bytes")?)
+}
+```
+
+표준 라이브러리에는 Base64 디코더가 없어서 `base64` 크레이트를 씁니다.
+
+:::
+
+::: lang node
+
+```ts
+const db = Database.open('app.darudb', {
+  schema: app,
+  key: Buffer.from(process.env.DATABASE_KEY ?? '', 'base64')
+});
+```
+
+32바이트로 디코딩되지 않는 키는 `INVALID_ARGUMENT`로 실패합니다.
+
+:::
+
+::: lang dart
+
+```dart
+import 'dart:convert';
+import 'dart:io';
+
+final db = Database.open(
+  'app.darudb',
+  schema: const Schema(1, [userSchema]),
+  key: base64Decode(Platform.environment['DATABASE_KEY']!),
+);
+```
+
+32바이트로 디코딩되지 않는 키는 `INVALID_ARGUMENT`로 실패합니다.
+
+:::
+
+::: lang python
+
+```python
+import base64
+import os
+
+db = darudb.Database.open(
+    "app.darudb",
+    schema=darudb.Schema(1, [User]),
+    key=base64.b64decode(os.environ["DATABASE_KEY"]),
+)
+```
+
+32바이트로 디코딩되지 않는 키는 `INVALID_ARGUMENT`로 실패합니다.
+
+:::
 
 ## 운영체제 키 저장소에 키 보관하기
 
@@ -247,6 +328,203 @@ db = darudb.Database.open(
 
 :::
 
+## 기존 데이터베이스 암호화하기
+
+평문 데이터베이스는 그 자리에서 암호화할 수 없습니다. 키나 비밀번호를 준 백업이 암호화한 사본을 쓰고, 그 사본이 평문 파일 자리를 차지합니다.
+
+::: lang rust
+
+```rust
+use darudb::{BackupOptions, Database};
+
+fn encrypt(key: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let db = Database::open("app.darudb")?;
+
+    db.backup_with("app.encrypted.darudb", BackupOptions::new().key(key))?;
+    db.close()?;
+    std::fs::rename("app.encrypted.darudb", "app.darudb")?;
+
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+import { renameSync } from 'node:fs';
+
+const db = Database.open('app.darudb', { schema: app });
+
+db.backup('app.encrypted.darudb', { key }); // 또는 `await db.backupAsync(...)`
+db.close();
+renameSync('app.encrypted.darudb', 'app.darudb');
+```
+
+:::
+
+::: lang dart
+
+```dart
+import 'dart:io';
+
+final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]));
+
+db.backup('app.encrypted.darudb', key: key); // 또는 `await db.backupAsync(...)`
+db.close();
+File('app.encrypted.darudb').renameSync('app.darudb');
+```
+
+:::
+
+::: lang python
+
+```python
+import os
+
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User]))
+db.backup("app.encrypted.darudb", key=key)  # 또는 `await db.backup_async(...)`
+db.close()
+os.replace("app.encrypted.darudb", "app.darudb")
+```
+
+:::
+
+- 사본에는 백업을 시작할 때 공개된 커밋이 들어갑니다. 사본을 옮겨 놓기 전에 쓰기를 멈추고, 모든 프로세스에서 평문 파일의 핸들을 닫으세요. 그 사이에 한 쓰기는 사본에 없고, 예전 파일을 연 채로 둔 프로세스는 그 파일을 계속 씁니다.
+- 평문 파일을 사본으로 바꿔도 디스크에서 지워지지는 않습니다. 파일 시스템은 그 블록을 덮어쓰지 않고 비워 두기만 하며, 그 전에 백업이나 동기화 폴더에 생긴 사본도 평문으로 남습니다.
+
+## 키나 비밀번호 바꾸기
+
+<LangCode rust="Database::set_key" node="setKey" dart="setKey" python="set_key" />와 <LangCode rust="Database::set_password" node="setPassword" dart="setPassword" python="set_password" />는 [데이터베이스 암호화하기](#데이터베이스-암호화하기)에서 보듯 데이터 키를 새 키나 비밀번호로 다시 감쌉니다. 페이지는 다시 암호화하지 않으므로 파일 크기와 관계없이 걸리는 시간이 같습니다. 동기 커밋 세 번이면 끝나는데, 한 번은 새로 감싼 데이터 키를 쓰고 두 번은 헤더의 나머지 슬롯에 남은 예전 것을 덮어씁니다. 호출이 반환되면 예전 키나 비밀번호로는 이 파일을 열 수 없습니다. 새 비밀번호는 핸들을 열 때 준 옵션의 비용으로 해시합니다.
+
+바꾸기로 달라지지 않는 것도 있습니다.
+
+- **바꾸기 전에 만든 사본.** 백업이나 운영체제 백업, 동기화 폴더에 있는 사본은 예전에 감싼 데이터 키를 그대로 갖고 있어서 예전 키나 비밀번호로 여전히 열립니다.
+- **데이터 키.** 예전 비밀번호와 바꾸기 전의 파일 사본을 함께 가진 사람은 그 사본에서 데이터 키를 풀어낼 수 있고, 그 데이터 키로 지금 파일도 복호화됩니다. 비밀번호나 키가 새어 나갔을 수 있다면 데이터 키도 바꾸세요. 앞 절처럼 새 키로 백업하고 그 사본을 파일 자리에 둡니다([새 키로 백업하기](./tools.md#새-키로-백업하기)).
+
+## 데이터베이스 복호화하기
+
+파일의 암호화를 벗기는 호출은 없습니다. 암호화한 파일의 백업도 원래 데이터 키든 새 데이터 키든 늘 암호화됩니다. 평문 데이터베이스가 필요하면 키 없이 같은 스키마로 새 데이터베이스를 만들어 객체를 옮기고, 그 파일을 암호화한 파일 자리에 둡니다.
+
+::: lang rust
+
+```rust
+use darudb::OpenOptions;
+
+fn decrypt(key: [u8; 32]) -> Result<(), darudb::Error> {
+    let schema = schema();
+    let encrypted = OpenOptions::new().schema(schema.clone()).key(key).open("secret.darudb")?;
+    let plain = OpenOptions::new().schema(schema.clone()).open("plain.darudb")?;
+    let read = encrypted.begin_read()?;
+
+    for collection in schema.collections() {
+        let mut txn = plain.begin_write()?;
+        let mut copy = txn.collection(collection.name())?;
+
+        for object in read.collection(collection.name())?.iter()? {
+            copy.put(object?)?;
+        }
+
+        txn.commit()?;
+    }
+
+    drop(read);
+    plain.close()?;
+    encrypted.close()
+}
+```
+
+`schema()`는 [컬렉션과 객체](./objects.md#스키마-선언하기)에서처럼 애플리케이션의 스키마를 선언하는 함수입니다. 스키마를 모르는 도구라면 암호화한 파일을 스키마 없이 열고 `Database::stored_schema`에서 스키마를 얻습니다.
+
+:::
+
+::: lang node
+
+```ts
+import { Database } from 'darudb';
+
+const encrypted = Database.open('secret.darudb', { schema: app, key });
+const plain = Database.open('plain.darudb', { schema: app });
+
+for (const name of ['teams', 'users'] as const) {
+  const objects = encrypted.read((txn) => txn.collection(name).find());
+
+  plain.write((txn) => {
+    txn.collection(name).putMany(objects);
+  });
+}
+
+plain.close();
+encrypted.close();
+```
+
+목록에는 [컬렉션과 객체](./objects.md#스키마-선언하기)의 스키마 `app`에 있는 컬렉션을 모두 적습니다.
+
+:::
+
+::: lang dart
+
+```dart
+void copy<T, Q extends QueryBuilder<T>, K extends Object>(
+  Database from,
+  Database to,
+  CollectionSchema<T, Q, K> collection,
+) {
+  final objects = from.read((txn) => txn.collection(collection).find());
+
+  to.write((txn) => txn.collection(collection).putMany(objects));
+}
+
+const schema = Schema(1, [teamSchema, userSchema]);
+final encrypted = Database.open('secret.darudb', schema: schema, key: key);
+final plain = Database.open('plain.darudb', schema: schema);
+
+copy(encrypted, plain, teamSchema);
+copy(encrypted, plain, userSchema);
+
+plain.close();
+encrypted.close();
+```
+
+:::
+
+::: lang python
+
+```python
+import darudb
+
+schema = darudb.Schema(1, [Team, User])
+
+with (
+    darudb.Database.open("secret.darudb", schema=schema, key=key) as encrypted,
+    darudb.Database.open("plain.darudb", schema=schema) as plain,
+):
+    for cls in (Team, User):
+        with encrypted.read() as txn:
+            objects = txn.collection(cls).find()
+
+        with plain.write() as txn:
+            txn.collection(cls).put_many(objects)
+```
+
+:::
+
+- 컬렉션마다 쓰기 트랜잭션 하나로 옮기므로, 그 컬렉션의 객체가 한꺼번에 메모리에 올라옵니다. 아주 큰 컬렉션은 기본 키 범위로 나눠 옮기고, 나눈 부분마다 커밋하세요.
+- 기본 키를 그대로 옮기므로 링크는 여전히 같은 객체를 가리킵니다. 자동 증가 키를 쓰는 컬렉션에서는 사본의 다음 번호가 옮긴 키 중 가장 큰 값 바로 다음이 됩니다. 그래서 암호화한 파일에서 쓰였다가 삭제된 객체의 번호가 다시 나올 수 있습니다.
+- 사본에 [무결성 검사](./tools.md#파일-검사하기)를 돌리고, 두 파일의 핸들을 모두 닫은 다음 사본을 암호화한 파일 자리에 두세요. 그때부터는 파일을 읽을 수 있는 사람이면 누구나 데이터를 읽습니다.
+
+## 고려할 점
+
+- **키를 잃으면 데이터도 잃습니다.** 키와 비밀번호를 모두 잃은 파일을 여는 호출이나 도구는 없고, 다른 길도 없습니다. 첫 커밋 전에 키를 저장하고, 운영체제 키 저장소나 비밀 관리 서비스처럼 자체 백업이 있는 곳에 두세요.
+- **키를 애플리케이션 코드에 적지 마세요.** 애플리케이션의 모든 사본이 같은 키를 쓰게 되고, 사본을 가진 누구나 프로그램에서 키를 꺼낼 수 있습니다. 사용자 기기에 설치되는 앱은 [위](#운영체제-키-저장소에-키-보관하기)처럼 기기마다 키를 만들어 키 저장소에 둡니다.
+- **비밀번호는 추측하기 어려워야 합니다.** Argon2id는 추측 한 번에 파일을 한 번 여는 만큼의 메모리와 시간이 들게 해서 추측을 늦출 뿐, 막지는 못합니다. 짧거나 흔한 비밀번호는 결국 뚫립니다. 비용을 올리면 추측만큼 파일 열기도 느려집니다.
+- **모든 프로세스가 해시 비용을 냅니다.** 비밀번호 파일은 열 때마다 그 비용만큼 메모리를 씁니다. 기본값은 19 MiB이고, 파일을 여는 프로세스마다 듭니다. 모바일 앱 확장은 프로세스 전체가 쓸 수 있는 메모리가 이보다 조금 많은 정도일 수 있습니다.
+- **페이지를 읽고 쓰는 비용이 조금 늘어납니다.** 디스크에서 읽는 페이지는 모두 복호화하고 검사하며, 쓰는 페이지는 모두 암호화합니다. 파일은 처음 만든 컴퓨터가 고른 암호 방식을 계속 쓰므로, 그 방식이 맞지 않는 프로세서에서는 더 느립니다.
+- **모든 핸들이 키를 줘야 합니다.** 파일을 여는 프로세스마다, 그리고 한 프로세스 안에서 여는 핸들마다 키나 비밀번호를 줍니다. 주지 않으면 다른 핸들이 파일을 열어 둔 동안에도 `KEY_REQUIRED`로 실패합니다.
+- **프로세스 안에서는 데이터가 평문입니다.** 데이터베이스가 열려 있는 동안 데이터 키와 읽은 페이지는 프로세스 메모리에 있고, 디버거나 크래시 덤프, 시스템의 스왑 파일로 닿을 수 있습니다. 키는 바이트로 넘기고, 호출이 반환되면 가지고 있던 사본을 지우세요. 문자열은 지울 수 없습니다.
+- **크기와 커밋은 드러납니다.** 평문 헤더에 파일 크기와 트랜잭션 ID가 보이므로, 데이터가 얼마나 있고 얼마나 자주 바뀌는지는 키 없이도 알 수 있습니다. 파일 전체를 예전 사본으로 되돌려 놓아도 파일 안에서는 알아챌 수 없습니다. 이를 알아채야 하는 애플리케이션은 가장 최근 트랜잭션 ID를 다른 곳에 보관하며, Rust API에서는 `ReadTransaction::commit_id`로 읽습니다.
+
 ## 암호화한 파일과 도구
 
-암호화한 파일의 백업은 같은 키로 암호화되고, 같은 키나 비밀번호로 열립니다. 다만 백업에 키나 비밀번호를 따로 주면 새 데이터 키로 암호화됩니다. 키나 비밀번호를 바꾸는 것으로는 데이터 키 자체가 바뀌지 않으므로, 데이터 키를 바꾸는 방법은 이것입니다([새 키로 백업하기](./tools.md#새-키로-백업하기)). 되살리기는 손상된 파일의 키나 비밀번호를 받고, 그 키나 비밀번호로 새 파일도 열립니다. [도구](./tools.md)를 보세요.
+암호화한 파일의 백업은 같은 데이터 키로 암호화되고, 같은 키나 비밀번호로 열립니다. 다만 백업에 키나 비밀번호를 따로 주면 새 데이터 키로 암호화됩니다([키나 비밀번호 바꾸기](#키나-비밀번호-바꾸기)). 되살리기는 손상된 파일의 키나 비밀번호를 받고, 그 키나 비밀번호로 새 파일도 열립니다. [도구](./tools.md)를 보세요.
