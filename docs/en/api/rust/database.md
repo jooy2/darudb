@@ -149,7 +149,7 @@ The copy has this file's page size, and in an encrypted file its cipher and key,
 pub fn backup_with(&self, path: impl AsRef<Path>, options: &BackupOptions) -> Result<BackupReport>
 ```
 
-Writes a copy as [`backup`](#backup) does, as [`BackupOptions`](./backup-options.md) say: with a key or a password there, the copy is encrypted under a new random data key, which it wraps, and opens only with it. A plain database's copy is encrypted the same way. An empty password fails with `INVALID_ARGUMENT` before anything is written.
+Writes a copy as [`backup`](#backup) does, as [`BackupOptions`](./backup-options.md) say: with a key or a password there, the copy is encrypted under a new random data key, which it wraps, and opens only with it. A plain database's copy is encrypted the same way. With `plain` there, the copy has no encryption and opens without a key or a password. An empty password fails with `INVALID_ARGUMENT` before anything is written.
 
 ### compact
 

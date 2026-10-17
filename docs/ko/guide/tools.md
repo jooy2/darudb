@@ -168,6 +168,47 @@ db.backup("app.rekeyed.darudb", password="a new password")  # 또는 `await db.b
 
 :::
 
+### 암호화하지 않고 백업하기
+
+`plain`을 준 백업은 파일이 어떻든 사본을 암호화하지 않고 씁니다. 암호화한 데이터베이스를 평문 데이터베이스로 바꾸는 방법이 이것입니다([데이터베이스 복호화하기](./encryption.md#데이터베이스-복호화하기)). 사본에는 엔진 자신의 트리도 들어가므로 자동 증가 카운터와 저장된 스키마도 그대로 넘어갑니다.
+
+::: lang rust
+
+```rust
+use darudb::{BackupOptions, Database};
+
+fn decrypted(db: &Database) -> Result<(), darudb::Error> {
+    db.backup_with("app.plain.darudb", BackupOptions::new().plain())?;
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+await db.backupAsync('app.plain.darudb', { plain: true }); // 또는 `db.backup(path, options)`
+```
+
+:::
+
+::: lang dart
+
+```dart
+await db.backupAsync('app.plain.darudb', plain: true); // 또는 `db.backup(path, ...)`
+```
+
+:::
+
+::: lang python
+
+```python
+db.backup("app.plain.darudb", plain=True)  # 또는 `await db.backup_async(...)`
+```
+
+:::
+
 ## 파일 압축하기
 
 파일은 한때 필요했던 페이지를 계속 갖고 있습니다. 객체를 지우면 파일 안에 빈 페이지가 생기고 이후 쓰기가 그 페이지를 다시 쓰지만, 파일이 저절로 줄지는 않습니다. 압축은 파일 끝쪽 페이지를 앞쪽 빈 페이지로 옮기고, 비게 된 끝을 파일 시스템에 돌려줍니다. 그 전에, 삽입으로 페이지가 덜 찬 트리를 꽉 채워 다시 씁니다. 키가 정해진 순서 없이 들어오면 트리의 페이지는 3분의 2쯤만 차므로, 이 과정으로 파일이 백업 사본과 비슷한 크기까지 줄어듭니다. 파일을 그 자리에서 줄이므로 다른 핸들과 프로세스는 그동안 계속 읽고 씁니다.

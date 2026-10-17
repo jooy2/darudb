@@ -149,7 +149,7 @@ pub fn backup(&self, path: impl AsRef<Path>) -> Result<BackupReport>
 pub fn backup_with(&self, path: impl AsRef<Path>, options: &BackupOptions) -> Result<BackupReport>
 ```
 
-[`backup`](#backup)처럼 사본을 쓰되 [`BackupOptions`](./backup-options.md)를 따릅니다. 옵션에 키나 비밀번호가 있으면 사본은 무작위로 만든 새 데이터 키로 암호화되고, 그 키나 비밀번호가 새 데이터 키를 감싸며, 사본은 그것으로만 열립니다. 평문 데이터베이스의 사본도 같은 방식으로 암호화됩니다. 빈 비밀번호는 아무것도 쓰기 전에 `INVALID_ARGUMENT`로 실패합니다.
+[`backup`](#backup)처럼 사본을 쓰되 [`BackupOptions`](./backup-options.md)를 따릅니다. 옵션에 키나 비밀번호가 있으면 사본은 무작위로 만든 새 데이터 키로 암호화되고, 그 키나 비밀번호가 새 데이터 키를 감싸며, 사본은 그것으로만 열립니다. 평문 데이터베이스의 사본도 같은 방식으로 암호화됩니다. 옵션에 `plain`이 있으면 사본은 암호화되지 않고 키나 비밀번호 없이 열립니다. 빈 비밀번호는 아무것도 쓰기 전에 `INVALID_ARGUMENT`로 실패합니다.
 
 ### compact
 

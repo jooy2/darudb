@@ -288,12 +288,15 @@ BackupReport backup(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool plain = false,
 });
 ```
 
 다른 핸들과 프로세스가 쓰는 동안에도 게시된 커밋의 사본을 `path`에 새 파일로 씁니다. 사본에는 빈 공간이 없고, 페이지 크기는 원본과 같으며, 같은 키나 비밀번호로 열립니다. 파일을 덮어쓰지 않으므로 이미 있는 경로나 빈 경로는 `INVALID_ARGUMENT`로 실패합니다. 결과는 [BackupReport](../../types/dart/backup-report.md)에 있습니다.
 
 32바이트 `key`나 `password`를 주면 사본은 무작위로 만든 새 데이터 키로 암호화되고, 그 키나 비밀번호가 새 데이터 키를 감쌉니다. 비밀번호를 해시하는 비용은 [`passwordHashing`](../../types/dart/password-hashing.md)이 정하고, 사본은 그것으로만 열립니다. 파일의 키나 비밀번호를 바꾸면 데이터 키를 다시 감쌀 뿐 데이터 키 자체는 그대로이므로, 노출됐을 수 있는 데이터 키를 버리려면 새 키로 백업한 뒤 사본을 원래 파일 자리에 두면 됩니다. 평문 데이터베이스의 사본도 같은 방식으로 암호화됩니다. 32바이트가 아닌 키, 빈 비밀번호, 함께 준 키와 비밀번호는 아무것도 쓰기 전에 `INVALID_ARGUMENT`로 실패하며, 패키지는 호출하는 순간 이 값을 복사합니다.
+
+`plain`을 주면 사본을 암호화하지 않고, 키나 비밀번호 없이 열리는 평문 데이터베이스로 씁니다. 암호화한 데이터베이스를 평문 데이터베이스로 바꾸는 방법이 이것입니다. 자동 증가 카운터와 저장된 스키마도 그대로 넘어갑니다. `plain`을 `key`나 `password`와 함께 주면 `INVALID_ARGUMENT`로 실패합니다.
 
 ### backupAsync
 
@@ -303,6 +306,7 @@ Future<BackupReport> backupAsync(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool plain = false,
 });
 ```
 

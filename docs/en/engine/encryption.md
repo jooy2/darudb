@@ -15,7 +15,7 @@ A database created with a key or a password is encrypted for its whole life: eve
 
 A plain database stays plain. It cannot be encrypted in place: its data has to be copied into a new database created with a key or a password, which is what a backup given a key or a password does, for the application to put in the plain file's place ([Back up under a new key](../guide/tools.md#back-up-under-a-new-key)).
 
-An encrypted database stays encrypted the same way. No call writes a plain copy of it, and its backup is always encrypted, under its own data key or a new one, so a plain database is made by copying the objects through the API into a new database created without a key ([Decrypt a database](../guide/encryption.md#decrypt-a-database)).
+An encrypted database stays encrypted the same way: it cannot be decrypted in place. A backup told `plain` writes a plain copy of it, with every tree the file holds, for the application to put in the encrypted file's place ([Decrypt a database](../guide/encryption.md#decrypt-a-database)). The copy keeps the file id, as every copy does, since a plain file binds nothing to it.
 
 ## Pages
 
@@ -49,7 +49,7 @@ The pages are encrypted under a data key: 32 random bytes, generated when the fi
 
 Changing the key or the password writes a new key block and re-encrypts no page, so it takes the same time whatever the size of the file. It is a sync commit with the new key block, followed by empty sync commits until no slot holds the old one: three commits in all when nothing else commits in between. Every commit copies the key block of the one before it, which is how the new one reaches the other slots. Until then, the old key still opens the file; once the call returns, it no longer does. The calls are <LangCode rust="Database::set_key" node="setKey" dart="setKey" python="set_key" /> and <LangCode rust="Database::set_password" node="setPassword" dart="setPassword" python="set_password" />.
 
-The data key itself stays the same for the life of the file. A backup and a salvage keep it too, since the new file takes the old one's key block, so the key or password that opens the file opens the copy. A backup given a key or a password of its own is the exception: its copy gets a new random data key, which that key or password wraps, and every page of the copy is written under it, as every page of a backup is written anew anyway.
+The data key itself stays the same for the life of the file. A backup and a salvage keep it too, since the new file takes the old one's key block, so the key or password that opens the file opens the copy. A backup given a key or a password of its own is the exception: its copy gets a new random data key, which that key or password wraps, and every page of the copy is written under it, as every page of a backup is written anew anyway. A backup told `plain` is the other exception: its copy has no data key at all.
 
 ## Passwords
 

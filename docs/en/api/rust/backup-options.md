@@ -6,14 +6,14 @@ counterpart: /types/node/backup-options
 
 # BackupOptions
 
-`BackupOptions` holds the options [`Database::backup_with`](./database.md#backup-with) writes a copy with: a key or a password that encrypts the copy under a new data key, and the cost of hashing that password.
+`BackupOptions` holds the options [`Database::backup_with`](./database.md#backup-with) writes a copy with: a key or a password that encrypts the copy under a new data key, and the cost of hashing that password, or no encryption at all.
 
 ```rust
 #[derive(Debug, Clone)]
 pub struct BackupOptions
 ```
 
-Without a key or a password, the copy is what [`backup`](./database.md#backup) writes: a copy of an encrypted file keeps its data key, so the same key or password opens it. With one, the copy is encrypted under a new random data key, which the key or password wraps, and opens only with it. Changing a file's key or password wraps its data key again and leaves it as it was, so a backup under a new key is the way to leave behind a data key that may have been exposed: back up, then put the copy in the old file's place. A plain database's copy is encrypted the same way.
+Without a key or a password, the copy is what [`backup`](./database.md#backup) writes: a copy of an encrypted file keeps its data key, so the same key or password opens it. With one, the copy is encrypted under a new random data key, which the key or password wraps, and opens only with it. Changing a file's key or password wraps its data key again and leaves it as it was, so a backup under a new key is the way to leave behind a data key that may have been exposed: back up, then put the copy in the old file's place. A plain database's copy is encrypted the same way. With [`plain`](#plain), the copy has no encryption, which is how an encrypted database becomes a plain one.
 
 It is a builder like [`OpenOptions`](./open-options.md): each method takes `&mut self` and returns `&mut Self`. `BackupOptions` also implements `Default`, which is `new`.
 
@@ -46,7 +46,7 @@ Options that keep the file's data key, if it has one.
 pub fn key(&mut self, key: [u8; 32]) -> &mut Self
 ```
 
-Encrypts the copy under a new data key, which `key` wraps. `key` and [`password`](#password) replace each other; the last one given counts.
+Encrypts the copy under a new data key, which `key` wraps. `key`, [`password`](#password) and [`plain`](#plain) replace each other; the last one given counts.
 
 ### password
 
@@ -63,3 +63,11 @@ pub fn password_hashing(&mut self, memory_kib: u32, iterations: u32, parallelism
 ```
 
 How much work hashing the copy's password takes, as [`OpenOptions::password_hashing`](./open-options.md#password-hashing) says: 19456 KiB, 2 iterations and 1 lane by default. The copy records the cost, so opening it takes that cost.
+
+### plain
+
+```rust
+pub fn plain(&mut self) -> &mut Self
+```
+
+Writes the copy with no encryption, as a plain database that opens without a key or a password. It holds every tree the file holds, the engine's own included, so the auto-increment counters and the stored schema come across as they are. Anyone who can read the copy can read what the encrypted file held. A plain database's copy is plain anyway, so this changes nothing for one.

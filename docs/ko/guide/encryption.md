@@ -405,86 +405,50 @@ os.replace("app.encrypted.darudb", "app.darudb")
 
 ## 데이터베이스 복호화하기
 
-파일의 암호화를 벗기는 호출은 없습니다. 암호화한 파일의 백업도 원래 데이터 키든 새 데이터 키든 늘 암호화됩니다. 평문 데이터베이스가 필요하면 키 없이 같은 스키마로 새 데이터베이스를 만들어 객체를 옮기고, 그 파일을 암호화한 파일 자리에 둡니다.
+`plain`을 준 백업은 데이터베이스를 암호화하지 않은 사본으로 쓰고, 그 사본이 암호화한 파일 자리를 차지합니다. 파일을 그 자리에서 복호화하는 호출은 없습니다.
 
 ::: lang rust
 
 ```rust
-use darudb::OpenOptions;
+use darudb::{BackupOptions, OpenOptions};
 
-fn decrypt(key: [u8; 32]) -> Result<(), darudb::Error> {
-    let schema = schema();
-    let encrypted = OpenOptions::new().schema(schema.clone()).key(key).open("secret.darudb")?;
-    let plain = OpenOptions::new().schema(schema.clone()).open("plain.darudb")?;
-    let read = encrypted.begin_read()?;
+fn decrypt(key: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let db = OpenOptions::new().key(key).open("app.darudb")?;
 
-    for collection in schema.collections() {
-        let mut txn = plain.begin_write()?;
-        let mut copy = txn.collection(collection.name())?;
+    db.backup_with("app.plain.darudb", BackupOptions::new().plain())?;
+    db.close()?;
+    std::fs::rename("app.plain.darudb", "app.darudb")?;
 
-        for object in read.collection(collection.name())?.iter()? {
-            copy.put(object?)?;
-        }
-
-        txn.commit()?;
-    }
-
-    drop(read);
-    plain.close()?;
-    encrypted.close()
+    Ok(())
 }
 ```
-
-`schema()`는 [컬렉션과 객체](./objects.md#스키마-선언하기)에서처럼 애플리케이션의 스키마를 선언하는 함수입니다. 스키마를 모르는 도구라면 암호화한 파일을 스키마 없이 열고 `Database::stored_schema`에서 스키마를 얻습니다.
 
 :::
 
 ::: lang node
 
 ```ts
-import { Database } from 'darudb';
+import { renameSync } from 'node:fs';
 
-const encrypted = Database.open('secret.darudb', { schema: app, key });
-const plain = Database.open('plain.darudb', { schema: app });
+const db = Database.open('app.darudb', { schema: app, key });
 
-for (const name of ['teams', 'users'] as const) {
-  const objects = encrypted.read((txn) => txn.collection(name).find());
-
-  plain.write((txn) => {
-    txn.collection(name).putMany(objects);
-  });
-}
-
-plain.close();
-encrypted.close();
+db.backup('app.plain.darudb', { plain: true }); // 또는 `await db.backupAsync(...)`
+db.close();
+renameSync('app.plain.darudb', 'app.darudb');
 ```
-
-목록에는 [컬렉션과 객체](./objects.md#스키마-선언하기)의 스키마 `app`에 있는 컬렉션을 모두 적습니다.
 
 :::
 
 ::: lang dart
 
 ```dart
-void copy<T, Q extends QueryBuilder<T>, K extends Object>(
-  Database from,
-  Database to,
-  CollectionSchema<T, Q, K> collection,
-) {
-  final objects = from.read((txn) => txn.collection(collection).find());
+import 'dart:io';
 
-  to.write((txn) => txn.collection(collection).putMany(objects));
-}
+final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]), key: key);
 
-const schema = Schema(1, [teamSchema, userSchema]);
-final encrypted = Database.open('secret.darudb', schema: schema, key: key);
-final plain = Database.open('plain.darudb', schema: schema);
-
-copy(encrypted, plain, teamSchema);
-copy(encrypted, plain, userSchema);
-
-plain.close();
-encrypted.close();
+db.backup('app.plain.darudb', plain: true); // 또는 `await db.backupAsync(...)`
+db.close();
+File('app.plain.darudb').renameSync('app.darudb');
 ```
 
 :::
@@ -492,27 +456,19 @@ encrypted.close();
 ::: lang python
 
 ```python
-import darudb
+import os
 
-schema = darudb.Schema(1, [Team, User])
-
-with (
-    darudb.Database.open("secret.darudb", schema=schema, key=key) as encrypted,
-    darudb.Database.open("plain.darudb", schema=schema) as plain,
-):
-    for cls in (Team, User):
-        with encrypted.read() as txn:
-            objects = txn.collection(cls).find()
-
-        with plain.write() as txn:
-            txn.collection(cls).put_many(objects)
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User]), key=key)
+db.backup("app.plain.darudb", plain=True)  # 또는 `await db.backup_async(...)`
+db.close()
+os.replace("app.plain.darudb", "app.darudb")
 ```
 
 :::
 
-- 컬렉션마다 쓰기 트랜잭션 하나로 옮기므로, 그 컬렉션의 객체가 한꺼번에 메모리에 올라옵니다. 아주 큰 컬렉션은 기본 키 범위로 나눠 옮기고, 나눈 부분마다 커밋하세요.
-- 기본 키를 그대로 옮기므로 링크는 여전히 같은 객체를 가리킵니다. 자동 증가 키를 쓰는 컬렉션에서는 사본의 다음 번호가 옮긴 키 중 가장 큰 값 바로 다음이 됩니다. 그래서 암호화한 파일에서 쓰였다가 삭제된 객체의 번호가 다시 나올 수 있습니다.
-- 사본에 [무결성 검사](./tools.md#파일-검사하기)를 돌리고, 두 파일의 핸들을 모두 닫은 다음 사본을 암호화한 파일 자리에 두세요. 그때부터는 파일을 읽을 수 있는 사람이면 누구나 데이터를 읽습니다.
+- 사본에는 엔진 자신의 트리까지 파일의 모든 트리가 들어가므로, 자동 증가 카운터와 저장된 스키마도 그대로 넘어가고 사본을 쓰는 데 스키마가 필요 없습니다.
+- [기존 데이터베이스 암호화하기](#기존-데이터베이스-암호화하기)와 마찬가지로, 사본을 옮겨 놓기 전에 쓰기를 멈추고 모든 프로세스에서 암호화한 파일의 핸들을 닫으세요.
+- 사본을 옮겨 놓은 뒤에는 파일을 읽을 수 있는 사람이면 누구나 데이터를 읽고, 그 뒤에 만든 백업이나 동기화 사본을 읽을 수 있는 사람도 마찬가지입니다.
 
 ## 고려할 점
 
@@ -527,4 +483,4 @@ with (
 
 ## 암호화한 파일과 도구
 
-암호화한 파일의 백업은 같은 데이터 키로 암호화되고, 같은 키나 비밀번호로 열립니다. 다만 백업에 키나 비밀번호를 따로 주면 새 데이터 키로 암호화됩니다([키나 비밀번호 바꾸기](#키나-비밀번호-바꾸기)). 되살리기는 손상된 파일의 키나 비밀번호를 받고, 그 키나 비밀번호로 새 파일도 열립니다. [도구](./tools.md)를 보세요.
+암호화한 파일의 백업은 같은 데이터 키로 암호화되고, 같은 키나 비밀번호로 열립니다. 다만 백업에 키나 비밀번호를 따로 주면 새 데이터 키로 암호화되고([키나 비밀번호 바꾸기](#키나-비밀번호-바꾸기)), `plain`을 주면 암호화되지 않습니다([데이터베이스 복호화하기](#데이터베이스-복호화하기)). 되살리기는 손상된 파일의 키나 비밀번호를 받고, 그 키나 비밀번호로 새 파일도 열립니다. [도구](./tools.md)를 보세요.

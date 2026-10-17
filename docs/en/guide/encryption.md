@@ -405,86 +405,50 @@ What the change leaves as it was:
 
 ## Decrypt a database
 
-No call takes the encryption off a file, and the backup of an encrypted file is always encrypted, under its own data key or a new one. A plain database is made by copying the objects into a new database created without a key, with the same schema, which then takes the encrypted file's place.
+A backup told `plain` writes a copy of the database with no encryption, which then takes the encrypted file's place. No call takes the encryption off a file in place.
 
 ::: lang rust
 
 ```rust
-use darudb::OpenOptions;
+use darudb::{BackupOptions, OpenOptions};
 
-fn decrypt(key: [u8; 32]) -> Result<(), darudb::Error> {
-    let schema = schema();
-    let encrypted = OpenOptions::new().schema(schema.clone()).key(key).open("secret.darudb")?;
-    let plain = OpenOptions::new().schema(schema.clone()).open("plain.darudb")?;
-    let read = encrypted.begin_read()?;
+fn decrypt(key: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
+    let db = OpenOptions::new().key(key).open("app.darudb")?;
 
-    for collection in schema.collections() {
-        let mut txn = plain.begin_write()?;
-        let mut copy = txn.collection(collection.name())?;
+    db.backup_with("app.plain.darudb", BackupOptions::new().plain())?;
+    db.close()?;
+    std::fs::rename("app.plain.darudb", "app.darudb")?;
 
-        for object in read.collection(collection.name())?.iter()? {
-            copy.put(object?)?;
-        }
-
-        txn.commit()?;
-    }
-
-    drop(read);
-    plain.close()?;
-    encrypted.close()
+    Ok(())
 }
 ```
-
-`schema()` declares the application's schema, as in [Collections and objects](./objects.md#declare-a-schema). A tool that does not know the schema opens the encrypted file without one and takes it from `Database::stored_schema`.
 
 :::
 
 ::: lang node
 
 ```ts
-import { Database } from 'darudb';
+import { renameSync } from 'node:fs';
 
-const encrypted = Database.open('secret.darudb', { schema: app, key });
-const plain = Database.open('plain.darudb', { schema: app });
+const db = Database.open('app.darudb', { schema: app, key });
 
-for (const name of ['teams', 'users'] as const) {
-  const objects = encrypted.read((txn) => txn.collection(name).find());
-
-  plain.write((txn) => {
-    txn.collection(name).putMany(objects);
-  });
-}
-
-plain.close();
-encrypted.close();
+db.backup('app.plain.darudb', { plain: true }); // or `await db.backupAsync(...)`
+db.close();
+renameSync('app.plain.darudb', 'app.darudb');
 ```
-
-The list names every collection of `app`, the schema of [Collections and objects](./objects.md#declare-a-schema).
 
 :::
 
 ::: lang dart
 
 ```dart
-void copy<T, Q extends QueryBuilder<T>, K extends Object>(
-  Database from,
-  Database to,
-  CollectionSchema<T, Q, K> collection,
-) {
-  final objects = from.read((txn) => txn.collection(collection).find());
+import 'dart:io';
 
-  to.write((txn) => txn.collection(collection).putMany(objects));
-}
+final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]), key: key);
 
-const schema = Schema(1, [teamSchema, userSchema]);
-final encrypted = Database.open('secret.darudb', schema: schema, key: key);
-final plain = Database.open('plain.darudb', schema: schema);
-
-copy(encrypted, plain, teamSchema);
-copy(encrypted, plain, userSchema);
-
-plain.close();
-encrypted.close();
+db.backup('app.plain.darudb', plain: true); // or `await db.backupAsync(...)`
+db.close();
+File('app.plain.darudb').renameSync('app.darudb');
 ```
 
 :::
@@ -492,27 +456,19 @@ encrypted.close();
 ::: lang python
 
 ```python
-import darudb
+import os
 
-schema = darudb.Schema(1, [Team, User])
-
-with (
-    darudb.Database.open("secret.darudb", schema=schema, key=key) as encrypted,
-    darudb.Database.open("plain.darudb", schema=schema) as plain,
-):
-    for cls in (Team, User):
-        with encrypted.read() as txn:
-            objects = txn.collection(cls).find()
-
-        with plain.write() as txn:
-            txn.collection(cls).put_many(objects)
+db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User]), key=key)
+db.backup("app.plain.darudb", plain=True)  # or `await db.backup_async(...)`
+db.close()
+os.replace("app.plain.darudb", "app.darudb")
 ```
 
 :::
 
-- Each collection is copied in one write transaction, so all of its objects are in memory at once. Copy a very large collection in parts, by ranges of its primary key, and commit after each part.
-- Primary keys are copied as they are, so links still lead to the same objects. In a collection keyed by an auto-increment, the copy's next number is one past the highest key copied, so a number the encrypted file gave an object that was later deleted can be given again.
-- Run the [integrity check](./tools.md#check-a-file) on the copy, and close every handle to both files before the copy takes the encrypted file's place. From then on, anyone who can read the file can read the data.
+- The copy holds every tree of the file, the engine's own included, so the auto-increment counters and the stored schema come across as they are, and the copy needs no schema to be written.
+- Stop writing, and close every handle to the encrypted file in every process, before the copy takes its place, as for [encrypting an existing database](#encrypt-an-existing-database).
+- Once the copy is in place, anyone who can read the file can read the data, and so can anyone who can read a backup or a synced copy made of it afterwards.
 
 ## What to consider
 
@@ -527,4 +483,4 @@ with (
 
 ## Tools on an encrypted file
 
-A backup of an encrypted file is encrypted with the same data key and opens with the same key or password, unless it is given a key or a password of its own, which encrypts it under a new data key ([Change the key or the password](#change-the-key-or-the-password)). Salvage takes the key or the password of the damaged file, which then opens the new file too. See [Tools](./tools.md).
+A backup of an encrypted file is encrypted with the same data key and opens with the same key or password, unless it is given a key or a password of its own, which encrypts it under a new data key ([Change the key or the password](#change-the-key-or-the-password)), or told `plain`, which writes it with no encryption ([Decrypt a database](#decrypt-a-database)). Salvage takes the key or the password of the damaged file, which then opens the new file too. See [Tools](./tools.md).

@@ -168,6 +168,47 @@ db.backup("app.rekeyed.darudb", password="a new password")  # or `await db.backu
 
 :::
 
+### Back up without encryption
+
+A backup told `plain` writes its copy with no encryption, whatever the file is, which is how an encrypted database becomes a plain one ([Decrypt a database](./encryption.md#decrypt-a-database)). The copy holds the engine's own trees too, so the auto-increment counters and the stored schema come across as they are.
+
+::: lang rust
+
+```rust
+use darudb::{BackupOptions, Database};
+
+fn decrypted(db: &Database) -> Result<(), darudb::Error> {
+    db.backup_with("app.plain.darudb", BackupOptions::new().plain())?;
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+await db.backupAsync('app.plain.darudb', { plain: true }); // or `db.backup(path, options)`
+```
+
+:::
+
+::: lang dart
+
+```dart
+await db.backupAsync('app.plain.darudb', plain: true); // or `db.backup(path, ...)`
+```
+
+:::
+
+::: lang python
+
+```python
+db.backup("app.plain.darudb", plain=True)  # or `await db.backup_async(...)`
+```
+
+:::
+
 ## Compact a file
 
 A file keeps the pages it once needed: deleting objects frees pages inside it, which later writes reuse, but the file does not shrink by itself. Compaction moves the pages at the end of the file into free pages nearer its start and gives the end back to the file system. Before that, it writes again, full, every tree whose pages inserts left part empty: keys that arrive in no particular order leave a tree's pages about two thirds full, so this takes a file down to about the size of a backup's copy. It works in place, while other handles and processes keep reading and writing.

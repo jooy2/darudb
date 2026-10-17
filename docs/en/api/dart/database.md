@@ -288,12 +288,15 @@ BackupReport backup(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool plain = false,
 });
 ```
 
 Writes a copy of the published commit to a new file at `path`, while other handles and processes may write. The copy holds no free space, has the file's page size, and opens with the same key or password. It never replaces a file: a path that is taken, or an empty one, fails with `INVALID_ARGUMENT`. [BackupReport](../../types/dart/backup-report.md) describes the result.
 
 A `key` of 32 bytes or a `password` encrypts the copy under a new random data key, which it wraps, at the cost [`passwordHashing`](../../types/dart/password-hashing.md) sets for a password, and the copy opens only with it. Changing a file's key or password wraps its data key again and leaves it as it was, so a backup under a new key is the way to leave behind a data key that may have been exposed: back up, then put the copy in the old file's place. A plain database's copy is encrypted the same way. A key that is not 32 bytes, an empty password, or both together fail with `INVALID_ARGUMENT` before anything is written, and the package copies them when the call is made.
+
+`plain` writes the copy with no encryption instead, as a plain database that opens without a key or a password: how an encrypted database becomes a plain one. Auto-increment counters and the stored schema come across as they are. `plain` beside a `key` or a `password` fails with `INVALID_ARGUMENT`.
 
 ### backupAsync
 
@@ -303,6 +306,7 @@ Future<BackupReport> backupAsync(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
+  bool plain = false,
 });
 ```
 

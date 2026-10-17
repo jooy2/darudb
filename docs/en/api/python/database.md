@@ -311,12 +311,15 @@ def backup(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    plain: bool = False,
 ) -> BackupReport: ...
 ```
 
 Writes a copy of the published commit to a new file at `path`, while other handles and processes may write. The copy holds no free space, has the file's page size, and opens with the same key or password. It never replaces a file: a path that is taken fails with `INVALID_ARGUMENT`. [BackupReport](../../types/python/backup-report.md) describes the result.
 
 A `key` of 32 bytes or a `password` encrypts the copy under a new random data key, at the cost [`password_hashing`](../../types/python/password-hashing.md) sets for a password, and the copy opens only with it. Changing a file's key or password wraps its data key again and leaves the data key as it was, so a backup under a new key is the way to leave behind a data key that may have been exposed: back up, then put the copy in the old file's place. A plain database's copy is encrypted the same way. A key that is not 32 bytes, or a key and a password together, fail with `INVALID_ARGUMENT` before anything is written. [Tools](../../guide/tools.md) explains how a backup is made.
+
+`plain=True` writes the copy with no encryption instead, as a plain database that opens without a key or a password: how an encrypted database becomes a plain one. Auto-increment counters and the stored schema come across as they are. `plain` beside a `key` or a `password` fails with `INVALID_ARGUMENT`.
 
 ### backup_async
 
@@ -328,6 +331,7 @@ async def backup_async(
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
+    plain: bool = False,
 ) -> BackupReport: ...
 ```
 
