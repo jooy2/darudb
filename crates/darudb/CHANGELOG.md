@@ -2,6 +2,13 @@
 
 > This crate's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
+### Added
+
+- `BackupOptions::plain`, which makes `Database::backup_with` write its copy with no encryption: the way to turn an encrypted database into a plain one, which put in the encrypted file's place opens without a key or a password. The copy holds every tree, the engine's own included, so auto-increment counters and the stored schema come across as they are. `key`, `password` and `plain` each replace what an earlier call to one of them set.
+
+
 ## v1.3.0 (2026-10-13)
 
 ### Added

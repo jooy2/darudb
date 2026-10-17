@@ -401,6 +401,19 @@ impl Database {
         create_beside(path, header, key_block, Some(&data_key))
     }
 
+    /// A new plain database in a file beside `path`, as
+    /// [`create_copy_beside`](Self::create_copy_beside) makes, but with no
+    /// cipher, key block or data key, whatever this file has. It keeps the file
+    /// id, as every copy does: in a plain file nothing is bound to it.
+    pub(crate) fn create_plain_beside(&self, path: &Path) -> Result<(PathBuf, Database)> {
+        let header = StaticHeader {
+            cipher: Cipher::Plain,
+            ..self.shared.static_fields()
+        };
+
+        create_beside(path, header, [0; crate::format::KEY_BLOCK_LEN], None)
+    }
+
     /// The instance behind this handle, for the tools and the engine's own
     /// tests.
     pub(crate) fn shared(&self) -> &Arc<Shared> {
