@@ -1060,14 +1060,25 @@ interface BackupReport {
 /** The options `backup` and `backupAsync` take. */
 interface BackupOptions extends Secret {
   passwordHashing?: OpenOptions<never>['passwordHashing'];
+  plain?: boolean;
 }
 
 /** What `backup` and `backupAsync` pass to the native layer, checked. */
 function backupOptionsOf(options: BackupOptions): native.NativeBackupOptions {
+  const { plain = false } = options;
+
   checkPasswordHashing(options.passwordHashing);
 
+  if (typeof plain !== 'boolean') {
+    throw invalid('`plain` is true or false');
+  }
+
+  if (plain && (options.key !== undefined || options.password !== undefined)) {
+    throw invalid('give `plain`, a `key` or a `password`, not more than one');
+  }
+
   // Last, so that nothing above throws with the copies not yet wiped.
-  return { passwordHashing: options.passwordHashing, ...secretOf(options) };
+  return { passwordHashing: options.passwordHashing, plain, ...secretOf(options) };
 }
 
 /** The options `salvage` and `salvageAsync` take. */

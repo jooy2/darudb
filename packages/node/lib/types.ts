@@ -806,7 +806,8 @@ export interface CompactReport {
  * new random data key, which the key or password wraps: changing a file's key
  * or password only wraps its data key again, so a backup is the way to leave
  * behind a data key that may have been exposed. A plain database's copy is
- * encrypted the same way. Give a `key` or a `password`, not both.
+ * encrypted the same way. With `plain`, the copy is not encrypted at all.
+ * Give a `key`, a `password` or `plain`, not more than one.
  */
 export interface BackupOptions {
   /** A key of 32 bytes for the copy. The package copies it when the call is made. */
@@ -815,6 +816,13 @@ export interface BackupOptions {
   password?: string | Uint8Array;
   /** How much work hashing the copy's password takes, as `OpenOptions` says. */
   passwordHashing?: PasswordHashing;
+  /**
+   * Whether to write the copy with no encryption, as a plain database that
+   * opens without a key or a password: how an encrypted database becomes a
+   * plain one. Anyone who can read the copy can then read the data. `false` by
+   * default.
+   */
+  plain?: boolean;
 }
 
 /** What `Database.backup` wrote. */

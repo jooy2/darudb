@@ -466,6 +466,67 @@ describe('Database#backup', () => {
     db.close();
     plain.close();
   });
+
+  it('writes a plain copy of an encrypted file with plain', async (context) => {
+    const dir = tempDir(context);
+    const key = new Uint8Array(32).fill(3);
+    const db = Database.open(join(dir, 'app.darudb'), { schema: people, key });
+
+    db.write((txn) => {
+      const collection = txn.collection('people');
+
+      collection.insertMany([
+        { name: 'a', email: 'a@x', age: 1 },
+        { name: 'b', email: 'b@x', age: 2 }
+      ]);
+      // Only the auto-increment counter remembers that 2 was given.
+      collection.delete(2);
+    });
+    db.backup(join(dir, 'plain.darudb'), { plain: true });
+    await db.backupAsync(join(dir, 'later.darudb'), { plain: true });
+
+    for (const name of ['plain.darudb', 'later.darudb']) {
+      const copy = Database.open(join(dir, name), { schema: people });
+
+      assert.equal(copy.isEncrypted, false);
+      assert.deepEqual(
+        copy.read((txn) => txn.collection('people').find()),
+        db.read((txn) => txn.collection('people').find())
+      );
+      assert.equal(
+        copy.write((txn) => txn.collection('people').insert({ name: 'c', email: 'c@x', age: 3 })),
+        3
+      );
+      copy.close();
+    }
+
+    assertCode(
+      () => Database.open(join(dir, 'plain.darudb'), { schema: people, key }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () => db.backup(join(dir, 'keyed.darudb'), { plain: true, key }),
+      'INVALID_ARGUMENT'
+    );
+    await assert.rejects(
+      db.backupAsync(join(dir, 'password.darudb'), { plain: true, password: 'x' }),
+      {
+        code: 'INVALID_ARGUMENT'
+      }
+    );
+    assertCode(() => db.backup(join(dir, 'odd.darudb'), { plain: 'yes' }), 'INVALID_ARGUMENT');
+    db.close();
+
+    const plain = Database.open(join(dir, 'plain.darudb'), { schema: people });
+
+    plain.backup(join(dir, 'again.darudb'), { plain: true });
+    plain.close();
+
+    const again = Database.open(join(dir, 'again.darudb'), { schema: people });
+
+    assert.equal(again.isEncrypted, false);
+    again.close();
+  });
 });
 
 describe('Database.salvage', () => {

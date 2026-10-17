@@ -135,13 +135,15 @@ pub struct NativeSalvageOptions {
 }
 
 /// What `Database.backup` passes down: a key or a password, with its
-/// hashing cost, that encrypts the copy under a new data key.
+/// hashing cost, that encrypts the copy under a new data key, or `plain`,
+/// which writes it with no encryption. The package gives one at most.
 #[napi(object)]
 pub struct NativeBackupOptions {
     /// A key of 32 bytes, as in [`NativeOptions`].
     pub key: Option<Buffer>,
     pub password: Option<Buffer>,
     pub password_hashing: Option<NativePasswordHashing>,
+    pub plain: Option<bool>,
 }
 
 /// What the integrity check found, as `Database.check` gives it.
@@ -322,6 +324,10 @@ fn backup_options(backup: &NativeBackupOptions) -> Result<darudb::BackupOptions>
 
     if let Some(cost) = &backup.password_hashing {
         options.password_hashing(cost.memory_kib, cost.iterations, cost.parallelism);
+    }
+
+    if backup.plain == Some(true) {
+        options.plain();
     }
 
     Ok(options)
