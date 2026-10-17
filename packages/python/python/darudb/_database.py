@@ -939,19 +939,27 @@ class Database:
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
+        plain: bool = False,
     ) -> BackupReport:
         """Writes a copy of the published commit to a new file at ``path``,
         while other handles and processes may write. The copy holds no free
         space and opens with the same key or password, or, with ``key`` or
         ``password``, is encrypted under a new data key that only they open.
-        It never replaces a file: a ``path`` that is taken is
-        ``INVALID_ARGUMENT``."""
+        With ``plain``, the copy has no encryption and opens without a key or
+        a password, which is how an encrypted database becomes a plain one.
+        Give ``key``, ``password`` or ``plain``, not more than one. It never
+        replaces a file: a ``path`` that is taken is ``INVALID_ARGUMENT``."""
         check_options(password_hashing=password_hashing)
+
+        if type(plain) is not bool:
+            raise invalid(f"plain is True or False, not {plain!r}")
+
         report = self._native.backup(
             os.fspath(path),
             key=key,
             password=password,
             password_hashing=None if password_hashing is None else password_hashing.spec(),
+            plain=plain,
         )
 
         return BackupReport(**report)
@@ -1016,12 +1024,15 @@ class Database:
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
+        plain: bool = False,
     ) -> BackupReport:
         """``backup`` on the package's thread pool."""
         from ._async import run
 
         return await run(
-            lambda: self.backup(path, key=key, password=password, password_hashing=password_hashing)
+            lambda: self.backup(
+                path, key=key, password=password, password_hashing=password_hashing, plain=plain
+            )
         )
 
     async def upgrade_format_async(self) -> bool:

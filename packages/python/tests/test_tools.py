@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,47 @@ def test_backup_with_a_password_encrypts_the_copy(path: Path, tmp_path: Path) ->
 
     with open_db(copy, password="for the copy") as db:
         assert db.is_encrypted
+
+
+def test_a_plain_backup_of_an_encrypted_file_opens_without_a_key(
+    path: Path, tmp_path: Path
+) -> None:
+    key = bytes(range(32))
+
+    with open_db(path, key=key) as db:
+        fill(db, 3)
+
+        # Only the auto-increment counter remembers that 3 was given.
+        with db.write() as txn:
+            txn.collection(User).delete(3)
+
+        db.backup(tmp_path / "plain.darudb", plain=True)
+        asyncio.run(db.backup_async(tmp_path / "later.darudb", plain=True))
+
+        for refused in (
+            lambda: db.backup(tmp_path / "keyed.darudb", plain=True, key=key),
+            lambda: db.backup(tmp_path / "password.darudb", plain=True, password="x"),
+            lambda: db.backup(tmp_path / "odd.darudb", plain="yes"),  # type: ignore[arg-type]
+        ):
+            with pytest.raises(DaruError) as error:
+                refused()
+
+            assert error.value.code == "INVALID_ARGUMENT"
+
+    for name in ("plain.darudb", "later.darudb"):
+        with open_db(tmp_path / name) as db:
+            assert not db.is_encrypted
+
+            with db.read() as txn:
+                assert [user.name for user in txn.collection(User).find()] == ["user 0", "user 1"]
+
+            with db.write() as txn:
+                assert txn.collection(User).insert(User(name="new", age=1)) == 4
+
+    with pytest.raises(DaruError) as error:
+        open_db(tmp_path / "plain.darudb", key=key)
+
+    assert error.value.code == "INVALID_ARGUMENT"
 
 
 def test_compact_gives_space_back(path: Path) -> None:

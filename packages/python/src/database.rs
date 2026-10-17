@@ -164,8 +164,9 @@ impl NativeDatabase {
     }
 
     /// Writes a copy of the published commit to a new file at `path`, under
-    /// a new key or password when one is given.
-    #[pyo3(signature = (path, key = None, password = None, password_hashing = None))]
+    /// a new key or password when one is given, or with no encryption when
+    /// `plain` is set.
+    #[pyo3(signature = (path, key = None, password = None, password_hashing = None, plain = false))]
     fn backup<'py>(
         &self,
         py: Python<'py>,
@@ -173,10 +174,22 @@ impl NativeDatabase {
         key: Option<&Bound<'py, PyAny>>,
         password: Option<&Bound<'py, PyAny>>,
         password_hashing: Option<(u32, u32, u32)>,
+        plain: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         one_secret(py, key, password)?;
 
+        if plain && (key.is_some() || password.is_some()) {
+            return Err(invalid(
+                py,
+                "give plain, a key or a password, not more than one",
+            ));
+        }
+
         let mut options = BackupOptions::new();
+
+        if plain {
+            options.plain();
+        }
 
         if let Some(key) = key {
             options.key(*Zeroizing::new(key_of(key)?));
