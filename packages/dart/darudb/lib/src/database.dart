@@ -332,6 +332,7 @@ Uint8List _options({
   required PasswordHashing? passwordHashing,
   required List<Migration> migrations,
   bool upgradeFormat = true,
+  bool plain = false,
 }) {
   if (key != null && password != null) {
     throw invalidArgument('give a key or a password, not both');
@@ -391,6 +392,8 @@ Uint8List _options({
         },
       ),
     if (!upgradeFormat) (10, (Writer w) => w.byte(Tag.falseValue)),
+    // A backup's alone: an open refuses it as an option it does not know.
+    if (plain) (11, (Writer w) => w.byte(Tag.trueValue)),
     if (migrations.isNotEmpty)
       (
         9,
@@ -1031,13 +1034,19 @@ final class Database implements Finalizable {
   /// backup is the way to leave behind a data key that may have been
   /// exposed. A plain database's copy is encrypted the same way. The package
   /// copies the key or password when the call is made.
+  ///
+  /// [plain] writes the copy with no encryption instead, as a plain database
+  /// that opens without a key or a password: how an encrypted database
+  /// becomes a plain one. Anyone who can read the copy can then read the
+  /// data. Give a [key], a [password] or [plain], not more than one.
   BackupReport backup(
     String path, {
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
+    bool plain = false,
   }) {
-    final options = _backupOptions(key, password, passwordHashing);
+    final options = _backupOptions(key, password, passwordHashing, plain);
     final bytes = utf8.encode(path);
     final loaded = _io.load(bytes, options);
 
@@ -1066,8 +1075,9 @@ final class Database implements Finalizable {
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
+    bool plain = false,
   }) async {
-    final options = _backupOptions(key, password, passwordHashing);
+    final options = _backupOptions(key, password, passwordHashing, plain);
     final bytes = utf8.encode(path);
     final loaded = _io.load(bytes, options);
     final Future<_Reply> backedUp;

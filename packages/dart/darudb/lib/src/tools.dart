@@ -153,22 +153,30 @@ final class SalvageReport {
 Map<int, Object?> _report(Uint8List bytes) => Reader(bytes).anyFields();
 
 /// The options of `Database.backup` as the record the library reads: the
-/// key, the password and its hashing cost of the copy.
+/// key, the password and its hashing cost of the copy, or `plain`.
 Uint8List _backupOptions(
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
-) => _options(
-  create: false,
-  pageSize: null,
-  busyTimeout: null,
-  cacheSize: null,
-  schema: null,
-  key: key,
-  password: password,
-  passwordHashing: passwordHashing,
-  migrations: const [],
-);
+  bool plain,
+) {
+  if (plain && (key != null || password != null)) {
+    throw invalidArgument('give plain, a key or a password, not more than one');
+  }
+
+  return _options(
+    create: false,
+    pageSize: null,
+    busyTimeout: null,
+    cacheSize: null,
+    schema: null,
+    key: key,
+    password: password,
+    passwordHashing: passwordHashing,
+    migrations: const [],
+    plain: plain,
+  );
+}
 
 /// The options salvage reads, as `Database.open`'s record holds them.
 Uint8List _salvageOptions(

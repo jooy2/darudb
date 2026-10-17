@@ -176,6 +176,80 @@ void main() {
     );
   });
 
+  test('a plain backup of an encrypted file opens without a key', () async {
+    final key = Uint8List(32)..fillRange(0, 32, 3);
+    const schema = Schema(1, [userSchema]);
+    final db = Database.open(path, schema: schema, key: key);
+
+    db.write((txn) {
+      final users = txn.collection(userSchema);
+
+      users.insertMany(const [
+        User(name: 'one', email: 'one@example.com', age: 1),
+        User(name: 'two', email: 'two@example.com', age: 2),
+      ]);
+      // Only the auto-increment counter remembers that 2 was given.
+      users.delete(2);
+    });
+    db.backup('${directory.path}/plain.darudb', plain: true);
+    await db.backupAsync('${directory.path}/later.darudb', plain: true);
+
+    for (final refused in [
+      () => db.backup('${directory.path}/keyed.darudb', plain: true, key: key),
+      () => db.backup(
+        '${directory.path}/password.darudb',
+        plain: true,
+        password: 'x',
+      ),
+    ]) {
+      expect(
+        refused,
+        throwsA(
+          isA<DaruException>().having(
+            (e) => e.code,
+            'code',
+            'INVALID_ARGUMENT',
+          ),
+        ),
+      );
+    }
+    db.close();
+
+    for (final name in ['plain.darudb', 'later.darudb']) {
+      final copy = Database.open('${directory.path}/$name', schema: schema);
+
+      expect(copy.isEncrypted, isFalse, reason: name);
+      expect(
+        copy.read(
+          (txn) => txn.collection(userSchema).find().map((user) => user.name),
+        ),
+        ['one'],
+        reason: name,
+      );
+      expect(
+        copy.write(
+          (txn) => txn
+              .collection(userSchema)
+              .insert(const User(name: 'three', email: 'three@example.com')),
+        ),
+        3,
+        reason: name,
+      );
+      copy.close();
+    }
+
+    expect(
+      () => Database.open(
+        '${directory.path}/plain.darudb',
+        schema: schema,
+        key: key,
+      ),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'INVALID_ARGUMENT'),
+      ),
+    );
+  });
+
   test('compaction makes the file smaller after deletes', () async {
     final db = filled();
 

@@ -310,9 +310,11 @@ fn password_cost(value: record::Field<'_>) -> Result<[u32; 3]> {
 
 /// The options of a backup, from a record of [`open_options`] with the key
 /// (6), the password (7) and the password hashing (8), each of which is about
-/// the copy here: a key or a password encrypts it under a new data key. The
-/// Dart side writes the record as it writes the options of an open, which
-/// always hold `create` (1), and a backup has no use for it.
+/// the copy here: a key or a password encrypts it under a new data key. Field
+/// 11, a `bool` that only a backup's record holds, writes the copy with no
+/// encryption; the Dart side refuses it beside a key or a password. The Dart
+/// side writes the record as it writes the options of an open, which always
+/// hold `create` (1), and a backup has no use for it.
 fn backup_options(record: &[u8]) -> Result<darudb::BackupOptions> {
     let mut options = darudb::BackupOptions::new();
 
@@ -336,6 +338,11 @@ fn backup_options(record: &[u8]) -> Result<darudb::BackupOptions> {
                 let cost = password_cost(value)?;
 
                 options.password_hashing(cost[0], cost[1], cost[2]);
+            }
+            11 => {
+                if value.bool()? {
+                    options.plain();
+                }
             }
             _ => {
                 return Err(invalid(format!(
