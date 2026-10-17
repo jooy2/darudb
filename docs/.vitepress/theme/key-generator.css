@@ -1,0 +1,118 @@
+/**
+ * The key generator on the encryption guide, which `KeyGenerator.vue` draws:
+ * a filled button, and below it, once pressed, the key in two forms, each
+ * with a button that copies it.
+ *
+ * A key is one unbroken word of 44 or 64 characters, so it breaks anywhere
+ * rather than pushing the page wider on a phone, and one click selects all of
+ * it, for a browser that does not allow the copy button.
+ */
+
+.key-generator {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-soft);
+}
+
+.key-generator-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.key-generator-make {
+  padding: 0 20px;
+  border: 1px solid var(--vp-button-brand-border);
+  border-radius: 20px;
+  background-color: var(--vp-button-brand-bg);
+  color: var(--vp-button-brand-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 38px;
+  cursor: pointer;
+  transition:
+    color 0.25s,
+    border-color 0.25s,
+    background-color 0.25s;
+}
+
+.key-generator-make:hover {
+  border-color: var(--vp-button-brand-hover-border);
+  background-color: var(--vp-button-brand-hover-bg);
+  color: var(--vp-button-brand-hover-text);
+}
+
+.key-generator-make:active {
+  border-color: var(--vp-button-brand-active-border);
+  background-color: var(--vp-button-brand-active-bg);
+  color: var(--vp-button-brand-active-text);
+}
+
+.key-generator-make:focus-visible,
+.key-generator-copy:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.key-generator-size {
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}
+
+.vp-doc .key-generator-forms {
+  margin: 16px 0 0;
+}
+
+.key-generator-form + .key-generator-form {
+  margin-top: 12px;
+}
+
+.key-generator-form dt {
+  color: var(--vp-c-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
+.vp-doc .key-generator-form dd {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.vp-doc .key-generator-value {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-all;
+  user-select: all;
+}
+
+.key-generator-copy {
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background-color: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+  transition: border-color 0.16s;
+}
+
+.key-generator-copy:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+.vp-doc .key-generator-status {
+  margin: 12px 0 0;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}

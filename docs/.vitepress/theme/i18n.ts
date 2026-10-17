@@ -24,7 +24,19 @@ const STRINGS = {
     groupObjects: 'Schemas and objects',
     groupQueries: 'Queries and writes',
     groupTools: 'Tools',
-    groupErrors: 'Errors and versions'
+    groupErrors: 'Errors and versions',
+    keyMake: 'Make a key',
+    keyAgain: 'Make another key',
+    keySize: '32 bytes, 256 bits',
+    keyHex: 'Hex',
+    keyBase64: 'Base64',
+    keyCopy: 'Copy',
+    keyCopied: 'Copied',
+    keyCopyHex: 'Copy the key as hex',
+    keyCopyBase64: 'Copy the key as Base64',
+    keyMade: 'A new key is below the button.',
+    keyCopiedStatus: 'The key was copied.',
+    keyCopyFailed: 'The browser did not allow copying. Select the key and copy it yourself.'
   },
   ko: {
     switchLabel: '언어',
@@ -46,7 +58,19 @@ const STRINGS = {
     groupObjects: '스키마와 객체',
     groupQueries: '쿼리와 쓰기',
     groupTools: '도구',
-    groupErrors: '오류와 버전'
+    groupErrors: '오류와 버전',
+    keyMake: '키 만들기',
+    keyAgain: '새 키 만들기',
+    keySize: '32바이트, 256비트',
+    keyHex: '16진수',
+    keyBase64: 'Base64',
+    keyCopy: '복사',
+    keyCopied: '복사됨',
+    keyCopyHex: '16진수 키 복사',
+    keyCopyBase64: 'Base64 키 복사',
+    keyMade: '버튼 아래에 새 키가 있습니다.',
+    keyCopiedStatus: '키를 복사했습니다.',
+    keyCopyFailed: '브라우저가 복사를 허용하지 않았습니다. 키를 선택해 직접 복사하세요.'
   }
 };
 
