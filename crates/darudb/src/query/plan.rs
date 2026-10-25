@@ -118,8 +118,9 @@ pub(crate) enum Test<'s> {
     In(Vec<Cow<'s, Value>>),
     /// `CONTAINS` on a list: equal to the value.
     Element(Cow<'s, Value>),
-    /// `CONTAINS` on a string.
-    Substring(&'s str),
+    /// `CONTAINS` on a string: a searcher for it, made once for the query,
+    /// and boxed, since it is several times the size of any other test.
+    Substring(Box<memchr::memmem::Finder<'s>>),
     StartsWith(&'s str),
     EndsWith(&'s str),
     IsNull,
@@ -795,7 +796,9 @@ fn test<'s>(
             Test::In(values)
         }
         (Op::Contains, 1) if path.list_leaf => Test::Element(check(value(0)?)?),
-        (Op::Contains, 1) => Test::Substring(string(value(0)?)?),
+        (Op::Contains, 1) => {
+            Test::Substring(Box::new(memchr::memmem::Finder::new(string(value(0)?)?)))
+        }
         (Op::StartsWith, 1) => Test::StartsWith(string(value(0)?)?),
         (Op::EndsWith, 1) => Test::EndsWith(string(value(0)?)?),
         (Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge, 1) => {

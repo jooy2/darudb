@@ -33,6 +33,10 @@ zeroize.workspace = true
 # Keyed BLAKE2b, the MAC of an encrypted file's commit records. Argon2id
 # builds on it already. MIT OR Apache-2.0.
 blake2.workspace = true
+# The search for `CONTAINS` on a string, with SIMD and a searcher made once
+# for each query rather than for each object. MIT OR Unlicense, with no
+# dependencies of its own.
+memchr.workspace = true
 
 # `#[derive(Object)]` and `#[derive(Embedded)]`, with the `derive` feature.
 # The project's own crate; it brings `syn`, `quote` and `proc-macro2`, MIT OR

@@ -259,14 +259,6 @@ impl ValueRef<'_> {
         }
     }
 
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            ValueRef::String(text) => std::str::from_utf8(text).ok(),
-            ValueRef::Value(value) => value.as_str(),
-            _ => None,
-        }
-    }
-
     fn to_value(self) -> Value {
         match self {
             ValueRef::Value(value) => value.clone(),
@@ -532,7 +524,12 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
         Test::In(values) => values
             .binary_search_by(|other| value.compare(other).reverse())
             .is_ok(),
-        Test::Substring(text) => value.as_str().is_some_and(|value| value.contains(*text)),
+        // Found among the string's bytes, which are checked to be UTF-8 only
+        // where it is found: a check of every string a walk tested took a
+        // tenth of its time.
+        Test::Substring(finder) => value.string_bytes().is_some_and(|bytes| {
+            finder.find(bytes).is_some() && std::str::from_utf8(bytes).is_ok()
+        }),
         Test::StartsWith(text) => value
             .string_bytes()
             .is_some_and(|value| value.starts_with(text.as_bytes())),
