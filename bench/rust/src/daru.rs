@@ -140,9 +140,10 @@ pub fn run(directory: &Path, rows: &mut Rows) -> darudb::Result<()> {
         for round in 0..10_000 {
             let id = random_id(round);
 
-            if let Some(mut person) = people.get(id)? {
-                person.age = (id + 1) % 80;
-                people.put(&person)?;
+            // Read, as every store's pass reads the object, then set the
+            // one field, as an SQL statement sets one column.
+            if people.get(id)?.is_some() {
+                people.set(id, Person::AGE, (id + 1) % 80)?;
             }
         }
 

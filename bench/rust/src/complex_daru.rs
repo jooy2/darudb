@@ -314,9 +314,12 @@ pub fn run(directory: &Path, rows: &mut Rows) -> darudb::Result<()> {
 
             d.number(found.len() as u64);
 
-            for mut person in found {
-                person.age = (person.age + 1) % 80;
-                people.put(&person)?;
+            for person in found {
+                people.set(
+                    person.id.expect("an id"),
+                    Person::AGE,
+                    (person.age + 1) % 80,
+                )?;
             }
         }
 
