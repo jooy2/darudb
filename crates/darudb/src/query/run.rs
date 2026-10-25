@@ -982,6 +982,15 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
         let mut taken = 0;
 
         walk(source, plan, &mut |key, walked| {
+            // With no filter left, every object the walk gives meets it, so
+            // one the offset skips is skipped without reading its record: a
+            // page deep in an index's order reads the page's records alone.
+            if plan.filter.is_none() && skipped < offset {
+                skipped += 1;
+
+                return Ok(false);
+            }
+
             let mut stop = false;
             let mut each = |lent: Lent<'_>| {
                 if !meets(&reader, plan, Some(lent), None)? {

@@ -8,6 +8,9 @@
 
 - `BackupOptions::plain`, which makes `Database::backup_with` write its copy with no encryption: the way to turn an encrypted database into a plain one, which put in the encrypted file's place opens without a key or a password. The copy holds every tree, the engine's own included, so auto-increment counters and the stored schema come across as they are. `key`, `password` and `plain` each replace what an earlier call to one of them set.
 
+### Changed
+
+- A query sorted by an indexed field, with an offset and nothing of its filter left to test on the objects it reads, skips the objects before its page by their keys, rather than reading each of them. A page of 50 objects after up to 98,703 others took 0.69 ms rather than 19 ms on an Apple M1 Max.
 
 ## v1.3.0 (2026-10-13)
 
