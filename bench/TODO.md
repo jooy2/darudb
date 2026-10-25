@@ -156,5 +156,11 @@ Done (2026-10-11):
 
 Done (2026-10-25):
 
-- **Skipping the objects before a page by their keys** when a query walks an index in its sort's order with no filter left to test (`design/objects.md`, step 5 of running a query): `people-page`, 50 people after 98,703 others, took 0.69 ms rather than 19 ms.
+- **Skipping the objects before a page by their keys** when a query walks an index in its sort's order with no filter left to test (`design/objects.md`, step 5 of running a query): `people-page`, 50 people after up to 98,703 others, took 0.69 ms rather than 19 ms.
 - **Sets of keys** (`query/keys.rs`, `Part` in `query/plan.rs`, `Strategy` in `query/run.rs`): a filter's terms that indexes answer alone gather the keys of the objects that meet them, which are met for `AND`, joined for `OR`, and followed through an indexed link, before an object is read, when counting the indexes' entries up to a cap says that is cheaper; a query sorted by an indexed field with a limit walks that index and takes only the gathered keys. `people-filter` 39% less time, `people-or` 92%, `posts-author-country` 93%, `posts-two-links` 93%, `posts-tag` 95% and `posts-count` 69%. The scan of `people-prefix`, which no index answers, takes about 1 to 1.5% longer for choosing, against a calibration of ±0.8%. A set is sorted only when its objects are read in key order: sorting every set took most of a count's time.
+
+Where it is behind (2026-10-25, nine passes on the M1 Max, with other work running; the performance page has the tables):
+
+- **Counts against Realm's columns.** `posts-text` takes Realm 0.45 times DaruDB's 32 ms in Node.js and Dart, and `posts-count` 0.46 to 0.48 times its 7.5 to 8.2 ms. Realm reads only the column it tests. DaruDB reads each of 300,000 records for the body, about 107 ns a post with the `memchr` finder, and for the count gathers the keys of one condition from its index, then walks the other's index keeping those among them (`gather` and `keep` in `query/run.rs`).
+- **Updating the people a query finds.** Realm takes 0.46 to 0.57 times DaruDB's time, SQLite's one `UPDATE` 0.91 times in Node.js and 0.60 in Dart; DaruDB takes 6.5 to 7.4 µs a person, rewriting the record and the age index's entries. `TypedWriter::set` is what the Rust pass uses; the bindings use `update`.
+- **In Dart, `posts-author-country` and `people-prefix`**: Realm 0.78 and 0.84 times, against 1.53 and 1.46 in Node.js, where its objects cost more. The prefix is a scan of a field without an index, item 5.
