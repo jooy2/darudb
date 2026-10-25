@@ -36,7 +36,7 @@ One collection of 100,000 objects, each with a name, an email under a unique ind
 
 The two queries without an index each have a row of their own for their first run, since DaruDB answers such a query faster once it has run: it remembers where the field it tests or sorts by lies in each record it read, and reads it there the next time. A query that an application runs once takes the time of the first run.
 
-Every database is used the way an application in that language would use it. DaruDB runs through its public API with a schema, SQLite through SQL with prepared statements, and the key-value stores keep a record and the indexes an application would write for them. Every read is made into an object of the language with all its fields, and a query that runs many times is prepared once. An update sets the one field it changes where the language's DaruDB package can, as SQL sets one column: through Node.js, Python and Dart with `update`, where writing the whole object back would build it again in the language first, and through Rust by writing the typed struct back, which is faster there than an update whose changes name the field.
+Every database is used the way an application in that language would use it. DaruDB runs through its public API with a schema, SQLite through SQL with prepared statements, and the key-value stores keep a record and the indexes an application would write for them. Every read is made into an object of the language with all its fields, and a query that runs many times is prepared once. An update sets the one field it changes where the language's DaruDB package can, as SQL sets one column: through Node.js, Python and Dart with `update`, where writing the whole object back would build it again in the language first, and through Rust, in the run these tables come from, by writing the typed struct back, which was faster there than an update whose changes name the field. The Rust harness now sets the field with `TypedWriter::set`, which names it through the type and took 13% less time an object than writing the struct back on an Apple M1 Max; the next run of the workflow shows it.
 
 The Node.js and Dart tables also have Realm, for applications moving from it, though its vendor deprecated it in September 2024 and ended support in September 2025; the [migration guide](./migration/realm.md) shows how to move the data. Realm assigns no keys, so the application gives each object the key the other stores assign. It has no unique index besides the primary key, so the email has a plain index, and its queries are strings it parses on every call, since it has no prepared queries. An update sets the one property.
 
@@ -68,6 +68,48 @@ In this run Rust and Python ran on runners with AMD EPYC 9V45 processors, and No
 - **A delete of 10,000 objects in Dart**, where SQLite takes 0.91 times DaruDB's time; DaruDB is ahead in the other languages. The delete is one transaction whose commit syncs, and DaruDB's commit of many scattered changes writes its pages where earlier commits freed pages, so it makes many more write calls, and on the EPYC 7763 runners syncing pages scattered over the file takes longer than syncing pages written in one run, as the sync commits show.
 - **A lookup through a unique index in Node.js**, where SQLite takes 0.90 times DaruDB's time: two lookups make it, the email's entry in the index and then the object by its key, and making the object from its record in JavaScript takes a fifth of it.
 
+## The complex suite
+
+A second suite measures an application with more than one collection: three collections that link to each other, 401,000 objects in all, and queries through links, lists and several indexes at once. Only the stores with a query language run it, DaruDB, SQLite and, in Node.js and Dart, Realm: a key-value store has no planner, and the code written by hand for each query would be what a row measured, not the store.
+
+These tables come from one Apple M1 Max, where the suite was first run, with the four languages one after another, so here a row compares across languages too. They do not compare with the tables above, which come from Linux runners. The machine ran other work meanwhile, so some rows spread 20% or more between passes; each cell is the median of nine passes, which four slow passes cannot pull far. The `run-benchmarks` workflow runs this suite as well, and its next run replaces these tables.
+
+<PerformanceTable suite="complex" />
+
+### What it measures
+
+| Collection | Objects | Fields |
+| --- | --- | --- |
+| Organizations | 1,000 | A code as the key, a name, a kind and a country, both indexed, and a year |
+| People | 100,000 | A name, an email under a unique index, an age, a country and a date joined, each indexed, an embedded address, a score, whether active, a link to an organization, indexed, and a list of one to three tags, indexed |
+| Posts | 300,000 | A link to the author, indexed, a title, a body of twelve words, likes, a language and a date, each indexed, whether pinned, and a list of up to two tags, indexed |
+
+| Workload | What it does |
+| --- | --- |
+| Load 401,000 objects, 10,000 to a transaction | The three collections, each commit waiting for the disk; the time is per object |
+| A person, their organization and their 5 newest posts | By key, then through the link, then through the posts' author index, 10,000 times |
+| Three conditions on two indexes, sorted, first 50 | An age range of ten years, one country and active, by score descending |
+| Count with OR across two indexes | The people of two countries, or aged 78 and over |
+| Names that start with a text | The people whose name starts with `person` and a number below 1,000, a field without an index |
+| A page of 50, deep in an indexed order | 50 people in the order they joined, after skipping up to 98,703 |
+| Through a link | The 20 newest posts with 900 likes or more whose author lives in one country |
+| Through two links | Counting the posts of one language whose author's organization is of one kind |
+| A tag in a list, sorted by another index | The 20 posts with one tag that have the most likes |
+| Count posts whose text contains a phrase | Two words in a row, in the body of 300,000 posts, without an index |
+| Count with conditions on two indexes | The posts of one language with 500 likes or more |
+| Update the people a query finds | Adding a year to the age of everyone in four countries, about 20,000 people, in one transaction; the time is per person |
+| Delete 1,000 people with their posts | In one transaction; the time is per person |
+
+Each store writes its queries the way an application would: DaruDB in its query language, prepared once; SQLite in SQL, with a join or a subquery for a link and a table of tags for each list; Realm in its query language, with a backlink for a person's posts, since Realm cannot index a link. An update through SQL is one `UPDATE` statement, where DaruDB and Realm find the people and change each. Every row digests what it found, and a run in which two stores disagree fails, as in the suite above.
+
+### Where DaruDB is behind in the complex suite
+
+DaruDB is ahead of SQLite in every row in Rust, and in every row but the update in Node.js, Python and Dart: SQLite takes 0.91 times DaruDB's time for it in Node.js and 0.60 times in Dart, and the two are level in Python. Realm is ahead in three rows in Node.js and five in Dart:
+
+- **Counting posts by a phrase in their text, and by conditions on two indexes.** Realm takes 0.45 and 0.48 times DaruDB's time in Node.js, and 0.45 and 0.46 times in Dart. Realm keeps each property's values together, so it reads only the bodies, or only the languages and the likes, and counts them without making an object. DaruDB reads each post's record to find the body in it, and for the count gathers the keys of one condition from its index, then walks the other's index for those among them.
+- **Updating the people a query finds.** Realm takes 0.57 times DaruDB's time in Node.js and 0.46 times in Dart, and SQLite 0.91 and 0.60 times. Realm sets one value where it keeps the ages, and SQLite's one statement changes every row inside the engine. DaruDB finds the people through the country index and writes each one's record again, with its entries in the age index, 6.5 to 7.4 µs a person in every language.
+- **Posts through a link, and names that start with a text, in Dart.** Realm takes 0.78 and 0.84 times DaruDB's time in Dart, and 1.53 and 1.46 times in Node.js, where making a JavaScript object of each post or person it finds costs more. Realm tests the likes and each author's country, or the names, in the values it keeps together. DaruDB gathers the keys of the country's people from its index, follows them to their posts through the author index, meets those with the likes, and walks the date index for the newest; for the names, which have no index, it reads each person's record.
+
 ## Run it yourself
 
 The harness is in [`bench/`](https://github.com/jooy2/darudb/tree/main/bench) of the repository, with a README that lists every setting. The `run-benchmarks` workflow runs it on GitHub-hosted runners and opens a pull request with the results for this page.
@@ -76,3 +118,5 @@ The harness is in [`bench/`](https://github.com/jooy2/darudb/tree/main/bench) of
 cd bench/rust && cargo build --release && cd ../..
 node bench/run.mjs rust --runs 9 --out bench/results/rust.json
 ```
+
+`--suite complex` runs the complex suite: `node bench/run.mjs rust --suite complex --runs 9 --out bench/results/rust-complex.json`.
