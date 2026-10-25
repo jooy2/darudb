@@ -4,10 +4,10 @@ Apps that use DaruDB the way an application does, with end-to-end tests that dri
 
 Nothing here is released. The packages ship only their own folders, the documentation site is built from `docs/`, and the samples depend on the packages in this checkout rather than on the published ones, so they run and test the code as it is in the repository.
 
-| Path      | What it is                                                                       | Tested with                          |
-| --------- | -------------------------------------------------------------------------------- | ------------------------------------ |
-| `node`    | One set of React screens, run as an Electron app and as a page of a local server | Playwright, in Electron and Chromium |
-| `flutter` | The same screens as a Flutter app, for macOS, Windows, Linux, iOS and Android    | `integration_test`, with no window   |
+| Path      | What it is                                                                       | Tested with                                       |
+| --------- | -------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `node`    | One set of React screens, run as an Electron app and as a page of a local server | Playwright, in Electron and Chromium              |
+| `flutter` | The same screens as a Flutter app, for macOS, Windows, Linux, iOS and Android    | `integration_test`, with no window and on a phone |
 
 Both use [Plass UI](https://plass.cdget.com) for their components and [randino](https://randino.cdget.com) for their sample data.
 
@@ -43,7 +43,7 @@ People come in nine languages, most of them Korean and English, with names, nick
 
 - **Rust**, through [rustup](https://rustup.rs). Both samples build the engine from this checkout, and rustup installs the version the repository pins on the first build.
 - **Node.js 22.18 or later** for the Node.js sample, which runs its TypeScript as it is.
-- **Flutter 3.41 or later** for the Flutter sample, Plass UI's minimum, with the tools for the platform you build for.
+- **Flutter 3.41 or later** for the Flutter sample, Plass UI's minimum, with the tools for the platform you build for: Xcode for iOS, whose oldest system for the sample is iOS 15, and the Android SDK with its NDK for Android.
 
 ## Run the Node.js sample
 
@@ -90,7 +90,13 @@ flutter test
 flutter test integration_test -d flutter-tester
 ```
 
-`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario, on a plain file and again on an encrypted one, in Flutter's test runner, which lays the app out at its window's size with no window on the screen. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
+`flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario, on a plain file and again on an encrypted one, in Flutter's test runner, which lays the app out at its window's size with no window on the screen, and once more on a plain file at a phone's size, where the sidebar is a drawer. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
+
+On a phone, or an iOS simulator or Android emulator, the scenario runs on the device's own screen: `flutter devices` lists the names to pass to `-d`.
+
+```bash
+flutter test integration_test -d <device>
+```
 
 ## In CI
 

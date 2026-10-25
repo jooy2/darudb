@@ -2,6 +2,10 @@
 // the query language, and sorting and paging are the query's too: the table
 // asks for `filter SORT BY field LIMIT 50 OFFSET n` and draws what comes back,
 // so the engine does the work whatever the collection holds.
+//
+// A narrow view, a phone's, scrolls the table sideways rather than squeezing
+// every column to a sliver, with the pager below it where it stays on the
+// screen.
 import 'package:darudb/darudb.dart';
 import 'package:flutter/widgets.dart';
 import 'package:plass_ui/plass_ui.dart';
@@ -34,6 +38,14 @@ const Map<String, double> _widths = <String, double>{
   'founded': 88,
   'language': 96,
 };
+
+/// The width a column that shares the room gets when the table scrolls
+/// sideways, where there is no room to share.
+const double _sharedWidth = 150;
+
+/// The width below which the view stacks the filter's buttons under it and
+/// scrolls the table sideways.
+const double _narrowBelow = 560;
 
 class CollectionView extends StatefulWidget {
   const CollectionView({super.key, required this.controller});
@@ -256,11 +268,117 @@ class _CollectionViewState extends State<CollectionView> {
     ];
   }
 
+  void _handlePageChanged(int page) {
+    _page = page;
+    _load();
+  }
+
+  /// The table, scrolled sideways at [width] on a narrow view.
+  Widget _getTableWidget(
+    List<PlDataTableColumn<SampleRow>> columns, {
+    required double width,
+    required bool sideways,
+  }) {
+    final CollectionInfo info = _collection.info;
+    final Widget table = PlDataTable<SampleRow>(
+      semanticLabel: 'Objects of ${_collection.name}',
+      columns: columns,
+      rows: _result.rows,
+      rowKey: (SampleRow row, int index) => row[info.key] ?? index,
+      // Sideways, the table's own pager would sit at the far end of the
+      // scroll, so it draws the page it gets and the pager goes below it.
+      manual: sideways
+          ? const <PlDataTableStage>[PlDataTableStage.sort]
+          : const <PlDataTableStage>[
+              PlDataTableStage.sort,
+              PlDataTableStage.pages,
+            ],
+      paging: sideways ? PlDataTablePaging.scroll : PlDataTablePaging.pages,
+      pageSize: _pageSize,
+      page: _page,
+      onPageChanged: _handlePageChanged,
+      rowCount: _result.total,
+      sort: _sort,
+      onSortChanged: (PlDataTableSort? sort) {
+        _sort = sort;
+        _page = 1;
+        _load();
+      },
+      loading: _loading,
+      striped: true,
+      hoverable: true,
+      empty: const PlEmpty(
+        title: Text('No objects'),
+        description: Text(
+          'Insert sample data from the sidebar, or add an object.',
+        ),
+      ),
+    );
+
+    if (!sideways) {
+      return table;
+    }
+
+    final int pages = (_result.total / _pageSize).ceil();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      spacing: 8,
+      children: <Widget>[
+        Flexible(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(width: width, child: table),
+          ),
+        ),
+        if (pages > 1)
+          Center(
+            // No neighbours beside the current page, so that the pager fits
+            // a phone's width whatever page it is on.
+            child: PlPagination(
+              count: pages,
+              page: _page,
+              siblingCount: 0,
+              onPageChanged: _handlePageChanged,
+            ),
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final CollectionInfo info = _collection.info;
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) =>
+          _getViewWidget(constraints.maxWidth),
+    );
+  }
+
+  Widget _getViewWidget(double width) {
     final DaruException? failure = _failure;
     final SampleRow? editing = _editing;
+    final bool narrow = width < _narrowBelow;
+    final double padding = narrow ? 16 : 24;
+    final List<PlDataTableColumn<SampleRow>> columns = _getColumns();
+    final Widget filter = PlTextField(
+      key: const Key('filter'),
+      controller: _filterInput,
+      label: const Text('Filter'),
+      placeholder: _filterExamples[_collection],
+      description: const Text(
+        'A condition in the query language. Leave it empty for every object.',
+      ),
+      onSubmitted: (_) => _handleApplyPressed(),
+      fullWidth: true,
+    );
+    final List<Widget> filterButtons = <Widget>[
+      PlButton(onPressed: _handleApplyPressed, child: const Text('Apply')),
+      PlButton(
+        variant: PlassVariant.ghost,
+        onPressed: _handleClearPressed,
+        child: const Text('Clear'),
+      ),
+    ];
     final Widget? form = editing != null || _adding
         ? ObjectForm(
             store: widget.controller.store,
@@ -277,20 +395,23 @@ class _CollectionViewState extends State<CollectionView> {
     return Stack(
       children: <Widget>[
         Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(padding),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             spacing: 16,
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  PlTypography(_collection.name, level: PlTypographyLevel.h3),
+                  PlTypography(
+                    _collection.name,
+                    level: narrow ? PlTypographyLevel.h4 : PlTypographyLevel.h3,
+                  ),
                   const SizedBox(width: 12),
                   Text(
                     formatCount(_result.total),
                     key: const Key('total'),
                     style: TextStyle(
-                      fontSize: 20,
+                      fontSize: narrow ? 16 : 20,
                       color: PlassTheme.of(context).mutedFg,
                     ),
                   ),
@@ -301,40 +422,28 @@ class _CollectionViewState extends State<CollectionView> {
                   ),
                 ],
               ),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: 8,
-                children: <Widget>[
-                  Expanded(
-                    child: PlTextField(
-                      key: const Key('filter'),
-                      controller: _filterInput,
-                      label: const Text('Filter'),
-                      placeholder: _filterExamples[_collection],
-                      description: const Text(
-                        'A condition in the query language. Leave it empty for every object.',
+              if (narrow)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  spacing: 8,
+                  children: <Widget>[
+                    filter,
+                    Row(spacing: 8, children: filterButtons),
+                  ],
+                )
+              else
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 8,
+                  children: <Widget>[
+                    Expanded(child: filter),
+                    for (final Widget button in filterButtons)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 26),
+                        child: button,
                       ),
-                      onSubmitted: (_) => _handleApplyPressed(),
-                      fullWidth: true,
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 26),
-                    child: PlButton(
-                      onPressed: _handleApplyPressed,
-                      child: const Text('Apply'),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 26),
-                    child: PlButton(
-                      variant: PlassVariant.ghost,
-                      onPressed: _handleClearPressed,
-                      child: const Text('Clear'),
-                    ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
               if (failure != null)
                 PlAlert(
                   key: const Key('list-failure'),
@@ -343,38 +452,14 @@ class _CollectionViewState extends State<CollectionView> {
                   child: Text(failure.message),
                 ),
               Flexible(
-                child: PlDataTable<SampleRow>(
-                  semanticLabel: 'Objects of ${_collection.name}',
-                  columns: _getColumns(),
-                  rows: _result.rows,
-                  rowKey: (SampleRow row, int index) => row[info.key] ?? index,
-                  manual: const <PlDataTableStage>[
-                    PlDataTableStage.sort,
-                    PlDataTableStage.pages,
-                  ],
-                  paging: PlDataTablePaging.pages,
-                  pageSize: _pageSize,
-                  page: _page,
-                  onPageChanged: (int page) {
-                    _page = page;
-                    _load();
-                  },
-                  rowCount: _result.total,
-                  sort: _sort,
-                  onSortChanged: (PlDataTableSort? sort) {
-                    _sort = sort;
-                    _page = 1;
-                    _load();
-                  },
-                  loading: _loading,
-                  striped: true,
-                  hoverable: true,
-                  empty: const PlEmpty(
-                    title: Text('No objects'),
-                    description: Text(
-                      'Insert sample data from the sidebar, or add an object.',
-                    ),
+                child: _getTableWidget(
+                  columns,
+                  width: columns.fold<double>(
+                    0,
+                    (double sum, PlDataTableColumn<SampleRow> column) =>
+                        sum + (column.width ?? _sharedWidth),
                   ),
+                  sideways: narrow,
                 ),
               ),
             ],

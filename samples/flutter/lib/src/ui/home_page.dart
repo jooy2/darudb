@@ -3,6 +3,11 @@
 // in the header. The file's card chooses whether the file is encrypted,
 // which makes it again, empty. It opens the store when it first appears and
 // closes it when it goes.
+//
+// On a screen narrower than `_collapseBelow`, a phone's, the sidebar is a
+// drawer the header's button opens, and the file's tools move into the
+// file's card, since the header has room for the app's name and that button
+// only.
 import 'dart:async';
 
 import 'package:darudb/darudb.dart';
@@ -20,6 +25,16 @@ import 'package:darudb_sample/src/ui/sample_panel.dart';
 /// The key a test reads a collection's count by.
 Key countKey(SampleCollection collection) => Key('count-${collection.name}');
 
+/// The key of the header's button that opens the sidebar on a narrow screen.
+const Key menuKey = Key('menu');
+
+/// What the drawer's close button says to a screen reader, which a test finds
+/// it by.
+const String closeSidebarLabel = 'Close the sidebar';
+
+/// The width below which the sidebar is a drawer.
+const PlassBreakpoint _collapseBelow = PlassBreakpoint.md;
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key, this.directory});
 
@@ -34,6 +49,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   SampleController? _controller;
   Object? _openFailure;
+  bool _sidebarOpen = false;
 
   @override
   void initState() {
@@ -209,47 +225,71 @@ class _HomePageState extends State<HomePage> {
           confirmLabel: 'Make plain',
         );
 
-  Widget _getHeaderWidget(SampleController controller) {
+  /// Check, Compact and Reset: in the header on a wide screen, and in the
+  /// file's card on a narrow one.
+  List<Widget> _getToolWidgets(SampleController controller) {
+    return <Widget>[
+      PlButton(
+        variant: PlassVariant.glass,
+        onPressed: controller.busy
+            ? null
+            : () => _handleCheckPressed(controller),
+        child: const Text('Check'),
+      ),
+      PlButton(
+        variant: PlassVariant.glass,
+        onPressed: controller.busy
+            ? null
+            : () => _handleCompactPressed(controller),
+        child: const Text('Compact'),
+      ),
+      PlButton(
+        color: PlassColor.danger,
+        onPressed: controller.busy
+            ? null
+            : () => _handleResetPressed(controller),
+        child: const Text('Reset'),
+      ),
+    ];
+  }
+
+  Widget _getHeaderWidget(SampleController controller, {required bool narrow}) {
     return PlHeader(
-      brand: const <Widget>[
-        PlTypography(
+      brand: <Widget>[
+        const PlSidebarTrigger(key: menuKey),
+        const PlTypography(
           'DaruDB Sample',
           level: PlTypographyLevel.h5,
           weight: PlTypographyWeight.semibold,
         ),
-        PlChip(size: PlassSize.sm, child: Text('Flutter')),
+        if (!narrow) const PlChip(size: PlassSize.sm, child: Text('Flutter')),
       ],
-      actions: <Widget>[
-        PlButton(
-          variant: PlassVariant.glass,
-          onPressed: controller.busy
-              ? null
-              : () => _handleCheckPressed(controller),
-          child: const Text('Check'),
-        ),
-        PlButton(
-          variant: PlassVariant.glass,
-          onPressed: controller.busy
-              ? null
-              : () => _handleCompactPressed(controller),
-          child: const Text('Compact'),
-        ),
-        PlButton(
-          color: PlassColor.danger,
-          onPressed: controller.busy
-              ? null
-              : () => _handleResetPressed(controller),
-          child: const Text('Reset'),
-        ),
-      ],
+      actions: narrow ? const <Widget>[] : _getToolWidgets(controller),
     );
   }
 
-  Widget _getSidebarWidget(SampleController controller) {
+  void _handleCollectionPressed(
+    SampleController controller,
+    SampleCollection collection, {
+    required bool narrow,
+  }) {
+    controller.select(collection);
+
+    // The drawer covers the list the reader just chose.
+    if (narrow) {
+      setState(() => _sidebarOpen = false);
+    }
+  }
+
+  Widget _getSidebarWidget(
+    SampleController controller, {
+    required bool narrow,
+  }) {
     final SampleInfo? info = controller.info;
 
     return PlSidebar(
       width: 320,
+      closeLabel: closeSidebarLabel,
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -261,7 +301,11 @@ class _HomePageState extends State<HomePage> {
                     in SampleCollection.values)
                   PlListItem(
                     selected: collection == controller.collection,
-                    onPressed: () => controller.select(collection),
+                    onPressed: () => _handleCollectionPressed(
+                      controller,
+                      collection,
+                      narrow: narrow,
+                    ),
                     endIcon: Text(
                       formatCount(info?.counts[collection] ?? 0),
                       key: countKey(collection),
@@ -278,6 +322,12 @@ class _HomePageState extends State<HomePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   spacing: 12,
                   children: <Widget>[
+                    if (narrow)
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _getToolWidgets(controller),
+                      ),
                     PlSegmentedButton<bool>(
                       semanticLabel: 'Encryption',
                       size: PlassSize.sm,
@@ -352,15 +402,28 @@ class _HomePageState extends State<HomePage> {
       return Center(child: waiting);
     }
 
-    return ListenableBuilder(
-      listenable: controller,
-      builder: (BuildContext context, Widget? child) => PlPageLayout(
-        collapseBelow: null,
-        header: _getHeaderWidget(controller),
-        sidebar: _getSidebarWidget(controller),
-        child: CollectionView(
-          key: ValueKey<SampleCollection>(controller.collection),
-          controller: controller,
+    // The layout measures the room it is given against the same breakpoint,
+    // so the header and the sidebar agree with it on what is narrow.
+    return SafeArea(
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (BuildContext context, Widget? child) => LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final bool narrow = constraints.maxWidth < _collapseBelow.width;
+
+            return PlPageLayout(
+              collapseBelow: _collapseBelow,
+              sidebarOpen: _sidebarOpen,
+              onSidebarOpenChanged: (bool open) =>
+                  setState(() => _sidebarOpen = open),
+              header: _getHeaderWidget(controller, narrow: narrow),
+              sidebar: _getSidebarWidget(controller, narrow: narrow),
+              child: CollectionView(
+                key: ValueKey<SampleCollection>(controller.collection),
+                controller: controller,
+              ),
+            );
+          },
         ),
       ),
     );

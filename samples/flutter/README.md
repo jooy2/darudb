@@ -9,7 +9,7 @@ The sample app's screens in Flutter with [Plass UI](https://plass.cdget.com), fo
 | `lib/src/store.dart`  | Every operation the screens ask of the database                             |
 | `lib/src/ui/`         | The screens                                                                 |
 | `test/`               | Unit tests of the sample data and the store                                 |
-| `integration_test/`   | The end-to-end scenario, which runs the app with or without a window        |
+| `integration_test/`   | The end-to-end scenario, with or without a window or on a phone             |
 
 ```bash
 flutter pub get
@@ -24,4 +24,4 @@ flutter test
 flutter test integration_test -d flutter-tester
 ```
 
-The second runs the app through the scenario with no window on the screen; `-d macos`, `-d windows` or `-d linux` runs it in the app's window instead.
+The second runs the app through the scenario with no window on the screen, at the window's size and again at a phone's; `-d macos`, `-d windows` or `-d linux` runs it in the app's window instead, and the name of a phone, a simulator or an emulator, from `flutter devices`, runs it on that device's screen. On iOS the sample needs iOS 15 or later, the oldest system the current Xcode builds for.
