@@ -356,55 +356,75 @@ sqlite.close();
 
 ::: lang dart
 
-The script reads the old file with the `sqlite3` package, whose build hook brings SQLite with it:
+A Flutter app's SQLite file is on each device, so the copy runs in the app itself, once, at the first launch of the version that moves. It reads the old file with `sqflite`, which the app already uses:
 
 ```yaml
 dependencies:
   darudb: ^1.3.0
-  sqlite3: ^3.7.0
+  sqflite: ^2.4.0
 ```
 
 ```dart
+import 'dart:io';
+
 import 'package:darudb/darudb.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'schema.dart';
 
-void main() {
-  final sqlite = sqlite3.open('app.sqlite', mode: OpenMode.readOnly);
-  final db = Database.open('app.darudb', schema: app);
+/// Copies the SQLite file at [from] into a DaruDB file at [path], once.
+Future<void> moveFromSqlite(String from, String path) async {
+  final part = File('$path.part');
 
-  /// Copies [rows] into a collection, a thousand to a transaction.
-  void copy<T>(
-    Iterable<Row> rows,
+  if (File(path).existsSync()) {
+    return;
+  }
+
+  // A copy a crash cut short is started again.
+  if (part.existsSync()) {
+    part.deleteSync();
+  }
+
+  final sqlite = await sqflite.openReadOnlyDatabase(from);
+  final db = await Database.openAsync(part.path, schema: app);
+
+  /// Copies the rows [sql] selects into a collection, a thousand to a
+  /// transaction.
+  Future<void> copy<T>(
+    String sql,
     CollectionSchema<T, QueryBuilder<T>, Object> collection,
-    T Function(Row row) convert,
-  ) {
+    T Function(Map<String, Object?> row) convert,
+  ) async {
+    final rows = await sqlite.rawQueryCursor(sql, null, bufferSize: 1000);
     final batch = <T>[];
 
-    void flush() {
-      db.write(
+    Future<void> flush() async {
+      await db.writeAsync(
         (txn) => txn.collection(collection).insertMany(batch),
         durability: Durability.deferred,
       );
       batch.clear();
     }
 
-    for (final row in rows) {
-      batch.add(convert(row));
+    try {
+      while (await rows.moveNext()) {
+        batch.add(convert(rows.current));
 
-      if (batch.length == 1000) {
-        flush();
+        if (batch.length == 1000) {
+          await flush();
+        }
       }
+    } finally {
+      await rows.close();
     }
 
     if (batch.isNotEmpty) {
-      flush();
+      await flush();
     }
   }
 
-  copy(
-    sqlite.select('SELECT id, name, email, age FROM users'),
+  await copy(
+    'SELECT id, name, email, age FROM users',
     userSchema,
     (row) => User(
       id: row['id'] as int,
@@ -417,12 +437,12 @@ void main() {
   // The join table becomes a list on each post.
   final tags = <String, List<String>>{};
 
-  for (final row in sqlite.select('SELECT post_slug, tag FROM post_tags')) {
+  for (final row in await sqlite.rawQuery('SELECT post_slug, tag FROM post_tags')) {
     tags.putIfAbsent(row['post_slug'] as String, () => []).add(row['tag'] as String);
   }
 
-  copy(
-    sqlite.select('SELECT slug, author_id, body, published_at FROM posts'),
+  await copy(
+    'SELECT slug, author_id, body, published_at FROM posts',
     postSchema,
     (row) => Post(
       slug: row['slug'] as String,
@@ -434,10 +454,28 @@ void main() {
   );
 
   // Every deferred commit is durable once this returns.
-  db.close();
-  sqlite.close();
+  await db.closeAsync();
+  await sqlite.close();
+  part.renameSync(path);
 }
 ```
+
+The app calls it before it opens the database, with the old file where `sqflite` keeps it and the new one in a folder that the system does not clear, such as the one `getApplicationSupportDirectory` from `path_provider` gives:
+
+```dart
+final from = '${await sqflite.getDatabasesPath()}/app.db';
+final folder = await getApplicationSupportDirectory();
+final path = '${folder.path}/app.darudb';
+
+await moveFromSqlite(from, path);
+
+final db = await Database.openAsync(path, schema: app);
+```
+
+- **Copied under another name, then moved into place.** The copy is written to `app.darudb.part` and renamed once it is closed, so the app finds either no database, and copies again, or a complete one. The SQLite file is opened read-only, so a copy cut short loses nothing.
+- **Off the UI's way.** `sqflite` runs its queries on a thread of its own, and the engine's writes run on threads of the native library through the `Future` API, so the app can show a screen that says it is updating while the copy runs. The cursor reads a thousand rows at a time, so a large table is never in memory whole.
+- **Keep the old file for a while.** Delete it with `sqflite.deleteDatabase` in a later version, once the app has run on the new file.
+- **An app on `drift`, or a Dart program** that reads the file with the `sqlite3` package, runs the same queries through `sqlite3.open(from, mode: OpenMode.readOnly)` and its `select`, and needs neither the cursor nor the `Future` API.
 
 :::
 

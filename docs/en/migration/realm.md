@@ -1,11 +1,12 @@
 ---
 title: Realm
 order: 3
+languages: [node, dart]
 ---
 
 # Migrating from Realm
 
-This page moves the data of a Realm file into DaruDB: how object schemas and property types map onto collections and fields, a Node.js script that copies every object, and what changes in an application that used live objects.
+This page moves the data of a Realm file into DaruDB: how object schemas and property types map onto collections and fields, the code that copies every object through Realm's own SDK, in a Node.js script or inside a Flutter app, and what changes in an application that used live objects.
 
 ## How the two map
 
@@ -30,11 +31,13 @@ This page moves the data of a Realm file into DaruDB: how object schemas and pro
 
 - **A link needs a key.** A link holds the primary key of the object it names, so a class that other objects link to needs a primary key. Give one a key with a Realm migration before copying, or copy it as an embedded object when each of its objects belongs to one parent.
 - **Defaults are not in the file.** A Realm file records its classes and properties but not their default values, so declare the DaruDB defaults by hand.
-- **Large integers.** The JavaScript SDK reads every `int` as a number, so a value beyond 2^53 has lost precision before the script sees it.
+- **Large integers.** Through Node.js, the JavaScript SDK reads every `int` as a number, so a value beyond 2^53 has lost precision before the script sees it. The Dart SDK reads it as an `int`, which holds it whole.
 
 ## Declare the schema
 
 The example moves this Realm schema: users with an embedded address, and posts that link to them.
+
+::: lang node
 
 ```js
 const Address = { name: 'Address', embedded: true, properties: { city: 'string', zip: 'string?' } };
@@ -72,7 +75,7 @@ const Post = {
 
 `_id` becomes a string key named `id`, the date a number of milliseconds, the `decimal128` and the `uuid` text, and the dictionary JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
 
-The copy runs in Node.js, through the `realm` package, so the DaruDB schema is declared in TypeScript for it:
+The DaruDB schema, in TypeScript:
 
 ```ts
 import { collection, schema, t } from 'darudb';
@@ -100,57 +103,81 @@ const app = schema(1, {
 });
 ```
 
-::: lang rust
-
-A Rust program opens the copied file with the same declaration in Rust. The two have to agree, in version, collections, fields, types and indexes, or opening fails with `SCHEMA_MISMATCH`:
-
-```rust
-use darudb::{Collection, Embedded, Schema, Type};
-
-fn schema() -> Schema {
-    Schema::new(1)
-        .collection(
-            Collection::new("users")
-                .primary_key("id", Type::String)
-                .field("name", Type::String)
-                .optional("email", Type::String)
-                .with_default("age", Type::Int, 0)
-                .optional("score", Type::Float)
-                .optional("avatar", Type::Bytes)
-                .field("joined", Type::Int)
-                .field("tags", Type::list(Type::String))
-                .optional(
-                    "address",
-                    Type::object(Embedded::new().field("city", Type::String).optional("zip", Type::String)),
-                )
-                .index("email")
-                .index("age"),
-        )
-        .collection(
-            Collection::new("posts")
-                .primary_key("slug", Type::String)
-                .optional("author", Type::link("users"))
-                .field("readers", Type::list(Type::link("users")))
-                .optional("price", Type::String)
-                .optional("ref", Type::String)
-                .field("meta", Type::String)
-                .index("author"),
-        )
-}
-```
-
 :::
 
 ::: lang dart
 
-A Dart program opens the copied file with the same declaration as annotated classes. The two have to agree, in version, collections, fields, types and indexes, or opening fails with `SCHEMA_MISMATCH`:
+The app's Realm models, from which `realm_generator` made `User`, `Post` and `Address`:
+
+```dart
+import 'dart:typed_data';
+
+import 'package:realm/realm.dart';
+
+part 'realm_models.realm.dart';
+
+@RealmModel(ObjectType.embeddedObject)
+class _Address {
+  late String city;
+  String? zip;
+}
+
+@RealmModel()
+class _User {
+  @PrimaryKey()
+  @MapTo('_id')
+  late ObjectId id;
+  late String name;
+  @Indexed()
+  String? email;
+  @Indexed()
+  int age = 0;
+  double? score;
+  Uint8List? avatar;
+  late DateTime joined;
+  late List<String> tags;
+  _Address? address;
+  @Backlink(#author)
+  late Iterable<_Post> posts;
+}
+
+@RealmModel()
+class _Post {
+  @PrimaryKey()
+  late String slug;
+  _User? author;
+  late List<_User> readers;
+  Decimal128? price;
+  Uuid? ref;
+  late Map<String, String> meta;
+}
+```
+
+`id` becomes a string key, the date a number of milliseconds, the `Decimal128` and the `Uuid` text, and the map JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
+
+The `realm` package depends on `realm_generator`, which pins an older `analyzer` and `source_gen` than `darudb_generator` needs, so the two generators do not resolve in one package. The DaruDB classes go in a package of their own inside the app's repository, `packages/app_data`, with `darudb_generator` among its `dev_dependencies`:
+
+```yaml
+name: app_data
+publish_to: none
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  darudb: ^1.3.0
+
+dev_dependencies:
+  build_runner: ^2.10.0
+  darudb_generator: ^1.1.0
+```
 
 ```dart
 import 'dart:typed_data';
 
 import 'package:darudb/darudb.dart';
 
-part 'schema.g.dart';
+part 'app_data.g.dart';
 
 @Embedded()
 class Address {
@@ -212,72 +239,24 @@ class Post {
 const app = Schema(1, [userSchema, postSchema]);
 ```
 
-:::
+`dart run build_runner build` in `packages/app_data` writes `app_data.g.dart`. The app depends on the package by path, beside `realm`, and keeps running `realm_generator` for its own models:
 
-::: lang python
-
-A Python program opens the copied file with the same declaration as decorated classes. The two have to agree, in version, collections, fields, types and indexes, or opening fails with `SCHEMA_MISMATCH`:
-
-```python
-import darudb
-from darudb import field
-
-
-@darudb.embedded
-class Address:
-    city: str
-    zip: str | None = None
-
-
-@darudb.collection("users")
-class User:
-    id: str = field(primary_key=True)
-    name: str
-    email: str | None = field(default=None, index=True)
-    age: int = field(default=0, index=True)
-    score: float | None = None
-    avatar: bytes | None = None
-    joined: int
-    tags: list[str]
-    address: Address | None = None
-
-
-@darudb.collection("posts")
-class Post:
-    slug: str = field(primary_key=True)
-    author: str | None = field(default=None, link=User, index=True)
-    readers: list[str] = field(link=User)
-    price: str | None = None
-    ref: str | None = None
-    meta: str
-
-
-app = darudb.Schema(1, [User, Post])
+```yaml
+dependencies:
+  realm: ^20.2.0
+  app_data:
+    path: packages/app_data
 ```
+
+Once a later version of the app no longer opens the Realm file, `realm` goes, and the classes can move back into the app with `darudb_generator`.
 
 :::
 
 ## Copy the objects
 
-The script reads the Realm file through the `realm` package and writes the DaruDB file through the Node.js package, whatever language the application is in: a DaruDB file is the same file in every language.
+::: lang node
 
-::: lang rust
-
-Realm has no Rust SDK. Run the script below once with the Node.js package, then open the file it writes from Rust with `OpenOptions::new().schema(schema()).open("app.darudb")`.
-
-:::
-
-::: lang dart
-
-Realm's Flutter SDK reads the file from Dart too, through the app's own Realm model classes, and the copy can be written the same way in Dart, a class at a time. The script below needs neither: run it once with the Node.js package, then open the file it writes from Dart with `Database.open('app.darudb', schema: app)`.
-
-:::
-
-::: lang python
-
-Realm has no Python SDK. Run the script below once with the Node.js package, then open the file it writes from Python with `darudb.Database.open("app.darudb", schema=app)`.
-
-:::
+The script reads the Realm file through the `realm` package and writes the DaruDB file through the Node.js package:
 
 ```js
 import Realm from 'realm';
@@ -340,9 +319,133 @@ process.exit(0);
 - **Classes, not embedded objects.** `realm.objects` takes a class; an embedded object is copied with its parent, as `address` is here.
 - **One class at a time.** A link holds the key whatever has been copied so far, so the classes can go in any order.
 
+:::
+
+::: lang dart
+
+A Flutter app's Realm file is on each device, so the copy runs in the app itself, once, at the first launch of the version that moves, through the app's own Realm models:
+
+```dart
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:app_data/app_data.dart';
+import 'package:darudb/darudb.dart';
+import 'package:realm/realm.dart' as realm;
+
+import 'realm_models.dart' as old;
+
+/// Copies the Realm file at [from] into a DaruDB file at [path], once.
+Future<void> moveFromRealm(String from, String path) async {
+  final part = File('$path.part');
+
+  if (File(path).existsSync()) {
+    return;
+  }
+
+  // A copy a crash cut short is started again.
+  if (part.existsSync()) {
+    part.deleteSync();
+  }
+
+  final source = realm.Realm(
+    realm.Configuration.local(
+      [old.User.schema, old.Post.schema, old.Address.schema],
+      path: from,
+      isReadOnly: true,
+    ),
+  );
+  final db = await Database.openAsync(part.path, schema: app);
+
+  /// Copies [objects] into a collection, a thousand to a transaction.
+  Future<void> copy<R, T>(
+    Iterable<R> objects,
+    CollectionSchema<T, QueryBuilder<T>, Object> collection,
+    T Function(R object) convert,
+  ) async {
+    final batch = <T>[];
+
+    Future<void> flush() async {
+      await db.writeAsync(
+        (txn) => txn.collection(collection).insertMany(batch),
+        durability: Durability.deferred,
+      );
+      batch.clear();
+    }
+
+    for (final object in objects) {
+      batch.add(convert(object));
+
+      if (batch.length == 1000) {
+        await flush();
+      }
+    }
+
+    if (batch.isNotEmpty) {
+      await flush();
+    }
+  }
+
+  await copy(
+    source.all<old.User>(),
+    userSchema,
+    (old.User user) => User(
+      id: user.id.hexString,
+      name: user.name,
+      email: user.email,
+      age: user.age,
+      score: user.score,
+      avatar: user.avatar,
+      joined: user.joined.millisecondsSinceEpoch,
+      tags: List.of(user.tags),
+      address: user.address == null
+          ? null
+          : Address(city: user.address!.city, zip: user.address!.zip),
+    ),
+  );
+
+  await copy(
+    source.all<old.Post>(),
+    postSchema,
+    (old.Post post) => Post(
+      slug: post.slug,
+      author: post.author == null ? null : Link<User>(post.author!.id.hexString),
+      readers: [for (final user in post.readers) Link<User>(user.id.hexString)],
+      price: post.price?.toString(),
+      ref: post.ref?.toString(),
+      meta: jsonEncode(Map.of(post.meta)),
+    ),
+  );
+
+  // Every deferred commit is durable once this returns.
+  await db.closeAsync();
+  source.close();
+  part.renameSync(path);
+}
+```
+
+The app calls it before it opens the database, with the path of its Realm file and a path for the new one in a folder that the system does not clear, such as the one `getApplicationSupportDirectory` from `path_provider` gives:
+
+```dart
+final folder = await getApplicationSupportDirectory();
+final path = '${folder.path}/app.darudb';
+
+await moveFromRealm(realm.Configuration.defaultRealmPath, path);
+
+final db = await Database.openAsync(path, schema: app);
+```
+
+- **Read-only, through the app's models.** Opened with `isReadOnly`, the file stays as it was. An encrypted file also needs its `encryptionKey` in the configuration.
+- **Copied under another name, then moved into place.** The copy is written to `app.darudb.part` and renamed once it is closed, so the app finds either no database, and copies again, or a complete one.
+- **Off the UI's way.** The engine's writes run on threads of the native library through the `Future` API, so the app can show a screen that says it is updating while the copy runs.
+- **Keep the Realm file for a while.** Delete it with `realm.Realm.deleteRealm` in a later version, once the app has run on the new file.
+- **Imported under a prefix.** The Realm models and the DaruDB classes have the same names, so the copy imports the models as `old`.
+
+:::
+
 ## Check the copy
 
-Compare `realm.objects('User').length` with <LangCode rust="len" node="count" dart="count" python="count" /> on `users`, for every class, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
+Count the objects of each class through Realm, `objects('User').length` in Node.js or `all` and `length` in Dart, and compare them with `count` on each collection, and run the [integrity check](../guide/tools.md#check-a-file) on the new file.
 
 ## Queries
 
@@ -370,8 +473,8 @@ The query language is close to the Realm Query Language that `filtered` takes:
 
 - **Results are plain objects.** A query returns objects copied out of the file, not live objects tied to it: they do not change when the data does, and they stay usable after the transaction and the database are closed. A change is written back with `put` or `update`.
 - **No change notifications.** Nothing calls the application when data changes. After a write, read again what the screen shows.
-- **Transactions** are <LangCode rust="begin_write and commit" node="db.write" dart="db.write" python="db.write" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
+- **Transactions** are <LangCode node="db.write" dart="db.write and db.writeAsync" /> instead of `realm.write`, and reads happen in a read transaction too. See [Transactions](../guide/transactions.md).
 - **Schema versions** keep working the same way: raise the schema's version, and give a migration for what the engine does not do by itself. See [Migrations](../guide/migrations.md).
 - **Encryption** takes a 32-byte key or a password instead of Realm's 64-byte key. The new file has a key of its own; see [Encryption](../guide/encryption.md).
 - **Sync** to a server has no counterpart: DaruDB keeps data in a local file only.
-- **Speed** is measured beside Realm on the [performance page](../performance.md), in its Node.js table, on the same objects and workloads.
+- **Speed** is measured beside Realm on the [performance page](../performance.md), in its Node.js and Dart tables, on the same objects and workloads.

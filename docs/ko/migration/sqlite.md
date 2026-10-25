@@ -356,55 +356,74 @@ sqlite.close();
 
 ::: lang dart
 
-스크립트는 `sqlite3` 패키지로 원래 파일을 읽습니다. 이 패키지는 빌드 훅으로 SQLite를 함께 가져옵니다.
+Flutter 앱의 SQLite 파일은 기기마다 있으므로, 복사는 앱 안에서 합니다. 옮기는 버전이 처음 실행될 때 한 번, 앱이 이미 쓰는 `sqflite`로 원래 파일을 읽습니다.
 
 ```yaml
 dependencies:
   darudb: ^1.3.0
-  sqlite3: ^3.7.0
+  sqflite: ^2.4.0
 ```
 
 ```dart
+import 'dart:io';
+
 import 'package:darudb/darudb.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'schema.dart';
 
-void main() {
-  final sqlite = sqlite3.open('app.sqlite', mode: OpenMode.readOnly);
-  final db = Database.open('app.darudb', schema: app);
+/// [from]의 SQLite 파일을 [path]의 DaruDB 파일로 한 번 복사합니다.
+Future<void> moveFromSqlite(String from, String path) async {
+  final part = File('$path.part');
 
-  /// [rows]를 컬렉션에 트랜잭션마다 천 개씩 복사합니다.
-  void copy<T>(
-    Iterable<Row> rows,
+  if (File(path).existsSync()) {
+    return;
+  }
+
+  // 충돌로 중간에 끊긴 복사는 처음부터 다시 합니다.
+  if (part.existsSync()) {
+    part.deleteSync();
+  }
+
+  final sqlite = await sqflite.openReadOnlyDatabase(from);
+  final db = await Database.openAsync(part.path, schema: app);
+
+  /// [sql]이 고른 행을 트랜잭션마다 천 개씩 컬렉션에 복사합니다.
+  Future<void> copy<T>(
+    String sql,
     CollectionSchema<T, QueryBuilder<T>, Object> collection,
-    T Function(Row row) convert,
-  ) {
+    T Function(Map<String, Object?> row) convert,
+  ) async {
+    final rows = await sqlite.rawQueryCursor(sql, null, bufferSize: 1000);
     final batch = <T>[];
 
-    void flush() {
-      db.write(
+    Future<void> flush() async {
+      await db.writeAsync(
         (txn) => txn.collection(collection).insertMany(batch),
         durability: Durability.deferred,
       );
       batch.clear();
     }
 
-    for (final row in rows) {
-      batch.add(convert(row));
+    try {
+      while (await rows.moveNext()) {
+        batch.add(convert(rows.current));
 
-      if (batch.length == 1000) {
-        flush();
+        if (batch.length == 1000) {
+          await flush();
+        }
       }
+    } finally {
+      await rows.close();
     }
 
     if (batch.isNotEmpty) {
-      flush();
+      await flush();
     }
   }
 
-  copy(
-    sqlite.select('SELECT id, name, email, age FROM users'),
+  await copy(
+    'SELECT id, name, email, age FROM users',
     userSchema,
     (row) => User(
       id: row['id'] as int,
@@ -417,12 +436,12 @@ void main() {
   // 연결 테이블은 글마다의 목록이 됩니다.
   final tags = <String, List<String>>{};
 
-  for (final row in sqlite.select('SELECT post_slug, tag FROM post_tags')) {
+  for (final row in await sqlite.rawQuery('SELECT post_slug, tag FROM post_tags')) {
     tags.putIfAbsent(row['post_slug'] as String, () => []).add(row['tag'] as String);
   }
 
-  copy(
-    sqlite.select('SELECT slug, author_id, body, published_at FROM posts'),
+  await copy(
+    'SELECT slug, author_id, body, published_at FROM posts',
     postSchema,
     (row) => Post(
       slug: row['slug'] as String,
@@ -434,10 +453,28 @@ void main() {
   );
 
   // 이 호출이 반환되면 지연 커밋이 모두 디스크에 기록됩니다.
-  db.close();
-  sqlite.close();
+  await db.closeAsync();
+  await sqlite.close();
+  part.renameSync(path);
 }
 ```
+
+앱은 데이터베이스를 열기 전에 이 함수를 부릅니다. 원래 파일은 `sqflite`가 두는 곳에서 찾고, 새 파일은 시스템이 비우지 않는 폴더에 둡니다. `path_provider`의 `getApplicationSupportDirectory`가 주는 폴더가 그런 곳입니다.
+
+```dart
+final from = '${await sqflite.getDatabasesPath()}/app.db';
+final folder = await getApplicationSupportDirectory();
+final path = '${folder.path}/app.darudb';
+
+await moveFromSqlite(from, path);
+
+final db = await Database.openAsync(path, schema: app);
+```
+
+- **다른 이름으로 복사하고 나서 제자리로 옮깁니다.** 복사본은 `app.darudb.part`에 쓰고, 닫은 뒤에 이름을 바꿉니다. 그래서 앱이 찾는 파일은 아예 없거나(이때는 다시 복사합니다) 완전한 파일, 둘 중 하나입니다. SQLite 파일은 읽기 전용으로 열므로, 복사가 중간에 끊겨도 잃는 것이 없습니다.
+- **UI를 막지 않습니다.** `sqflite`는 쿼리를 자기 스레드에서 돌리고, 엔진의 쓰기는 `Future` API를 거쳐 네이티브 라이브러리의 스레드에서 돕니다. 그래서 복사하는 동안 앱은 업데이트 중이라는 화면을 보여 줄 수 있습니다. 커서는 행을 천 개씩 읽으므로 큰 테이블도 한꺼번에 메모리에 올라오지 않습니다.
+- **원래 파일은 한동안 남겨 둡니다.** 앱이 새 파일로 문제없이 돈 뒤, 다음 버전에서 `sqflite.deleteDatabase`로 지웁니다.
+- **`drift`를 쓰는 앱이나 Dart 프로그램**이 `sqlite3` 패키지로 파일을 읽는다면, `sqlite3.open(from, mode: OpenMode.readOnly)`와 `select`로 같은 쿼리를 돌립니다. 이때는 커서도 `Future` API도 필요 없습니다.
 
 :::
 
