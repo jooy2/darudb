@@ -394,6 +394,134 @@ fn put_replaces_delete_removes_and_update_sets_fields() {
 }
 
 #[test]
+fn set_and_change_write_fields_named_through_the_type() {
+    let dir = TestDir::new();
+    let db = open(&dir, schema());
+    let mut txn = db.begin_write().unwrap();
+    let mut people = txn.collection_of::<Person>().unwrap();
+    let ada_id = people.insert(&ada()).unwrap();
+    let grace_id = people.insert(&grace()).unwrap();
+
+    assert!(people.set(ada_id, Person::AGE, 40).unwrap());
+    assert!(
+        people
+            .change(ada_id)
+            .set(Person::NAME, "Ada Lovelace".to_owned())
+            .set(Person::EMAIL, None)
+            .set(Person::TAGS, vec!["poetry".to_owned()])
+            .set(Person::FRIEND, Some(Link::new(grace_id)))
+            .set(Person::AGE, 41)
+            .apply()
+            .unwrap()
+    );
+    // A collection with embedded objects and lists takes the changes as an
+    // update with an object does.
+    assert!(
+        people
+            .set(
+                grace_id,
+                Person::HOME,
+                Some(Address {
+                    city: "Arlington".to_owned(),
+                    postal_code: Some("22201".to_owned()),
+                    point: Point { x: 1.0, y: 2.0 },
+                }),
+            )
+            .unwrap()
+    );
+    assert!(!people.set(99, Person::AGE, 1).unwrap());
+
+    let expected = Person {
+        id: Some(ada_id),
+        name: "Ada Lovelace".to_owned(),
+        email: None,
+        age: 41,
+        tags: vec!["poetry".to_owned()],
+        friend: Some(Link::new(grace_id)),
+        ..ada()
+    };
+
+    assert_eq!(people.get(ada_id).unwrap(), Some(expected));
+    assert_eq!(
+        people.get(grace_id).unwrap().unwrap().home.unwrap().city,
+        "Arlington"
+    );
+    // The index on the age followed the change.
+    assert_eq!(
+        people
+            .query(&Query::new().filter(Filter::eq("age", 41)))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        code(people.set(grace_id, Person::ID, Some(ada_id))),
+        "INVALID_ARGUMENT"
+    );
+}
+
+#[test]
+fn set_changes_a_record_of_scalars_and_refuses_a_taken_unique_value() {
+    let dir = TestDir::new();
+    let db = open(&dir, Schema::new(1).collection(Collection::of::<Account>()));
+    let mut txn = db.begin_write().unwrap();
+    let mut accounts = txn.collection_of::<Account>().unwrap();
+    let account = |email: &str, level| Account {
+        id: None,
+        email: email.to_owned(),
+        level,
+        note: Some("first".to_owned()),
+    };
+    let a = accounts.insert(&account("a@example.com", 1)).unwrap();
+    let b = accounts.insert(&account("b@example.com", 2)).unwrap();
+
+    assert!(
+        accounts
+            .change(a)
+            .set(Account::LEVEL, 5)
+            .set(Account::NOTE, None)
+            .apply()
+            .unwrap()
+    );
+    assert_eq!(
+        code(accounts.set(b, Account::EMAIL, "a@example.com".to_owned())),
+        "DUPLICATE_KEY"
+    );
+    // The refused change left the object as it was.
+    assert_eq!(
+        accounts.get(b).unwrap(),
+        Some(Account {
+            id: Some(b),
+            ..account("b@example.com", 2)
+        })
+    );
+    assert_eq!(
+        accounts.get(a).unwrap(),
+        Some(Account {
+            id: Some(a),
+            email: "a@example.com".to_owned(),
+            level: 5,
+            note: None,
+        })
+    );
+    assert_eq!(
+        accounts
+            .query(&Query::new().filter(Filter::eq("level", 5)))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        accounts
+            .query(&Query::new().filter(Filter::eq("level", 1)))
+            .unwrap()
+            .is_empty()
+    );
+    drop(accounts);
+    txn.commit().unwrap();
+}
+
+#[test]
 fn a_refused_write_leaves_the_transaction_as_it_was() {
     let dir = TestDir::new();
     let db = open(&dir, schema());

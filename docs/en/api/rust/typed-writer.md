@@ -73,7 +73,33 @@ Deletes the object whose primary key is `key`, and returns whether there was one
 pub fn update(&mut self, key: impl Into<Value>, changes: Object) -> Result<bool>
 ```
 
-Sets the fields `changes` has in the object whose primary key is `key`, and keeps the rest, as [`CollectionWriter::update`](./collection-writer.md#update) does. The changes are an [`Object`](../../types/rust/object.md) of the fields by name, since a struct would have to hold every field.
+Sets the fields `changes` has in the object whose primary key is `key`, and keeps the rest, as [`CollectionWriter::update`](./collection-writer.md#update) does. The changes are an [`Object`](../../types/rust/object.md) of the fields by name, since a struct would have to hold every field. [`set`](#set) and [`change`](#change) name the fields through `T` instead.
+
+### set
+
+```rust
+pub fn set<V: FieldType>(&mut self, key: impl Into<Value>, field: FieldOf<T, V>, value: V) -> Result<bool>
+```
+
+Sets `field` of the object whose primary key is `key` to `value`, and returns whether there was one; nothing is written when there is none. `field` is the constant [`#[derive(Object)]`](./derive.md#object) declares for the field, a [`FieldOf`](../../types/rust/field-of.md) such as `User::AGE`, and `value` has the field's own type; `None` makes an optional field null.
+
+```rust
+users.set(id, User::AGE, 32)?;
+```
+
+The value is written as a typed write writes it, and in a collection whose fields all hold scalars, the record stored is changed where it lies: the object is neither read into `T` nor written whole again, which makes it faster than reading the object and writing it back with [`put`](#put). It fails as `update` does, with `DUPLICATE_KEY` for a value a unique index already holds and `INVALID_ARGUMENT` for a primary key other than `key`, and the transaction is left as it was.
+
+### change
+
+```rust
+pub fn change(&mut self, key: impl Into<Value>) -> Change<'_, 'a, T>
+```
+
+The changes to the object whose primary key is `key`, made one field at a time with [`Change::set`](./change.md#set) and written together, as one update, by [`Change::apply`](./change.md#apply).
+
+```rust
+users.change(id).set(User::NAME, "Alice Liddell".to_owned()).set(User::AGE, 32).apply()?;
+```
 
 ### get
 

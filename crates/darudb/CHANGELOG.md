@@ -7,6 +7,7 @@
 ### Added
 
 - `BackupOptions::plain`, which makes `Database::backup_with` write its copy with no encryption: the way to turn an encrypted database into a plain one, which put in the encrypted file's place opens without a key or a password. The copy holds every tree, the engine's own included, so auto-increment counters and the stored schema come across as they are. `key`, `password` and `plain` each replace what an earlier call to one of them set.
+- `TypedWriter::set`, which sets one field of an object, named through the type by a `FieldOf` constant that `#[derive(Object)]` declares for each field, such as `Person::AGE`, with a value of the field's own type; and `TypedWriter::change`, whose `Change` sets several fields and writes them with `apply` as one update. In a collection whose fields all hold scalars the record is changed where it lies, so setting one field no longer needs the dynamic `Object` of `update` or the whole struct of `put`.
 
 ### Changed
 

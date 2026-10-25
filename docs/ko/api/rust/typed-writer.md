@@ -73,7 +73,33 @@ pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 pub fn update(&mut self, key: impl Into<Value>, changes: Object) -> Result<bool>
 ```
 
-기본 키가 `key`인 객체에서 `changes`에 있는 필드만 바꾸고 나머지는 그대로 둡니다. [`CollectionWriter::update`](./collection-writer.md#update)와 같습니다. 구조체로 넘기면 모든 필드를 채워야 하므로, 바꿀 필드는 이름으로 담은 [`Object`](../../types/rust/object.md)로 넘깁니다.
+기본 키가 `key`인 객체에서 `changes`에 있는 필드만 바꾸고 나머지는 그대로 둡니다. [`CollectionWriter::update`](./collection-writer.md#update)와 같습니다. 구조체로 넘기면 모든 필드를 채워야 하므로, 바꿀 필드는 이름으로 담은 [`Object`](../../types/rust/object.md)로 넘깁니다. [`set`](#set)과 [`change`](#change)는 필드를 이름 대신 `T`로 가리킵니다.
+
+### set
+
+```rust
+pub fn set<V: FieldType>(&mut self, key: impl Into<Value>, field: FieldOf<T, V>, value: V) -> Result<bool>
+```
+
+기본 키가 `key`인 객체의 `field`를 `value`로 바꾸고, 그 객체가 있었는지를 돌려줍니다. 없으면 아무것도 쓰지 않습니다. `field`는 [`#[derive(Object)]`](./derive.md#object)가 필드마다 선언하는 상수인 [`FieldOf`](../../types/rust/field-of.md)이고(`User::AGE` 같은), `value`는 그 필드의 타입 그대로입니다. 선택 필드에 `None`을 넘기면 null이 됩니다.
+
+```rust
+users.set(id, User::AGE, 32)?;
+```
+
+값은 타입 있는 쓰기와 같은 방식으로 씁니다. 필드가 모두 스칼라인 컬렉션이라면 저장된 레코드를 그 자리에서 고치므로, 객체를 `T`로 읽어 들이지도 통째로 다시 쓰지도 않습니다. 그래서 객체를 읽어 [`put`](#put)으로 다시 쓰는 것보다 빠릅니다. 실패하는 경우는 `update`와 같습니다. 고유 인덱스에 이미 있는 값이면 `DUPLICATE_KEY`, 기본 키를 `key`와 다른 값으로 바꾸려 하면 `INVALID_ARGUMENT`이고, 이때 트랜잭션은 그대로입니다.
+
+### change
+
+```rust
+pub fn change(&mut self, key: impl Into<Value>) -> Change<'_, 'a, T>
+```
+
+기본 키가 `key`인 객체에 대한 변경을 돌려줍니다. [`Change::set`](./change.md#set)으로 필드를 하나씩 담고, [`Change::apply`](./change.md#apply)로 한 번의 업데이트로 씁니다.
+
+```rust
+users.change(id).set(User::NAME, "Alice Liddell".to_owned()).set(User::AGE, 32).apply()?;
+```
 
 ### get
 

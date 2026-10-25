@@ -89,6 +89,7 @@ Implements [`CollectionType`](../../types/rust/collection-type.md) for a struct 
 - **The collection** is named after the struct, as written, unless `#[darudb(collection = "name")]` on the struct names it.
 - **The primary key** is the field marked `#[darudb(key)]`, of type `i64`, `String` or `Vec<u8>`. Without one, the collection is keyed by an auto-increment, and the struct needs a field `id: Option<i64>`: `None` until the object is inserted, which assigns the next number.
 - **The fields** are declared in the struct's order, each with the type its Rust type gives: see [`FieldType`](../../types/rust/field-type.md). An `Option` is an optional field, and anything else is required.
+- **A constant for each field** is declared on the struct, named after the field in capitals and with the field's visibility: `User::AGE` for a field `age`, a [`FieldOf`](../../types/rust/field-of.md) that [`TypedWriter::set`](./typed-writer.md#set) takes to set that one field. A constant of the same name declared by hand on the struct does not compile beside it.
 
 ## Embedded
 

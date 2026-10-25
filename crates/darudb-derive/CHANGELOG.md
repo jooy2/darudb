@@ -2,6 +2,12 @@
 
 > This crate's history. It is released with the `darudb` crate, at the same version, since the code it generates calls that crate; `darudb`'s changelog says what the macros let an application do.
 
+## vNext (2026--)
+
+### Added
+
+- `#[derive(Object)]` declares an associated constant of the struct for each field, named after the field in capitals and with the field's visibility, such as `Person::AGE` for `age`: a `darudb::FieldOf`, which `TypedWriter::set` and `Change::set` of `darudb` take. A constant of the same name declared by hand on the struct no longer compiles beside it.
+
 ## v1.3.0 (2026-10-13)
 
 ### Changed

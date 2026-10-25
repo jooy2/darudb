@@ -33,7 +33,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::codec::{
-    self, BYTES, FALSE, FLOAT, INT, LINK, LIST, OBJECT, STRING, TRUE,
+    self, BYTES, FALSE, FLOAT, INT, LINK, LIST, NULL, OBJECT, STRING, TRUE,
 };
 use crate::format::object::names::records;
 use crate::format::object::schema::{CollectionDef, Fields, Kind, OpenSchema, StoredSchema};
@@ -131,6 +131,50 @@ pub trait FieldType: Sized {
 
 /// A type a list may hold: a scalar or a link.
 pub trait ElementType: FieldType {}
+
+/// A field of the collection type `T` whose values are of type `V`, which
+/// [`TypedWriter::set`] and [`Change::set`] take, so that an update names
+/// its field through the type rather than by a name.
+///
+/// `#[derive(Object)]` declares one for each field, as an associated
+/// constant of the struct named after the field in capitals: `Person::AGE`
+/// for a field `age`.
+pub struct FieldOf<T, V> {
+    slot: usize,
+    types: PhantomData<fn(&T) -> V>,
+}
+
+impl<T, V> FieldOf<T, V> {
+    /// The field numbered `slot` in `T`, as
+    /// [`CollectionType::write_field`] numbers its fields.
+    #[must_use]
+    pub const fn new(slot: usize) -> Self {
+        Self {
+            slot,
+            types: PhantomData,
+        }
+    }
+
+    /// The field's number in `T`.
+    #[must_use]
+    pub const fn slot(self) -> usize {
+        self.slot
+    }
+}
+
+impl<T, V> Clone for FieldOf<T, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T, V> Copy for FieldOf<T, V> {}
+
+impl<T, V> fmt::Debug for FieldOf<T, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FieldOf").field("slot", &self.slot).finish()
+    }
+}
 
 /// A type a primary key may have: `i64`, `String` or `Vec<u8>`.
 pub trait KeyType: FieldType {
@@ -1644,6 +1688,102 @@ fn write_encoded(
     key
 }
 
+/// Changes to one object of a [`TypedWriter`]'s collection, made one field
+/// at a time with [`set`](Self::set) and written as one update by
+/// [`apply`](Self::apply). [`TypedWriter::change`] makes it.
+#[must_use = "the changes are written only by `apply`"]
+pub struct Change<'w, 'a, T> {
+    writer: &'w mut TypedWriter<'a, T>,
+    key: Value,
+    /// Each field set, by its position in the layout, encoded as a record
+    /// of changes holds it: its id, then its value or the tag of a null.
+    fields: Vec<(usize, Vec<u8>)>,
+    /// The first value that did not write, which `apply` returns.
+    failed: Option<Error>,
+}
+
+impl<T> fmt::Debug for Change<'_, '_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Change")
+            .field("key", &self.key)
+            .field("fields", &self.fields.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: CollectionType> Change<'_, '_, T> {
+    /// Sets `field` to `value`, in place of any value set for it before.
+    pub fn set<V: FieldType>(mut self, field: FieldOf<T, V>, value: V) -> Self {
+        if self.failed.is_none() {
+            if let Err(error) = self.encode(field.slot, &value) {
+                self.failed = Some(error);
+            }
+        }
+
+        self
+    }
+
+    fn encode(&mut self, slot: usize, value: &impl FieldType) -> Result<()> {
+        let layout = &self.writer.typed.layout;
+        let position = layout
+            .fields
+            .iter()
+            .position(|field| field.slot == slot)
+            .ok_or_else(|| Error::InvalidArgument {
+                message: format!("`{}` has no field numbered {slot}", T::COLLECTION),
+            })?;
+        let field = &layout.fields[position];
+        let mut bytes = Vec::new();
+        let mut written = 0;
+
+        value.write(ValueWriter::field(&mut bytes, field, &mut written))?;
+
+        // A value a record leaves out, as an optional field's `None`, is a
+        // change to null.
+        if written == 0 {
+            codec::write_varint(field.id, &mut bytes);
+            bytes.push(NULL);
+        }
+
+        self.fields.retain(|(at, _)| *at != position);
+        self.fields.push((position, bytes));
+
+        Ok(())
+    }
+
+    /// Writes the changes to the object, and returns whether there was one;
+    /// nothing is written when there is none. See [`TypedWriter::set`].
+    ///
+    /// # Errors
+    ///
+    /// What [`set`](Self::set) met writing a value, or what
+    /// [`TypedWriter::set`] returns.
+    pub fn apply(mut self) -> Result<bool> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
+
+        // The layout lists the fields in id order, as a record holds them.
+        self.fields.sort_unstable_by_key(|(position, _)| *position);
+
+        let mut changes = Vec::with_capacity(
+            1 + self
+                .fields
+                .iter()
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>(),
+        );
+
+        codec::write_varint(self.fields.len() as u64, &mut changes);
+
+        for (_, bytes) in &self.fields {
+            changes.extend_from_slice(bytes);
+        }
+
+        self.writer.inner.update_record(self.key, &changes)
+    }
+}
+
 /// A collection of a write transaction, as `T`: its objects read straight
 /// into `T`, and `T`'s values written as its objects.
 pub struct TypedWriter<'a, T> {
@@ -1744,11 +1884,51 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     /// `key`, as [`CollectionWriter::update`] does, and returns whether there
     /// was one.
     ///
+    /// [`set`](Self::set) and [`change`](Self::change) name the fields
+    /// through `T` instead, and take their values as `T` holds them.
+    ///
     /// # Errors
     ///
     /// As [`CollectionWriter::update`] fails.
     pub fn update(&mut self, key: impl Into<Value>, changes: crate::Object) -> Result<bool> {
         self.inner.update(key, changes)
+    }
+
+    /// Sets `field` of the object whose primary key is `key` to `value`, and
+    /// returns whether there was one; nothing is written when there is none:
+    /// `people.set(id, Person::AGE, 37)`, with the constant `#[derive(Object)]`
+    /// declares for the field `age`.
+    ///
+    /// The value is written as a typed write writes it, and in a collection
+    /// whose fields all hold scalars, the record stored is changed where it
+    /// lies, as [`CollectionWriter::update_record`] changes it: the object is
+    /// neither read into `T` nor written whole again. A `None` makes an
+    /// optional field null.
+    ///
+    /// # Errors
+    ///
+    /// As [`CollectionWriter::update_record`] fails, leaving the transaction
+    /// as it was.
+    pub fn set<V: FieldType>(
+        &mut self,
+        key: impl Into<Value>,
+        field: FieldOf<T, V>,
+        value: V,
+    ) -> Result<bool> {
+        self.change(key).set(field, value).apply()
+    }
+
+    /// The changes to the object whose primary key is `key`, which
+    /// [`Change::set`] makes one field at a time and [`Change::apply`] writes
+    /// together, as one update:
+    /// `people.change(id).set(Person::NAME, name).set(Person::AGE, 37).apply()`.
+    pub fn change(&mut self, key: impl Into<Value>) -> Change<'_, 'a, T> {
+        Change {
+            writer: self,
+            key: key.into(),
+            fields: Vec::new(),
+            failed: None,
+        }
     }
 
     /// The object whose primary key is `key`, if there is one, with this

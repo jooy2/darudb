@@ -97,9 +97,9 @@ pub mod __binding {
     pub use crate::schema::{Scalar, Shape, ShapeField};
 }
 pub use schema::{
-    Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
-    EmbeddedType, Field, FieldReader, FieldType, KeyType, Link, Migrating, Migration, Schema, Type,
-    TypedReader, TypedWriter, ValueReader, ValueWriter,
+    Change, Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
+    EmbeddedType, Field, FieldOf, FieldReader, FieldType, KeyType, Link, Migrating, Migration,
+    Schema, Type, TypedReader, TypedWriter, ValueReader, ValueWriter,
 };
 
 #[cfg(feature = "derive")]

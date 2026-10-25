@@ -53,6 +53,15 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 /// let ada = read.collection_of::<Person>()?.get(id)?;
 ///
 /// assert_eq!(ada.map(|person| person.name), Some("Ada".to_owned()));
+///
+/// // One field, named through the constant the derive declares for it.
+/// let mut txn = db.begin_write()?;
+/// let mut people = txn.collection_of::<Person>()?;
+///
+/// people.set(id, Person::AGE, 37)?;
+/// people.change(id).set(Person::NAME, "Ada Lovelace".to_owned()).set(Person::EMAIL, None).apply()?;
+/// drop(people);
+/// txn.commit()?;
 /// # Ok::<(), darudb::Error>(())
 /// ```
 ///
@@ -74,6 +83,11 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 ///   Rust field's name otherwise.
 /// - `#[darudb(default = value)]`: the value a record that leaves the field
 ///   out holds, anything `darudb::Value::from` takes. The field is required.
+///
+/// It also declares, for each field, an associated constant of the struct
+/// named after the field in capitals, a `darudb::FieldOf` with the field's
+/// visibility, which `TypedWriter::set` takes to set that one field:
+/// `Person::AGE` for the field `age` above.
 #[proc_macro_derive(Object, attributes(darudb))]
 pub fn derive_object(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -119,6 +133,7 @@ pub fn derive_embedded(input: TokenStream) -> TokenStream {
 /// A field of the struct, with what its attributes say.
 struct Field {
     ident: Ident,
+    vis: syn::Visibility,
     ty: Type,
     /// The field's name in the collection.
     name: String,
@@ -190,6 +205,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
         let mut parsed = Field {
             name: ident.unraw().to_string(),
             ident,
+            vis: field.vis.clone(),
             ty: field.ty.clone(),
             key: false,
             index: false,
@@ -397,9 +413,29 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
         }
     });
     let methods = methods(&slots);
+    // A constant for each field, by its slot, for an update that names the
+    // field through the type.
+    let constants = slots.iter().enumerate().map(|(slot, field)| {
+        let vis = &field.vis;
+        let ty = &field.ty;
+        let constant = format_ident!("{}", field.ident.unraw().to_string().to_uppercase());
+        let doc = format!(
+            "The field `{}`, which `TypedWriter::set` takes to set it.",
+            field.name
+        );
+
+        quote! {
+            #[doc = #doc]
+            #vis const #constant: ::darudb::FieldOf<Self, #ty> = ::darudb::FieldOf::new(#slot);
+        }
+    });
 
     Ok(quote! {
         #id_check
+
+        impl #ident {
+            #(#constants)*
+        }
 
         impl ::darudb::CollectionType for #ident {
             type Key = #key_type;
