@@ -232,6 +232,7 @@ dependencies = [
  "darudb-derive",
  "getrandom",
  "libc",
+ "memchr",
  "rustix",
  "twox-hash",
  "windows-sys",
