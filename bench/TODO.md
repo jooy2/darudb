@@ -66,7 +66,7 @@ Directions not tried yet:
 
 - **The levels below the root.** Random keys share the branch below the root once in about twenty lookups, so keeping the path, as `btree::read::Seeker` does for a query, saves little beyond the root for them.
 - **Integer primary keys.** An int key of the records tree is three or four bytes, which the head after the node's prefix covers whole, so a search reads a key only to confirm the head it found; a node whose keys all end inside their heads could skip that read. The record's cell is beside the key, so the cache miss would move rather than go.
-- **Readers without reference counts.** Readers that borrow nodes for the life of the transaction, reclaimed through epochs or hazard pointers, so that a lookup takes no lock and touches no count. It needs `unsafe` beyond `sys/`, or a crate whose API does, and it touches every read path.
+- **Readers without reference counts.** Readers that borrow nodes for the life of the transaction, reclaimed through epochs or hazard pointers, so that a lookup takes no lock and touches no count. It needs `unsafe` beyond `sys/`, or a crate whose API does, and it touches every read path. The maintainer put it off on 2026-10-25: what it would save shows on x86 alone, 7.5% of a query through an index on an EPYC against 1.7% on an M1 Max, and it would be the first `unsafe` outside `sys/`.
 
 ### 2. Updates in Rust
 
@@ -87,7 +87,7 @@ Measured on 2026-10-11:
 
 Directions not tried yet:
 
-- **A sync commit's pages in runs.** A small sync commit whose pages lay in one or two runs would make its barrier a third as long on `sda` runners. The pages are allocated as the transaction changes nodes, before it knows whether it commits with a sync, so either every small commit would place its pages in runs, with the file growth the prototypes above ran into, or a sync commit would move its pages at commit time, which changes how the allocator trees settle.
+- **A sync commit's pages in runs.** A small sync commit whose pages lay in one or two runs would make its barrier a third as long on `sda` runners. The pages are allocated as the transaction changes nodes, before it knows whether it commits with a sync, so either every small commit would place its pages in runs, with the file growth the prototypes above ran into, or a sync commit would move its pages at commit time, which changes how the allocator trees settle. The maintainer put it off on 2026-10-25, since both ways change the allocator, and the first made the file a third larger in the prototypes.
 - **A bounded area for small commits.** Keep a few runs of free pages near the end of the file for small commits, grown by a fixed amount, so that their pages land in runs without the file growing as the prototypes did. Worth at most the 2 µs above.
 
 ### 4. The other system calls of a commit
@@ -117,6 +117,11 @@ Tried and not kept:
 - **Hashing the marks' keys with SipHash** took a tenth of a first scan; they are hashed as the page cache's keys are.
 - **Batching the field search a leaf at a time** (a micro-benchmark): no faster than record by record on the M1 Max, whose processor already overlaps the records' searches.
 - **`meets` inlined into the walk's closure**, on top of the equality: on the M1 Max, `city-scan` a point faster than with the equality alone, and `top-score` 2% slower.
+- **A substring searched among bytes by hand** (2026-10-25): comparing the text at each place in the string whose first and last bytes are the text's, with the string checked as UTF-8 only where the text was found, made the complex suite's `posts-text` 26% slower on the M1 Max than checking the string and searching it with `str::contains`. The finder kept below is what the gain came from.
+
+Done (2026-10-25):
+
+- **`CONTAINS` through a `memchr::memmem::Finder`** made once for the query (`Test::Substring` in `query/plan.rs`), with the string checked as UTF-8 only where the text is found: the complex suite's `posts-text`, a count of 300,000 posts by two words in their text, 11.8% faster on the M1 Max. `memchr` is MIT OR Unlicense, and `regex` and `aho-corasick` build on it.
 
 Directions not tried yet:
 
@@ -142,5 +147,14 @@ Done (2026-10-11):
 - **The runner decides more than the code.** Which store leads the commit rows, and even the scans in Rust, changes with the kind of runner. Options: run all four languages in one job, so that the tables at least share a machine; or run each language on several runners and show the kind with each table, as `probe-machines.yml` does.
 - **Rows that spread.** A Dart sync commit spread 599% between passes in one run, and in run 38128026467 DaruDB's update spread from 4.6 to 8.7 µs an object in Rust. The workflow and `bench/run.mjs` take nine passes rather than five since then, whose median stays put through four slow passes rather than two. A runner that is slow through a whole run moves every store's row alike, as Node.js's update and delete were in that run, slower for every store than in the run before on a slower processor, and more passes do not steady that; only another run does.
 - **Realm in Dart** (done 2026-10-11): `bench/dart_pinned`, a harness of its own, since `realm_generator` 20.2 pins `analyzer` 7 and `build` 2.4.2 where `darudb_generator` needs `analyzer` 12 and `build` 4. `dart run realm_dart install` puts the library in the package's folder, and `tool/bundle.dart` copies it beside the compiled harness, which looks for it there.
-- **`update` in Rust and Dart** (measured 2026-10-11 on the M1 Max). In Dart, `update` of the age took 0.97 times the time of writing the object back with `put`, so the Dart pass sets the field with `update` now, as the Node.js and Python passes do. In Rust it took 1.15 times as long, since `TypedWriter::update` takes its changes as a dynamic `Object`, made and matched by the field's name, where `put` writes the struct's record as it is, and the Rust pass still writes the struct back. A typed update, whose changes name the field through the type, would close that.
+- **`update` in Rust and Dart** (measured 2026-10-11 on the M1 Max). In Dart, `update` of the age took 0.97 times the time of writing the object back with `put`, so the Dart pass sets the field with `update` now, as the Node.js and Python passes do. In Rust it took 1.15 times as long, since `TypedWriter::update` takes its changes as a dynamic `Object`, made and matched by the field's name, where `put` writes the struct's record as it is, and the Rust pass wrote the struct back. `TypedWriter::set` (2026-10-25), which names the field through the constant `#[derive(Object)]` declares for it and changes a record of scalars where it lies, took 3.72 µs an object against `put`'s 4.29 on the M1 Max, and the Rust passes of both suites use it now. The simple suite's published Rust rows were measured with `put`.
 - **Scans run ten times in a pass.** `city-scan` and `top-score` scan the collection ten times, and every run after the first reads the field from the marks the first left. The rows `city-scan-first` and `top-score-first` (`FIRST_RUN` in each harness) time the first run on its own, which shows what a query that runs once on a new handle takes.
+
+### 8. The complex suite
+
+`--suite complex` (2026-10-25): 1,000 organizations, 100,000 people and 300,000 posts, which link to each other, and queries through links, lists and several indexes. Measured on the M1 Max with the A/B tools, each build against the one before it.
+
+Done (2026-10-25):
+
+- **Skipping the objects before a page by their keys** when a query walks an index in its sort's order with no filter left to test (`design/objects.md`, step 5 of running a query): `people-page`, 50 people after 98,703 others, took 0.69 ms rather than 19 ms.
+- **Sets of keys** (`query/keys.rs`, `Part` in `query/plan.rs`, `Strategy` in `query/run.rs`): a filter's terms that indexes answer alone gather the keys of the objects that meet them, which are met for `AND`, joined for `OR`, and followed through an indexed link, before an object is read, when counting the indexes' entries up to a cap says that is cheaper; a query sorted by an indexed field with a limit walks that index and takes only the gathered keys. `people-filter` 39% less time, `people-or` 92%, `posts-author-country` 93%, `posts-two-links` 93%, `posts-tag` 95% and `posts-count` 69%. The scan of `people-prefix`, which no index answers, takes about 1 to 1.5% longer for choosing, against a calibration of ±0.8%. A set is sorted only when its objects are read in key order: sorting every set took most of a count's time.
