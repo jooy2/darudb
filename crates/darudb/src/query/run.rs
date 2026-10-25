@@ -543,13 +543,6 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
     }
 }
 
-/// Walks the keys the access names, in its order, reading each object once.
-/// `visit` gets a primary key and, when the walk read it, the record, both
-/// borrowed; it returns whether to stop.
-///
-/// Generic over `visit`, which every object read goes through: a call
-/// through a pointer for each object was a tenth of a walk over every
-/// record that tests one field.
 /// What a run walks to find a plan's objects.
 #[derive(Clone, Copy)]
 enum Route<'r, 's> {
@@ -615,6 +608,13 @@ fn walk(
     }
 }
 
+/// Walks the keys the access names, in its order, reading each object once.
+/// `visit` gets a primary key and, when the walk read it, the record, both
+/// borrowed; it returns whether to stop.
+///
+/// Generic over `visit`, which every object read goes through: a call
+/// through a pointer for each object was a tenth of a walk over every
+/// record that tests one field.
 fn walk_access(
     source: &dyn Source,
     plan: &Plan<'_>,
