@@ -8,12 +8,15 @@
 //! - `plan`: checking a query against the schema, and choosing whether a key
 //!   range, an index or a walk of every object finds its objects.
 //! - `run`: reading the objects, testing them, sorting, and counting.
+//! - `keys`: sets of primary keys, which a run gathers from the indexes for
+//!   the parts of a filter they answer alone.
 //!
 //! Whatever the plan, a query gives the objects a walk of every object would,
 //! in the same order; `tests` checks that on random data and random queries.
 
 mod build;
 pub(crate) mod ir;
+mod keys;
 mod parse;
 mod plan;
 mod run;

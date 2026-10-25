@@ -689,13 +689,20 @@ impl<'a, L: Load> Range<'a, L> {
 
     /// The number of entries the walk has left, counted a leaf at a time
     /// rather than an entry at a time, and without copying any.
-    pub(crate) fn count_entries(mut self) -> Result<u64> {
+    pub(crate) fn count_entries(self) -> Result<u64> {
+        self.count_entries_up_to(u64::MAX)
+    }
+
+    /// [`count_entries`](Self::count_entries), stopping at the end of the
+    /// leaf where the count reaches `cap`: the count, or at least `cap` when
+    /// there are that many entries.
+    pub(crate) fn count_entries_up_to(mut self, cap: u64) -> Result<u64> {
         let mut count = 0u64;
 
         while let Some((_, from, to, done)) = self.left_in_leaf()? {
             count += (to - from) as u64;
 
-            if done {
+            if done || count >= cap {
                 break;
             }
 

@@ -8,6 +8,12 @@
 //! order. The choice only decides which objects are read and in what order:
 //! every object read is still tested against the whole filter unless the
 //! access answers the filter exactly.
+//!
+//! Planning also finds the terms that indexes answer alone, a link's
+//! included, as parts whose sets of keys a run may gather and combine
+//! rather than test each object read against them (`design/objects.md`,
+//! "Sets of keys"). Whether that is cheaper depends on how many entries the
+//! indexes hold, which only a run can count, so the run decides.
 
 use std::borrow::Cow;
 use std::ops::{Bound, Deref};
@@ -153,6 +159,32 @@ pub(crate) enum Access<'s> {
     },
 }
 
+/// A part of the filter that indexes answer alone: the primary keys of the
+/// objects that meet it can be gathered from the records' keys and the
+/// indexes' entries, without reading an object (`design/objects.md`, "Sets
+/// of keys").
+#[derive(Debug)]
+pub(crate) enum Part<'s> {
+    /// The keys of the collection's records within these ranges of keys.
+    Records(Vec<Range>),
+    /// These keys, of the records that are there.
+    Keys(Vec<Vec<u8>>),
+    /// The objects an index names within these ranges of its entries.
+    Index {
+        index: &'s IndexDef,
+        ranges: Vec<Range>,
+    },
+    /// The objects whose link field names, through its index, an object of
+    /// `target` that `inner` finds.
+    Linked {
+        index: &'s IndexDef,
+        target: &'s CollectionDef,
+        inner: Box<Part<'s>>,
+    },
+    And(Vec<Part<'s>>),
+    Or(Vec<Part<'s>>),
+}
+
 /// A query, checked and planned.
 #[derive(Debug)]
 pub(crate) struct Plan<'s> {
@@ -175,6 +207,16 @@ pub(crate) struct Plan<'s> {
     /// leaf, and the marks are kept beside the page cache, so that a query
     /// that walks the leaf again finds it there.
     pub(crate) marked: Option<&'s FieldDef>,
+    /// The terms of `filter` that indexes answer alone, by their position
+    /// among its terms, a filter that is not an `AND` being its only term.
+    pub(crate) parts: Vec<(usize, Part<'s>)>,
+    /// What the access answers of the query's filter, as a part, when it
+    /// answers a term: a run that walks something else gathers it instead.
+    pub(crate) access_part: Option<Part<'s>>,
+    /// The walk in the order of the query's sort, when the access is not
+    /// one: a run that gathered a set of keys may walk it and take the keys
+    /// in the set, and stop at the limit.
+    pub(crate) sort_walk: Option<Access<'s>>,
 }
 
 /// The field [`Plan::marked`] names for `filter` and `sort`.
@@ -203,6 +245,31 @@ pub(crate) fn plan<'s>(
 ) -> Result<Plan<'s>> {
     let (filter, sort) = resolve(schema, collection, ir, parameters)?;
     let (access, consumed, ordered) = choose(collection, filter.as_ref(), &sort);
+    // The parts of the terms the access leaves, by their positions in what
+    // is left of the filter.
+    let parts = terms_of(filter.as_ref())
+        .iter()
+        .enumerate()
+        .filter(|(position, _)| !consumed.contains(position))
+        .enumerate()
+        .filter_map(|(left, (_, term))| part(collection, term, 0).map(|part| (left, part)))
+        .collect();
+    let access_part = (!consumed.is_empty())
+        .then(|| access_part(&access))
+        .flatten();
+    let sort_walk = if ordered || sort.is_empty() {
+        None
+    } else {
+        let sorted_by = match sort.as_slice() {
+            [(path, descending)] => path.direct.map(|field| (field.id, *descending)),
+            _ => None,
+        };
+
+        match unfiltered(collection, &sort, sorted_by) {
+            (walk, _, true) => Some(walk),
+            _ => None,
+        }
+    };
     let (filter, exact) = match filter {
         Some(Cond::And(terms)) if !consumed.is_empty() => {
             let rest: Vec<Cond<'s>> = terms
@@ -232,6 +299,142 @@ pub(crate) fn plan<'s>(
         access,
         ordered,
         exact,
+        parts,
+        access_part,
+        sort_walk,
+    })
+}
+
+/// The terms of a filter: those of its top-level `AND`, or the filter alone.
+pub(crate) fn terms_of<'f, 's>(filter: Option<&'f Cond<'s>>) -> &'f [Cond<'s>] {
+    match filter {
+        Some(Cond::And(terms)) => terms,
+        Some(cond) => std::slice::from_ref(cond),
+        None => &[],
+    }
+}
+
+/// What `access` answers, as a part.
+fn access_part<'s>(access: &Access<'s>) -> Option<Part<'s>> {
+    Some(match access {
+        Access::Records { range, .. } => Part::Records(vec![range.clone()]),
+        Access::Keys { keys, .. } => Part::Keys(keys.clone()),
+        Access::Index { index, ranges, .. } => Part::Index {
+            index,
+            ranges: ranges.clone(),
+        },
+    })
+}
+
+/// The part `cond` is, when indexes answer it alone. A part within an `AND`
+/// or an `OR` answers it only with every other term's.
+fn part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>, depth: usize) -> Option<Part<'s>> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+
+    match cond {
+        Cond::Test { path, test } => path_part(collection, &path.steps, &path.leaf, test),
+        Cond::And(terms) => terms
+            .iter()
+            .map(|term| part(collection, term, depth + 1))
+            .collect::<Option<Vec<_>>>()
+            .map(Part::And),
+        Cond::Or(terms) => terms
+            .iter()
+            .map(|term| part(collection, term, depth + 1))
+            .collect::<Option<Vec<_>>>()
+            .map(Part::Or),
+        Cond::Not(_) => None,
+    }
+}
+
+/// The part a test of the values at `steps` from an object of `collection`
+/// is, when indexes answer it: a field of the collection, or a link field
+/// with an index, followed to a part of the linked collection.
+fn path_part<'s>(
+    collection: &'s CollectionDef,
+    steps: &[Step<'s>],
+    leaf: &Kind,
+    test: &Test<'s>,
+) -> Option<Part<'s>> {
+    let Some((Step::Field(name), rest)) = steps.split_first() else {
+        return None;
+    };
+    let field = collection.fields.by_name(name)?;
+    // Each element of a list has an entry in the list's index, so a path into
+    // a list's elements is a lookup of the list's index.
+    let rest = match rest.split_first() {
+        Some((Step::Expand, rest)) => rest,
+        _ => rest,
+    };
+
+    match rest {
+        [] => direct_part(collection, field, leaf, test),
+        [Step::Follow(target), rest @ ..] => {
+            // A link to an object that is not there reads as null, and only
+            // `IS NULL` holds for it, which no entry of the linked
+            // collection's index says.
+            if matches!(test, Test::IsNull) {
+                return None;
+            }
+
+            let index = collection
+                .indexes
+                .iter()
+                .find(|index| index.field == field.id)?;
+            let inner = path_part(target, rest, leaf, test)?;
+
+            Some(Part::Linked {
+                index,
+                target,
+                inner: Box::new(inner),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The part a test of `field`, a field of `collection` itself, is, when its
+/// index or the primary key answers it: the ranges the access would walk
+/// for it alone.
+fn direct_part<'s>(
+    collection: &'s CollectionDef,
+    field: &'s FieldDef,
+    leaf: &Kind,
+    test: &Test<'s>,
+) -> Option<Part<'s>> {
+    let found = candidate_on(collection, 0, field, leaf, test)?;
+
+    Some(match (found.lookup, found.source, found.index) {
+        (Lookup::Equal | Lookup::Several, Source::Key, _) => {
+            Part::Keys(found.values.iter().map(|value| encoded(value)).collect())
+        }
+        (Lookup::Equal | Lookup::Several, _, Some(index)) => Part::Index {
+            index,
+            ranges: found
+                .values
+                .iter()
+                .map(|value| {
+                    let bytes = encoded(value);
+                    let end = after(&bytes);
+
+                    (Bound::Included(bytes), end)
+                })
+                .collect(),
+        },
+        (Lookup::Range, Source::Key, _) => Part::Records(vec![range(
+            found.leaf,
+            found.low,
+            found.high,
+            found.prefix,
+            false,
+        )]),
+        (Lookup::Range, _, Some(index)) => Part::Index {
+            index,
+            ranges: vec![range(found.leaf, found.low, found.high, found.prefix, true)],
+        },
+        (_, _, None) => return None,
     })
 }
 
@@ -260,6 +463,9 @@ pub(crate) fn scan<'s>(
         },
         ordered: false,
         exact: false,
+        parts: Vec::new(),
+        access_part: None,
+        sort_walk: None,
     })
 }
 
@@ -691,7 +897,19 @@ fn candidate<'s, 'c>(
     let Cond::Test { path, test } = cond else {
         return None;
     };
-    let field = path.direct?;
+
+    candidate_on(collection, term, path.direct?, &path.leaf, test)
+}
+
+/// [`candidate`] for a test of `field`, a field of `collection` itself
+/// whose values are of type `leaf`.
+fn candidate_on<'s, 'c>(
+    collection: &'s CollectionDef,
+    term: usize,
+    field: &'s FieldDef,
+    leaf: &'c Kind,
+    test: &'c Test<'s>,
+) -> Option<Candidate<'s, 'c>> {
     let (source, index) = if field.id == collection.key {
         (Source::Key, None)
     } else {
@@ -712,7 +930,7 @@ fn candidate<'s, 'c>(
     let mut found = Candidate {
         term,
         field,
-        leaf: &path.leaf,
+        leaf,
         source,
         index,
         lookup: Lookup::Range,

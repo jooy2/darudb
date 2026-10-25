@@ -321,6 +321,25 @@ fn agree(
 
     assert_eq!(found, expected, "{ir:?}\nplanned {planned:?}");
 
+    // Every way a run can take finds the same objects and counts them alike:
+    // the access alone, a set of the keys the indexes answer, and a walk in
+    // the sort's order through that set.
+    for way in [run::Forced::Plain, run::Forced::Keys, run::Forced::Through] {
+        let (by_way, counted) = run::forced(way, || {
+            (
+                ids(&run::objects(source, &planned, Some(&order)).unwrap()),
+                run::count(source, &planned).unwrap(),
+            )
+        });
+
+        assert_eq!(by_way, expected, "{ir:?} by {way:?}\nplanned {planned:?}");
+        assert_eq!(
+            counted,
+            u64::try_from(expected.len()).unwrap(),
+            "{ir:?} counted by {way:?}"
+        );
+    }
+
     // The same query without its offset and limit, cut here: what a sort
     // that keeps only the objects still able to be in the result has to
     // give, found without cutting anything, so that a mistake shared by the

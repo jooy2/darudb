@@ -9,7 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 
 use super::ir::{Expr, Ir, Op, Operand};
-use super::plan::{Access, Cond, Plan, Range, Resolved, Step, Test};
+use super::keys::KeySet;
+use super::plan::{Access, Cond, Part, Plan, Range, Resolved, Step, Test, terms_of};
 use crate::btree::UNMARKED;
 use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, NameOrder};
@@ -36,6 +37,11 @@ struct Reader<'a> {
     source: &'a dyn Source,
     links: RefCell<Links>,
     records: RefCell<Records<'a>>,
+    /// The terms of the plan's filter, a bit for each by its position, that
+    /// a set of keys answered already, and that are not tested again.
+    skip: u64,
+    /// Whether the set answered every term, so that nothing is tested.
+    answered: bool,
 }
 
 /// How a query reads the records an index names: the first one from the
@@ -53,6 +59,20 @@ impl<'a> Reader<'a> {
             source,
             links: RefCell::new(HashMap::new()),
             records: RefCell::new(Records::None),
+            skip: 0,
+            answered: false,
+        }
+    }
+
+    /// A reader for a run of `plan` that leaves out the terms `skip` marks.
+    fn skipping(source: &'a dyn Source, plan: &Plan<'_>, skip: u64) -> Self {
+        Self {
+            skip,
+            answered: plan
+                .filter
+                .as_ref()
+                .is_some_and(|filter| answered(filter, skip)),
+            ..Self::new(source)
         }
     }
 }
@@ -147,6 +167,23 @@ impl Reader<'_> {
         links.insert(cache_key, object.clone());
 
         Ok(object)
+    }
+
+    /// [`holds`](Self::holds) of a plan's filter, leaving out the terms a
+    /// set of keys answered.
+    fn holds_left<F: Fields + ?Sized>(&self, filter: &Cond<'_>, fields: &F) -> Result<bool> {
+        match filter {
+            Cond::And(terms) if self.skip != 0 => {
+                for (position, term) in terms.iter().enumerate() {
+                    if !skipped(self.skip, position) && !self.holds(term, fields)? {
+                        return Ok(false);
+                    }
+                }
+
+                Ok(true)
+            }
+            _ => self.holds(filter, fields),
+        }
     }
 
     fn holds<F: Fields + ?Sized>(&self, cond: &Cond<'_>, fields: &F) -> Result<bool> {
@@ -513,14 +550,80 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
 /// Generic over `visit`, which every object read goes through: a call
 /// through a pointer for each object was a tenth of a walk over every
 /// record that tests one field.
+/// What a run walks to find a plan's objects.
+#[derive(Clone, Copy)]
+enum Route<'r, 's> {
+    /// An access, giving every key it finds.
+    Access(&'r Access<'s>),
+    /// An access, giving only the keys a set holds.
+    Through(&'r Access<'s>, &'r KeySet),
+    /// The keys of a set, in their order.
+    Keys(&'r KeySet),
+}
+
+/// Gives `visit` the key of each object `route` finds, in the route's order,
+/// with its record where the walk has it, until `visit` says to stop.
+///
+/// A run that walks the plan's access calls [`walk_access`] itself rather
+/// than through this function, which made a walk of every record take a few
+/// percent longer.
 fn walk(
     source: &dyn Source,
     plan: &Plan<'_>,
+    route: Route<'_, '_>,
+    visit: &mut impl FnMut(&[u8], Option<Lent<'_>>) -> Result<bool>,
+) -> Result<()> {
+    match route {
+        Route::Access(access) => walk_access(source, plan, access, visit),
+        Route::Through(access, set) => walk_access(source, plan, access, &mut |key, walked| {
+            if set.contains(key) {
+                visit(key, walked)
+            } else {
+                Ok(false)
+            }
+        }),
+        Route::Keys(set) => {
+            let tree = records(plan.collection.id);
+            let mut seeker = source.seeker_in(&tree)?;
+
+            for at in 0..set.len() {
+                let key = set.get(at);
+                let mut stop = false;
+
+                // The records are looked up in key order, each from where the
+                // last was found, and lent where they lie.
+                let found = seeker.get_with(key, &mut |record| {
+                    stop = visit(key, Some(Lent::unmarked(record)))?;
+
+                    Ok(())
+                })?;
+
+                if !found {
+                    return Err(source.corrupted(format!(
+                        "an index of `{}` names an object that is not there",
+                        plan.collection.name
+                    )));
+                }
+
+                if stop {
+                    break;
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
+fn walk_access(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    access: &Access<'_>,
     visit: &mut impl FnMut(&[u8], Option<Lent<'_>>) -> Result<bool>,
 ) -> Result<()> {
     let records = records(plan.collection.id);
 
-    match &plan.access {
+    match access {
         Access::Records { range, backward } => {
             let marked = plan.marked.map(|field| field.id);
 
@@ -967,25 +1070,70 @@ pub(crate) fn whole<T>(run: impl FnOnce() -> T) -> T {
 /// it, and nothing of it is copied. Otherwise the objects are gathered and
 /// sorted first.
 fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()> {
-    let reader = Reader::new(source);
+    if plan.limit == Some(0) {
+        return Ok(());
+    }
+
+    let strategy = strategy(source, plan, false)?;
+
+    if let Strategy::Try {
+        access,
+        part,
+        budget,
+    } = &strategy
+    {
+        if found_by(source, plan, take, &strategy, Some(*budget))? {
+            return Ok(());
+        }
+
+        // The access found more than the budget, and gave nothing yet.
+        let kept = plan.offset.saturating_add(plan.limit.unwrap_or(u64::MAX));
+        let turned = turn(
+            source,
+            plan,
+            access,
+            gather(source, plan.collection, part)?,
+            kept,
+        )?;
+
+        found_by(source, plan, take, &turned, None)?;
+
+        return Ok(());
+    }
+
+    found_by(source, plan, take, &strategy, None)?;
+
+    Ok(())
+}
+
+/// [`found`] by `strategy`. With a `budget`, a walk that is not in the
+/// query's order stops once it has found more objects than that, and
+/// returns false, having given nothing.
+fn found_by(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    take: &mut Take<'_>,
+    strategy: &Strategy<'_, '_>,
+    budget: Option<u64>,
+) -> Result<bool> {
     let limit = plan.limit.map_or(usize::MAX, |limit| {
         usize::try_from(limit).unwrap_or(usize::MAX)
     });
     let offset = usize::try_from(plan.offset).unwrap_or(usize::MAX);
+    let (route, skip, ordered) = strategy.route(plan);
+    let reader = Reader::skipping(source, plan, skip);
+    // Whether any of the filter is left to test on the objects read.
+    let tested = plan.filter.is_some() && !reader.answered;
 
-    if limit == 0 {
-        return Ok(());
-    }
-
-    if plan.ordered {
+    if ordered {
         let mut skipped = 0;
         let mut taken = 0;
 
-        walk(source, plan, &mut |key, walked| {
+        let mut visit = |key: &[u8], walked: Option<Lent<'_>>| -> Result<bool> {
             // With no filter left, every object the walk gives meets it, so
             // one the offset skips is skipped without reading its record: a
             // page deep in an index's order reads the page's records alone.
-            if plan.filter.is_none() && skipped < offset {
+            if !tested && skipped < offset {
                 skipped += 1;
 
                 return Ok(false);
@@ -1017,12 +1165,20 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
             }
 
             Ok(stop)
-        })?;
+        };
 
-        return Ok(());
+        match route {
+            Route::Access(access) => walk_access(source, plan, access, &mut visit)?,
+            route => walk(source, plan, route, &mut visit)?,
+        }
+
+        return Ok(true);
     }
 
     let keep = offset.saturating_add(limit);
+    // How many objects the walk found, against the budget.
+    let mut seen = 0u64;
+    let mut over = false;
     let compare = |a: &Found, b: &Found| order(plan, a, b);
     let mut found: Vec<Found> = Vec::new();
     // The values an object sorts by, filled again for each object tested.
@@ -1036,9 +1192,24 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
     // not read. When the index answers the filter too, its entries decide
     // which objects are found, and only the records of the result are read.
     let by_key = plan.sort.is_empty();
-    let deferred = by_key && plan.filter.is_none() && matches!(plan.access, Access::Index { .. });
+    let deferred = by_key
+        && !tested
+        && matches!(
+            route,
+            Route::Access(Access::Index { .. }) | Route::Through(Access::Index { .. }, _)
+        );
 
-    walk(source, plan, &mut |key, record| {
+    let mut visit = |key: &[u8], record: Option<Lent<'_>>| -> Result<bool> {
+        if let Some(budget) = budget {
+            seen += 1;
+
+            if seen > budget {
+                over = true;
+
+                return Ok(true);
+            }
+        }
+
         let bound = trimmed.then(|| &found[keep - 1]);
 
         if by_key && bound.is_some_and(|bound| key >= bound.key.as_slice()) {
@@ -1071,7 +1242,16 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
         }
 
         Ok(false)
-    })?;
+    };
+
+    match route {
+        Route::Access(access) => walk_access(source, plan, access, &mut visit)?,
+        route => walk(source, plan, route, &mut visit)?,
+    }
+
+    if over {
+        return Ok(false);
+    }
 
     found.sort_by(compare);
 
@@ -1085,7 +1265,7 @@ fn found(source: &dyn Source, plan: &Plan<'_>, take: &mut Take<'_>) -> Result<()
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// The order of the result: the sort keys, then the primary key.
@@ -1253,8 +1433,13 @@ fn meets(
     }
 
     let sorting = sort.is_some() && !plan.sort.is_empty();
+    let filter = if reader.answered {
+        None
+    } else {
+        plan.filter.as_ref()
+    };
 
-    if plan.filter.is_none() && !sorting {
+    if filter.is_none() && !sorting {
         return Ok(true);
     }
 
@@ -1272,7 +1457,7 @@ fn meets(
     #[cfg(not(test))]
     let fields = &view;
 
-    if let Some(filter) = &plan.filter {
+    if let Some(filter) = filter {
         // A filter that is one test of a field of the collection itself is
         // made here rather than through the filter's tree, which passed the
         // test to the field through a pointer: a walk over every object
@@ -1291,7 +1476,7 @@ fn meets(
                 Current::Borrowed(value) => direct(test, value),
                 Current::Owned(value) => direct(test, ValueRef::Value(&value)),
             },
-            _ => reader.holds(filter, fields)?,
+            _ => reader.holds_left(filter, fields)?,
         };
 
         if !held {
@@ -1311,7 +1496,42 @@ fn meets(
 /// Runs `plan` and counts the objects it finds, after its offset and within
 /// its limit.
 pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
-    let found = if plan.filter.is_none() && !plan.exact {
+    let strategy = strategy(source, plan, true)?;
+    let found = match &strategy {
+        Strategy::Plain | Strategy::Try { .. } => count_plain(source, plan)?,
+        // A set that answers the whole filter is the objects found.
+        Strategy::Keys { set, skip }
+            if !plan.filter.as_ref().is_some_and(|f| !answered(f, *skip)) =>
+        {
+            set.len() as u64
+        }
+        Strategy::Keys { .. } | Strategy::Through { .. } => {
+            let (route, skip, _) = strategy.route(plan);
+            let reader = Reader::skipping(source, plan, skip);
+            let mut found = 0u64;
+
+            walk(source, plan, route, &mut |key, walked| {
+                with_record(&reader, plan, key, walked, &mut |lent| {
+                    found += u64::from(meets(&reader, plan, Some(lent), None)?);
+
+                    Ok(())
+                })?;
+
+                Ok(false)
+            })?;
+
+            found
+        }
+    };
+    let found = found.saturating_sub(plan.offset);
+
+    Ok(plan.limit.map_or(found, |limit| found.min(limit)))
+}
+
+/// The number of objects `plan`'s access and filter find, before its offset
+/// and limit, without a set of keys.
+fn count_plain(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
+    Ok(if plan.filter.is_none() && !plan.exact {
         // No filter at all: the tree knows how many records it holds.
         source.len_in(&records(plan.collection.id))?
     } else if plan.exact {
@@ -1347,7 +1567,7 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
             _ => {
                 let mut found = 0u64;
 
-                walk(source, plan, &mut |_, _| {
+                walk(source, plan, Route::Access(&plan.access), &mut |_, _| {
                     found += 1;
 
                     Ok(false)
@@ -1360,21 +1580,649 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
         let reader = Reader::new(source);
         let mut found = 0u64;
 
-        walk(source, plan, &mut |key, walked| {
-            with_record(&reader, plan, key, walked, &mut |lent| {
-                found += u64::from(meets(&reader, plan, Some(lent), None)?);
+        walk(
+            source,
+            plan,
+            Route::Access(&plan.access),
+            &mut |key, walked| {
+                with_record(&reader, plan, key, walked, &mut |lent| {
+                    found += u64::from(meets(&reader, plan, Some(lent), None)?);
 
-                Ok(())
-            })?;
+                    Ok(())
+                })?;
 
-            Ok(false)
-        })?;
+                Ok(false)
+            },
+        )?;
 
         found
-    };
-    let found = found.saturating_sub(plan.offset);
+    })
+}
 
-    Ok(plan.limit.map_or(found, |limit| found.min(limit)))
+/// Whether every term of `filter` is one `skip` marks.
+fn answered(filter: &Cond<'_>, skip: u64) -> bool {
+    skip != 0 && (0..terms_of(Some(filter)).len()).all(|position| skipped(skip, position))
+}
+
+/// Whether `skip` marks the term at `position`.
+fn skipped(skip: u64, position: usize) -> bool {
+    position < 64 && skip & 1 << position != 0
+}
+
+/// How a run finds a plan's objects (`design/objects.md`, "Sets of keys").
+enum Strategy<'p, 's> {
+    /// The plan's access, each object tested against the plan's filter.
+    Plain,
+    /// The objects of a set of keys gathered from the parts of the filter
+    /// that indexes answer, in key order, each tested against the terms of
+    /// the filter the set does not answer, which `skip` leaves.
+    Keys { set: KeySet, skip: u64 },
+    /// The walk in the sort's order, taking only the keys in a set gathered
+    /// as for `Keys`, so that a limit stops the walk.
+    Through {
+        access: &'p Access<'s>,
+        set: KeySet,
+        skip: u64,
+    },
+    /// The plan's access, unless it finds more than `budget` objects: then
+    /// `Through` the walk `access`, with the keys of `part`, the access's.
+    Try {
+        access: &'p Access<'s>,
+        part: &'p Part<'s>,
+        budget: u64,
+    },
+}
+
+impl<'p, 's> Strategy<'p, 's> {
+    /// The route a run walks, the terms of the filter it leaves out, and
+    /// whether the walk gives the objects in the query's order.
+    fn route<'r>(&'r self, plan: &'r Plan<'s>) -> (Route<'r, 's>, u64, bool)
+    where
+        'p: 'r,
+    {
+        match self {
+            Strategy::Plain | Strategy::Try { .. } => {
+                (Route::Access(&plan.access), 0, plan.ordered)
+            }
+            Strategy::Keys { set, skip } => (Route::Keys(set), *skip, plan.sort.is_empty()),
+            Strategy::Through { access, set, skip } => (Route::Through(access, set), *skip, true),
+        }
+    }
+}
+
+/// What a run weighs its ways by, in units of walking one entry of a tree:
+/// looking an object's record up by its key and testing it, and finding a
+/// key's place in a tree from the root. On an Apple M1 Max, walking an
+/// entry of an index took about 30 ns, looking a record up about 350 ns, and
+/// a descent about a microsecond.
+const RECORD: u64 = 12;
+const SEEK: u64 = 30;
+
+/// A walk of every record reads each where it lies, at about a third of a
+/// lookup's cost.
+const WALKED: u64 = 4;
+
+/// A part that holds more than this many times the keys the smallest holds
+/// is left to be tested on the objects read, rather than gathered.
+const SPREAD: u64 = 8;
+
+/// The ways the tests make a run take, rather than weighing them.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Forced {
+    Weigh,
+    Plain,
+    Keys,
+    Through,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCED: std::cell::Cell<Forced> = const { std::cell::Cell::new(Forced::Weigh) };
+}
+
+/// Runs `run` with every query taking `way`, where it can.
+#[cfg(test)]
+pub(crate) fn forced<T>(way: Forced, run: impl FnOnce() -> T) -> T {
+    FORCED.with(|forced| forced.set(way));
+
+    let result = run();
+
+    FORCED.with(|forced| forced.set(Forced::Weigh));
+    result
+}
+
+/// A part of a plan, with about how many keys it holds, and what gathering
+/// them costs.
+struct Weighed<'p, 's> {
+    /// The term of the plan's filter the part is, or `None` for what the
+    /// access answers.
+    position: Option<usize>,
+    part: &'p Part<'s>,
+    size: u64,
+    cost: u64,
+}
+
+/// How a run finds `plan`'s objects: the access the plan chose, or a set of
+/// the keys the parts of its filter that indexes answer come to, walked
+/// alone or through the walk in the sort's order, whichever the sizes of
+/// the indexes' ranges make cheapest.
+fn strategy<'p, 's>(
+    source: &dyn Source,
+    plan: &'p Plan<'s>,
+    counting: bool,
+) -> Result<Strategy<'p, 's>> {
+    #[cfg(test)]
+    let forced = FORCED.with(std::cell::Cell::get);
+    #[cfg(test)]
+    let weigh = forced == Forced::Weigh;
+    #[cfg(not(test))]
+    let weigh = true;
+
+    let through = plan
+        .sort_walk
+        .as_ref()
+        .filter(|_| plan.limit.is_some() && !counting);
+
+    #[cfg(test)]
+    if forced == Forced::Plain {
+        return Ok(Strategy::Plain);
+    }
+
+    let collection = plan.collection;
+    let take = plan.limit.map(|limit| plan.offset.saturating_add(limit));
+
+    if plan.parts.is_empty() && (through.is_none() || plan.access_part.is_none()) {
+        return Ok(Strategy::Plain);
+    }
+
+    if weigh {
+        // A lookup of a few keys, or of a few values of a unique index, is
+        // as cheap as a set could make it.
+        let few = match &plan.access {
+            Access::Keys { keys, .. } => keys.len() <= 16,
+            Access::Index {
+                index,
+                ranges,
+                values: true,
+                ..
+            } => index.unique && ranges.len() <= 16,
+            _ => false,
+        };
+
+        // A count the access answers alone reads no record already.
+        if few || (counting && plan.exact) {
+            return Ok(Strategy::Plain);
+        }
+    }
+
+    if let (true, Some(access), Some(take), Some(part)) =
+        (plan.parts.is_empty(), through, take, &plan.access_part)
+    {
+        #[cfg(test)]
+        if !weigh {
+            return turn(
+                source,
+                plan,
+                access,
+                gather(source, collection, part)?,
+                take,
+            );
+        }
+
+        // Only the walk in the sort's order is left to weigh, which pays
+        // when the access finds many more objects than the limit takes, and
+        // only walking the access tells that. So the run walks it, and turns
+        // to the walk in the sort's order once it has found eight times what
+        // the limit takes: a query whose access finds a few, such as the
+        // newest posts of one author, costs nothing more.
+        return Ok(Strategy::Try {
+            access,
+            part,
+            budget: take.saturating_mul(SPREAD).max(SPREAD),
+        });
+    }
+
+    let total = source.len_in(&records(collection.id))?.max(1);
+    let access = access_size(source, collection, &plan.access)?;
+    let cap = access.saturating_mul(SPREAD).saturating_add(1);
+    let mut weighed = Vec::new();
+
+    for (position, part) in &plan.parts {
+        if *position < 64 {
+            let (size, cost) = weight(source, collection, part, cap)?;
+
+            weighed.push(Weighed {
+                position: Some(*position),
+                part,
+                size,
+                cost,
+            });
+        }
+    }
+
+    if let Some(part) = &plan.access_part {
+        weighed.push(Weighed {
+            position: None,
+            part,
+            size: access,
+            cost: weight(source, collection, part, 0)?.1.max(access),
+        });
+    }
+
+    weighed.sort_by_key(|weighed| weighed.size);
+
+    let fewest = weighed.first().map_or(0, |weighed| weighed.size);
+    let most = fewest.saturating_mul(SPREAD).max(SPREAD);
+    let (chosen, left): (Vec<_>, Vec<_>) = weighed
+        .into_iter()
+        .partition(|weighed| !weigh || weighed.size <= most);
+    // A run that leaves the access gathers what the access answered, chosen
+    // or not, since the filter no longer holds those terms.
+    let access_left = left.into_iter().find(|weighed| weighed.position.is_none());
+    let skip = chosen
+        .iter()
+        .filter_map(|weighed| weighed.position)
+        .fold(0u64, |skip, position| skip | 1 << position);
+    let tested = plan
+        .filter
+        .as_ref()
+        .is_some_and(|filter| !answered(filter, skip));
+    let gathered = chosen
+        .iter()
+        .chain(access_left.as_ref())
+        .map(|weighed| weighed.cost)
+        .fold(0u64, u64::saturating_add);
+    // About how many objects the set holds, if the parts were independent.
+    let result = chosen
+        .iter()
+        .chain(access_left.as_ref())
+        .skip(1)
+        .fold(fewest, |kept, weighed| {
+            kept.saturating_mul(weighed.size) / total
+        })
+        .max(1);
+    let per_object = match &plan.access {
+        Access::Records { .. } => WALKED,
+        _ => 1 + RECORD,
+    };
+    // A walk in the query's order stops at the limit.
+    let plain = match take {
+        Some(take) if plan.ordered => access.min(take.saturating_mul(access) / result),
+        _ => access,
+    }
+    .saturating_mul(per_object);
+    let keys = gathered.saturating_add(if counting && !tested {
+        0
+    } else {
+        result.saturating_mul(RECORD)
+    });
+    let walked = through.zip(take).map(|(_, take)| {
+        let walked = total.min(take.saturating_mul(total) / result);
+
+        gathered
+            .saturating_add(walked)
+            .saturating_add(take.saturating_mul(RECORD))
+    });
+
+    #[cfg(test)]
+    let (plain, keys, walked) = match forced {
+        Forced::Keys => (u64::MAX, 0, None),
+        Forced::Through if walked.is_some() => (u64::MAX, u64::MAX, Some(0)),
+        Forced::Through => (u64::MAX, 0, None),
+        _ => (plain, keys, walked),
+    };
+
+    if plain <= keys && walked.is_none_or(|walked| plain <= walked) {
+        return Ok(Strategy::Plain);
+    }
+
+    // The smallest part first, then each other kept to the keys found in
+    // it, so that no part larger than the first is held.
+    let mut parts = chosen
+        .iter()
+        .chain(access_left.as_ref())
+        .map(|weighed| weighed.part);
+    let mut set = match parts.next() {
+        Some(part) => gather(source, collection, part)?,
+        None => return Ok(Strategy::Plain),
+    };
+
+    for part in parts {
+        if set.is_empty() {
+            break;
+        }
+
+        set = keep(source, collection, part, &set)?;
+    }
+
+    Ok(match (through, walked) {
+        (Some(access), Some(walked)) if walked < keys => Strategy::Through { access, set, skip },
+        _ => Strategy::Keys { set, skip },
+    })
+}
+
+/// How a run whose access found more than its budget goes on: through
+/// `access`, the walk in the sort's order, taking only the keys in `set`,
+/// the access's, or reading the set's objects, whichever is cheaper for the
+/// `take` objects the query keeps.
+fn turn<'p, 's>(
+    source: &dyn Source,
+    plan: &Plan<'s>,
+    access: &'p Access<'s>,
+    set: KeySet,
+    take: u64,
+) -> Result<Strategy<'p, 's>> {
+    let size = set.len() as u64;
+    let total = source.len_in(&records(plan.collection.id))?.max(1);
+    let walked = total.min(take.saturating_mul(total) / size.max(1));
+    let through = walked.saturating_add(take.saturating_mul(RECORD));
+    let keys = size.saturating_mul(RECORD);
+    #[cfg(test)]
+    let (through, keys) = match FORCED.with(std::cell::Cell::get) {
+        Forced::Keys => (u64::MAX, 0),
+        Forced::Through => (0, u64::MAX),
+        _ => (through, keys),
+    };
+
+    Ok(if through < keys {
+        Strategy::Through {
+            access,
+            set,
+            skip: 0,
+        }
+    } else {
+        Strategy::Keys { set, skip: 0 }
+    })
+}
+
+/// How many objects `access` finds before the filter is tested.
+fn access_size(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    access: &Access<'_>,
+) -> Result<u64> {
+    let count = |tree: &str, ranges: &[Range]| -> Result<u64> {
+        let mut size = 0u64;
+
+        for range in ranges {
+            size += source
+                .range_in(tree, as_ref(&range.0), as_ref(&range.1), false)?
+                .count_entries()?;
+        }
+
+        Ok(size)
+    };
+
+    match access {
+        Access::Records {
+            range: (Bound::Unbounded, Bound::Unbounded),
+            ..
+        } => source.len_in(&records(collection.id)),
+        Access::Records { range, .. } => {
+            count(&records(collection.id), std::slice::from_ref(range))
+        }
+        Access::Keys { keys, .. } => Ok(keys.len() as u64),
+        Access::Index { index, ranges, .. } => count(&index_tree(index.id), ranges),
+    }
+}
+
+/// About how many keys `part`, of `collection`, holds, counted up to about
+/// `cap` and no further, and what gathering them costs. With a `cap` of 0,
+/// only the cost of a part of known keys or ranges, without counting.
+fn weight(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    part: &Part<'_>,
+    cap: u64,
+) -> Result<(u64, u64)> {
+    let count = |tree: &str, ranges: &[Range]| -> Result<u64> {
+        let mut size = 0u64;
+
+        for range in ranges {
+            if size >= cap {
+                break;
+            }
+
+            size += source
+                .range_in(tree, as_ref(&range.0), as_ref(&range.1), false)?
+                .count_entries_up_to(cap - size)?;
+        }
+
+        Ok(size)
+    };
+
+    Ok(match part {
+        Part::Records(ranges) => {
+            let size = count(&records(collection.id), ranges)?;
+
+            (size, size)
+        }
+        Part::Keys(keys) => {
+            let size = keys.len() as u64;
+
+            (size, size.saturating_mul(SEEK))
+        }
+        Part::Index { index, ranges } => {
+            let size = count(&index_tree(index.id), ranges)?;
+
+            (size, size.saturating_add(ranges.len() as u64 * SEEK))
+        }
+        Part::Linked {
+            index,
+            target,
+            inner,
+        } => {
+            // Each object of the linked collection is linked to by about as
+            // many objects as the index has entries for each.
+            let entries = source.len_in(&index_tree(index.id))?;
+            let fanout = (entries / source.len_in(&records(target.id))?.max(1)).max(1);
+            let (found, cost) = weight(source, target, inner, cap / fanout + 1)?;
+            let size = found.saturating_mul(fanout);
+            // Each object found is looked up in the index, unless a walk of
+            // the whole index is cheaper.
+            let lookups = found.saturating_mul(SEEK).min(entries);
+
+            (size, cost.saturating_add(lookups).saturating_add(size))
+        }
+        Part::And(parts) => {
+            let mut size = u64::MAX;
+            let mut cost = 0u64;
+
+            for part in parts {
+                let (found, gathering) = weight(source, collection, part, cap)?;
+
+                size = size.min(found);
+                cost = cost.saturating_add(gathering);
+            }
+
+            (size.min(cap.max(1)), cost)
+        }
+        Part::Or(parts) => {
+            let mut size = 0u64;
+            let mut cost = 0u64;
+
+            for part in parts {
+                let (found, gathering) = weight(source, collection, part, cap)?;
+
+                size = size.saturating_add(found);
+                cost = cost.saturating_add(gathering);
+            }
+
+            (size, cost)
+        }
+    })
+}
+
+/// The keys of the objects of `collection` that `part` finds.
+fn gather(source: &dyn Source, collection: &CollectionDef, part: &Part<'_>) -> Result<KeySet> {
+    if let Part::And(parts) = part {
+        let mut parts = parts.iter();
+        let mut set = match parts.next() {
+            Some(first) => gather(source, collection, first)?,
+            None => return Ok(KeySet::default()),
+        };
+
+        for part in parts {
+            if set.is_empty() {
+                break;
+            }
+
+            set = keep(source, collection, part, &set)?;
+        }
+
+        return Ok(set);
+    }
+
+    let mut set = KeySet::default();
+
+    each_key(source, collection, part, &mut |key| {
+        set.push(key);
+
+        Ok(())
+    })?;
+
+    Ok(set.seal())
+}
+
+/// The keys of `set` that `part` finds too.
+fn keep(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    part: &Part<'_>,
+    set: &KeySet,
+) -> Result<KeySet> {
+    if let Part::And(parts) = part {
+        let mut kept = None;
+
+        for part in parts {
+            kept = Some(keep(
+                source,
+                collection,
+                part,
+                kept.as_ref().unwrap_or(set),
+            )?);
+        }
+
+        return Ok(kept.unwrap_or_default());
+    }
+
+    let mut kept = KeySet::default();
+
+    each_key(source, collection, part, &mut |key| {
+        if set.contains(key) {
+            kept.push(key);
+        }
+
+        Ok(())
+    })?;
+
+    Ok(kept.seal())
+}
+
+/// Gives `give` the key of each object of `collection` that `part` finds,
+/// once or more, in no order to rely on.
+fn each_key(
+    source: &dyn Source,
+    collection: &CollectionDef,
+    part: &Part<'_>,
+    give: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    match part {
+        Part::Records(ranges) => {
+            let tree = records(collection.id);
+
+            for range in ranges {
+                source
+                    .range_in(&tree, as_ref(&range.0), as_ref(&range.1), false)?
+                    .for_each(&mut |key, _| {
+                        give(key)?;
+
+                        Ok(false)
+                    })?;
+            }
+        }
+        Part::Keys(keys) => {
+            let tree = records(collection.id);
+
+            for key in keys {
+                if source.get_in_with(&tree, key, &mut |_| Ok(()))? {
+                    give(key)?;
+                }
+            }
+        }
+        Part::Index { index, ranges } => {
+            let tree = index_tree(index.id);
+
+            for range in ranges {
+                walk_entries(source, index, &tree, range, &mut |key| {
+                    give(key)?;
+
+                    Ok(false)
+                })?;
+            }
+        }
+        Part::Linked {
+            index,
+            target,
+            inner,
+        } => {
+            let targets = gather(source, target, inner)?;
+
+            if targets.is_empty() {
+                return Ok(());
+            }
+
+            let tree = index_tree(index.id);
+
+            // An entry of a link's index starts with the linked object's key,
+            // encoded as the linked collection's records are keyed.
+            if (targets.len() as u64).saturating_mul(SEEK) > source.len_in(&tree)? {
+                // Fewer entries in the whole index than lookups of each: the
+                // index is walked once, and the entries of the set's keys
+                // kept.
+                source
+                    .range_in(&tree, Bound::Unbounded, Bound::Unbounded, false)?
+                    .for_each(&mut |entry, stored| {
+                        let (value, key) = entry_parts(source, index, entry, stored)?;
+
+                        if targets.contains(value) {
+                            give(key)?;
+                        }
+
+                        Ok(false)
+                    })?;
+            } else {
+                for at in 0..targets.len() {
+                    let value = targets.get(at);
+                    let range = (
+                        Bound::Included(value.to_vec()),
+                        key::after_prefix(value).map_or(Bound::Unbounded, Bound::Excluded),
+                    );
+
+                    walk_entries(source, index, &tree, &range, &mut |key| {
+                        give(key)?;
+
+                        Ok(false)
+                    })?;
+                }
+            }
+        }
+        Part::And(_) => {
+            let set = gather(source, collection, part)?;
+
+            for at in 0..set.len() {
+                give(set.get(at))?;
+            }
+        }
+        Part::Or(parts) => {
+            for part in parts {
+                each_key(source, collection, part, give)?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -76,6 +76,13 @@ impl<'a> Range<'a> {
         self.inner.map_or(Ok(0), btree::Range::count_entries)
     }
 
+    /// [`count_entries`](Self::count_entries), stopping once it reaches
+    /// `cap`, as [`btree::Range::count_entries_up_to`] does.
+    pub(crate) fn count_entries_up_to(self, cap: u64) -> Result<u64> {
+        self.inner
+            .map_or(Ok(0), |inner| inner.count_entries_up_to(cap))
+    }
+
     fn over<K: AsRef<[u8]>>(
         loader: &'a Loader,
         tree: u64,

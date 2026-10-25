@@ -11,6 +11,7 @@
 ### Changed
 
 - A query sorted by an indexed field, with an offset and nothing of its filter left to test on the objects it reads, skips the objects before its page by their keys, rather than reading each of them. A page of 50 objects after up to 98,703 others took 0.69 ms rather than 19 ms on an Apple M1 Max.
+- A query whose filter has terms that indexes answer alone gathers the keys of the objects that meet them from the indexes, and combines them before it reads an object, when counting the indexes' entries says that is cheaper: terms joined by `AND` meet, terms joined by `OR` join, a test through a link field with an index, such as `author.country == "kr"`, goes through the linked collection's index and then the link's, and a query sorted by an indexed field with a limit walks that index and takes only the gathered keys. In the benchmark's complex suite on an Apple M1 Max, a count with `OR` across two indexes took 80% less time, a count with conditions on two indexes 66% less, three conditions on two indexes sorted with a limit 41% less, the first 20 posts of authors in one country 91% less, a count through two links 91% less, and the first 20 posts with a tag sorted by another index 95% less.
 
 ### Fixed
 

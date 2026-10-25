@@ -287,6 +287,24 @@ When the access path answers the whole filter, the rest of the filter is empty. 
 
 Walking an index in reverse is the kernel's backward walk of a tree, the one its `range_backward` offers.
 
+### Sets of keys
+
+The access path answers one term of the filter, and every other term is tested on each object read. Planning also finds the terms that indexes answer alone, each as a part whose objects' primary keys can be gathered without reading an object:
+
+- **A test of a field of the collection** that its index or the primary key answers, as in step 1: the keys of the entries in the test's ranges, or of the records that hold the keys an equality or an `IN` names.
+- **A test through a link field that has an index**, such as `author.country == "kr"`, of a part of the linked collection: the keys that part gathers in the linked collection, then the objects whose link names one of them, through the link field's index. Each named key is looked up in the index, unless that would take more lookups than the index has entries, and then the index is walked once. An `IS NULL` through a link is not such a part, since a link to an object that is not there reads as null and no index entry says so.
+- **An `AND` or an `OR`** whose every term is a part. A `NOT` is never one.
+
+Before it reads an object, a run weighs three ways, by counting the entries in each part's ranges a leaf at a time, no further than eight times the access path's own count:
+
+1. **The access path**, as above.
+2. **A set of keys.** The smallest part is gathered first, and each other part whose count is at most eight times the smallest is kept to the keys found in it, without being held itself; a larger part is left to be tested on the objects read. When the access path answered terms, its part is in the set too, since those terms are no longer in the filter. The objects of the set are read in key order and tested against the terms no part in the set answered. A count whose filter the set answers whole is the number of keys in it.
+3. **Through the sort's order.** When the query sorts by one indexed field, or by the primary key, and has a limit, the walk in that order gives only the keys in the set, and the limit stops it.
+
+The weights are units of walking one entry of a tree: a record looked up by its key and tested is 12, a descent from a tree's root 30, and a record that a walk of every record reads where it lies 4. The run takes the cheapest, estimating how many objects the set holds as if the parts were independent, and how far the walk in the sort's order goes as the limit times the collection's size over that estimate. When the access path's part is the only one and the query sorts with a limit, the access path's keys are gathered rather than counted, so that it is walked once whichever way the run takes: a set of no more than eight times the limit is read as the access path would have read it. A lookup of a few keys, or of a few values of a unique index, and a count the access path answers alone, are not weighed.
+
+A set holds its keys in one buffer, sorted and without repeats, and finds a key through a table of their hashes. Keys come from the file, so a crafted file can make them collide and slow a lookup down, but a collision is settled by comparing the keys and cannot change an answer. The choice never changes the result either: the tests run every random query through the access path, through a set and through the sort's order, and compare each with the scan.
+
 ## Migrations
 
 Opening a file with a declared schema compares it with the stored one:
