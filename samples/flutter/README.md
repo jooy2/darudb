@@ -2,14 +2,14 @@
 
 The sample app's screens in Flutter with [Plass UI](https://plass.cdget.com), for macOS, Windows, Linux, iOS and Android. [The samples' README](../README.md) says what the app does, how the sample data is made, and what you need.
 
-| Path                  | What it is                                                                  |
-| --------------------- | --------------------------------------------------------------------------- |
-| `lib/src/model.dart`  | The annotated classes of the three collections; `model.g.dart` is generated |
-| `lib/src/sample.dart` | The sample data, and the seeded generator in `random.dart`                  |
-| `lib/src/store.dart`  | Every operation the screens ask of the database                             |
-| `lib/src/ui/`         | The screens                                                                 |
-| `test/`               | Unit tests of the sample data and the store                                 |
-| `integration_test/`   | The end-to-end scenario, with or without a window or on a phone             |
+| Path                  | What it is                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `lib/src/model.dart`  | The annotated classes of the three collections; `model.g.dart` is generated                                              |
+| `lib/src/sample.dart` | The sample data, and the seeded generator in `random.dart`                                                               |
+| `lib/src/store.dart`  | Every operation the screens ask of the database                                                                          |
+| `lib/src/ui/`         | The screens                                                                                                              |
+| `test/`               | Unit tests of the sample data and the store                                                                              |
+| `integration_test/`   | The end-to-end scenario, with or without a window or on a phone, and `engine_test.dart`, the engine on the device itself |
 
 ```bash
 flutter pub get

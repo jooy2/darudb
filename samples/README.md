@@ -92,7 +92,7 @@ flutter test integration_test -d flutter-tester
 
 `flutter test` runs the unit tests of the sample data and the store, against the engine. `flutter test integration_test -d flutter-tester` runs the app itself through the scenario, on a plain file and again on an encrypted one, in Flutter's test runner, which lays the app out at its window's size with no window on the screen, and once more on a plain file at a phone's size, where the sidebar is a drawer. On a desktop instead, with `-d macos`, `-d windows` or `-d linux`, the scenario drives the app's own window, through the platform's embedding and plugins, so it needs a display and a session that is not locked.
 
-On a phone, or an iOS simulator or Android emulator, the scenario runs on the device's own screen: `flutter devices` lists the names to pass to `-d`.
+On a phone, or an iOS simulator or Android emulator, the scenario runs on the device's own screen: `flutter devices` lists the names to pass to `-d`. The same folder holds `engine_test.dart`, which runs the engine without the screens, where an app runs it: two isolates writing to one file at once, an encrypted file through a password change, two backups and a salvage, a hundred thousand objects in one transaction, and on a phone, a file in each folder an app keeps files in, Android's shared storage among them.
 
 ```bash
 flutter test integration_test -d <device>
