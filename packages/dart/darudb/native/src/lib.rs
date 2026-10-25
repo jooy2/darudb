@@ -138,6 +138,18 @@ unsafe fn hand_out(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<i32>
 
         let status = fill(bytes)?;
 
+        // A large result does not keep its memory for every later call. The
+        // bytes move to a small buffer before they are handed out: handed
+        // out first, Dart would read memory already freed, which on iOS is
+        // no longer mapped. Moving them every time, where shrinking in place
+        // may not, is what lets a test catch that order.
+        if bytes.capacity() > 1 << 20 && bytes.len() < 1 << 16 {
+            let mut small = Vec::with_capacity(1 << 16);
+
+            small.extend_from_slice(bytes);
+            *bytes = small;
+        }
+
         // SAFETY: the caller promises `out` is writable; the buffer lives in
         // this thread until its next use, which is after Dart has read it.
         unsafe {
@@ -145,11 +157,6 @@ unsafe fn hand_out(out: *mut Buf, fill: impl FnOnce(&mut Vec<u8>) -> Result<i32>
                 ptr: bytes.as_ptr(),
                 len: bytes.len(),
             });
-        }
-
-        // A large result does not keep its memory for every later call.
-        if bytes.capacity() > 1 << 20 && bytes.len() < 1 << 16 {
-            bytes.shrink_to(1 << 16);
         }
 
         Ok(status)
@@ -1200,4 +1207,34 @@ pub unsafe extern "C" fn darudb_salvage(
         // SAFETY: the caller's promise for `out`.
         unsafe { hand_out(out, |bytes| ops::salvage(from, into, options, bytes)) }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A small result after a large one shrinks the buffer, which moves it,
+    /// so the pointer handed out for the small one is taken after that.
+    #[test]
+    fn a_small_result_after_a_large_one_is_handed_out_where_it_is() {
+        let mut out = Buf {
+            ptr: std::ptr::null(),
+            len: 0,
+        };
+
+        for size in [2 << 20, 16] {
+            // SAFETY: `out` is a `Buf` this test can write.
+            let status = unsafe {
+                hand_out(&raw mut out, |bytes| {
+                    bytes.resize(size, 7);
+
+                    Ok(0)
+                })
+            };
+
+            assert!(matches!(status, Ok(0)));
+            assert_eq!(out.len, size);
+            OUT.with_borrow(|bytes| assert_eq!(out.ptr, bytes.as_ptr()));
+        }
+    }
 }

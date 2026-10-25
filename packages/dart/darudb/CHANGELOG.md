@@ -8,6 +8,10 @@
 
 - `plain` in `Database.backup` and `Database.backupAsync`, which writes the copy with no encryption: the way to turn an encrypted database into a plain one, which put in the encrypted file's place opens without a key or a password. Auto-increment counters and the stored schema come across as they are. `plain` beside a `key` or a `password` fails with `INVALID_ARGUMENT`.
 
+### Fixed
+
+- A synchronous call whose result is small, made after one whose result passed 1 MiB, such as `check` after an `insertMany` of a hundred thousand objects, read its result from memory the library had already freed. On iOS the app crashed; elsewhere the result could be wrong.
+
 ## v1.3.0 (2026-10-13)
 
 ### Added
