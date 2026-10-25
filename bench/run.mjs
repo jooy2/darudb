@@ -3,7 +3,12 @@
 // process of its own on new files, the stores taking turns in an order that
 // moves by one every run.
 //
-//   node bench/run.mjs <rust|node|dart|python> [--runs 9] [--only daru,sqlite] [--dir DIR] [--out FILE]
+//   node bench/run.mjs <rust|node|dart|python> [--suite simple|complex] [--runs 9] [--only daru,sqlite] [--dir DIR] [--out FILE]
+//
+// The simple suite is one collection and the operations an application does
+// most; the complex one is three collections that link to each other, and
+// queries through the links, lists and several indexes, which only the stores
+// with a query language run.
 //
 // A cell is the median of the runs, with the fastest and the slowest beside
 // it. A row whose results differ between stores, or between runs, fails the
@@ -23,6 +28,7 @@ const option = (name, fallback) => {
 
   return at < 0 ? fallback : args[at + 1];
 };
+const suite = option('--suite', 'simple');
 const runs = Number(option('--runs', '9'));
 const only = option('--only', null)?.split(',');
 const base = option('--dir', os.tmpdir());
@@ -33,6 +39,9 @@ const out = option('--out', null);
  * of the language, each the command that lists its stores and the command
  * that runs one pass of one of them.
  */
+/** What a harness is told when it is not to run the simple suite. */
+const suiteArgs = suite === 'simple' ? [] : ['--suite', suite];
+
 const LANGUAGES = {
   rust: () => {
     const binary = join(
@@ -43,8 +52,8 @@ const LANGUAGES = {
 
     return [
       {
-        stores: [binary, '--stores'],
-        child: (store, dir) => [binary, '--child', store, '--dir', dir]
+        stores: [binary, '--stores', ...suiteArgs],
+        child: (store, dir) => [binary, '--child', store, '--dir', dir, ...suiteArgs]
       }
     ];
   },
@@ -53,8 +62,13 @@ const LANGUAGES = {
 
     return [
       {
-        stores: [process.execPath, join(bench, 'node/stores.mjs'), daru],
-        child: (store, dir) => [process.execPath, join(bench, `node/${store}.mjs`), dir, daru]
+        stores: [process.execPath, join(bench, 'node/stores.mjs'), daru, ...suiteArgs],
+        child: (store, dir) => [
+          process.execPath,
+          join(bench, `node/${suite === 'simple' ? '' : `${suite}-`}${store}.mjs`),
+          dir,
+          daru
+        ]
       }
     ];
   },
@@ -70,8 +84,8 @@ const LANGUAGES = {
         `${folder}/build/cli/${target}/bundle/bin/bench${process.platform === 'win32' ? '.exe' : ''}`
       );
     const harness = (folder, binary) => ({
-      stores: [binary, '--stores', '--lock', join(bench, `${folder}/pubspec.lock`)],
-      child: (store, dir) => [binary, '--child', store, '--dir', dir]
+      stores: [binary, '--stores', '--lock', join(bench, `${folder}/pubspec.lock`), ...suiteArgs],
+      child: (store, dir) => [binary, '--child', store, '--dir', dir, ...suiteArgs]
     });
 
     return [
@@ -85,8 +99,8 @@ const LANGUAGES = {
 
     return [
       {
-        stores: [python, script, '--stores'],
-        child: (store, dir) => [python, script, '--child', store, '--dir', dir]
+        stores: [python, script, '--stores', ...suiteArgs],
+        child: (store, dir) => [python, script, '--child', store, '--dir', dir, ...suiteArgs]
       }
     ];
   }
@@ -153,7 +167,7 @@ for (let pass = 0; pass < runs; pass++) {
       }
     }
 
-    console.error(`${language}: run ${pass + 1} of ${runs}, ${id} done`);
+    console.error(`${language} ${suite}: run ${pass + 1} of ${runs}, ${id} done`);
   }
 }
 
@@ -204,6 +218,7 @@ const rows = [...first.keys()].map((row) => {
 const cpus = os.cpus();
 const results = {
   language,
+  suite,
   generated: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
   runs,
   machine: {
@@ -231,11 +246,11 @@ const format = (ns) =>
         ? `${(ns / 1e3).toFixed(2)} us`
         : `${Math.round(ns)} ns`;
 
-console.error(''.padEnd(18) + stores.map(({ id }) => id.padStart(12)).join(''));
+console.error(''.padEnd(22) + stores.map(({ id }) => id.padStart(12)).join(''));
 
 for (const row of rows) {
   console.error(
-    row.id.padEnd(18) +
+    row.id.padEnd(22) +
       stores.map(({ id }) => format(row.results[id]?.median ?? 0).padStart(12)).join('')
   );
 }

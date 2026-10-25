@@ -1,8 +1,11 @@
 /// The Dart side of the benchmark of `bench/README.md`: DaruDB and the
 /// embedded stores Dart programs use most, each running the same workloads.
 ///
-///   bench --stores --lock LOCK       the stores, with the versions LOCK resolved, as JSON
-///   bench --child STORE --dir DIR    one pass of one store, one line of JSON per row
+///   bench --stores --lock LOCK [--suite S]       the stores, with the versions LOCK resolved, as JSON
+///   bench --child STORE --dir DIR [--suite S]    one pass of one store, one line of JSON per row
+///
+/// The suite is `simple`, by default, or `complex`, which only the stores
+/// with a query language run.
 ///
 /// `bench/run.mjs` runs the passes, each in a process of its own on new
 /// files, and puts the runs together. It runs the harness compiled ahead of
@@ -13,6 +16,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:darudb_bench/common.dart';
+import 'package:darudb_bench/complex_daru.dart' as complex_daru;
+import 'package:darudb_bench/complex_sqlite.dart' as complex_sqlite;
 import 'package:darudb_bench/daru.dart' as daru;
 import 'package:darudb_bench/hive.dart' as hive;
 import 'package:darudb_bench/sqlite.dart' as sqlite;
@@ -28,6 +33,15 @@ String _locked(String lock, String package) {
 }
 
 Future<void> main(List<String> args) async {
+  final suite = args.contains('--suite')
+      ? args[args.indexOf('--suite') + 1]
+      : 'simple';
+
+  if (suite != 'simple' && suite != 'complex') {
+    stderr.writeln('no suite is named $suite');
+    exit(2);
+  }
+
   if (args.contains('--stores')) {
     final lock = args[args.indexOf('--lock') + 1];
 
@@ -39,7 +53,8 @@ Future<void> main(List<String> args) async {
           'version':
               '${sqlite3.version.libVersion} (sqlite3 ${_locked(lock, 'sqlite3')})',
         },
-        {'id': 'hive', 'version': 'hive_ce ${_locked(lock, 'hive_ce')}'},
+        if (suite == 'simple')
+          {'id': 'hive', 'version': 'hive_ce ${_locked(lock, 'hive_ce')}'},
       ]),
     );
     return;
@@ -51,12 +66,19 @@ Future<void> main(List<String> args) async {
 
   Directory(directory).createSync(recursive: true);
 
-  switch (store) {
-    case 'daru':
+  switch ((suite, store)) {
+    case ('complex', 'daru'):
+      complex_daru.run(directory, rows);
+    case ('complex', 'sqlite'):
+      complex_sqlite.run(directory, rows);
+    case ('complex', _):
+      stderr.writeln('no store is named $store in the complex suite');
+      exit(2);
+    case (_, 'daru'):
       daru.run(directory, rows);
-    case 'sqlite':
+    case (_, 'sqlite'):
       sqlite.run(directory, rows);
-    case 'hive':
+    case (_, 'hive'):
       await hive.run(directory, rows);
     default:
       stderr.writeln('no store is named $store');

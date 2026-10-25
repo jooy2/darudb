@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const [, , packageDir] = process.argv;
+const [, , packageDir, ...rest] = process.argv;
+// The complex suite runs only the stores with a query language.
+const complex = rest.includes('complex');
 const here = dirname(fileURLToPath(import.meta.url));
 const versionOf = (name) =>
   JSON.parse(readFileSync(join(here, 'node_modules', name, 'package.json'), 'utf8')).version;
@@ -14,10 +16,12 @@ const sqlite = memory.prepare('SELECT sqlite_version() AS v').get().v;
 
 memory.close();
 process.stdout.write(
-  JSON.stringify([
-    { id: 'daru', version: daru },
-    { id: 'sqlite', version: `${sqlite} (better-sqlite3 ${versionOf('better-sqlite3')})` },
-    { id: 'lmdb', version: `lmdb-js ${versionOf('lmdb')}` },
-    { id: 'realm', version: `realm-js ${versionOf('realm')}` }
-  ]) + '\n'
+  JSON.stringify(
+    [
+      { id: 'daru', version: daru },
+      { id: 'sqlite', version: `${sqlite} (better-sqlite3 ${versionOf('better-sqlite3')})` },
+      { id: 'lmdb', version: `lmdb-js ${versionOf('lmdb')}` },
+      { id: 'realm', version: `realm-js ${versionOf('realm')}` }
+    ].filter(({ id }) => !complex || id !== 'lmdb')
+  ) + '\n'
 );

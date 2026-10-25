@@ -24,6 +24,8 @@ export interface Measured {
 
 export interface Results {
   language: LanguageId;
+  /** `complex` for the complex suite; results from before it name none. */
+  suite?: 'simple' | 'complex';
   generated: string;
   runs: number;
   machine: { os: string; cpu: string; cores: number; memory?: number };
@@ -34,6 +36,8 @@ export interface Results {
 
 export interface Data {
   languages: Partial<Record<LanguageId, Results>>;
+  /** The complex suite's results, which only the stores with a query language run. */
+  complex?: Partial<Record<LanguageId, Results>>;
 }
 
 /** The stores' names, as their projects write them. */
@@ -120,6 +124,89 @@ export const ROWS: { id: string; label: Localized }[] = [
     label: {
       en: 'Delete 10,000 objects in one transaction',
       ko: '트랜잭션 하나로 객체 10,000개 지우기'
+    }
+  }
+];
+
+/** The rows of the complex suite, in order; `left-people` and `left-posts` are checks. */
+export const COMPLEX_ROWS: { id: string; label: Localized }[] = [
+  {
+    id: 'load',
+    label: {
+      en: 'Load 401,000 objects, 10,000 to a transaction',
+      ko: '객체 401,000개 적재, 트랜잭션마다 10,000개'
+    }
+  },
+  {
+    id: 'person-detail',
+    label: {
+      en: 'A person, their organization and their 5 newest posts',
+      ko: '사람 한 명과 그 조직, 최신 게시글 5개'
+    }
+  },
+  {
+    id: 'people-filter',
+    label: {
+      en: 'Three conditions on two indexes, sorted, first 50',
+      ko: '인덱스 둘에 걸친 조건 셋, 정렬 후 50개'
+    }
+  },
+  {
+    id: 'people-or',
+    label: { en: 'Count with OR across two indexes', ko: '인덱스 둘에 걸친 OR로 개수 세기' }
+  },
+  {
+    id: 'people-prefix',
+    label: { en: 'Names that start with a text', ko: '어떤 글로 시작하는 이름' }
+  },
+  {
+    id: 'people-page',
+    label: {
+      en: 'A page of 50, deep in an indexed order',
+      ko: '인덱스 순서 깊숙한 곳의 50개 한 페이지'
+    }
+  },
+  {
+    id: 'posts-author-country',
+    label: {
+      en: 'Through a link: posts by country of author, sorted, first 20',
+      ko: '링크 하나 건너: 작성자 국가로 게시글, 정렬 후 20개'
+    }
+  },
+  {
+    id: 'posts-two-links',
+    label: {
+      en: 'Through two links: count by kind of organization',
+      ko: '링크 둘 건너: 조직 종류로 개수 세기'
+    }
+  },
+  {
+    id: 'posts-tag',
+    label: {
+      en: 'A tag in a list, sorted by another index, first 20',
+      ko: '리스트 안의 태그, 다른 인덱스로 정렬 후 20개'
+    }
+  },
+  {
+    id: 'posts-text',
+    label: { en: 'Count posts whose text contains a phrase', ko: '본문에 구절이 든 게시글 개수' }
+  },
+  {
+    id: 'posts-count',
+    label: { en: 'Count with conditions on two indexes', ko: '인덱스 둘에 걸친 조건으로 개수 세기' }
+  },
+  {
+    id: 'update-query',
+    label: {
+      en: 'Update the people a query finds, in one transaction',
+      ko: '쿼리로 찾은 사람 고치기, 트랜잭션 하나로'
+    }
+  },
+  {
+    id: 'delete-cascade',
+    label: {
+      en: 'Delete 1,000 people with their posts, in one transaction',
+      ko: '사람 1,000명과 그 게시글 지우기, 트랜잭션 하나로'
     }
   }
 ];

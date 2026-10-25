@@ -52,6 +52,36 @@ Random reads go in the order a 64-bit mix of the read's number gives, the same i
 
 Reads run in one read transaction. A query that runs many times is prepared once, as a statement would be. A row's time is the time of all its operations divided by their number. The first run of each query without an index is timed as a row of its own as well (`FIRST_RUN` in each harness's common code), since a store may answer such a query faster once it has run it; the digest of the row of ten then covers the nine runs after the first.
 
+## The complex suite
+
+`--suite complex` runs a second suite, closer to an application with more than one collection: three collections that link to each other, ten times the objects of the load, and queries through the links, lists and several indexes at once. Only the stores with a query language run it, DaruDB, SQLite and, in Node.js and Dart, Realm: a key-value store has no planner, and the code written by hand for each of these queries would be what the row measured, not the store.
+
+| Collection | Objects | Key | Fields |
+| --- | --- | --- | --- |
+| `organizations` | 1,000 | `code`, a string | `name`, `kind` (index), `country` (index), `founded` |
+| `people` | 100,000 | an auto-increment | `name`, `email` (unique), `age` (index), `country` (index), `address`, an embedded object of `city` and `zip`, `score`, `active`, `joinedAt` (index), `organization`, a link (index), `tags`, a list of one to three strings (index) |
+| `posts` | 300,000 | an auto-increment | `author`, a link to a person (index), `title`, `body` of twelve words, `likes` (index), `language` (index), `createdAt` (index), `pinned`, `tags`, a list of up to two strings (index) |
+
+Every field is drawn from a 32-bit hash of the object's number and a salt of its own, the same in every language. SQLite keeps what an SQL application would: a foreign key for each link, the address's fields as columns, and a table of `(post, tag)` and one of `(person, tag)` for the lists, with an index on every column the other stores index; a row is read with its tags, through a subquery. Realm cannot index a link, so a person's posts are a backlink there, and it does not index a list.
+
+| Row | What it measures | Runs |
+| --- | --- | --- |
+| `load` | The three collections, 10,000 objects to a transaction, each commit waiting for the disk; the time is per object | 401,000 objects |
+| `person-detail` | A person by key, their organization through the link, and their five newest posts | 10,000 |
+| `people-filter` | `age` in a range of ten, `country` equal and `active`, sorted by `score` descending, first 50 | 500 |
+| `people-or` | Counting the people of two countries or aged 78 and over | 100 |
+| `people-prefix` | The people whose name starts with `person` and a number below 1,000 | 100 |
+| `people-page` | 50 people in `joinedAt` order, after skipping up to 98,703 | 100 |
+| `posts-author-country` | Posts with 900 likes or more whose author lives in one country, newest first, first 20 | 100 |
+| `posts-two-links` | Counting the posts of one language whose author's organization is of one kind | 30 |
+| `posts-tag` | Posts with one tag, by likes descending, first 20 | 200 |
+| `posts-text` | Counting the posts whose body contains two words in a row | 10 |
+| `posts-count` | Counting the posts of one language with 500 likes or more | 200 |
+| `update-query` | One transaction that adds a year to the age of everyone in four countries; the time is per person | about 20,000 |
+| `delete-cascade` | One transaction that deletes 1,000 people and every post each wrote; the time is per person | 1,000 |
+
+The objects of the load are made before its time starts. Each store writes its query the way an application would: DaruDB in its query language, prepared once; SQLite in SQL, with a join or a subquery for a link; Realm in its query language, with a slice of the sorted results for the page, since it has no offset. An update through SQL is one `UPDATE` statement, where DaruDB and Realm find the people and change each. Results are digested as in the simple suite, the people by key and age and the posts by key and likes, and the rows `left-people` and `left-posts` check what is left at the end.
+
 ## Durability
 
 A sync commit waits until the disk has the commit; a deferred one returns before that and reaches the disk with a later sync. Each store is set to promise the same:
@@ -109,4 +139,4 @@ python3 -m venv bench/python/.venv && bench/python/.venv/bin/pip install maturin
 BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --runs 9 --out bench/results/python.json
 ```
 
-`--only daru,sqlite` limits the stores, and `--dir` chooses where the files go. `node bench/merge.mjs bench/results/*.json` writes the results into `docs/.vitepress/theme/performance.json`, which the documentation reads.
+`--suite complex` runs the complex suite, for which five passes are enough, since each takes longer: `node bench/run.mjs rust --suite complex --runs 5 --out bench/results/rust-complex.json`. `--only daru,sqlite` limits the stores, and `--dir` chooses where the files go. `node bench/merge.mjs bench/results/*.json` writes the results into `docs/.vitepress/theme/performance.json`, which the documentation reads, each suite's apart.

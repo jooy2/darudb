@@ -4,21 +4,26 @@ import { computed } from 'vue';
 import { CODE_LANGUAGES } from '../languages';
 import { localeOf } from './i18n';
 import data from './performance.json';
-import { ROWS, STORES, TEXT, type Data, type Results } from './performance';
+import { COMPLEX_ROWS, ROWS, STORES, TEXT, type Data, type Results } from './performance';
 
 /*
  * The benchmark's results, one table for each language, of which CSS shows
- * the reader's, as a `::: lang` block does.
+ * the reader's, as a `::: lang` block does: the simple suite's, or with
+ * `suite="complex"`, the complex suite's.
  *
  * Each cell is the median time of one operation, and below it, for a store
  * other than DaruDB, how many times as long as DaruDB that store takes. The
  * fastest time of a row is set in bold.
  */
 
+const props = withDefaults(defineProps<{ suite?: 'simple' | 'complex' }>(), { suite: 'simple' });
 const { lang } = useData();
 const locale = computed(() => localeOf(lang.value));
 const text = computed(() => TEXT[locale.value]);
-const results = (data as Data).languages;
+const results = computed(() =>
+  props.suite === 'complex' ? ((data as Data).complex ?? {}) : (data as Data).languages
+);
+const order = computed(() => (props.suite === 'complex' ? COMPLEX_ROWS : ROWS));
 
 /** `538 ns`, `8.68 µs`, `5.35 ms`. */
 function time(ns: number): string {
@@ -34,7 +39,7 @@ function fill(template: string, values: Record<string, string | number>): string
 
 function table(result: Results) {
   const stores = result.stores.map((store) => store.id);
-  const rows = ROWS.flatMap((row) => {
+  const rows = order.value.flatMap((row) => {
     const found = result.rows.find((measured) => measured.id === row.id);
 
     if (!found) return [];
@@ -98,7 +103,7 @@ function table(result: Results) {
 
 const languages = computed(() =>
   CODE_LANGUAGES.map((language) => {
-    const result = results[language.id];
+    const result = results.value[language.id];
 
     return { id: language.id, table: result ? table(result) : null };
   })

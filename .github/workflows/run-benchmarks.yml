@@ -19,6 +19,9 @@ on:
       runs:
         description: Passes of each store; a cell is their median
         default: '9'
+      complex-runs:
+        description: Passes of each store in the complex suite, whose passes take longer
+        default: '5'
 
 permissions:
   contents: read
@@ -26,6 +29,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUNS: ${{ inputs.runs }}
+  COMPLEX_RUNS: ${{ inputs.complex-runs }}
 
 jobs:
   rust:
@@ -45,10 +49,14 @@ jobs:
         run: cargo build --release
       - name: Run
         run: node bench/run.mjs rust --runs "$RUNS" --out rust.json
+      - name: Run the complex suite
+        run: node bench/run.mjs rust --suite complex --runs "$COMPLEX_RUNS" --out rust-complex.json
       - uses: actions/upload-artifact@v7
         with:
           name: results-rust
-          path: rust.json
+          path: |
+            rust.json
+            rust-complex.json
 
   node:
     runs-on: ubuntu-24.04
@@ -72,10 +80,14 @@ jobs:
         run: npm ci
       - name: Run
         run: node bench/run.mjs node --runs "$RUNS" --out node.json
+      - name: Run the complex suite
+        run: node bench/run.mjs node --suite complex --runs "$COMPLEX_RUNS" --out node-complex.json
       - uses: actions/upload-artifact@v7
         with:
           name: results-node
-          path: node.json
+          path: |
+            node.json
+            node-complex.json
 
   dart:
     runs-on: ubuntu-24.04
@@ -116,10 +128,16 @@ jobs:
         env:
           REALM_DISABLE_ANALYTICS: '1'
         run: node bench/run.mjs dart --runs "$RUNS" --out dart.json
+      - name: Run the complex suite
+        env:
+          REALM_DISABLE_ANALYTICS: '1'
+        run: node bench/run.mjs dart --suite complex --runs "$COMPLEX_RUNS" --out dart-complex.json
       - uses: actions/upload-artifact@v7
         with:
           name: results-dart
-          path: dart.json
+          path: |
+            dart.json
+            dart-complex.json
 
   python:
     runs-on: ubuntu-24.04
@@ -142,10 +160,14 @@ jobs:
           (cd packages/python && maturin develop --release)
       - name: Run
         run: BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --runs "$RUNS" --out python.json
+      - name: Run the complex suite
+        run: BENCH_PYTHON=bench/python/.venv/bin/python node bench/run.mjs python --suite complex --runs "$COMPLEX_RUNS" --out python-complex.json
       - uses: actions/upload-artifact@v7
         with:
           name: results-python
-          path: python.json
+          path: |
+            python.json
+            python-complex.json
 
   publish:
     needs: [rust, node, dart, python]
@@ -166,7 +188,7 @@ jobs:
           merge-multiple: true
           path: results
       - name: Put the results into the documentation
-        run: node bench/merge.mjs results/rust.json results/node.json results/dart.json results/python.json
+        run: node bench/merge.mjs results/*.json
       - name: Open the pull request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -180,4 +202,4 @@ jobs:
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" \
             --title "[docs] chore: record the benchmark results of run ${{ github.run_id }}" \
-            --body "The results of [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), $RUNS passes of each store on GitHub-hosted runners. Check that the numbers look like the previous run's before merging: a runner that was busy shows as a row that moved for every store of a language."
+            --body "The results of [run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), $RUNS passes of each store on GitHub-hosted runners, and $COMPLEX_RUNS of the complex suite. Check that the numbers look like the previous run's before merging: a runner that was busy shows as a row that moved for every store of a language."

@@ -2,14 +2,15 @@
 /// generator cannot resolve beside DaruDB's: the same commands as the
 /// harness of `bench/dart`, which `bench/run.mjs` runs beside it.
 ///
-///   bench --stores --lock LOCK       the store, with the version LOCK resolved, as JSON
-///   bench --child STORE --dir DIR    one pass of the store, one line of JSON per row
+///   bench --stores --lock LOCK [--suite S]       the store, with the version LOCK resolved, as JSON
+///   bench --child STORE --dir DIR [--suite S]    one pass of the store, one line of JSON per row
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
 import '../../dart/lib/common.dart';
+import 'src/complex_realm.dart' as complex_realm;
 import 'src/realm.dart' as realm;
 
 /// The version of [package] in the `pubspec.lock` at [lock].
@@ -22,6 +23,14 @@ String _locked(String lock, String package) {
 }
 
 void main(List<String> args) {
+  final suite =
+      args.contains('--suite') ? args[args.indexOf('--suite') + 1] : 'simple';
+
+  if (suite != 'simple' && suite != 'complex') {
+    stderr.writeln('no suite is named $suite');
+    exit(2);
+  }
+
   if (args.contains('--stores')) {
     final lock = args[args.indexOf('--lock') + 1];
 
@@ -39,8 +48,10 @@ void main(List<String> args) {
 
   Directory(directory).createSync(recursive: true);
 
-  switch (store) {
-    case 'realm':
+  switch ((suite, store)) {
+    case ('complex', 'realm'):
+      complex_realm.run(directory, rows);
+    case (_, 'realm'):
       realm.run(directory, rows);
     default:
       stderr.writeln('no store $store');
