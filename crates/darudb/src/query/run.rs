@@ -1898,7 +1898,12 @@ fn strategy<'p, 's>(
 
     Ok(match (through, walked) {
         (Some(access), Some(walked)) if walked < keys => Strategy::Through { access, set, skip },
-        _ => Strategy::Keys { set, skip },
+        // A count the set answers whole needs only its size.
+        _ if counting && !tested => Strategy::Keys { set, skip },
+        _ => Strategy::Keys {
+            set: set.in_order(),
+            skip,
+        },
     })
 }
 
@@ -1932,7 +1937,10 @@ fn turn<'p, 's>(
             skip: 0,
         }
     } else {
-        Strategy::Keys { set, skip: 0 }
+        Strategy::Keys {
+            set: set.in_order(),
+            skip: 0,
+        }
     })
 }
 
