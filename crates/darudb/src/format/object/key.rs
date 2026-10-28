@@ -347,6 +347,23 @@ pub(crate) fn int_bytes(value: i64) -> ([u8; 9], usize) {
     (bytes, 1 + used)
 }
 
+/// The int that `bytes` encode whole, or `None` when they are anything else:
+/// another type, more bytes than the int's, or an int written in more bytes
+/// than it needs, which no key of the engine's is.
+#[inline]
+pub(crate) fn whole_int(bytes: &[u8]) -> Option<i64> {
+    let (&tag, rest) = bytes.split_first()?;
+
+    if !(INT..=INT_LAST).contains(&tag) {
+        return None;
+    }
+
+    match read_int(tag, rest) {
+        Ok((value, used)) if used == rest.len() => Some(value),
+        _ => None,
+    }
+}
+
 /// Reads the bytes of an int whose tag is `tag` at the start of `rest`, as
 /// [`int`] wrote them. Returns the int and how many bytes it took.
 ///
