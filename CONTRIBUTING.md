@@ -149,7 +149,7 @@ flutter test                              # the sample data and the store
 flutter test integration_test -d macos    # the app itself; or -d windows, -d linux
 ```
 
-The Flutter end-to-end test drives a window, so it needs a display and a session that is not locked. [samples/README.md](samples/README.md) says what the apps do and how their sample data is made.
+The Flutter end-to-end test drives a window, so it needs a display and a session that is not locked. On Linux, run each file of `integration_test` on its own, as the workflow does: in a run of several files there, the app built for the second never connects to the test. [samples/README.md](samples/README.md) says what the apps do and how their sample data is made.
 
 For the documentation site:
 

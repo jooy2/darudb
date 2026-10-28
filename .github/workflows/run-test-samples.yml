@@ -105,5 +105,11 @@ jobs:
         run: dart format --output=none --set-exit-if-changed lib test integration_test
       - name: Unit tests
         run: flutter test
+      # One run for each file: in a run of several files on the Linux
+      # desktop, the app built for the second never connected to the test
+      # ("Unable to start the app on the device").
       - name: End-to-end tests
-        run: xvfb-run -a flutter test integration_test -d linux
+        run: |
+          for test in integration_test/*_test.dart; do
+            xvfb-run -a flutter test "$test" -d linux
+          done
