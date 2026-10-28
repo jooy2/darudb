@@ -174,7 +174,12 @@ Where it is behind (2026-10-25, nine passes on the M1 Max, with other work runni
 
 Done (2026-10-28):
 
+- **A set of int keys close together is looked up through bits** (`Lookup::Bits` in `query/keys.rs`): a bit for each int from the least key to the greatest, when that is at most 64 bits a key, rather than the table of hashes, whose lookup read the table, the key's end and the key, three places in memory; and the keys of such a set are read once for their order and their range, rather than compared as bytes for the order. A profile had put 44% of `posts-count` in the table's lookups, for the 150,000 entries of `likes >= 500` walked against the 50,000 posts of one language. Against the commit before (`darudb-compare/cx`): `posts-count` 40% less time, `posts-two-links` 33%, `people-or` 27%, `people-filter` 19%, `posts-author-country` 17%, `posts-tag` 7%; `people-page` and `person-detail`, which gather no set, level. What is left of `posts-count` is building the set of the kept keys, which a count needs only the length of: `push`, `seal` and copying the keys are about two fifths of it.
 - **An update of scalars changes the record where it lies beside lists, embedded objects and links** (`update_record` in `schema/objects.rs`, `flat_record::<true>` in `format/object/codec.rs`), copying their values; it had read the object and written it whole, and recomputed every index's entries. `update-query` took 30.5% less time on the M1 Max (`darudb-compare/cx`, the row run in a write transaction that is dropped). A profile had put 39% of the row in the update through objects and 13% more in the entries of indexes that did not change.
+
+Looked into on 2026-10-28:
+
+- **`posts-text` is mostly the page cache.** The suite's file is 102 MiB and the page cache 32 MiB by default, which the harness keeps, as it gives SQLite 32 MiB, so each count over the 300,000 posts reads every leaf of their tree from the file again: `pread` was 30% of the row, and checking the page, decoding it and working out the heads of its keys about 15% more. With `cache_size` at 256 MiB the row took 15 ms rather than 31 ms, about Realm's time, which maps the whole file. Raising the default cache, or reading a scan's next leaves in one call when they lie in a run, are what would move it; the first is a choice of how much memory a database takes, which is the maintainer's.
 
 Tried and not kept:
 
