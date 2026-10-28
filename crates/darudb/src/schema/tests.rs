@@ -1252,6 +1252,274 @@ fn updating_a_damaged_object_changes_nothing() {
     );
 }
 
+/// A collection with a list, an embedded object and links beside its
+/// scalars, whose indexes take the list and a link too.
+fn mixed_schema() -> Schema {
+    Schema::new(1)
+        .collection(Collection::new("teams").primary_key("name", Type::String))
+        .collection(
+            Collection::new("players")
+                .with_default("score", Type::Int, 0)
+                .optional("handle", Type::String)
+                .optional("rating", Type::Float)
+                .optional("tags", Type::list(Type::String))
+                .optional("team", Type::link("teams"))
+                .optional(
+                    "card",
+                    Type::object(
+                        super::Embedded::new()
+                            .field("city", Type::String)
+                            .optional("zip", Type::Int),
+                    ),
+                )
+                .index("score")
+                .unique("handle")
+                .index("tags")
+                .index("team"),
+        )
+}
+
+/// An update of the scalars of an object that also holds a list, an
+/// embedded object and links changes the record where it lies, copying the
+/// rest, and writes what reading the object, setting the fields and putting
+/// it writes: the same records, byte for byte, and the same index entries.
+/// Changes of the list or the embedded object, which go through objects,
+/// come between them.
+#[test]
+fn an_update_of_scalars_beside_other_fields_writes_what_a_put_writes() {
+    use crate::format::object::codec;
+
+    for seed in 0..4 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = OpenOptions::new();
+
+        options.schema(mixed_schema());
+
+        let through_records = options.open(dir.path().join("records.darudb")).unwrap();
+        let through_objects = options.open(dir.path().join("objects.darudb")).unwrap();
+        let mut rng = Rng::new(300 + seed);
+        let pick = |rng: &mut Rng, of: &[&str]| of[rng.index(of.len())].to_owned();
+
+        for db in [&through_records, &through_objects] {
+            let mut txn = db.begin_write().unwrap();
+            let mut teams = txn.collection("teams").unwrap();
+
+            teams.insert(Object::new().with("name", "north")).unwrap();
+            teams.insert(Object::new().with("name", "south")).unwrap();
+            txn.commit().unwrap();
+        }
+
+        let open = through_records
+            .begin_read()
+            .unwrap()
+            .schema()
+            .cloned()
+            .unwrap();
+        let players = &open.schema.collections[1];
+        let id = |name: &str| {
+            players
+                .fields
+                .list
+                .iter()
+                .find(|field| field.name == name)
+                .unwrap()
+                .id
+        };
+        let mut changed = 0;
+
+        for _ in 0..10 {
+            let mut left = through_records.begin_write().unwrap();
+            let mut right = through_objects.begin_write().unwrap();
+
+            for _ in 0..30 {
+                let key = 1 + i64::try_from(rng.below(25)).unwrap();
+
+                // Objects to change, put the same way on both sides.
+                if rng.below(4) == 0 {
+                    let mut object = Object::new()
+                        .with("id", key)
+                        .with("score", i64::try_from(rng.below(5)).unwrap());
+
+                    if rng.below(2) == 0 {
+                        let tags = (0..rng.below(4))
+                            .map(|_| Value::from(pick(&mut rng, &["red", "blue", "red"])))
+                            .collect::<Vec<_>>();
+
+                        object.set("tags", tags);
+                    }
+
+                    if rng.below(2) == 0 {
+                        object.set("team", pick(&mut rng, &["north", "south"]));
+                    }
+
+                    if rng.below(2) == 0 {
+                        let mut card = Object::new().with("city", pick(&mut rng, &["Oslo", "Ulm"]));
+
+                        if rng.below(2) == 0 {
+                            card.set("zip", 1000);
+                        }
+
+                        object.set("card", card);
+                    }
+
+                    left.collection("players")
+                        .unwrap()
+                        .put(object.clone())
+                        .unwrap();
+                    right.collection("players").unwrap().put(object).unwrap();
+
+                    continue;
+                }
+
+                let mut changes = Vec::new();
+
+                if rng.below(2) == 0 {
+                    changes.push((
+                        id("score"),
+                        Some(Raw::Int(i64::try_from(rng.below(5)).unwrap())),
+                    ));
+                }
+
+                if rng.below(3) == 0 {
+                    let handle = (rng.below(4) > 0)
+                        .then(|| Raw::String(pick(&mut rng, &["ace", "bee", "cat"])));
+
+                    changes.push((id("handle"), handle));
+                }
+
+                if rng.below(3) == 0 {
+                    changes.push((id("rating"), Some(Raw::Float([0.5, 2.0][rng.index(2)]))));
+                }
+
+                match rng.below(8) {
+                    0 => changes.push((
+                        id("tags"),
+                        Some(Raw::List(vec![Raw::String("blue".to_owned())])),
+                    )),
+                    1 => changes.push((id("card"), None)),
+                    _ => {}
+                }
+
+                changes.sort_by_key(|(id, _)| *id);
+
+                let bytes = codec::write_changes(&changes);
+                let fast = left
+                    .collection("players")
+                    .unwrap()
+                    .update_record(key, &bytes);
+                let slow = {
+                    let changes = codec::changes_object_of(&bytes, &players.fields).unwrap();
+                    let mut collection = right.collection("players").unwrap();
+
+                    match collection.get(key).unwrap() {
+                        None => Ok(false),
+                        Some(mut object) => {
+                            for (field, value) in changes.fields() {
+                                object.set(field, value.clone());
+                            }
+
+                            collection.put(object).map(|_| true)
+                        }
+                    }
+                };
+
+                match (&fast, &slow) {
+                    (Ok(fast), Ok(slow)) => {
+                        assert_eq!(fast, slow, "seed {seed}: {changes:?}");
+                        changed += usize::from(*fast);
+                    }
+                    (Err(fast), Err(slow)) => {
+                        assert_eq!(fast.code(), slow.code(), "seed {seed}: {fast} and {slow}");
+                    }
+                    _ => panic!(
+                        "seed {seed}: {changes:?} gave {fast:?} one way and {slow:?} the other"
+                    ),
+                }
+            }
+
+            let trees = std::iter::once(records(players.id))
+                .chain(players.indexes.iter().map(|index| index_tree(index.id)));
+
+            for tree in trees {
+                let entries = |txn: &crate::WriteTransaction| {
+                    txn.range_in::<Vec<u8>>(
+                        &tree,
+                        &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+                        false,
+                    )
+                    .unwrap()
+                    .collect::<crate::Result<Vec<_>>>()
+                    .unwrap()
+                };
+
+                assert_eq!(
+                    entries(&left),
+                    entries(&right),
+                    "seed {seed}: tree {:?}",
+                    &*tree
+                );
+            }
+
+            check_indexes(&left as &dyn Source, &open.schema)
+                .unwrap_or_else(|reason| panic!("seed {seed}: {reason}"));
+            left.commit().unwrap();
+            right.commit().unwrap();
+        }
+
+        assert!(changed > 50, "seed {seed}: {changed} objects changed");
+    }
+}
+
+/// An update of a scalar of an object whose embedded object is damaged
+/// fails with `CORRUPTED` and changes nothing, as reading the object would
+/// find it damaged: the values it copies are read whole first.
+#[test]
+fn an_update_beside_a_damaged_embedded_object_changes_nothing() {
+    use crate::format::object::codec;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = OpenOptions::new();
+
+    options.schema(mixed_schema());
+
+    let db = options.open(dir.path().join("objects.darudb")).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let players = &open.schema.collections[1];
+    let field = |name: &str| {
+        players
+            .fields
+            .list
+            .iter()
+            .find(|field| field.name == name)
+            .unwrap()
+            .id
+    };
+    let key = crate::format::object::key::encoded(&Value::Int(1)).unwrap();
+
+    // A card without its required `city`.
+    txn.insert_in(
+        &records(players.id),
+        &key,
+        &codec::write(&[
+            (field("id"), Raw::Int(1)),
+            (field("score"), Raw::Int(2)),
+            (field("card"), Raw::Object(vec![(2, Raw::Int(5))])),
+        ]),
+    )
+    .unwrap();
+
+    let score = codec::write_changes(&[(field("score"), Some(Raw::Int(3)))]);
+    let mut collection = txn.collection("players").unwrap();
+    let before = collection.get_record(1).unwrap();
+    let error = collection.update_record(1, &score).unwrap_err();
+
+    assert_eq!(error.code(), "CORRUPTED");
+    assert_eq!(collection.get_record(1).unwrap(), before);
+    drop(collection);
+    txn.commit().unwrap();
+}
+
 /// A put refused after the transaction copied its way down the collection's
 /// tree, as the first change of the transaction to that tree, leaves the
 /// tree on the copies: the commit has to write them, or the tree it leaves

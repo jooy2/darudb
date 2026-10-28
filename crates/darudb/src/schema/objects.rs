@@ -1028,8 +1028,8 @@ struct Lent {
     changing: Changing,
 }
 
-/// What an update of an object of a collection whose fields all hold
-/// scalars writes besides its new record, in buffers the transaction lends:
+/// What an update that changes only fields holding scalars writes besides
+/// its new record, in buffers the transaction lends:
 /// where each field of the stored record and of the new one lies, and the
 /// object's entries and those it had. An update through objects uses the
 /// entries alone.
@@ -1151,10 +1151,11 @@ fn changed(
     }
 
     // Only a change can leave out a required field now: one made null.
-    let first = codec::flat_record(fields, changes, stored, None, record, &mut buffers.placed)
-        .map_err(|message| Error::InvalidArgument {
-            message: format!("an object of `{}`: {message}", collection.name),
-        })?;
+    let first =
+        codec::flat_record::<true>(fields, changes, stored, None, record, &mut buffers.placed)
+            .map_err(|message| Error::InvalidArgument {
+                message: format!("an object of `{}`: {message}", collection.name),
+            })?;
 
     if record.as_slice() == stored.bytes {
         return Ok(false);
@@ -1497,10 +1498,12 @@ impl<'a> CollectionWriter<'a> {
     /// made null holding the tag `0x01` (`design/objects.md`, "Records").
     /// See [`update`](Self::update).
     ///
-    /// In a collection whose fields all hold scalars, the record stored is
-    /// changed where it lies, and only the indexes on the fields changed are
-    /// read: decoding the object and writing it whole again cost as much as
-    /// the rest of the update. Any other collection's goes through objects.
+    /// When every field it changes holds a scalar, the record stored is
+    /// changed where it lies, with the values of its lists, embedded objects
+    /// and links copied as they are, and only the indexes on the fields
+    /// changed are read: decoding the object and writing it whole again cost
+    /// as much as the rest of the update. An update that changes a list, an
+    /// embedded object or a link goes through objects.
     pub fn update_record(&mut self, key: impl Into<Value>, changes: &[u8]) -> Result<bool> {
         let schema = Arc::clone(&self.schema);
         let collection = &schema.schema.collections[self.position];
@@ -1512,18 +1515,31 @@ impl<'a> CollectionWriter<'a> {
             ),
         };
 
-        if !codec::is_flat(&collection.fields) {
-            let changes = codec::changes_object_of(changes, &collection.fields).map_err(refused)?;
-
-            return self.update(key_value, changes);
-        }
-
+        let fields = &collection.fields;
         let mut lent = Lent::take(self.txn.spare());
 
         key_bytes_into(collection, &key_value, &mut lent.key)?;
 
-        let first =
-            codec::flat_changes(changes, &collection.fields, &mut lent.given).map_err(refused)?;
+        // Changes that `flat_changes` refuses in a collection with other
+        // fields than scalars may be changes of those, which objects take.
+        let first = match codec::flat_changes(changes, fields, &mut lent.given) {
+            Ok(first)
+                if lent
+                    .given
+                    .iter()
+                    .all(|&(position, _)| codec::is_scalar(&fields.list[position].kind)) =>
+            {
+                first
+            }
+            Err(reason) if codec::is_flat(fields) => return Err(refused(reason)),
+            _ => {
+                lent.give_back(self.txn.spare());
+
+                let changes = codec::changes_object_of(changes, fields).map_err(refused)?;
+
+                return self.update(key_value, changes);
+            }
+        };
         let Lent {
             key,
             record,
@@ -1646,7 +1662,7 @@ impl<'a> CollectionWriter<'a> {
 
         key_bytes_into(collection, &key_value, &mut key)?;
 
-        let first = codec::flat_record(
+        let first = codec::flat_record::<false>(
             &collection.fields,
             sent,
             Placed::default(),

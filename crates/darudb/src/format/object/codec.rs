@@ -1230,12 +1230,16 @@ fn partial_object(bytes: &[u8], fields: &Fields, nulls: bool) -> Result<Object, 
 /// checked and completed as they are, by [`flat_fields`] and
 /// [`flat_record`], rather than read into an object and written again.
 pub(crate) fn is_flat(fields: &Fields) -> bool {
-    fields.list.iter().all(|field| {
-        matches!(
-            field.kind,
-            Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
-        )
-    })
+    fields.list.iter().all(|field| is_scalar(&field.kind))
+}
+
+/// Whether a field of kind `kind` holds a scalar: a bool, an int, a float, a
+/// string or bytes.
+pub(crate) fn is_scalar(kind: &Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+    )
 }
 
 /// Checks the record `bytes` from outside the engine under `fields`, which
@@ -1364,6 +1368,30 @@ fn placed_at<'a>(
     }))
 }
 
+/// A list, an embedded object or a link at `at` of a stored record that
+/// [`stored_flat_fields`] placed, as its bytes, tag included, for
+/// [`flat_record`] to copy as they are, where [`placed_at`] refused it as
+/// `refused`. Kept out of `placed_at`, which a binding's insert runs for
+/// every field it writes, on the path of an error.
+#[cold]
+#[inline(never)]
+fn encoded_at<'a>(
+    bytes: &'a [u8],
+    at: usize,
+    kind: &Kind,
+    refused: &'static str,
+) -> Result<Option<FieldRef<'a>>, &'static str> {
+    if is_scalar(kind) {
+        return Err(refused);
+    }
+
+    let mut reader = Reader { bytes, at };
+
+    reader.skip(0)?;
+
+    Ok(Some(FieldRef::Encoded(&bytes[at..reader.at])))
+}
+
 /// Checks the changes the record `bytes` from outside the engine holds for
 /// an update of an object under `fields`, which [`is_flat`] accepts, and
 /// puts each one in `placed`, as [`flat_fields`] puts a field: a change to
@@ -1409,11 +1437,12 @@ pub(crate) fn flat_changes(
     Ok(first)
 }
 
-/// Checks the record `bytes` from the file under `fields`, which [`is_flat`]
-/// accepts, and puts each field it holds in `placed`, as [`flat_fields`]
-/// puts a binding's. A field id `fields` does not have belongs to a field
-/// that was removed, and is stepped over; a value that does not fit its
-/// field makes the record damaged, as it does for [`object_of`].
+/// Checks the record `bytes` from the file under `fields`, and puts each
+/// field it holds in `placed`, as [`flat_fields`] puts a binding's. A field
+/// id `fields` does not have belongs to a field that was removed, and is
+/// stepped over; a value that does not fit its field makes the record
+/// damaged, as it does for [`object_of`], which a list, an embedded object
+/// or a link is read whole to find out, as `object_of` reads it.
 pub(crate) fn stored_flat_fields(
     bytes: &[u8],
     fields: &Fields,
@@ -1436,8 +1465,14 @@ pub(crate) fn stored_flat_fields(
         match fields.list.iter().position(|field| field.id == id) {
             Some(position) => {
                 let start = reader.at - first;
+                let kind = &fields.list[position].kind;
 
-                reader.scalar_as(&fields.list[position].kind)?;
+                if is_scalar(kind) {
+                    reader.scalar_as(kind)?;
+                } else {
+                    reader.value_as(kind, 0)?;
+                }
+
                 placed.push((position, start));
             }
             None => reader.skip(0)?,
@@ -1452,13 +1487,16 @@ pub(crate) fn stored_flat_fields(
 }
 
 /// Writes into `out` the record the file holds for an object under
-/// `fields`, which [`is_flat`] accepts, whose fields are those `given`
-/// holds, over those `beneath` holds: a binding's record over none, or an
-/// update's changes over the record stored, where a change to null leaves
-/// the field out. Puts each field it writes in `placed`, as [`flat_fields`]
-/// puts one. The record is the bytes [`record_of`] writes for that object:
-/// a required field left out is written with its default, and an optional
-/// one is not written. `assigned` is the position in the list of the
+/// `fields`, whose fields are those `given` holds, over those `beneath`
+/// holds: a binding's record over none, or an update's changes over the
+/// record stored, where a change to null leaves the field out. Only
+/// `beneath` may hold a list, an embedded object or a link, the stored
+/// record of a collection that [`is_flat`] does not accept, and only where
+/// `COPIES` is true, for an update: their bytes are copied as they are. A
+/// binding's insert compiles without that. Puts each field it writes in
+/// `placed`, as [`flat_fields`] puts one. The record is the bytes
+/// [`record_of`] writes for that object: a required field left out is
+/// written with its default, and an optional one is not written. `assigned` is the position in the list of the
 /// auto-increment key both leave out, and the number it gets. Returns where
 /// the first field starts.
 ///
@@ -1468,7 +1506,7 @@ pub(crate) fn stored_flat_fields(
 /// iterators an update of one field about 9%.
 ///
 /// The error says what is wrong, as [`record_of`] says it.
-pub(crate) fn flat_record(
+pub(crate) fn flat_record<const COPIES: bool>(
     fields: &Fields,
     given: Placed<'_>,
     beneath: Placed<'_>,
@@ -1492,7 +1530,14 @@ pub(crate) fn flat_record(
         let from_beneath = under.next_if(|(at, _)| *at == position);
         let value = match (from_given, from_beneath) {
             (Some(&(_, at)), _) => placed_at(given.bytes, given.first + at, &field.kind)?,
-            (None, Some(&(_, at))) => placed_at(beneath.bytes, beneath.first + at, &field.kind)?,
+            (None, Some(&(_, at))) => {
+                let at = beneath.first + at;
+
+                match placed_at(beneath.bytes, at, &field.kind) {
+                    Err(refused) if COPIES => encoded_at(beneath.bytes, at, &field.kind, refused)?,
+                    placed => placed?,
+                }
+            }
             (None, None) => assigned
                 .filter(|(at, _)| *at == position)
                 .map(|(_, number)| FieldRef::Int(number)),

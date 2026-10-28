@@ -87,7 +87,7 @@ Sets `field` of the object whose primary key is `key` to `value`, and returns wh
 users.set(id, User::AGE, 32)?;
 ```
 
-The value is written as a typed write writes it, and in a collection whose fields all hold scalars, the record stored is changed where it lies: the object is neither read into `T` nor written whole again, which makes it faster than reading the object and writing it back with [`put`](#put). It fails as `update` does, with `DUPLICATE_KEY` for a value a unique index already holds and `INVALID_ARGUMENT` for a primary key other than `key`, and the transaction is left as it was.
+The value is written as a typed write writes it, and when the field holds a scalar, the record stored is changed where it lies, with any lists, embedded objects and links it holds copied as they are: the object is neither read into `T` nor written whole again, which makes it faster than reading the object and writing it back with [`put`](#put). It fails as `update` does, with `DUPLICATE_KEY` for a value a unique index already holds and `INVALID_ARGUMENT` for a primary key other than `key`, and the transaction is left as it was.
 
 ### change
 

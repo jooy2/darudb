@@ -157,7 +157,7 @@ pub fn put_record(&mut self, record: &[u8]) -> Result<Value>
 pub fn update_record(&mut self, key: impl Into<Value>, changes: &[u8]) -> Result<bool>
 ```
 
-기본 키가 `key`인 객체에서, 언어 바인딩이 보낸 레코드 `changes`에 있는 필드만 바꿉니다. 필드는 ID로 들어 있고, null로 만들 필드에는 태그 `0x01`이 들어 있습니다. 나머지는 `update`와 같습니다. 필드가 모두 스칼라인 컬렉션에서는 저장된 레코드를 그 자리에서 고치고, 바뀐 필드의 인덱스만 읽습니다.
+기본 키가 `key`인 객체에서, 언어 바인딩이 보낸 레코드 `changes`에 있는 필드만 바꿉니다. 필드는 ID로 들어 있고, null로 만들 필드에는 태그 `0x01`이 들어 있습니다. 나머지는 `update`와 같습니다. 바꾸는 필드가 모두 스칼라라면 저장된 레코드를 그 자리에서 고치고 리스트, 내장 객체, 링크는 있는 그대로 옮겨 쓰며, 바뀐 필드의 인덱스만 읽습니다.
 
 ### get_record
 

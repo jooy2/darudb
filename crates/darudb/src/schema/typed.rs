@@ -1899,9 +1899,9 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     /// `people.set(id, Person::AGE, 37)`, with the constant `#[derive(Object)]`
     /// declares for the field `age`.
     ///
-    /// The value is written as a typed write writes it, and in a collection
-    /// whose fields all hold scalars, the record stored is changed where it
-    /// lies, as [`CollectionWriter::update_record`] changes it: the object is
+    /// The value is written as a typed write writes it, and when the field
+    /// holds a scalar, the record stored is changed where it lies, as
+    /// [`CollectionWriter::update_record`] changes it: the object is
     /// neither read into `T` nor written whole again. A `None` makes an
     /// optional field null.
     ///

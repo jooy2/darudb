@@ -157,7 +157,7 @@ Inserts or replaces the object whose record is `record`, as `put` does for an ob
 pub fn update_record(&mut self, key: impl Into<Value>, changes: &[u8]) -> Result<bool>
 ```
 
-Sets the fields of the object whose primary key is `key` that the record `changes` holds, as a language binding sends them: by id, a field to be made null holding the tag `0x01`. Otherwise it is `update`. In a collection whose fields all hold scalars, the stored record is changed where it lies, and only the indexes on the fields changed are read.
+Sets the fields of the object whose primary key is `key` that the record `changes` holds, as a language binding sends them: by id, a field to be made null holding the tag `0x01`. Otherwise it is `update`. When every field it changes holds a scalar, the stored record is changed where it lies, its lists, embedded objects and links copied as they are, and only the indexes on the fields changed are read.
 
 ### get_record
 
