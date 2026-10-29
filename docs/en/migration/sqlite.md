@@ -360,7 +360,7 @@ A Flutter app's SQLite file is on each device, so the copy runs in the app itsel
 
 ```yaml
 dependencies:
-  darudb: ^1.3.0
+  darudb: ^1.4.0
   sqflite: ^2.4.0
 ```
 

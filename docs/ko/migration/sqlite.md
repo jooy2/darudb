@@ -360,7 +360,7 @@ Flutter 앱의 SQLite 파일은 기기마다 있으므로, 복사는 앱 안에�
 
 ```yaml
 dependencies:
-  darudb: ^1.3.0
+  darudb: ^1.4.0
   sqflite: ^2.4.0
 ```
 

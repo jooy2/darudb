@@ -10,7 +10,7 @@ Add the package, and `darudb_generator` with `build_runner` for the code they ge
 
 ```yaml
 dependencies:
-  darudb: ^1.3.0
+  darudb: ^1.4.0
 
 dev_dependencies:
   build_runner: ^2.10.0
