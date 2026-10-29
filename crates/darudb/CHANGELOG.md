@@ -2,6 +2,8 @@
 
 > This crate's history. DaruDB keeps a separate changelog for each package it ships, beside that package's own manifest, because the packages version independently.
 
+## vNext (2026--)
+
 ## v1.4.0 (2026-10-29)
 
 ### Added
