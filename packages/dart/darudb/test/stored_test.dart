@@ -7,7 +7,7 @@ import 'dart:typed_data';
 import 'package:darudb/darudb.dart';
 import 'package:test/test.dart';
 
-import 'models.dart' show Event, eventSchema;
+import 'models.dart' show Event, Stop, Trip, eventSchema, tripSchema;
 import 'support/hand_written.dart';
 import 'support/versions.dart';
 
@@ -317,6 +317,58 @@ void main() {
     expect(
       () => db.write(
         (txn) => txn.collection(events).insert({'at': '2000-01-01'}),
+      ),
+      failsWith('INVALID_ARGUMENT'),
+    );
+  });
+
+  test('a list of embedded objects reads as a list of maps', () {
+    final typed = Database.open(path, schema: const Schema(1, [tripSchema]));
+
+    typed.write(
+      (txn) => txn
+          .collection(tripSchema)
+          .insert(
+            const Trip(
+              name: 'coast',
+              stops: [Stop(city: 'Busan')],
+            ),
+          ),
+    );
+    typed.close();
+
+    final db = Database.open(path);
+
+    addTearDown(db.close);
+
+    final trips = db.storedCollection('trips');
+
+    expect(db.read((txn) => txn.collection(trips).get(1))!['stops'], [
+      {'city': 'Busan', 'mins': null},
+    ]);
+    db.write(
+      (txn) => txn.collection(trips).insert({
+        'name': 'island',
+        'stops': [
+          {'city': 'Jeju', 'mins': 50},
+        ],
+      }),
+    );
+    expect(
+      db.read(
+        (txn) => txn
+            .collection(trips)
+            .find((q) => q.where(q.intField('stops.mins').atLeast(10)))
+            .map((trip) => trip['name']),
+      ),
+      ['island'],
+    );
+    expect(
+      () => db.write(
+        (txn) => txn.collection(trips).insert({
+          'name': 'x',
+          'stops': ['Busan'],
+        }),
       ),
       failsWith('INVALID_ARGUMENT'),
     );

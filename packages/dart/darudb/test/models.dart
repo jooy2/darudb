@@ -101,3 +101,21 @@ class Event {
   final DateTime? ends;
   final List<DateTime> seen;
 }
+
+@Embedded()
+class Stop {
+  const Stop({required this.city, this.minutes});
+
+  final String city;
+  @Name('mins')
+  final int? minutes;
+}
+
+@Collection('trips')
+class Trip {
+  const Trip({this.id, required this.name, this.stops = const []});
+
+  final int? id;
+  final String name;
+  final List<Stop> stops;
+}

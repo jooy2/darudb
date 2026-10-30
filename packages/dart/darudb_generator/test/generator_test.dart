@@ -146,6 +146,43 @@ class Note {
 ''', 'is not a type the database stores');
   });
 
+  test('a List of an embedded class is a list of embedded objects', () async {
+    final (written, errors) = await generate('''
+@Embedded()
+class Stop {
+  const Stop({required this.city});
+
+  final String city;
+}
+
+@Collection('trips')
+class Trip {
+  const Trip({this.id, this.stops = const []});
+
+  final int? id;
+  final List<Stop> stops;
+}
+''');
+
+    expect(errors, isEmpty);
+    expect(
+      written,
+      contains(
+        "FieldSpec('stops', ListKind(ObjectKind(stopSchema)), defaultValue: [])",
+      ),
+    );
+    expect(written, contains('sink.objectList('));
+    expect(written, contains('source.objectList(stopSchema)'));
+    expect(
+      written,
+      contains("StopListFields get stops => const StopListFields(['stops']);"),
+    );
+    expect(
+      written,
+      contains('final class StopListFields extends EmbeddedListField<Stop>'),
+    );
+  });
+
   test('a DateTime field is a date, alone or in a list', () async {
     final (written, errors) = await generate('''
 @Collection('events')

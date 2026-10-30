@@ -364,6 +364,22 @@ _Type _typeOf(DartType type, Element where, {bool element = false}) {
 
     final inner = _typeOf(elementType, where, element: true);
     final elementName = elementType.getDisplayString();
+    final embedded = elementType.element;
+
+    // A list of embedded objects writes and reads each with its schema, and
+    // the query reaches its elements' fields.
+    if (embedded is ClassElement && _embedded.hasAnnotationOfExact(embedded)) {
+      final schema = schemaName(embedded.name!);
+
+      return _Type(
+        kind: 'ListKind(${inner.kind})',
+        write: (value) => 'sink.objectList($value, $schema)',
+        read: 'source.objectList($schema)',
+        readNullable: 'source.objectListOrNull($schema)',
+        field: '${embedded.name}ListFields',
+        fieldIsGenerated: true,
+      );
+    }
     final field = switch (inner.field) {
       'StringField' => 'StringListField',
       _ when inner.fieldIsGenerated => 'ListField<Object>',
@@ -392,9 +408,7 @@ _Type _typeOf(DartType type, Element where, {bool element = false}) {
 
   final target = type.element;
 
-  if (!element &&
-      target is ClassElement &&
-      _embedded.hasAnnotationOfExact(target)) {
+  if (target is ClassElement && _embedded.hasAnnotationOfExact(target)) {
     final schema = schemaName(target.name!);
 
     return _Type(
@@ -409,8 +423,8 @@ _Type _typeOf(DartType type, Element where, {bool element = false}) {
 
   throw InvalidGenerationSourceError(
     '`$base` is not a type the database stores: bool, int, double, String, '
-    'Uint8List, DateTime, a List of those or of links, a Link to a '
-    'collection, or a class annotated `@Embedded()`.',
+    'Uint8List, DateTime, a Link to a collection, a class annotated '
+    '`@Embedded()`, or a List of any of those.',
     element: where,
   );
 }
@@ -678,6 +692,14 @@ ${_codec(className, fields)}
 /// holds it, for a query.
 final class ${className}Fields extends EmbeddedField<$className> {
   const ${className}Fields(List<String> path) : super(path, $schema);
+
+${_fieldGetters(fields, root: false)}}
+
+/// The fields of each element of a list of the embedded object
+/// [$className], for a query: a condition on one holds when it holds for any
+/// element.
+final class ${className}ListFields extends EmbeddedListField<$className> {
+  const ${className}ListFields(List<String> path) : super(path, $schema);
 
 ${_fieldGetters(fields, root: false)}}
 

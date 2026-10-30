@@ -394,6 +394,48 @@ base class EmbeddedField<E> extends Field {
   }
 }
 
+/// A list of embedded objects, whose fields a query reaches through it: a
+/// condition on one holds when it holds for any element. The code
+/// `darudb_generator` writes subclasses it with a getter for each field.
+base class EmbeddedListField<E> extends Field {
+  const EmbeddedListField(super.path, this._schema);
+
+  final EmbeddedSchema<E> _schema;
+
+  /// The change that replaces the list whole with [values], or makes it
+  /// null, for `update`. Null gives a required field with a default its
+  /// default.
+  Change set(List<E>? values) {
+    if (path.length != 1) {
+      throw invalidArgument(
+        '`update` sets the fields of the object itself, not `${path.join('.')}`',
+      );
+    }
+
+    return Change._(
+      path.single,
+      values == null
+          ? null
+          : (writer, nested) {
+              if (nested == null) {
+                throw invalidArgument(
+                  '`${path.single}` does not hold a list of embedded objects '
+                  'in the stored schema',
+                );
+              }
+
+              writer
+                ..byte(Tag.list)
+                ..varint(values.length);
+
+              for (final value in values) {
+                writeEmbedded(writer, value, _schema, nested);
+              }
+            },
+    );
+  }
+}
+
 /// The parts of a query: a filter, a sort, an offset and a limit. The code
 /// `darudb_generator` writes subclasses it with a getter for each field.
 abstract base class QueryBuilder<T> {

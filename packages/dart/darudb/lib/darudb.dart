@@ -66,6 +66,7 @@ export 'src/query.dart'
         Condition,
         DateField,
         EmbeddedField,
+        EmbeddedListField,
         Field,
         FloatField,
         IntField,

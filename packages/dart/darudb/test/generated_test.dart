@@ -300,4 +300,58 @@ void main() {
       expect(all.max((q) => q.ends), launch);
     });
   });
+
+  test('a List of an embedded class is a list of embedded objects', () {
+    final trips = Database.open(
+      '${directory.path}/trips.darudb',
+      schema: const Schema(1, [tripSchema]),
+    );
+
+    addTearDown(trips.close);
+
+    const coast = [Stop(city: 'Busan', minutes: 30), Stop(city: 'Ulsan')];
+
+    trips.write((txn) {
+      txn.collection(tripSchema)
+        ..insert(const Trip(name: 'coast', stops: coast))
+        ..insert(const Trip(name: 'none'));
+    });
+
+    List<int?> ids(List<Trip> found) => [for (final trip in found) trip.id];
+
+    trips.read((txn) {
+      final all = txn.collection(tripSchema);
+      final first = all.get(1)!;
+
+      expect(
+        [for (final stop in first.stops) (stop.city, stop.minutes)],
+        [('Busan', 30), ('Ulsan', null)],
+      );
+      expect(all.get(2)!.stops, isEmpty);
+      expect(ids(all.find((q) => q.where(q.stops.city.equals('Ulsan')))), [1]);
+      expect(ids(all.find((q) => q.where(q.stops.minutes.greaterThan(10)))), [
+        1,
+      ]);
+      expect(ids(all.findText('stops.mins IS NULL')), [1]);
+    });
+    trips.write((txn) {
+      txn
+          .collection(tripSchema)
+          .update(
+            2,
+            (q) => [
+              q.stops.set(const [Stop(city: 'Jeju')]),
+            ],
+          );
+    });
+    expect(
+      trips.read(
+        (txn) => [
+          for (final stop in txn.collection(tripSchema).get(2)!.stops)
+            stop.city,
+        ],
+      ),
+      ['Jeju'],
+    );
+  });
 }

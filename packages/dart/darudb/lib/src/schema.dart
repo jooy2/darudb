@@ -372,6 +372,32 @@ final class FieldSink {
     }
   }
 
+  /// A list of embedded objects, each written by [schema].
+  void objectList<E>(List<E>? values, EmbeddedSchema<E> schema) {
+    if (values == null) {
+      return;
+    }
+
+    final layout = _nested;
+
+    if (layout == null) {
+      throw invalidArgument(
+        'a list of embedded objects for a field that holds none',
+      );
+    }
+
+    final writer = _begin()
+      ..byte(Tag.list)
+      ..varint(values.length);
+
+    for (final value in values) {
+      final mark = writer.open();
+
+      _encode(writer, layout, (slot) => schema._write(value, slot, this));
+      writer.close(mark);
+    }
+  }
+
   /// An embedded object, written by [schema].
   void object<E>(E? value, EmbeddedSchema<E> schema) {
     if (value == null) {
@@ -704,6 +730,37 @@ final class FieldSource {
   E? objectOrNull<E>(EmbeddedSchema<E> schema) =>
       isNull ? null : object(schema);
 
+  /// A list of embedded objects, each read by [schema].
+  List<E> objectList<E>(EmbeddedSchema<E> schema) {
+    final layout = _nested;
+
+    if (layout == null) {
+      throw corrupted(
+        'a list of embedded objects is read from a field that holds none',
+      );
+    }
+
+    final reader = _value(Tag.list);
+    final values = <E>[];
+
+    for (var left = reader.count(); left > 0; left--) {
+      if (reader.byte() != Tag.object) {
+        throw corrupted(
+          'a list of embedded objects holds something that is not one',
+        );
+      }
+
+      values.add(
+        schema._readOne(FieldSource(Reader(reader.counted()), layout)) as E,
+      );
+    }
+
+    return values;
+  }
+
+  List<E>? objectListOrNull<E>(EmbeddedSchema<E> schema) =>
+      isNull ? null : objectList(schema);
+
   static Object _element(Reader reader) {
     switch (reader.byte()) {
       case Tag.trueValue:
@@ -832,7 +889,11 @@ final class StoredSchema {
           throw corrupted('the stored schema has a field without a type');
         }
 
-        final embedded = type[4];
+        // An embedded object's fields, or those of each element of a list
+        // of embedded objects, whose element type holds them.
+        final element = type[3];
+        final embedded =
+            type[4] ?? (element is Map<int, Object?> ? element[4] : null);
 
         fields.add(
           StoredField(
@@ -917,19 +978,17 @@ final class StoredSchema {
       }
 
       fields.add(
-        LaidField(
-          field.id,
-          slot,
-          field.optional,
-          defaultBytes,
-          kind is ObjectKind && field.fields != null
-              ? _layout(
-                  kind.embedded.fields,
-                  field.fields!,
-                  '$owner.${field.name}',
-                )
-              : null,
-        ),
+        LaidField(field.id, slot, field.optional, defaultBytes, switch ((
+          kind,
+          field.fields,
+        )) {
+          (ObjectKind(:final embedded), final List<StoredField> fields) ||
+          (
+            ListKind(element: ObjectKind(:final embedded)),
+            final List<StoredField> fields,
+          ) => _layout(embedded.fields, fields, '$owner.${field.name}'),
+          _ => null,
+        }),
       );
     }
 

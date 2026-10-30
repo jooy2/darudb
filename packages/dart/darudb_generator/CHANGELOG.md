@@ -6,6 +6,7 @@
 
 ### Added
 
+- A `List` of an `@Embedded()` class is a list of embedded objects: the generator declares it with `ListKind(ObjectKind(...))`, writes and reads it with `FieldSink.objectList` and `FieldSource.objectList`, and gives the query builder the `ListFields` class it now writes beside the `Fields` of every embedded class, such as `StopListFields`.
 - A `DateTime` field, or a `List<DateTime>`, is a date: the generator declares it with `DateKind`, writes and reads it with `FieldSink.date` and `FieldSource.date`, and gives the query builder a `DateField` for it. It needs `darudb` with date support, the version released with this one. A `DateTime` has no constant, so a date field has no default.
 
 ## v1.1.0 (2026-10-09)

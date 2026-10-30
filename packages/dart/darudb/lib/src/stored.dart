@@ -219,6 +219,19 @@ void _write(
       sink.date(_typed<DateTime>(value, field));
     case LinkKind():
       sink.link(_link(value, field));
+    case ListKind(element: ObjectKind(:final embedded)):
+      sink.objectList(
+        _typed<List<Object?>>(value, field)?.map((element) {
+          if (element is Map<String, Object?>) {
+            return element;
+          }
+
+          throw invalidArgument(
+            '`${field.name}` holds a list of maps, not ${element.runtimeType}',
+          );
+        }).toList(),
+        embedded as EmbeddedSchema<Map<String, Object?>>,
+      );
     case ListKind(:final element):
       sink.list(_list(element, _typed<List<Object?>>(value, field), field));
     case ObjectKind(:final embedded):
@@ -283,6 +296,9 @@ Map<String, Object?> _read(List<FieldSpec> fields, FieldSource source) {
       DateKind() => source.dateOrNull(),
       LinkKind() => source.linkOrNull<Object?>(),
       ListKind(element: LinkKind()) => source.linkListOrNull<Object?>(),
+      ListKind(element: ObjectKind(:final embedded)) => source.objectListOrNull(
+        embedded as EmbeddedSchema<Map<String, Object?>>,
+      ),
       ListKind() => source.listOrNull<Object?>(),
       ObjectKind(:final embedded) => source.objectOrNull(
         embedded as EmbeddedSchema<Map<String, Object?>>,
