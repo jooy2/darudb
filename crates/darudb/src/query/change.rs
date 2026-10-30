@@ -116,10 +116,11 @@ impl CollectionWriter<'_> {
         // by a unique value taken or an entry too long. Without one, no
         // record is kept to undo with.
         let may_refuse = collection.indexes.iter().any(|index| {
-            collection
-                .fields
-                .by_id(index.field)
-                .is_some_and(|field| changed.contains(&field.name))
+            index.components.iter().any(|path| {
+                path.first()
+                    .and_then(|id| collection.fields.by_id(*id))
+                    .is_some_and(|field| changed.contains(&field.name))
+            })
         });
         let keys = found_keys(source, schema, collection, query)?;
         let mut undo: Vec<(Value, Vec<u8>)> = Vec::new();

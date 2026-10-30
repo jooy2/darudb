@@ -1311,3 +1311,81 @@ fn a_list_of_embedded_objects_reads_into_a_vec_of_its_type() {
         "INVALID_QUERY"
     );
 }
+
+#[derive(darudb_derive::Embedded, Debug, Clone, PartialEq)]
+struct Place {
+    city: String,
+}
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "residents")]
+#[darudb(unique(last, first), index("home.city"))]
+struct Resident {
+    id: Option<i64>,
+    last: String,
+    #[darudb(rename = "given")]
+    first: Option<String>,
+    home: Option<Place>,
+}
+
+#[test]
+fn a_derived_type_declares_indexes_on_several_fields_and_on_paths() {
+    let dir = TestDir::new();
+    let declared = Collection::of::<Resident>();
+
+    assert_eq!(
+        declared
+            .indexes()
+            .iter()
+            .map(|index| (index.fields().collect::<Vec<_>>(), index.is_unique()))
+            .collect::<Vec<_>>(),
+        [
+            (vec!["last".to_owned(), "given".to_owned()], true),
+            (vec!["home.city".to_owned()], false),
+        ]
+    );
+
+    let db = open(&dir, Schema::new(1).collection(declared));
+    let member = |last: &str, first: &str, city: &str| Resident {
+        id: None,
+        last: last.to_owned(),
+        first: Some(first.to_owned()),
+        home: Some(Place {
+            city: city.to_owned(),
+        }),
+    };
+    let mut txn = db.begin_write().unwrap();
+    let mut members = txn.collection_of::<Resident>().unwrap();
+
+    members.insert(&member("Kim", "Ada", "Seoul")).unwrap();
+    members.insert(&member("Kim", "Bo", "Busan")).unwrap();
+    assert_eq!(
+        code(members.insert(&member("Kim", "Ada", "Jeju"))),
+        "DUPLICATE_KEY"
+    );
+    drop(members);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let members = read.collection_of::<Resident>().unwrap();
+
+    assert_eq!(
+        members
+            .query(&Query::new().filter(Resident::HOME.then(Place::CITY).eq("Busan")))
+            .unwrap()
+            .into_iter()
+            .map(|member| member.first.unwrap())
+            .collect::<Vec<_>>(),
+        ["Bo"]
+    );
+    assert_eq!(
+        members
+            .count(
+                &Query::new()
+                    .filter(Resident::LAST.eq("Kim"))
+                    .sort_by(Resident::FIRST)
+            )
+            .unwrap(),
+        2
+    );
+}

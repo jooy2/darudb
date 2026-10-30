@@ -60,7 +60,14 @@ fn schema() -> Schema {
                 .index("team")
                 .index("friends")
                 .index("active")
-                .index("born"),
+                .index("born")
+                // Indexes of several components, one inside an embedded
+                // object, and one through a list of them.
+                .index_on(["score", "handle"])
+                .unique_on(["handle", "active"])
+                .index_on(["active", "born", "rating"])
+                .index_on(["address.city"])
+                .index_on(["visits.city"]),
         )
 }
 
@@ -2029,4 +2036,189 @@ fn a_prepared_query_runs_as_the_parsed_one_does() {
         Query::parse("score == 3", &[]).unwrap(),
         "a query without parameters prepares as it parses"
     );
+}
+
+/// The index a plan of `text` walks, by its components' first names, and
+/// whether the plan delivers the order and answers the whole filter.
+fn planned_index(db: &Database, text: &str) -> (Option<Vec<String>>, bool, bool) {
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+    let (_, schema, collection) = players.parts();
+    let query = Query::parse(text, &[]).unwrap();
+    let planned = plan::plan(schema, collection, query.ir(), &[]).unwrap();
+    let index = match &planned.access {
+        plan::Access::Index { index, .. } => Some(
+            index
+                .components
+                .iter()
+                .map(|path| {
+                    crate::format::object::schema::path_fields(&collection.fields, path)
+                        .unwrap()
+                        .iter()
+                        .map(|field| field.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(".")
+                })
+                .collect(),
+        ),
+        _ => None,
+    };
+
+    (index, planned.ordered, planned.exact)
+}
+
+#[test]
+fn indexes_of_several_fields_and_inside_embedded_objects_are_chosen() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let names = |names: &[&str]| Some(names.iter().map(|name| (*name).to_owned()).collect());
+
+    // Equality on two components narrows more than the index on one, and
+    // on every component it gives the objects in key order.
+    assert_eq!(
+        planned_index(&db, r#"active == true AND born == DATE "1970-01-01""#),
+        (names(&["active", "born", "rating"]), false, true)
+    );
+    assert_eq!(
+        planned_index(
+            &db,
+            r#"active == true AND born == DATE "1970-01-01" AND rating == 0.5"#
+        ),
+        (names(&["active", "born", "rating"]), true, true)
+    );
+    // A unique index on one of them finds one object, and goes first.
+    assert_eq!(
+        planned_index(&db, r#"score == 3 AND handle == "ace""#).0,
+        names(&["handle"])
+    );
+    // Equality on the first and a range on the second.
+    assert_eq!(
+        planned_index(&db, r#"score == 3 AND handle STARTSWITH "a""#),
+        (names(&["score", "handle"]), false, true)
+    );
+    // Equality on the first, sorted by the rest: streamed in order.
+    assert_eq!(
+        planned_index(&db, r#"score == 3 SORT BY handle DESC"#),
+        (names(&["score", "handle"]), true, true)
+    );
+    // An `IN` on the first makes one range for each value.
+    assert_eq!(
+        planned_index(
+            &db,
+            r#"active == true AND born IN [DATE "1970-01-01", DATE "2000-01-01"]"#
+        )
+        .0,
+        names(&["active", "born", "rating"])
+    );
+    // Inside an embedded object, and through a list of them.
+    assert_eq!(
+        planned_index(&db, r#"address.city == "Busan""#),
+        (names(&["address.city"]), true, true)
+    );
+    assert_eq!(
+        planned_index(&db, r#"visits.city == "Busan""#),
+        (names(&["visits.city"]), false, true)
+    );
+    // Equality on one field alone keeps its own index, and the primary key
+    // goes before any.
+    assert_eq!(planned_index(&db, "score == 3").0, names(&["score"]));
+    assert_eq!(
+        planned_index(&db, r#"id == 1 AND score == 3 AND handle == "ace""#).0,
+        None
+    );
+    // A sort of the components without their equality walks the whole index
+    // in order, when nothing else answers the query.
+    assert_eq!(
+        planned_index(&db, "SORT BY active, born, rating"),
+        (names(&["active", "born", "rating"]), true, false)
+    );
+
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+
+    assert_eq!(
+        ids(&players
+            .query(&Query::parse(r#"score == 3 AND handle == "ace""#, &[]).unwrap())
+            .unwrap()),
+        [1]
+    );
+}
+
+#[test]
+fn a_unique_index_of_several_fields_refuses_the_same_values_unless_one_is_null() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = OpenOptions::new()
+        .schema(
+            Schema::new(1).collection(
+                Collection::new("people")
+                    .field("last", Type::String)
+                    .optional("first", Type::String)
+                    .optional(
+                        "address",
+                        Type::object(Embedded::new().optional("city", Type::String)),
+                    )
+                    .unique_on(["last", "first"])
+                    .unique_on(["address.city"]),
+            ),
+        )
+        .open(dir.path().join("people.darudb"))
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let mut people = txn.collection("people").unwrap();
+    let person = |last: &str, first: Option<&str>| {
+        Object::new()
+            .with("last", last)
+            .with("first", first.map(str::to_owned))
+    };
+
+    people.insert(person("Kim", Some("Ada"))).unwrap();
+    people.insert(person("Kim", Some("Bo"))).unwrap();
+    // Any number of objects may hold a null in a component.
+    people.insert(person("Kim", None)).unwrap();
+    people.insert(person("Kim", None)).unwrap();
+
+    let refused = people.insert(person("Kim", Some("Ada"))).unwrap_err();
+
+    assert_eq!(refused.code(), "DUPLICATE_KEY");
+    assert!(refused.to_string().contains("last, first"), "{refused}");
+    assert_eq!(
+        people
+            .count(&Query::parse(r#"last == "Kim" AND first IS NULL"#, &[]).unwrap())
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        people
+            .query(&Query::parse(r#"last == "Kim" AND first == "Bo""#, &[]).unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // A unique value inside an embedded object.
+    people
+        .update(
+            1,
+            Object::new().with("address", Object::new().with("city", "Seoul")),
+        )
+        .unwrap();
+    assert_eq!(
+        people
+            .update(
+                2,
+                Object::new().with("address", Object::new().with("city", "Seoul"))
+            )
+            .unwrap_err()
+            .code(),
+        "DUPLICATE_KEY"
+    );
+    // Changing a component moves the entry.
+    people
+        .update(2, Object::new().with("first", "Ada"))
+        .unwrap_err();
+    people.update(2, Object::new().with("first", "Cy")).unwrap();
+    people.insert(person("Kim", Some("Bo"))).unwrap();
+    drop(people);
+    check_indexes(&txn, &open.schema).unwrap();
 }

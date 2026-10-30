@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::format::object::Value;
-use crate::format::object::schema::{FieldDef, Kind, StoredSchema};
+use crate::format::object::schema::{FieldDef, Kind, MAX_COMPONENTS, StoredSchema, path_fields};
 
 use super::typed::{CollectionType, EmbeddedType};
 
@@ -151,6 +151,48 @@ fn field(name: impl Into<String>, kind: Type, optional: bool, default: Option<Va
     }
 }
 
+/// An index of a collection, as a schema declares it: the fields it is on,
+/// in order, and whether it is unique.
+///
+/// [`Collection::index`] and [`Collection::unique`] declare one on a field;
+/// [`Collection::index_on`] and [`Collection::unique_on`] one on several,
+/// whose entries sort by the first, then the second and so on, or on a field
+/// inside an embedded object, named by its path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Index {
+    /// Each component's path: the names from the collection down to the
+    /// field.
+    pub(crate) components: Vec<Vec<String>>,
+    pub(crate) unique: bool,
+}
+
+impl Index {
+    /// The fields the index is on, in order, each a name, or names joined by
+    /// `.` through embedded objects, such as `address.city`.
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = String> + '_ {
+        self.components.iter().map(|path| path.join("."))
+    }
+
+    /// Whether two objects may not hold the same values, though any number
+    /// may hold a null in one of them.
+    pub fn is_unique(&self) -> bool {
+        self.unique
+    }
+
+    /// The components' paths, joined by `.`, for a message.
+    fn text(&self) -> String {
+        self.fields().collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// The components of an index on `paths`, each split into names at `.`.
+fn components<P: Into<String>>(paths: impl IntoIterator<Item = P>) -> Vec<Vec<String>> {
+    paths
+        .into_iter()
+        .map(|path| path.into().split('.').map(str::to_owned).collect())
+        .collect()
+}
+
 /// A collection: its fields, its primary key and its indexes.
 ///
 /// Without [`primary_key`](Self::primary_key), the collection's key is an
@@ -161,8 +203,7 @@ pub struct Collection {
     pub(crate) fields: Vec<Field>,
     /// The name of the primary key's field, or `None` for the auto-increment.
     pub(crate) key: Option<String>,
-    /// Indexed fields, and whether each index is unique.
-    pub(crate) indexes: Vec<(String, bool)>,
+    pub(crate) indexes: Vec<Index>,
 }
 
 impl Collection {
@@ -223,7 +264,10 @@ impl Collection {
     /// Indexes field `name`, so that queries on it read the index.
     #[must_use]
     pub fn index(mut self, name: impl Into<String>) -> Self {
-        self.indexes.push((name.into(), false));
+        self.indexes.push(Index {
+            components: vec![vec![name.into()]],
+            unique: false,
+        });
         self
     }
 
@@ -231,7 +275,40 @@ impl Collection {
     /// hold the same value, though any number may hold null.
     #[must_use]
     pub fn unique(mut self, name: impl Into<String>) -> Self {
-        self.indexes.push((name.into(), true));
+        self.indexes.push(Index {
+            components: vec![vec![name.into()]],
+            unique: true,
+        });
+        self
+    }
+
+    /// Indexes the fields `paths`, in order, as one index: its entries sort
+    /// by the first field, then the second, and so on, so that a query
+    /// testing the first fields for equality and the next one for a range,
+    /// or sorting by the fields after them, reads it. Each is a field's name,
+    /// or names joined by `.` through embedded objects, such as
+    /// `address.city`, and there are 1 to 8 of them. A path through a list,
+    /// or to one, is allowed only in an index of one field. A file with such
+    /// an index, or an index of one field inside an embedded object, is in
+    /// object format 2.
+    #[must_use]
+    pub fn index_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) -> Self {
+        self.indexes.push(Index {
+            components: components(paths),
+            unique: false,
+        });
+        self
+    }
+
+    /// [`index_on`](Self::index_on), keeping the fields' values unique
+    /// together: two objects cannot hold the same values in all of them,
+    /// though any number may hold a null in one.
+    #[must_use]
+    pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) -> Self {
+        self.indexes.push(Index {
+            components: components(paths),
+            unique: true,
+        });
         self
     }
 
@@ -258,11 +335,10 @@ impl Collection {
         self.key.is_none()
     }
 
-    /// The indexed fields, each with whether its index is unique.
-    pub fn indexes(&self) -> impl ExactSizeIterator<Item = (&str, bool)> + '_ {
-        self.indexes
-            .iter()
-            .map(|(field, unique)| (field.as_str(), *unique))
+    /// The collection's indexes, in the order they were declared, or in the
+    /// file's order for a schema read from a file.
+    pub fn indexes(&self) -> &[Index] {
+        &self.indexes
     }
 
     /// The fields, the auto-increment key included.
@@ -393,12 +469,25 @@ impl Schema {
                 .indexes
                 .iter()
                 .map(|index| {
-                    let field = definition.fields.by_id(index.field).map_or_else(
-                        || invalid(format!("`{}` indexes a field it lacks", definition.name)),
-                        |field| Ok(field.name.clone()),
-                    )?;
+                    let components = index
+                        .components
+                        .iter()
+                        .map(|path| {
+                            path_fields(&definition.fields, path)
+                                .map(|steps| steps.iter().map(|step| step.name.clone()).collect())
+                                .ok_or_else(|| Error::InvalidArgument {
+                                    message: format!(
+                                        "`{}` indexes a field it lacks",
+                                        definition.name
+                                    ),
+                                })
+                        })
+                        .collect::<Result<_>>()?;
 
-                    Ok((field, index.unique))
+                    Ok(Index {
+                        components,
+                        unique: index.unique,
+                    })
                 })
                 .collect::<Result<_>>()?;
 
@@ -467,29 +556,82 @@ impl Schema {
                 ));
             }
 
-            for (position, (field_name, _)) in collection.indexes.iter().enumerate() {
-                let Some(field) = fields.iter().find(|field| field.name == *field_name) else {
-                    return invalid(format!(
-                        "`{name}` indexes `{field_name}`, which it does not have"
-                    ));
-                };
+            for (position, index) in collection.indexes.iter().enumerate() {
+                let count = index.components.len();
 
-                let indexable = scalar(&field.kind)
-                    || matches!(&field.kind, Type::List(element) if scalar(element));
-
-                if !indexable {
+                if count == 0 || count > MAX_COMPONENTS {
                     return invalid(format!(
-                        "`{name}.{field_name}` cannot be indexed: it is an object or a list of them"
+                        "`{name}` has an index on {count} fields; an index is on 1 to {MAX_COMPONENTS}"
                     ));
+                }
+
+                for path in &index.components {
+                    self.validate_component(name, &fields, path, count)?;
                 }
 
                 if collection.indexes[..position]
                     .iter()
-                    .any(|(other, _)| other == field_name)
+                    .any(|other| other.components == index.components)
                 {
-                    return invalid(format!("`{name}` indexes `{field_name}` twice"));
+                    return invalid(format!("`{name}` indexes `{}` twice", index.text()));
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    /// Refuses a component of an index of `count` components along `path`
+    /// from `fields`, the fields of `owner`, that cannot be one: a name that
+    /// is no field, a path past a scalar or through a link, an embedded object
+    /// at its end, more than one list, or a list in an index of more than
+    /// one component.
+    fn validate_component(
+        &self,
+        owner: &str,
+        fields: &[Field],
+        path: &[String],
+        count: usize,
+    ) -> Result<()> {
+        let text = path.join(".");
+        let mut fields = fields;
+        let mut lists = 0;
+
+        for (at, name) in path.iter().enumerate() {
+            let Some(field) = fields.iter().find(|field| field.name == *name) else {
+                return invalid(format!(
+                    "`{owner}` indexes `{text}`, which it does not have"
+                ));
+            };
+            let last = at + 1 == path.len();
+            let kind = match &field.kind {
+                Type::List(element) => {
+                    lists += 1;
+                    element.as_ref()
+                }
+                kind => kind,
+            };
+
+            match kind {
+                Type::Object(embedded) if !last => fields = &embedded.fields,
+                Type::Object(_) => {
+                    return invalid(format!(
+                        "`{owner}.{text}` cannot be indexed: it is an embedded object or a list of them; index one of its fields"
+                    ));
+                }
+                _ if !last => {
+                    return invalid(format!(
+                        "`{owner}` indexes `{text}`, which goes on past `{name}`: a path goes through embedded objects, and no link"
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if lists > 1 || (lists == 1 && count > 1) {
+            return invalid(format!(
+                "`{owner}` indexes `{text}`, a path through a list, which only an index of that one field can be, through one list"
+            ));
         }
 
         Ok(())
@@ -573,11 +715,6 @@ fn declared_type(kind: &Kind, stored: &StoredSchema) -> Result<Type> {
                 .collect::<Result<_>>()?,
         }),
     })
-}
-
-/// Whether a value of `kind` is one value: a scalar or a link.
-pub(crate) fn scalar(kind: &Type) -> bool {
-    !matches!(kind, Type::List(_) | Type::Object(_))
 }
 
 /// Whether `value` can be the default of a field of `kind`: a scalar of that

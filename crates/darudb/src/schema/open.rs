@@ -359,14 +359,11 @@ fn build_index(
             }
 
             if index.unique && txn.get_in(&tree, &entry)?.is_some() {
-                let field = definition
-                    .fields
-                    .by_id(index.field)
-                    .map_or("", |field| field.name.as_str());
+                let fields = objects::index_text(index, definition);
 
                 return Err(Error::DuplicateKey {
                     message: format!(
-                        "two objects of `{}` hold the same value of `{field}`, which the new unique index does not allow",
+                        "two objects of `{}` hold the same value of `{fields}`, which the new unique index does not allow",
                         definition.name
                     ),
                 });

@@ -12,6 +12,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::{format_ident, quote};
 use syn::ext::IdentExt;
+use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_input};
 
 /// Makes a struct the objects of a collection: implements
@@ -72,7 +73,11 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 /// `#[derive(Embedded)]`.
 ///
 /// A struct attribute `#[darudb(collection = "name")]` names the
-/// collection, which is named after the struct otherwise. Field attributes:
+/// collection, which is named after the struct otherwise.
+/// `#[darudb(index(last, first))]` on the struct declares an index on several
+/// fields, named as the struct names them, and `#[darudb(unique(...))]` a
+/// unique one; a string in their place is a path the collection stores, such
+/// as `"address.city"`, a field inside an embedded object. Field attributes:
 ///
 /// - `#[darudb(key)]`: the field is the primary key, of type `i64`,
 ///   `String` or `Vec<u8>`. Without one, the collection is keyed by an
@@ -151,8 +156,9 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// Its fields take the attributes of `#[derive(Object)]` except `key`,
-/// `index` and `unique`: an embedded object has no key, and no index reaches
-/// inside one. It declares a constant for each field as `#[derive(Object)]`
+/// `index` and `unique`: an embedded object has no key, and the collection
+/// that holds it indexes its fields by their paths, as
+/// `#[darudb(index("address.city"))]` on the collection's struct does. It declares a constant for each field as `#[derive(Object)]`
 /// does, which a path from the field that holds the embedded object goes on
 /// to: `Shop::ADDRESS.then(Address::CITY).eq("Seoul")`.
 #[proc_macro_derive(Embedded, attributes(darudb))]
@@ -182,6 +188,16 @@ struct Shape {
     ident: Ident,
     collection: String,
     fields: Vec<Field>,
+    /// The indexes the struct attribute declares: each component's path in
+    /// the collection, and whether the index is unique.
+    indexes: Vec<(Vec<String>, bool)>,
+}
+
+/// A component of an index the struct attribute declares: a field of the
+/// struct by its Rust name, or a path the collection stores.
+enum Component {
+    Field(Ident),
+    Stored(String),
 }
 
 /// Reads the struct `input`, refusing what neither macro supports: an enum,
@@ -213,6 +229,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
     };
 
     let mut collection = None;
+    let mut declared: Vec<(Vec<Component>, bool, proc_macro2::Span)> = Vec::new();
 
     for attribute in &input.attrs {
         if !attribute.path().is_ident("darudb") {
@@ -224,8 +241,34 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                 collection = Some(meta.value()?.parse::<LitStr>()?.value());
 
                 Ok(())
+            } else if meta.path.is_ident("index") || meta.path.is_ident("unique") {
+                let unique = meta.path.is_ident("unique");
+                let content;
+                let mut components = Vec::new();
+
+                syn::parenthesized!(content in meta.input);
+
+                while !content.is_empty() {
+                    if content.peek(LitStr) {
+                        components.push(Component::Stored(content.parse::<LitStr>()?.value()));
+                    } else {
+                        components.push(Component::Field(content.call(Ident::parse_any)?));
+                    }
+
+                    if content.is_empty() {
+                        break;
+                    }
+
+                    content.parse::<syn::Token![,]>()?;
+                }
+
+                declared.push((components, unique, meta.path.span()));
+
+                Ok(())
             } else {
-                Err(meta.error("unknown attribute; the struct takes `collection = \"name\"`"))
+                Err(meta.error(
+                    "unknown attribute; the struct takes `collection = \"name\"`, `index(...)` and `unique(...)`",
+                ))
             }
         })?;
     }
@@ -283,10 +326,35 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
         fields.push(parsed);
     }
 
+    let mut indexes = Vec::with_capacity(declared.len());
+
+    for (components, unique, span) in declared {
+        if components.is_empty() {
+            return Err(syn::Error::new(span, "an index is on one field at least"));
+        }
+
+        let paths = components
+            .into_iter()
+            .map(|component| match component {
+                Component::Stored(path) => Ok(path),
+                Component::Field(ident) => fields
+                    .iter()
+                    .find(|field| field.ident.unraw() == ident.unraw())
+                    .map(|field| field.name.clone())
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(&ident, "the struct has no field of this name")
+                    }),
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+
+        indexes.push((paths, unique));
+    }
+
     Ok(Shape {
         collection: collection.unwrap_or_else(|| input.ident.unraw().to_string()),
         ident: input.ident.clone(),
         fields,
+        indexes,
     })
 }
 
@@ -424,6 +492,13 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
             None
         }
     });
+    let composites = shape.indexes.iter().map(|(paths, unique)| {
+        if *unique {
+            quote! { let collection = collection.unique_on([#(#paths),*]); }
+        } else {
+            quote! { let collection = collection.index_on([#(#paths),*]); }
+        }
+    });
     let key_type = match key {
         Some(key) => {
             let ty = &key.ty;
@@ -465,6 +540,7 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
                 let collection = ::darudb::Collection::new(<Self as ::darudb::CollectionType>::COLLECTION);
                 #(#declarations)*
                 #(#indexes)*
+                #(#composites)*
                 collection
             }
 
@@ -499,6 +575,13 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
     let shape = shape(input, "`#[derive(Embedded)]`")?;
     let ident = &shape.ident;
 
+    if !shape.indexes.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &shape.ident,
+            "an embedded object has no index of its own; the collection holding it indexes its fields by their paths",
+        ));
+    }
+
     if let Some(field) = shape
         .fields
         .iter()
@@ -506,7 +589,7 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
     {
         return Err(syn::Error::new_spanned(
             &field.ident,
-            "an embedded object has no key, and no index reaches inside one",
+            "an embedded object has no key, and no index of its own; the collection holding it indexes its fields by their paths",
         ));
     }
 

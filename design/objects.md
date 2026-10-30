@@ -156,8 +156,9 @@ The stored schema is a record too, of this shape, where every `object` is itself
 |  | 4 | `list(object)`: an embedded object's fields |
 |  | 5 | `int`: an embedded object's next field id |
 | Index | 1 | `int`: its id |
-|  | 2 | `int`: its field's id |
+|  | 2 | `int`: its field's id, for an index on one field of the collection itself |
 |  | 3 | `bool`: whether it is unique |
+|  | 4 | `list(object)`: its components, for any other index, each with field 1, a `list(int)`: the ids along its path |
 
 A stored schema that does not decode, or whose ids repeat or point nowhere, is `CORRUPTED`. Field 1 lets a later layout change be told apart; a build refuses a format it does not know with `UNSUPPORTED_FORMAT_VERSION`.
 
@@ -177,12 +178,14 @@ A build that knows an object format reads every one before it. A build that does
 
 ## Indexes
 
-An index is on one field of a collection, scalar or `link`, and v1 has two kinds:
+An index is on one to eight **components**, in order, each a field of the collection or a field inside an embedded object of it, named by its path: a scalar, a `link`, or a list of them. An entry's value part is the components' encodings one after another, so entries sort by the first component, then the second, and so on. There are two kinds:
 
-- **Non-unique**: an entry per object, whose key is the encoded field value followed by the encoded primary key, and whose value is empty. Objects with one value sort together, in key order.
-- **Unique**: an entry per object, whose key is the encoded field value and whose value is the encoded primary key. Writing an object whose value another object has already fails with `DUPLICATE_KEY`. Nulls are not unique: an object whose value is null has an entry whose key is the null encoding followed by its primary key, as in a non-unique index.
+- **Non-unique**: an entry per object, whose key is the value part followed by the encoded primary key, and whose value is empty. Objects with the same values sort together, in key order.
+- **Unique**: an entry per object, whose key is the value part and whose value is the encoded primary key. Writing an object whose values another object has already fails with `DUPLICATE_KEY`. Nulls are not unique: an object with a null in any component has an entry whose key is the value part followed by its primary key, as in a non-unique index.
 
-An index on a list field holds an entry for each distinct element. An index on a field inside an embedded object is not in v1.
+- **Paths.** A component's path goes through embedded objects and lists of them, never a link, as `address.city` or `visits.city`. A field the path meets null, or a required field a record leaves out, reads as a query reads it: its default, or null.
+- **Lists.** An index of one component on a list field, or through a list of embedded objects, holds an entry for each distinct value of its elements, and a list with no elements gives none. A component of an index of several cannot pass a list, so each object has one entry there, and a path has at most one list.
+- **Format.** An index on one field of the collection itself is stored as format 1 stores it; any other needs [object format 2](#object-formats).
 
 An indexed value's entry has to fit in the kernel's key length, together with the primary key. A string or bytes value too long for that is refused with `INVALID_ARGUMENT` when the object is written.
 
@@ -331,6 +334,9 @@ An aggregate over every object a query finds, with no offset and no limit, reads
 The engine chooses how to find the objects, and the choice never changes the result: every query also has a plain answer, a scan of the collection with the filter applied to each object, and the tests compare the two ([Tests](#what-the-phase-4-tests-must-show)).
 
 1. **Find an access path.** Among the conditions that every matching object has to meet, the terms of the filter's top-level `AND`, pick one on a field of the collection itself that an index or the primary key answers: an equality, an `IN`, a range from comparisons or `BETWEEN`, a `STARTSWITH`, which is a range on a string's encoding, or an `IS NULL` on an indexed field, which is an equality with null. An equality or a `CONTAINS` on a list field is an equality in its index. The order of preference is an equality on the primary key or a unique index, then an `IN` on them, then an equality or an `IN` on another index, then a range; the range terms on the chosen field narrow one range together, unless the field is a list, where each term may hold for another element. With none, walk the index of the one field the query sorts by, if it sorts by an indexed field alone, or else every record.
+
+   An index of several components, or on a path, is a candidate too: terms testing its components for equality, from the first, each an `==`, an `IS NULL` or an `IN`, whose values make up to 64 combinations, and then the range terms on the next component, make one range of entries for each combination. It goes before the best term of one field when it narrows more, by more components, and never before the primary key; a unique index whose every component an equality fixes, with no null, finds one object. It delivers the query's order when the query sorts by every component after the equal ones, all one way, within one combination, and the objects of one combination of every component come in key order. Without any term it answers, a sort by every one of its components walks it whole.
+
 2. **Read the candidates** from the access path, in key order or in reverse. One value of a unique index, other than null, is one entry, which is looked up rather than walked.
 3. **Apply the rest of the filter** to each candidate, reading linked objects where a path goes through a link.
 4. **Sort.** When the access path already delivers the query's order, the objects stream in that order and the limit stops the reading early. That holds when the sort is on the path's field alone and the field is not a list, and when there is no sort and the path is the primary key or one value of an index. An index walked in reverse gives the objects of one value in descending key order, so they are held back and given in ascending key order; a value with more than 64 objects is instead walked forwards from its first entry, so that a limit stops the reading there too. Otherwise the matching objects are sorted in memory, keeping only the best `offset + limit` when there is a limit. Without a sort, the order is the primary key's, so a candidate whose key comes after the kept ones is dropped before its object is read, and when the index answers the whole filter, only the objects of the result are read, once the kept keys are known.
@@ -429,4 +435,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Composite indexes, indexes inside embedded objects, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, time zones and calendar arithmetic on dates, and cascading deletes.
+Indexes through a link, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, time zones and calendar arithmetic on dates, and cascading deletes.

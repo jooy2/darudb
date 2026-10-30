@@ -13,6 +13,7 @@ use crate::format::object::Value;
 use crate::format::object::key;
 use crate::format::object::schema::{
     CollectionDef, FieldDef, Fields, IndexDef, Kind, OLDEST_OBJECT_FORMAT, StoredSchema,
+    path_fields,
 };
 
 /// What opening a file with a declared schema does to the stored schema.
@@ -332,33 +333,29 @@ fn merge_collection(
     let mut indexes = Vec::new();
     let mut build = Vec::new();
 
-    for (field_name, unique) in &collection.indexes {
-        let field = fields
-            .by_name(field_name)
+    for declared in &collection.indexes {
+        let components = declared
+            .components
+            .iter()
+            .map(|path| component_ids(&fields, path))
+            .collect::<Option<Vec<_>>>()
             .ok_or_else(|| {
                 invalid(format!(
-                    "`{name}` indexes `{field_name}`, which it does not have"
+                    "`{name}` indexes a field it does not have: {}",
+                    declared.fields().collect::<Vec<_>>().join(", ")
                 ))
-            })?
-            .id;
-        // A record written before its field existed reads the field's
-        // default, so an index on a field whose default changed is built
-        // again, with the new default for those records.
+            })?;
+        // A record written before a field existed reads the field's default,
+        // so an index whose fields' defaults changed is built again, with the
+        // new defaults for those records.
         let kept = existing.and_then(|existing| {
-            let old = existing
-                .fields
-                .by_id(field)
-                .and_then(|old| old.default.as_ref());
-            let new = fields.by_id(field).and_then(|new| new.default.as_ref());
-            let same_default = match (old, new) {
-                (Some(old), Some(new)) => same_value(old, new),
-                (old, new) => old.is_none() && new.is_none(),
-            };
-
-            existing
-                .indexes
+            let same_defaults = components
                 .iter()
-                .find(|index| index.field == field && index.unique == *unique && same_default)
+                .all(|path| same_defaults(&existing.fields, &fields, path));
+
+            existing.indexes.iter().find(|index| {
+                index.components == components && index.unique == declared.unique && same_defaults
+            })
         });
 
         match kept {
@@ -366,8 +363,8 @@ fn merge_collection(
             None => {
                 let index = IndexDef {
                     id: *next_index,
-                    field,
-                    unique: *unique,
+                    components,
+                    unique: declared.unique,
                 };
 
                 *next_index += 1;
@@ -485,6 +482,47 @@ fn merge_fields(
     list.sort_by_key(|field| field.id);
 
     Ok(Fields { list, next_id })
+}
+
+/// The ids of the fields along `path`, the names of a component of an
+/// index, from `fields` down through embedded objects and lists of them.
+fn component_ids(fields: &Fields, path: &[String]) -> Option<Vec<u64>> {
+    let mut ids = Vec::with_capacity(path.len());
+    let mut fields = fields;
+
+    for (at, name) in path.iter().enumerate() {
+        let field = fields.by_name(name)?;
+
+        ids.push(field.id);
+
+        if at + 1 < path.len() {
+            fields = match &field.kind {
+                Kind::Object(inner) => inner,
+                Kind::List(element) => match element.as_ref() {
+                    Kind::Object(inner) => inner,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+        }
+    }
+
+    Some(ids)
+}
+
+/// Whether every field along `path` has the same default in `old` and in
+/// `new`, so that an index on it keeps its entries.
+fn same_defaults(old: &Fields, new: &Fields, path: &[u64]) -> bool {
+    let (Some(old), Some(new)) = (path_fields(old, path), path_fields(new, path)) else {
+        return false;
+    };
+
+    old.iter()
+        .zip(&new)
+        .all(|(old, new)| match (&old.default, &new.default) {
+            (Some(old), Some(new)) => same_value(old, new),
+            (old, new) => old.is_none() && new.is_none(),
+        })
 }
 
 /// The stored kind of a declared type, with an embedded object's fields

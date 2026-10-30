@@ -10,6 +10,7 @@
 
 ### Added
 
+- `#[darudb(index(last, first))]` and `#[darudb(unique(last, first))]` on the struct declare an index on several fields, named as the struct names them, or with a string, a path the collection stores, such as `"address.city"`.
 - `#[derive(Embedded)]` implements `darudb::ElementType` too, so that a `Vec` of the struct is a field: a list of embedded objects.
 
 ### Changed

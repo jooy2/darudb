@@ -20,7 +20,7 @@ use crate::format::object::codec::{self, FieldRef, Placed};
 use crate::format::object::key;
 use crate::format::object::names::{META, SCHEMA_KEY, records};
 use crate::format::object::schema::{
-    CollectionDef, FieldDef, IndexDef, Kind, OpenSchema, StoredSchema,
+    CollectionDef, FieldDef, Fields, IndexDef, Kind, OpenSchema, StoredSchema, path_fields,
 };
 use crate::format::object::{Object, Value};
 use crate::txn::{EntryBuffers, Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
@@ -531,7 +531,13 @@ fn object_entries(
     object: &Object,
     key: &[u8],
 ) -> Result<()> {
-    let field = indexed_field(index, collection)?;
+    let Some(field) = index.field() else {
+        return general_entries(entries, position, index, &collection.fields, object, key);
+    };
+    let field = collection
+        .fields
+        .by_id(field)
+        .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
 
     found_entries(
         entries,
@@ -541,6 +547,152 @@ fn object_entries(
         object.get(&field.name),
         key,
     )
+}
+
+/// Adds the entries of `index`, at `position`, an index that is not on one
+/// field of the collection itself, for `object`, whose fields are `fields`
+/// and whose key encodes as `key`. Each component reads the values along its
+/// path; an index of one component has an entry for each of them, through
+/// a list as for a list field, and one of several has one entry, the
+/// components' encodings one after another. A required field the object
+/// leaves out holds its default, as its record does.
+fn general_entries(
+    entries: &mut IndexKeys,
+    position: usize,
+    index: &IndexDef,
+    fields: &Fields,
+    object: &Object,
+    key: &[u8],
+) -> Result<()> {
+    if let [path] = index.components.as_slice() {
+        let mut values = Vec::new();
+
+        component_values(fields, Some(object), path, &mut values)?;
+
+        return match values.as_slice() {
+            [value] => value_entries(entries, position, index, value, key),
+            _ => value_entries(entries, position, index, &Value::List(values), key),
+        };
+    }
+
+    let mut values = Vec::with_capacity(index.components.len());
+
+    for path in &index.components {
+        let mut found = Vec::new();
+
+        component_values(fields, Some(object), path, &mut found)?;
+        values.push(found.pop().unwrap_or(Value::Null));
+    }
+
+    let null = values.iter().any(Value::is_null);
+    let len = values
+        .iter()
+        .map(|value| entry_len(index, value, &[]))
+        .sum::<usize>()
+        + room(index, null, key);
+
+    entries.push(position, len, |entry| {
+        for value in &values {
+            key::encode(value, entry).map_err(internal)?;
+        }
+
+        name_object(index, null, key, entry);
+
+        Ok(())
+    })
+}
+
+/// Adds to `values` the values at `path`, field ids from `fields` down,
+/// of `object`, `None` for a null one: one value through embedded objects,
+/// the elements of a list at its end, and the values of each element through
+/// a list of embedded objects, or a null where the path meets one. A list
+/// with no elements gives none.
+fn component_values(
+    fields: &Fields,
+    object: Option<&Object>,
+    path: &[u64],
+    values: &mut Vec<Value>,
+) -> Result<()> {
+    let Some((id, rest)) = path.split_first() else {
+        return Ok(());
+    };
+    let field = fields
+        .by_id(*id)
+        .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+    let value = match object.and_then(|object| object.get(&field.name)) {
+        None | Some(Value::Null) if !field.optional => {
+            field.default.as_ref().unwrap_or(&Value::Null)
+        }
+        Some(value) => value,
+        None => &Value::Null,
+    };
+
+    if rest.is_empty() {
+        match value {
+            Value::List(elements) => values.extend(elements.iter().cloned()),
+            value => values.push(value.clone()),
+        }
+
+        return Ok(());
+    }
+
+    let inner = match &field.kind {
+        Kind::Object(inner) => inner,
+        Kind::List(element) => match element.as_ref() {
+            Kind::Object(inner) => inner,
+            _ => return Err(internal("an index goes on past a field with no fields")),
+        },
+        _ => return Err(internal("an index goes on past a field with no fields")),
+    };
+
+    match value {
+        Value::Object(object) => component_values(inner, Some(object), rest, values),
+        Value::List(elements) => {
+            for element in elements {
+                if let Value::Object(object) = element {
+                    component_values(inner, Some(object), rest, values)?;
+                }
+            }
+
+            Ok(())
+        }
+        _ => {
+            values.push(Value::Null);
+
+            Ok(())
+        }
+    }
+}
+
+/// The fields of `collection` an index is on, for a message: each
+/// component's names joined by `.`.
+pub(crate) fn index_text(index: &IndexDef, collection: &CollectionDef) -> String {
+    index
+        .components
+        .iter()
+        .map(|path| {
+            path_fields(&collection.fields, path).map_or_else(String::new, |steps| {
+                steps
+                    .iter()
+                    .map(|step| step.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether a change of the top-level field at `position` of `collection`
+/// can change an entry of `index`: whether one of its components starts at
+/// that field.
+fn index_reads(index: &IndexDef, collection: &CollectionDef, position: usize) -> bool {
+    collection.fields.list.get(position).is_some_and(|field| {
+        index
+            .components
+            .iter()
+            .any(|path| path.first() == Some(&field.id))
+    })
 }
 
 /// [`object_entries`] for an object whose value of the indexed field `field`
@@ -580,7 +732,25 @@ fn stored_entries(
     record: &[u8],
     key: &[u8],
 ) -> Result<(), Unread> {
-    let field = indexed_field(index, collection)?;
+    let Some(field) = index.field() else {
+        // An index of several fields, or inside an embedded object, reads
+        // the object, which is rarer than an index on one field and decoded
+        // whole.
+        let object = codec::object_of(record, &collection.fields).map_err(Unread::Damaged)?;
+
+        return Ok(general_entries(
+            entries,
+            position,
+            index,
+            &collection.fields,
+            &object,
+            key,
+        )?);
+    };
+    let field = collection
+        .fields
+        .by_id(field)
+        .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
     let found = codec::find_field(record, field.id).map_err(Unread::Damaged)?;
 
     if let Some(found) = found {
@@ -668,14 +838,6 @@ fn adds_unique(collection: &CollectionDef, entries: &IndexKeys, old: &IndexKeys)
     entries.iter().any(|(position, entry)| {
         collection.indexes[position].unique && !old.contains(position, entry)
     })
-}
-
-/// The field of `collection` that `index` is on.
-fn indexed_field<'c>(index: &IndexDef, collection: &'c CollectionDef) -> Result<&'c FieldDef> {
-    collection
-        .fields
-        .by_id(index.field)
-        .ok_or_else(|| internal("an index is on a field its collection does not have"))
 }
 
 /// Adds the entries of `index`, at `position`, for an object whose value of
@@ -771,7 +933,19 @@ fn placed_entries(
     record: Placed<'_>,
     key: &[u8],
 ) -> Result<()> {
-    let position = field_position(collection, index.field)?;
+    let Some(field) = index.field() else {
+        let object = codec::object_of(record.bytes, &collection.fields).map_err(internal)?;
+
+        return general_entries(
+            entries,
+            index_position,
+            index,
+            &collection.fields,
+            &object,
+            key,
+        );
+    };
+    let position = field_position(collection, field)?;
     let field = &collection.fields.list[position];
     let value = match record.value(position, &field.kind).map_err(internal)? {
         Some(found) => {
@@ -1102,7 +1276,19 @@ fn object_written(
     entries.reserve(collection.indexes.len());
 
     for (index_position, index) in collection.indexes.iter().enumerate() {
-        let position = field_position(collection, index.field)?;
+        let Some(field) = index.field() else {
+            general_entries(
+                entries,
+                index_position,
+                index,
+                &collection.fields,
+                object,
+                key,
+            )?;
+
+            continue;
+        };
+        let position = field_position(collection, field)?;
         let field = &collection.fields.list[position];
 
         found_entries(
@@ -1169,7 +1355,10 @@ fn changed(
     };
 
     for (index_position, index) in collection.indexes.iter().enumerate() {
-        if !changes.holds(field_position(collection, index.field)?) {
+        let reads = (0..fields.list.len())
+            .any(|position| changes.holds(position) && index_reads(index, collection, position));
+
+        if !reads {
             continue;
         }
 
@@ -1948,12 +2137,24 @@ impl<'a> CollectionWriter<'a> {
         })?;
 
         for (position, index) in collection.indexes.iter().enumerate() {
+            let Some(field) = index.field() else {
+                general_entries(
+                    &mut entries,
+                    position,
+                    index,
+                    &collection.fields,
+                    &object,
+                    &key,
+                )?;
+
+                continue;
+            };
             let (at, field) = collection
                 .fields
                 .list
                 .iter()
                 .enumerate()
-                .find(|(_, field)| field.id == index.field)
+                .find(|(_, candidate)| candidate.id == field)
                 .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
 
             found_entries(&mut entries, position, index, field, slots.get(at), &key)?;
@@ -2242,17 +2443,20 @@ impl<'a> CollectionWriter<'a> {
             )?;
 
             if taken {
-                let field = collection
-                    .fields
-                    .by_id(index.field)
-                    .map_or("", |field| field.name.as_str());
-
-                return Err(Error::DuplicateKey {
-                    message: format!(
-                        "another object of `{}` holds this value of its unique field `{field}`",
+                let fields = index_text(index, collection);
+                let message = if index.components.len() == 1 {
+                    format!(
+                        "another object of `{}` holds this value of its unique field `{fields}`",
                         collection.name
-                    ),
-                });
+                    )
+                } else {
+                    format!(
+                        "another object of `{}` holds these values of its unique fields `{fields}`",
+                        collection.name
+                    )
+                };
+
+                return Err(Error::DuplicateKey { message });
             }
         }
 

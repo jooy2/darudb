@@ -465,11 +465,14 @@ fn schema_dict<'py>(py: Python<'py>, schema: &Schema) -> PyResult<Bound<'py, PyD
     for collection in schema.collections() {
         let indexes = PyList::empty(py);
 
-        for (field, unique) in collection.indexes() {
+        for declared in collection.indexes() {
             let index = PyDict::new(py);
+            let fields: Vec<String> = declared.fields().collect();
 
-            index.set_item("field", field)?;
-            index.set_item("unique", unique)?;
+            // `field` is the first, as it was when an index had one.
+            index.set_item("field", fields.first())?;
+            index.set_item("fields", fields)?;
+            index.set_item("unique", declared.is_unique())?;
             indexes.append(index)?;
         }
 

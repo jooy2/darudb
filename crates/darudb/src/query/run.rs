@@ -806,13 +806,30 @@ fn in_order(at: usize, len: usize, backward: bool) -> usize {
 /// may hold.
 fn unique_value<'r>(index: &IndexDef, values: bool, range: &'r Range) -> Option<&'r [u8]> {
     match range {
-        (Bound::Included(value), _)
-            if values && index.unique && value.first() != Some(&key::NULL) =>
-        {
+        (Bound::Included(value), _) if values && index.unique && !holds_null(index, value) => {
             Some(value)
         }
         _ => None,
     }
+}
+
+/// Whether `values`, the encodings of the components of an entry of `index`
+/// one after another, hold a null in any of them, which keys the entry by
+/// the object's key too.
+fn holds_null(index: &IndexDef, values: &[u8]) -> bool {
+    let mut at = 0;
+
+    for _ in 0..index.components.len() {
+        match values.get(at) {
+            Some(&key::NULL) | None => return true,
+            Some(_) => match key::length(&values[at..]) {
+                Ok(len) => at += len,
+                Err(_) => return true,
+            },
+        }
+    }
+
+    false
 }
 
 /// How many objects of one value a backward walk holds back before it goes
@@ -833,8 +850,20 @@ fn entry_parts<'e>(
     entry: &'e [u8],
     stored: &'e [u8],
 ) -> Result<(&'e [u8], &'e [u8])> {
-    let used = key::length(entry)
-        .map_err(|reason| source.corrupted(format!("an entry of index {}: {reason}", index.id)))?;
+    let damaged =
+        |reason: &str| source.corrupted(format!("an entry of index {}: {reason}", index.id));
+    let mut used = key::length(entry).map_err(damaged)?;
+
+    // An index of several components holds their encodings one after
+    // another.
+    for _ in 1..index.components.len() {
+        used += entry
+            .get(used..)
+            .ok_or("an entry ends early")
+            .and_then(key::length)
+            .map_err(damaged)?;
+    }
+
     let (value, key) = entry.split_at(used);
 
     // A unique index keeps the key in the entry's value, and after the
@@ -1085,7 +1114,7 @@ pub(crate) fn point(
     let Some(index) = collection
         .indexes
         .iter()
-        .find(|index| index.unique && index.field == field.id)
+        .find(|index| index.unique && index.is_on(field.id))
     else {
         return Ok(false);
     };
@@ -1695,7 +1724,7 @@ fn extreme_in_index(
 
     let whole;
     let (index, ranges): (&IndexDef, &[Range]) = match &plan.access {
-        Access::Index { index, ranges, .. } if index.field == field.id => (index, ranges),
+        Access::Index { index, ranges, .. } if index.is_on(field.id) => (index, ranges),
         Access::Records {
             range: (Bound::Unbounded, Bound::Unbounded),
             ..
@@ -1704,7 +1733,7 @@ fn extreme_in_index(
                 .collection
                 .indexes
                 .iter()
-                .find(|index| index.field == field.id)
+                .find(|index| index.is_on(field.id))
             else {
                 return Ok(None);
             };

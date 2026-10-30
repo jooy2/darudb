@@ -1313,16 +1313,24 @@ type Objects = BTreeMap<i64, crate::Object>;
 /// The schema of the object runs at `version`: version 2 adds a unique index
 /// that a migration builds, and a field its function fills.
 fn object_schema(version: u64) -> crate::Schema {
-    use crate::{Collection, Schema, Type};
+    use crate::{Collection, Embedded, Schema, Type};
 
+    // Beside the indexes on one field, one of two fields and one on a field
+    // inside an embedded object and another, kept in step through every cut.
     let items = Collection::new("items")
         .optional("name", Type::String)
         .with_default("rank", Type::Int, 0)
         .optional("tags", Type::list(Type::String))
         .optional("blob", Type::Bytes)
+        .optional(
+            "place",
+            Type::object(Embedded::new().optional("city", Type::String)),
+        )
         .unique("name")
         .index("rank")
-        .index("tags");
+        .index("tags")
+        .index_on(["rank", "name"])
+        .index_on(["place.city", "rank"]);
 
     match version {
         1 => Schema::new(1).collection(items),
@@ -1433,6 +1441,16 @@ fn random_item(rng: &mut Rng, page_size: usize) -> crate::Object {
         };
 
         item.set("blob", rng.bytes(len));
+    }
+
+    if rng.below(3) == 0 {
+        let mut place = crate::Object::new();
+
+        if rng.below(3) > 0 {
+            place.set("city", ["Seoul", "Busan"][rng.index(2)]);
+        }
+
+        item.set("place", place);
     }
 
     item

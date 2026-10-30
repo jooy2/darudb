@@ -752,17 +752,29 @@ fn a_file_opened_without_a_schema_is_read_and_written_with_its_own() {
     );
     assert_eq!(users.fields()[2].default(), Some(&Value::Int(0)));
     assert_eq!(users.fields()[0].default(), None);
+    let described = |indexes: &[darudb::Index]| {
+        indexes
+            .iter()
+            .map(|index| {
+                (
+                    index.fields().collect::<Vec<_>>().join(","),
+                    index.is_unique(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
     assert_eq!(
-        users.indexes().collect::<Vec<_>>(),
-        [("email", true), ("age", false)]
+        described(users.indexes()),
+        [("email".to_owned(), true), ("age".to_owned(), false)]
     );
     assert_eq!(posts.key(), "slug");
     assert!(!posts.is_auto_increment());
     assert_eq!(posts.fields()[1].kind(), &Type::link("users"));
     assert_eq!(posts.fields()[2].kind(), &Type::list(Type::String));
     assert_eq!(
-        posts.indexes().collect::<Vec<_>>(),
-        [("author", false), ("tags", false)]
+        described(posts.indexes()),
+        [("author".to_owned(), false), ("tags".to_owned(), false)]
     );
     // The record is the one a handle that declares the schema gets.
     assert_eq!(

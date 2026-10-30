@@ -1941,3 +1941,223 @@ fn a_list_of_embedded_objects_takes_only_the_empty_list_as_a_default() {
         Some("INVALID_ARGUMENT")
     );
 }
+
+/// The ids of the indexes of the collection `name` in `db`'s stored schema.
+fn index_ids(db: &Database, name: &str) -> Vec<(u64, Vec<Vec<u64>>)> {
+    StoredSchema::decode(db.schema_record().unwrap())
+        .unwrap()
+        .collection(name)
+        .unwrap()
+        .indexes
+        .iter()
+        .map(|index| (index.id, index.components.clone()))
+        .collect()
+}
+
+/// An index of several fields, or of a field inside an embedded object, is
+/// built from the objects there when a version declares it, is kept by its
+/// fields from version to version, and is built again when the default of
+/// one of its fields changes.
+#[test]
+fn an_index_of_several_fields_is_built_by_a_migration_and_kept_by_its_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let people = |version: u64, index: bool, default: i64| {
+        let collection = Collection::new("people")
+            .field("last", Type::String)
+            .optional("first", Type::String)
+            .with_default("age", Type::Int, default)
+            .optional(
+                "home",
+                Type::object(Embedded::new().optional("city", Type::String)),
+            );
+        let collection = if index {
+            collection
+                .unique_on(["last", "first"])
+                .index_on(["home.city", "age"])
+        } else {
+            collection
+        };
+
+        Schema::new(version).collection(collection)
+    };
+
+    {
+        let db = OpenOptions::new()
+            .schema(people(1, false, 0))
+            .open(&path)
+            .unwrap();
+        let mut txn = db.begin_write().unwrap();
+        let mut all = txn.collection("people").unwrap();
+
+        for (last, first, city) in [
+            ("Kim", "Ada", "Seoul"),
+            ("Kim", "Bo", "Busan"),
+            ("Lee", "Ada", "Seoul"),
+        ] {
+            all.insert(
+                Object::new()
+                    .with("last", last)
+                    .with("first", first)
+                    .with("home", Object::new().with("city", city)),
+            )
+            .unwrap();
+        }
+
+        txn.commit().unwrap();
+        assert_eq!(object_format(&db), 1);
+    }
+
+    let built = {
+        let db = OpenOptions::new()
+            .schema(people(2, true, 0))
+            .open(&path)
+            .unwrap();
+        let read = db.begin_read().unwrap();
+        let all = read.collection("people").unwrap();
+
+        assert_eq!(object_format(&db), 2);
+        assert_eq!(
+            all.count(&crate::Query::parse(r#"home.city == "Seoul" AND age == 0"#, &[]).unwrap())
+                .unwrap(),
+            2
+        );
+        assert!(db.check().unwrap().is_ok());
+
+        let described = db.stored_schema().unwrap();
+        let indexes = described.collections()[0].indexes();
+
+        assert_eq!(
+            indexes
+                .iter()
+                .map(|index| index.fields().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            [vec!["last", "first"], vec!["home.city", "age"]]
+        );
+
+        index_ids(&db, "people")
+    };
+
+    // The same declaration keeps the indexes.
+    {
+        let db = OpenOptions::new()
+            .schema(people(3, true, 0))
+            .open(&path)
+            .unwrap();
+
+        assert_eq!(index_ids(&db, "people"), built);
+    }
+
+    // A new default of `age` builds the index on it again.
+    let db = OpenOptions::new()
+        .schema(people(4, true, 1))
+        .open(&path)
+        .unwrap();
+    let rebuilt = index_ids(&db, "people");
+
+    assert_eq!(rebuilt[0], built[0]);
+    assert_ne!(rebuilt[1].0, built[1].0);
+    assert!(db.check().unwrap().is_ok());
+}
+
+/// An index whose objects already break it is refused when a version
+/// declares it, and the file keeps its schema.
+#[test]
+fn a_unique_index_of_several_fields_is_refused_over_objects_that_break_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let people = |version: u64, unique: bool| {
+        let collection = Collection::new("people")
+            .field("last", Type::String)
+            .field("first", Type::String);
+
+        Schema::new(version).collection(if unique {
+            collection.unique_on(["last", "first"])
+        } else {
+            collection
+        })
+    };
+
+    {
+        let db = OpenOptions::new()
+            .schema(people(1, false))
+            .open(&path)
+            .unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        for _ in 0..2 {
+            txn.collection("people")
+                .unwrap()
+                .insert(Object::new().with("last", "Kim").with("first", "Ada"))
+                .unwrap();
+        }
+
+        txn.commit().unwrap();
+    }
+
+    let refused = OpenOptions::new()
+        .schema(people(2, true))
+        .open(&path)
+        .err()
+        .unwrap();
+
+    assert_eq!(refused.code(), "DUPLICATE_KEY");
+    assert!(refused.to_string().contains("last, first"), "{refused}");
+
+    let db = OpenOptions::new()
+        .schema(people(1, false))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(db.stored_schema().map(|schema| schema.version()), Some(1));
+}
+
+#[test]
+fn indexes_that_cannot_be_kept_are_refused_when_declared() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = || {
+        Collection::new("people")
+            .field("name", Type::String)
+            .optional("tags", Type::list(Type::String))
+            .optional("team", Type::link("people"))
+            .optional(
+                "home",
+                Type::object(Embedded::new().optional("city", Type::String)),
+            )
+            .optional(
+                "visits",
+                Type::list(Type::object(Embedded::new().field("city", Type::String))),
+            )
+    };
+    let refused = |collection: Collection| {
+        OpenOptions::new()
+            .schema(Schema::new(1).collection(collection))
+            .open(dir.path().join("refused.darudb"))
+            .err()
+            .map(|error| error.code())
+    };
+    let nine: Vec<&str> = ["name"; 9].to_vec();
+
+    for collection in [
+        base().index_on(Vec::<&str>::new()),
+        base().index_on(nine),
+        base().index_on(["name", "tags"]),
+        base().index_on(["visits.city", "name"]),
+        base().index_on(["team.name"]),
+        base().index_on(["home"]),
+        base().index_on(["visits"]),
+        base().index_on(["nope"]),
+        base().index_on(["name.first"]),
+        base()
+            .index_on(["name", "home.city"])
+            .index_on(["name", "home.city"]),
+    ] {
+        assert_eq!(refused(collection), Some("INVALID_ARGUMENT"));
+    }
+
+    // A path through a list, or to one, in an index of that field alone.
+    assert_eq!(
+        refused(base().index_on(["visits.city"]).index_on(["tags"])),
+        None
+    );
+}

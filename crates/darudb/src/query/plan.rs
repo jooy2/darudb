@@ -27,7 +27,9 @@ use super::keys::KeySet;
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::key;
-use crate::format::object::schema::{CollectionDef, FieldDef, IndexDef, Kind, StoredSchema};
+use crate::format::object::schema::{
+    CollectionDef, FieldDef, Fields, IndexDef, Kind, StoredSchema, path_fields,
+};
 
 /// How many names a path may have. A path through a link back into its own
 /// collection could otherwise go on for as long as the text does, and reading
@@ -462,7 +464,7 @@ fn path_part<'s>(
             let index = collection
                 .indexes
                 .iter()
-                .find(|index| index.field == field.id)?;
+                .find(|index| index.is_on(field.id))?;
             let inner = path_part(target, rest, leaf, test)?;
 
             Some(Part::Linked {
@@ -1160,7 +1162,7 @@ fn candidate_on<'s, 'c>(
         let index = collection
             .indexes
             .iter()
-            .find(|index| index.field == field.id)?;
+            .find(|index| index.is_on(field.id))?;
 
         (
             if index.unique {
@@ -1315,6 +1317,273 @@ fn tighter_end(a: Bound<Vec<u8>>, b: Bound<Vec<u8>>) -> Bound<Vec<u8>> {
     }
 }
 
+/// The most combinations of values an access through an index of several
+/// components looks up, from the `IN`s of its components: beyond, the
+/// components after the `IN` that makes them are left to test.
+const COMBINATIONS: usize = 64;
+
+/// An access through an index that is not on one field of the collection
+/// itself, one of several components or one inside an embedded object, the
+/// positions of the terms it answers, whether it delivers the query's order,
+/// and how good it is: the lookup's kind as [`Candidate::rank`] ranks it,
+/// then how much of the index it narrows, more first.
+struct General<'s> {
+    access: Access<'s>,
+    consumed: Vec<usize>,
+    ordered: bool,
+    rank: (u8, i32),
+}
+
+/// The steps a path of field ids from `fields` takes, as a query's path
+/// resolves them: a field each, and each element of a list after a list.
+fn steps_of<'s>(fields: &'s Fields, path: &[u64]) -> Option<Vec<Step<'s>>> {
+    let mut steps = Vec::new();
+
+    for field in path_fields(fields, path)? {
+        steps.push(Step::Field(&field.name));
+
+        if matches!(field.kind, Kind::List(_)) {
+            steps.push(Step::Expand);
+        }
+    }
+
+    Some(steps)
+}
+
+/// Whether a query's path takes exactly `steps`.
+fn same_steps(path: &[Step<'_>], steps: &[Step<'_>]) -> bool {
+    path.len() == steps.len()
+        && path.iter().zip(steps).all(|pair| match pair {
+            (Step::Field(a), Step::Field(b)) => a == b,
+            (Step::Expand, Step::Expand) => true,
+            _ => false,
+        })
+}
+
+/// The best access through an index of `collection` that is not on one of
+/// its fields alone, for the top-level `terms` and `sort`: the components
+/// from the first that terms test for equality, a range on the next, and an
+/// order the components after them give.
+fn general<'s>(
+    collection: &'s CollectionDef,
+    terms: &[Cond<'s>],
+    sort: &[(Resolved<'s>, bool)],
+) -> Option<General<'s>> {
+    collection
+        .indexes
+        .iter()
+        .filter(|index| index.field().is_none())
+        .filter_map(|index| through(collection, index, terms, sort))
+        .min_by_key(|found| found.rank)
+}
+
+/// The top-level terms that test the values at `component`: each one's
+/// position, the type of the values, and the test.
+fn tests_on<'t, 's>(
+    terms: &'t [Cond<'s>],
+    component: &'t [Step<'s>],
+) -> impl Iterator<Item = (usize, &'t Kind, &'t Test<'s>)> + 't {
+    terms
+        .iter()
+        .enumerate()
+        .filter_map(move |(position, term)| match term {
+            Cond::Test { path, test } if same_steps(&path.steps, component) => {
+                Some((position, &path.leaf, test))
+            }
+            _ => None,
+        })
+}
+
+/// [`general`] for `index`.
+fn through<'s>(
+    collection: &'s CollectionDef,
+    index: &'s IndexDef,
+    terms: &[Cond<'s>],
+    sort: &[(Resolved<'s>, bool)],
+) -> Option<General<'s>> {
+    let components = index
+        .components
+        .iter()
+        .map(|path| steps_of(&collection.fields, path))
+        .collect::<Option<Vec<_>>>()?;
+    let list = components
+        .iter()
+        .any(|steps| steps.iter().any(|step| matches!(step, Step::Expand)));
+    let mut prefixes: Vec<Vec<u8>> = vec![Vec::new()];
+    let mut consumed = Vec::new();
+    let mut equal = 0;
+    // Whether a component is looked up as null, which keys a unique index's
+    // entry by the object's key too.
+    let mut nulls = false;
+
+    // The components from the first that a term tests for equality: each
+    // value, or each of an `IN`'s, after each prefix so far.
+    'components: for component in &components {
+        for (position, _, test) in tests_on(terms, component) {
+            let values: Vec<&Value> = match test {
+                Test::Compare(Op::Eq, value) | Test::Element(value) => vec![value.as_ref()],
+                Test::IsNull => vec![&Value::Null],
+                Test::In(values) if prefixes.len() * values.len() <= COMBINATIONS => {
+                    values.iter().map(AsRef::as_ref).collect()
+                }
+                _ => continue,
+            };
+
+            nulls |= values.iter().any(|value| value.is_null());
+            prefixes = prefixes
+                .iter()
+                .flat_map(|prefix| {
+                    values.iter().map(move |value| {
+                        let mut bytes = prefix.clone();
+
+                        bytes.extend_from_slice(&encoded(value));
+                        bytes
+                    })
+                })
+                .collect();
+            consumed.push(position);
+            equal += 1;
+
+            continue 'components;
+        }
+
+        break;
+    }
+
+    // A range on the component after them, narrowed by every range term on
+    // it, but one alone on a list, whose terms may hold for two elements.
+    let mut ranged = false;
+    let mut ranges: Vec<Range> = Vec::new();
+
+    if let Some(component) = components.get(equal) {
+        let mut low = Bound::Unbounded;
+        let mut high = Bound::Unbounded;
+        let mut prefix: Option<&str> = None;
+        let mut leaf = None;
+
+        for (position, kind, test) in tests_on(terms, component) {
+            let (term_low, term_high, term_prefix) = match test {
+                Test::Compare(Op::Lt, value) => {
+                    (Bound::Unbounded, Bound::Excluded(value.as_ref()), None)
+                }
+                Test::Compare(Op::Le, value) => {
+                    (Bound::Unbounded, Bound::Included(value.as_ref()), None)
+                }
+                Test::Compare(Op::Gt, value) => {
+                    (Bound::Excluded(value.as_ref()), Bound::Unbounded, None)
+                }
+                Test::Compare(Op::Ge, value) => {
+                    (Bound::Included(value.as_ref()), Bound::Unbounded, None)
+                }
+                Test::Between(a, b) => (
+                    Bound::Included(a.as_ref()),
+                    Bound::Included(b.as_ref()),
+                    None,
+                ),
+                Test::StartsWith(text) if prefix.is_none() => {
+                    (Bound::Unbounded, Bound::Unbounded, Some(*text))
+                }
+                _ => continue,
+            };
+
+            if ranged && list {
+                break;
+            }
+
+            low = higher_low(low, term_low);
+            high = lower_high(high, term_high);
+            prefix = prefix.or(term_prefix);
+            leaf = Some(kind);
+            ranged = true;
+            consumed.push(position);
+        }
+
+        if let Some(leaf) = leaf {
+            let (start, end) = range(leaf, low, high, prefix, true);
+
+            ranges = prefixes
+                .iter()
+                .map(|bytes| {
+                    let start = match &start {
+                        Bound::Included(value) => {
+                            Bound::Included([bytes.as_slice(), value].concat())
+                        }
+                        Bound::Excluded(value) => {
+                            Bound::Excluded([bytes.as_slice(), value].concat())
+                        }
+                        Bound::Unbounded => Bound::Included(bytes.clone()),
+                    };
+                    let end = match &end {
+                        Bound::Included(value) => {
+                            Bound::Included([bytes.as_slice(), value].concat())
+                        }
+                        Bound::Excluded(value) => {
+                            Bound::Excluded([bytes.as_slice(), value].concat())
+                        }
+                        Bound::Unbounded => after(bytes),
+                    };
+
+                    (start, end)
+                })
+                .collect();
+        }
+    }
+
+    if !ranged {
+        ranges = prefixes
+            .iter()
+            .map(|bytes| (Bound::Included(bytes.clone()), after(bytes)))
+            .collect();
+    }
+
+    let whole = equal == components.len();
+    let one = prefixes.len() == 1;
+    // The sort is the components after the equal ones, every one of them,
+    // in order and all one way, which the index gives within one prefix,
+    // with ties in primary key order. A sort that left a component out would
+    // get its ties in that component's order.
+    let follows = !list
+        && one
+        && !sort.is_empty()
+        && equal + sort.len() == components.len()
+        && sort.iter().enumerate().all(|(at, (path, descending))| {
+            components
+                .get(equal + at)
+                .is_some_and(|component| same_steps(&path.steps, component))
+                && *descending == sort[0].1
+        });
+    let ordered = follows || (sort.is_empty() && whole && one && !ranged && !list);
+    let backward = follows && sort[0].1;
+    let narrowed = i32::try_from(equal * 2 + usize::from(ranged)).unwrap_or(i32::MAX);
+    let lookup = match (equal, ranged) {
+        (0, false) if follows => 5,
+        (0, false) => return None,
+        (0, true) => 4,
+        _ if whole && index.unique && !ranged && one && !nulls => 0,
+        _ if whole && index.unique && !ranged => 1,
+        // Each value of an `IN` narrows within the components before it, so
+        // the ranges of several are as narrow as the one of an equality.
+        _ => 2,
+    };
+
+    Some(General {
+        access: Access::Index {
+            index,
+            ranges: if lookup == 5 {
+                vec![(Bound::Unbounded, Bound::Unbounded)]
+            } else {
+                ranges
+            },
+            backward,
+            repeats: list && !(whole && one && !ranged),
+            values: whole && !ranged,
+        },
+        consumed,
+        ordered,
+        rank: (lookup, -narrowed),
+    })
+}
+
 /// The access for a query, the positions of the top-level terms it answers,
 /// and whether it delivers the query's order.
 fn choose<'s>(
@@ -1342,6 +1611,33 @@ fn choose<'s>(
         _ => None,
     };
     let best = candidates().min_by_key(|candidate| (candidate.rank(), candidate.term));
+    let general = general(collection, terms, sort);
+
+    // An index of several components, or inside an embedded object, goes
+    // first when it narrows more than the best term of one field, and never
+    // before the primary key.
+    if let Some(general) = general {
+        let beats = match &best {
+            None => {
+                general.rank.0 < 5
+                    || !matches!(unfiltered(collection, sort, sorted_by), (_, _, true))
+            }
+            Some(best) if best.source == Source::Key => false,
+            Some(best) => {
+                let narrowed = if best.lookup == Lookup::Range { -1 } else { -2 };
+                let rank = (best.rank().0, narrowed);
+                // As narrow, the one that gives the query's order goes first.
+                let ordered =
+                    sort.is_empty() || sorted_by.is_some_and(|(field, _)| field == best.field.id);
+
+                general.rank < rank || (general.rank == rank && general.ordered && !ordered)
+            }
+        };
+
+        if beats {
+            return (general.access, general.consumed, general.ordered);
+        }
+    }
 
     let Some(best) = best else {
         return unfiltered(collection, sort, sorted_by);
@@ -1459,7 +1755,7 @@ fn unfiltered<'s>(
             true,
         ),
         Some((field, descending)) => {
-            match collection.indexes.iter().find(|index| index.field == field) {
+            match collection.indexes.iter().find(|index| index.is_on(field)) {
                 Some(index) => (
                     Access::Index {
                         index,

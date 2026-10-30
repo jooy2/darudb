@@ -10,8 +10,9 @@ use super::names::CollectionNames;
 use super::value::Value;
 
 /// The newest object layer's format this build reads and writes, field 1 of
-/// the stored schema. Format 2 adds the date type and lists of embedded
-/// objects.
+/// the stored schema. Format 2 adds the date type, lists of embedded
+/// objects, and indexes on several fields or on a field inside an embedded
+/// object.
 pub(crate) const OBJECT_FORMAT: i64 = 2;
 
 /// The oldest object format this build reads: the one every release before
@@ -118,12 +119,96 @@ impl Fields {
     }
 }
 
-/// An index on one field of a collection.
+/// The most components an index has.
+pub(crate) const MAX_COMPONENTS: usize = 8;
+
+/// An index of a collection: its components, in order, each the path of
+/// field ids from the collection down through embedded objects to the field
+/// it reads, and whether it is unique.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IndexDef {
     pub(crate) id: u64,
-    pub(crate) field: u64,
+    pub(crate) components: Vec<Vec<u64>>,
     pub(crate) unique: bool,
+}
+
+impl IndexDef {
+    /// The field of the collection itself the index is on, for an index of
+    /// one component on a top-level field, which format 1 has and which
+    /// keeps the fast paths of one field.
+    pub(crate) fn field(&self) -> Option<u64> {
+        match self.components.as_slice() {
+            [path] => match path.as_slice() {
+                [field] => Some(*field),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether the index is on `field`, a field of the collection itself,
+    /// alone.
+    pub(crate) fn is_on(&self, field: u64) -> bool {
+        self.field() == Some(field)
+    }
+}
+
+/// The fields a path of ids reaches, from `fields` down, or `None` where an
+/// id names no field or the path goes on past a field with none: the field
+/// of each step, and of the last.
+pub(crate) fn path_fields<'f>(fields: &'f Fields, path: &[u64]) -> Option<Vec<&'f FieldDef>> {
+    let mut found = Vec::with_capacity(path.len());
+    let mut fields = fields;
+
+    for (at, id) in path.iter().enumerate() {
+        let field = fields.by_id(*id)?;
+
+        found.push(field);
+
+        if at + 1 < path.len() {
+            fields = match &field.kind {
+                Kind::Object(inner) => inner,
+                Kind::List(element) => match element.as_ref() {
+                    Kind::Object(inner) => inner,
+                    _ => return None,
+                },
+                _ => return None,
+            };
+        }
+    }
+
+    Some(found)
+}
+
+/// Whether a component of an index may go along `path`, which reaches the
+/// fields `steps`: through embedded objects and lists of them, never a link,
+/// to a scalar, a link or a list of scalars or links, with at most one list
+/// on the way, and with none in an index of `components` components but
+/// one.
+pub(crate) fn indexable(steps: &[&FieldDef], components: usize) -> bool {
+    let Some((leaf, through)) = steps.split_last() else {
+        return false;
+    };
+    let mut lists = 0;
+
+    for step in through {
+        match &step.kind {
+            Kind::Object(_) => {}
+            Kind::List(element) if matches!(**element, Kind::Object(_)) => lists += 1,
+            _ => return false,
+        }
+    }
+
+    let leaf_ok = match &leaf.kind {
+        kind if kind.is_scalar() => true,
+        Kind::List(element) if element.is_scalar() => {
+            lists += 1;
+            true
+        }
+        _ => false,
+    };
+
+    leaf_ok && lists <= 1 && (lists == 0 || components == 1)
 }
 
 /// A collection, as the file knows it.
@@ -284,7 +369,8 @@ impl StoredSchema {
     }
 
     /// The lowest object format that holds what the schema declares: 2 for
-    /// a date or a list of embedded objects anywhere in it, and 1 otherwise.
+    /// a date or a list of embedded objects anywhere in it, or an index that
+    /// is not on one field of its collection, and 1 otherwise.
     pub(crate) fn needs(&self) -> i64 {
         fn needs_kind(kind: &Kind) -> i64 {
             match kind {
@@ -307,7 +393,19 @@ impl StoredSchema {
 
         self.collections
             .iter()
-            .map(|collection| needs_fields(&collection.fields))
+            .map(|collection| {
+                let indexes = if collection
+                    .indexes
+                    .iter()
+                    .all(|index| index.field().is_some())
+                {
+                    OLDEST_OBJECT_FORMAT
+                } else {
+                    2
+                };
+
+                needs_fields(&collection.fields).max(indexes)
+            })
             .max()
             .unwrap_or(OLDEST_OBJECT_FORMAT)
     }
@@ -399,13 +497,19 @@ impl StoredSchema {
 
                 index_ids.push(index.id);
 
-                let indexable = collection.fields.by_id(index.field).is_some_and(|field| {
-                    field.kind.is_scalar()
-                        || matches!(&field.kind, Kind::List(element) if element.is_scalar())
-                });
+                let count = index.components.len();
 
-                if !indexable {
-                    return Err("an index is on a field that cannot have one");
+                if count == 0 || count > MAX_COMPONENTS {
+                    return Err("an index has no components, or too many");
+                }
+
+                for component in &index.components {
+                    let fits = path_fields(&collection.fields, component)
+                        .is_some_and(|steps| indexable(&steps, count));
+
+                    if !fits {
+                        return Err("an index is on a field that cannot have one");
+                    }
                 }
             }
         }
@@ -485,11 +589,36 @@ fn encode_collection(collection: &CollectionDef) -> Raw {
                     .indexes
                     .iter()
                     .map(|index| {
-                        Raw::Object(vec![
-                            (1, int(index.id)),
-                            (2, int(index.field)),
-                            (3, Raw::Bool(index.unique)),
-                        ])
+                        // An index on one field of the collection keeps format
+                        // 1's field 2; any other lists its components' paths.
+                        Raw::Object(match index.field() {
+                            Some(field) => vec![
+                                (1, int(index.id)),
+                                (2, int(field)),
+                                (3, Raw::Bool(index.unique)),
+                            ],
+                            None => vec![
+                                (1, int(index.id)),
+                                (3, Raw::Bool(index.unique)),
+                                (
+                                    4,
+                                    Raw::List(
+                                        index
+                                            .components
+                                            .iter()
+                                            .map(|path| {
+                                                Raw::Object(vec![(
+                                                    1,
+                                                    Raw::List(
+                                                        path.iter().map(|id| int(*id)).collect(),
+                                                    ),
+                                                )])
+                                            })
+                                            .collect(),
+                                    ),
+                                ),
+                            ],
+                        })
                     })
                     .collect(),
             ),
@@ -643,9 +772,33 @@ fn decode_collection(raw: &Raw) -> Result<CollectionDef, &'static str> {
             .map(|raw| {
                 let index = as_record(raw)?;
 
+                let components = match index.get(4) {
+                    // Field 2 and field 4 are two forms of one thing, so a
+                    // record with both is damaged.
+                    Ok(_) if index.get(2).is_ok() => {
+                        return Err("an index has both a field and components");
+                    }
+                    Ok(Raw::List(components)) => components
+                        .iter()
+                        .map(|component| {
+                            as_record(component)?
+                                .list(1)?
+                                .iter()
+                                .map(|id| match id {
+                                    Raw::Int(id) => u64::try_from(*id)
+                                        .map_err(|_| "the schema holds a negative number"),
+                                    _ => Err("the schema holds a field of the wrong type"),
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    Ok(_) => return Err("the schema holds a field of the wrong type"),
+                    Err(_) => vec![vec![index.count(2)?]],
+                };
+
                 Ok(IndexDef {
                     id: index.count(1)?,
-                    field: index.count(2)?,
+                    components,
                     unique: index.bool(3)?,
                 })
             })
@@ -742,7 +895,7 @@ mod tests {
                     auto: true,
                     indexes: vec![IndexDef {
                         id: 2,
-                        field: 3,
+                        components: vec![vec![3]],
                         unique: false,
                     }],
                 },
@@ -772,7 +925,7 @@ mod tests {
                     auto: false,
                     indexes: vec![IndexDef {
                         id: 5,
-                        field: 2,
+                        components: vec![vec![2]],
                         unique: true,
                     }],
                 },
@@ -806,7 +959,25 @@ mod tests {
         broken.push(schema);
 
         let mut schema = sample();
-        schema.collections[0].indexes[0].field = 4;
+        schema.collections[0].indexes[0].components = vec![vec![4]];
+        broken.push(schema);
+
+        // Through a list of strings, past a scalar, and none at all.
+        let mut schema = sample();
+        schema.collections[0].indexes[0].components = vec![vec![3, 1]];
+        broken.push(schema);
+
+        let mut schema = sample();
+        schema.collections[0].indexes[0].components = vec![vec![1, 1]];
+        broken.push(schema);
+
+        let mut schema = sample();
+        schema.collections[0].indexes[0].components = Vec::new();
+        broken.push(schema);
+
+        // A list in an index of two components.
+        let mut schema = sample();
+        schema.collections[0].indexes[0].components = vec![vec![1], vec![3]];
         broken.push(schema);
 
         let mut schema = sample();

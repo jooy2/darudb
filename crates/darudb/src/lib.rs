@@ -102,8 +102,8 @@ pub mod __binding {
 }
 pub use schema::{
     Change, Collection, CollectionReader, CollectionType, CollectionWriter, ElementType, Embedded,
-    EmbeddedType, Field, FieldOf, FieldReader, FieldType, KeyType, Link, Migrating, Migration,
-    Schema, Type, TypedReader, TypedWriter, ValueReader, ValueWriter,
+    EmbeddedType, Field, FieldOf, FieldReader, FieldType, Index, KeyType, Link, Migrating,
+    Migration, Schema, Type, TypedReader, TypedWriter, ValueReader, ValueWriter,
 };
 
 #[cfg(feature = "derive")]
