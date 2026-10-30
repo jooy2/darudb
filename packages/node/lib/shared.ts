@@ -587,7 +587,11 @@ function describeSchema(layout: SchemaLayout): StoredSchema {
       fields: storedFieldsOf(collection.fields.list, collection.auto ? collection.key : null),
       indexes: Object.freeze(
         collection.indexes.map((index) =>
-          Object.freeze({ field: index.field.name, unique: index.unique })
+          Object.freeze({
+            field: index.fields[0],
+            fields: Object.freeze([...index.fields]),
+            unique: index.unique
+          })
         )
       )
     })

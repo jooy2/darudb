@@ -181,6 +181,29 @@ export interface Collection<F extends Fields = Fields> {
   readonly fields: F;
 }
 
+/**
+ * The options of `collection`: indexes on several fields, whose entries sort
+ * by the first, then the next, or on fields inside embedded objects, named
+ * by their paths. A field marked `index()` or `unique()` has an index of its
+ * own already.
+ */
+export interface CollectionOptions<F extends Fields = Fields> {
+  readonly indexes?: readonly IndexDeclaration<F>[];
+}
+
+/**
+ * An index of `CollectionOptions`: 1 to 8 fields, each a field's name or a
+ * path through embedded objects, such as `address.city`, and whether two
+ * objects may not hold the same values in all of them.
+ */
+export interface IndexDeclaration<F extends Fields = Fields> {
+  readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
+  readonly unique?: boolean;
+}
+
+/** A field of `F` an index names: its name, or a path into an embedded object. */
+export type IndexPath<F extends Fields> = (keyof F & string) | DottedPath;
+
 /** The collections of a database, at a version. */
 export interface Schema<C extends Record<string, Collection<any>> = Record<string, Collection>> {
   readonly version: number;
@@ -898,7 +921,10 @@ export interface StoredField {
 
 /** An index of a collection: the field it is on, and whether it is unique. */
 export interface StoredIndex {
+  /** The first field the index is on, the only one of most indexes. */
   readonly field: string;
+  /** Every field the index is on, in order, each a name or a path. */
+  readonly fields: readonly string[];
   readonly unique: boolean;
 }
 

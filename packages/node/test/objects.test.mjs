@@ -810,9 +810,9 @@ describe('a file opened without a schema', () => {
           { name: 'big', type: { kind: 'int' }, optional: true }
         ],
         indexes: [
-          { field: 'email', unique: true },
-          { field: 'age', unique: false },
-          { field: 'tags', unique: false }
+          { field: 'email', fields: ['email'], unique: true },
+          { field: 'age', fields: ['age'], unique: false },
+          { field: 'tags', fields: ['tags'], unique: false }
         ]
       }
     ]
@@ -1360,5 +1360,63 @@ describe('lists of embedded objects', () => {
         }),
       'INVALID_ARGUMENT'
     );
+  });
+});
+
+describe('indexes on several fields', () => {
+  const people = collection(
+    {
+      last: t.string(),
+      first: t.string().optional(),
+      age: t.int().default(0),
+      home: t.object({ city: t.string().optional() }).optional()
+    },
+    {
+      indexes: [{ fields: ['last', 'first'], unique: true }, { fields: ['home.city', 'age'] }]
+    }
+  );
+  const registry = schema(1, { people });
+
+  it('keep values unique together, and answer queries on their fields', (context) => {
+    const db = Database.open(tempPath(context), { schema: registry });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const all = txn.collection('people');
+
+      all.insert({ last: 'Kim', first: 'Ada', age: 36, home: { city: 'Seoul' } });
+      all.insert({ last: 'Kim', first: 'Bo', age: 20, home: { city: 'Seoul' } });
+      all.insert({ last: 'Kim', age: 50 });
+      all.insert({ last: 'Kim', age: 51 });
+      assertCode(() => all.insert({ last: 'Kim', first: 'Ada' }), 'DUPLICATE_KEY');
+    });
+
+    db.read((txn) => {
+      const all = txn.collection('people');
+      const firsts = (found) => found.map((person) => person.first);
+
+      assert.deepEqual(firsts(all.find('home.city == "Seoul" AND age >= 30')), ['Ada']);
+      assert.deepEqual(firsts(all.find('home.city == "Seoul" SORT BY age')), ['Bo', 'Ada']);
+      assert.equal(all.count('last == "Kim" AND first IS NULL'), 2);
+    });
+
+    assert.deepEqual(
+      db.storedSchema.collections[0].indexes.map((index) => [
+        index.field,
+        index.fields,
+        index.unique
+      ]),
+      [
+        ['last', ['last', 'first'], true],
+        ['home.city', ['home.city', 'age'], false]
+      ]
+    );
+    assert.equal(db.check().ok, true);
+  });
+
+  it('refuse an index whose options are not of its shape', () => {
+    assertCode(() => collection({ a: t.int() }, { indexes: [{ fields: [] }] }), 'INVALID_ARGUMENT');
+    assertCode(() => collection({ a: t.int() }, { indexes: 'a' }), 'INVALID_ARGUMENT');
   });
 });

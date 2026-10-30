@@ -101,9 +101,12 @@ export const t = schemaModule.t as unknown as api.TypeBuilders;
 /**
  * A collection with `fields`. A field marked `primaryKey()` is the key;
  * without one, the collection gets an `id` that the engine numbers from 1.
+ * `options.indexes` declares indexes on several fields, or on fields inside
+ * embedded objects.
  */
 export const collection = schemaModule.collection as unknown as <F extends api.Fields>(
-  fields: F
+  fields: F,
+  options?: api.CollectionOptions<F>
 ) => api.Collection<F>;
 
 /**

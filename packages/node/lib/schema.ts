@@ -32,9 +32,20 @@ export type Spec = (
 /** The declared fields of a collection or an embedded object, by name. */
 export type DeclaredFields = Readonly<Record<string, FieldType>>;
 
+/**
+ * An index on several fields, or on fields inside embedded objects, as the
+ * options of `collection` declare it: each a field's name or a path such as
+ * `address.city`, in order.
+ */
+export interface DeclaredIndex {
+  readonly fields: readonly string[];
+  readonly unique: boolean;
+}
+
 /** A declared collection, as `collection` makes it. */
 export interface DeclaredCollection {
   readonly fields: DeclaredFields;
+  readonly indexes: readonly DeclaredIndex[];
   readonly [COLLECTION]: boolean;
 }
 
@@ -152,8 +163,50 @@ const COLLECTION = Symbol('collection');
  * A collection: its fields by name. A field marked `primaryKey()` is the
  * key; without one, the collection gets an `id` that the engine numbers.
  */
-function collection(fields: Record<string, FieldType>): DeclaredCollection {
-  return Object.freeze({ fields: fieldTypes(fields, '`collection`'), [COLLECTION]: true });
+/**
+ * The indexes of the options of `collection`, checked for their shape: the
+ * engine checks what they are on when the database opens.
+ */
+function indexesOf(options: unknown): readonly DeclaredIndex[] {
+  if (options === undefined) {
+    return Object.freeze([]);
+  }
+
+  const indexes = (options as { indexes?: unknown } | null)?.indexes;
+
+  if (typeof options !== 'object' || options === null || !Array.isArray(indexes ?? [])) {
+    throw invalid('the options of `collection` are `{ indexes: [...] }`');
+  }
+
+  return Object.freeze(
+    ((indexes ?? []) as unknown[]).map((index) => {
+      const { fields, unique } = (index ?? {}) as { fields?: unknown; unique?: unknown };
+
+      if (
+        !Array.isArray(fields) ||
+        fields.length === 0 ||
+        !fields.every((path) => typeof path === 'string' && path.length > 0) ||
+        (unique !== undefined && typeof unique !== 'boolean')
+      ) {
+        throw invalid(
+          'an index of `collection` is `{ fields: [...names or paths], unique?: boolean }`'
+        );
+      }
+
+      return Object.freeze({
+        fields: Object.freeze([...(fields as string[])]),
+        unique: unique === true
+      });
+    })
+  );
+}
+
+function collection(fields: Record<string, FieldType>, options?: unknown): DeclaredCollection {
+  return Object.freeze({
+    fields: fieldTypes(fields, '`collection`'),
+    indexes: indexesOf(options),
+    [COLLECTION]: true
+  });
 }
 
 /** The collections of a database, at `version`, from 1 up. */

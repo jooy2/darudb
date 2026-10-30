@@ -162,9 +162,12 @@ export interface CollectionLayout {
   native?: ExternalObject<'CollectionName'>;
 }
 
-/** An index of a stored schema: the field it is on, and whether it is unique. */
+/**
+ * An index of a stored schema: the paths of the fields it is on, by their
+ * names, and whether it is unique.
+ */
 export interface IndexLayout {
-  field: FieldLayout;
+  fields: string[];
   unique: boolean;
 }
 
@@ -1862,17 +1865,46 @@ function decodeSchemaFields(bytes: Uint8Array): SchemaLayout {
     const list = field(fields, 3, 'list').map(fieldOf);
     const key = field(fields, 5, 'int');
     const name = field(fields, 2, 'string');
+    // The names along a path of field ids, through embedded objects and
+    // lists of them.
+    const pathOf = (ids: (number | bigint)[]): string => {
+      let at = list;
+      const names: string[] = [];
+
+      for (const id of ids) {
+        const step = at.find((each) => each.id === id);
+
+        if (step === undefined) {
+          throw corrupted(`\`${name}\` indexes a field it lacks`);
+        }
+
+        names.push(step.name);
+
+        const inner = step.kind.type === 'list' ? step.kind.element : step.kind;
+
+        at = inner.type === 'object' ? inner.fields.list : [];
+      }
+
+      return names.join('.');
+    };
     const indexes = field(fields, 7, 'list').map((raw) => {
       // A value that is not an object fails at `get`, as above.
       const index = raw.value as AnyRecord;
-      const on = field(index, 2, 'int');
-      const indexed = list.find((each) => each.id === on);
+      // An index on one field of the collection keeps format 1's field 2,
+      // and any other lists its components' paths in field 4.
+      const components = index.get(4);
+      const paths =
+        components === undefined
+          ? [pathOf([field(index, 2, 'int')])]
+          : field(index, 4, 'list').map((component) =>
+              pathOf(
+                field(component.value as AnyRecord, 1, 'list').map(
+                  (id) => id.value as number | bigint
+                )
+              )
+            );
 
-      if (indexed === undefined) {
-        throw corrupted(`\`${name}\` indexes a field it lacks`);
-      }
-
-      return { field: indexed, unique: field(index, 3, 'bool') };
+      return { fields: paths, unique: field(index, 3, 'bool') };
     });
     const collection = {
       id: field(fields, 1, 'int'),
@@ -2089,9 +2121,46 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
 
     // Without `auto`, `keys[0]` is one of the fields.
     const key = auto ? 1 : fields.find(([, fieldName]) => fieldName === keys[0][0])![0];
-    const indexes = fields
+    const indexes: [number, number[][], boolean][] = fields
       .filter(([, , spec]) => spec.index || spec.unique)
-      .map(([id, , spec]): [number, number, boolean] => [nextIndex++, id, spec.unique === true]);
+      .map(([id, , spec]) => [nextIndex++, [[id]], spec.unique === true]);
+
+    // An index of the options names its fields by their paths, which go to
+    // the ids given here: a field's place among its collection's or its
+    // embedded object's fields. A name that is none is left for the engine
+    // to refuse, as an id no field has.
+    for (const declaredIndex of declared.collections[name].indexes) {
+      const components = declaredIndex.fields.map((path) => {
+        let at: FieldEntry[] = fields;
+        const ids: number[] = [];
+
+        for (const step of path.split('.')) {
+          const found = at.find(([, fieldName]) => fieldName === step);
+
+          if (found === undefined) {
+            throw invalid(`\`${name}\` indexes \`${path}\`, which it does not have`);
+          }
+
+          ids.push(found[0]);
+
+          const spec = found[2];
+          const inner = spec.type === 'list' ? spec.element : spec;
+
+          at =
+            inner.type === 'object'
+              ? Object.entries(inner.fields).map(([innerName, type], position): FieldEntry => [
+                  position + 1,
+                  innerName,
+                  type.spec
+                ])
+              : [];
+        }
+
+        return ids;
+      });
+
+      indexes.push([nextIndex++, components, declaredIndex.unique]);
+    }
 
     // Every name has an id.
     return { id: ids.get(name)!, name, fields, key, auto, indexes };
@@ -2128,16 +2197,56 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
                     iw.byte(LIST);
                     iw.varint(collection.indexes.length);
 
-                    for (const [id, fieldId, unique] of collection.indexes) {
+                    for (const [id, components, unique] of collection.indexes) {
                       const index = new Writer(16);
+                      const one = components.length === 1 && components[0].length === 1;
 
                       writeEntries(
                         index,
-                        [
-                          [1, 'int', id],
-                          [2, 'int', fieldId],
-                          [3, 'bool', unique]
-                        ],
+                        one
+                          ? [
+                              [1, 'int', id],
+                              [2, 'int', components[0][0]],
+                              [3, 'bool', unique]
+                            ]
+                          : [
+                              [1, 'int', id],
+                              [3, 'bool', unique],
+                              [
+                                4,
+                                'raw',
+                                (cw) => {
+                                  cw.byte(LIST);
+                                  cw.varint(components.length);
+
+                                  for (const path of components) {
+                                    const component = new Writer(16);
+
+                                    writeEntries(
+                                      component,
+                                      [
+                                        [
+                                          1,
+                                          'raw',
+                                          (pw) => {
+                                            pw.byte(LIST);
+                                            pw.varint(path.length);
+
+                                            for (const step of path) {
+                                              pw.byte(INT);
+                                              pw.int(step);
+                                            }
+                                          }
+                                        ]
+                                      ],
+                                      collection.name
+                                    );
+                                    cw.byte(OBJECT);
+                                    cw.bytesOf(component.bytes.subarray(0, component.at));
+                                  }
+                                }
+                              ]
+                            ],
                         collection.name
                       );
                       iw.byte(OBJECT);

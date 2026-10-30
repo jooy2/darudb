@@ -25,6 +25,17 @@ const app = schema(1, {
   })
 });
 
+// The options of `collection` declare indexes on several fields, by name or
+// by a path into an embedded object.
+collection(
+  { last: t.string(), first: t.string(), home: t.object({ city: t.string() }) },
+  { indexes: [{ fields: ['last', 'first'], unique: true }, { fields: ['home.city'] }] }
+);
+// @ts-expect-error an index names fields the collection has.
+collection({ last: t.string() }, { indexes: [{ fields: ['lsat'] }] });
+// @ts-expect-error an index is on one field at least.
+collection({ last: t.string() }, { indexes: [{ fields: [] }] });
+
 // A list of embedded objects has no index, and no default but the empty list.
 // @ts-expect-error a list of embedded objects has no index.
 t.list(t.object({ city: t.string() })).index();
