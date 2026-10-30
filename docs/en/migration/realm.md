@@ -465,7 +465,7 @@ The query language is close to the Realm Query Language that `filtered` takes:
 
 - The `[c]` of `CONTAINS[c]` is `IGNORE CASE` after the condition: `name CONTAINS "li" IGNORE CASE`. `LIKE` with wildcards has no counterpart.
 - The aggregates `@sum`, `@min`, `@max` and `@avg` of a field become `sum`, `min`, `max` and `avg` on the collection, with the query, and `@count` becomes `count`. An aggregate inside a filter, such as `items.@sum.price > 10`, has no counterpart.
-- A backlink becomes a query on the link field: the posts of a user are `author == $0` on `posts`, with the user's key.
+- A backlink becomes a query on the link field: the posts of a user are `author == $0` on `posts`, with the user's key. A filter on a backlink, such as `@links.Post.author.year > 2020`, becomes `ANY posts.author (year > 2020)` on `users`.
 
 [Queries](../guide/queries.md) has the whole language, and the builder.
 

@@ -63,3 +63,21 @@ QueryBuilder<T> limit(int count);
 ```
 
 많아야 `count`개만 남깁니다. 음수를 주면 `INVALID_ARGUMENT`를 던집니다. 인덱스가 있는 필드 하나로만 정렬한 쿼리는 개수 제한에 이르면 읽기를 멈춥니다.
+
+### linkedFrom
+
+```dart
+Condition linkedFrom<L, LQ extends QueryBuilder<L>>(
+  CollectionSchema<L, LQ, Object> schema,
+  Field Function(LQ q) link, [
+  Condition Function(LQ q)? where,
+]);
+```
+
+`schema`의 컬렉션에서 어떤 객체가 `link`가 그 컬렉션의 쿼리 빌더에서 고른 링크 필드로 가리키고, 주어졌다면 그 컬렉션의 타입이 있는 필드로 쓴 조건 `where`도 만족하는 객체에서 참인 조건입니다. 가리키는 객체 하나가 조건 전체를 만족해야 하며, `~`를 씌우면 아무것도 가리키지 않는 객체를 찾습니다. 링크는 링크 목록이어도 되고, 쿼리를 실행하는 컬렉션을 가리켜야 하며 그렇지 않으면 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#이-객체를-가리키는-객체)의 `ANY posts.author (year >= 2020)`과 같습니다.
+
+```dart
+users.find((q) => q.where(
+  q.linkedFrom(postSchema, (p) => p.author, (p) => p.year.atLeast(2020)),
+));
+```

@@ -43,6 +43,7 @@ Python's `&`, `|` and `~` bind tighter than comparisons, so each comparison they
 - **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list has no element, so only `is_not_null` holds for it.
 - **None.** Every condition on a field that is `None` is false, except `is_null`. `F.email == None` is `F.email.is_null()`, and `F.email != None` is `F.email.is_not_null()`. Any other test with `None` fails with `INVALID_QUERY` at once. An embedded object itself is never tested, not even for `None`: a condition tests one of its fields.
 - **Types.** A value has the field's type. An `int` field compares with an `int` and never a `float` or a `bool`, a `float` field with a `float` or with an `int` from -2^53 to 2^53, and a link with the linked collection's key. A value is one `bool`, `int`, `float`, `str` or bytes, as `bytes`, `bytearray` or `memoryview`, or a [param](./param.md); a list, or anything else, fails with `INVALID_QUERY` when the query runs.
+- **Objects that link here.** [`linked`](./linked.md) makes a condition on the objects that link to an object.
 - **Nesting.** A filter nests at most 24 levels deep. An `&` inside an `&`, and an `|` inside an `|`, become one level, so only `~` and alternating groups count.
 
 ## F

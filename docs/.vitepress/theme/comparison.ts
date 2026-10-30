@@ -520,9 +520,9 @@ export const SECTIONS: Section[] = [
         redb: partly('Ranges in key order', '키 순서의 범위 탐색')
       }),
       row('links', 'Links between objects, or joins', '객체 간 링크나 조인', {
-        darudb: partly(
-          'Links, followed in queries; no backlinks or joins',
-          '쿼리에서 따라가는 링크, 역링크와 조인은 없음'
+        darudb: yes(
+          'Links followed in queries, and filters on the objects that link back; no joins',
+          '쿼리에서 따라가는 링크와 역링크 조건, 조인은 없음'
         ),
         sqlite: yes('Joins and foreign keys', '조인과 외래 키'),
         realm: yes('Links and backlinks', '링크와 역링크'),

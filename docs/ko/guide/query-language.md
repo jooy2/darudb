@@ -131,6 +131,21 @@ tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
 - **인덱스는 쓰지 않습니다.** 인덱스는 바이트를 그대로 담으므로, 대소문자를 무시하는 조건은 읽은 객체마다 검사합니다. 인덱스가 답하는 다른 조건이 `AND`로 붙어 있으면 그 객체만 읽습니다.
 - **키워드가 아닙니다.** `IGNORE`와 `CASE`는 조건 바로 뒤에서만 그렇게 읽으므로, `ignore`나 `case`라는 필드도 백틱 없이 쓸 수 있습니다.
 
+## 이 객체를 가리키는 객체
+
+`ANY` 뒤에 컬렉션, 점, 그 컬렉션 객체의 링크 필드를 쓰면, 그 컬렉션의 어떤 객체가 그 필드로 가리키는 객체에서 참이 됩니다. 뒤에 괄호로 필터를 붙이면 가리키는 객체를 좁히며, 가리키는 객체 하나가 필터 전체를 만족해야 합니다.
+
+```text
+ANY posts.author
+ANY posts.author (year >= 2020 AND draft == false)
+NOT ANY posts.author
+```
+
+- **링크**는 다른 컬렉션의 필드로, 쿼리를 실행하는 컬렉션을 가리키는 단일 링크나 링크 목록입니다. `posts.meta.author`처럼 내장 객체를 거치는 경로도 됩니다. 그 밖의 경로는 `INVALID_QUERY`로 실패하며, 다른 컬렉션에 없는 필드로 쓴 필터도 마찬가지입니다.
+- **`NOT ANY`**는 그 필드로 아무것도 가리키지 않는 객체를 찾습니다.
+- **비용.** 엔진은 쿼리마다 한 번, 가리키는 객체를 그 컬렉션의 인덱스로 찾아 링크가 가리키는 키를 모읍니다. 그 집합이 작으면 해당 객체만 읽습니다.
+- **키워드가 아닙니다.** `ANY`는 컬렉션 이름 앞에서만 그렇게 읽으므로, `any`라는 필드도 쓸 수 있습니다.
+
 ## 조건 묶기
 
 | 키워드      | 예                                   | 성립하는 경우                |
@@ -211,7 +226,7 @@ tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
 
 ## 키워드
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다. `IGNORE CASE`는 조건 바로 뒤에서만 읽으므로 이 목록에 들지 않습니다.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다. `IGNORE CASE`는 조건 바로 뒤에서만, `ANY`는 컬렉션 이름 앞에서만 그렇게 읽으므로 둘 다 이 목록에 들지 않습니다.
 
 ## 오류
 
@@ -233,7 +248,8 @@ query       = [ filter ] [ "SORT" "BY" sort { "," sort } ] [ "LIMIT" int ] [ "OF
 sort        = path [ "ASC" | "DESC" ]
 filter      = and { "OR" and }
 and         = not { "AND" not }
-not         = "NOT" not | "(" filter ")" | condition
+not         = "NOT" not | "(" filter ")" | linked | condition
+linked      = "ANY" name "." path [ "(" filter ")" ]
 condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
             | path "IN" "[" [ value { "," value } ] "]" [ case ]
@@ -260,6 +276,8 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 | `email ENDSWITH "@example.com"` | 그 도메인의 주소를 가진 사용자 |
 | `tags CONTAINS "admin"` | 태그 `admin`이 있는 사용자 |
 | `name == "ada" IGNORE CASE` | 이름이 Ada, ADA, ada인 사용자 |
+| `ANY posts.author (year >= 2020)` | 2020년 이후 글이 있는 사용자 |
+| `NOT ANY posts.author` | 글이 없는 사용자 |
 | `tags STARTSWITH "team-"` | `team-`으로 시작하는 태그가 있는 사용자 |
 | `email IS NULL` | 이메일이 없는 사용자 |
 | `city != "Seoul"` | 서울이 아닌 도시에 사는 사용자 |

@@ -255,6 +255,79 @@ users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
 
 `ß` matches `ẞ` but not `ss`, since folding keeps one character for one. A test that ignores case on a field holding no strings fails with `INVALID_QUERY`. No index answers it, so the objects it tests are read.
 
+## Objects that link here
+
+A condition can test the objects of another collection, or of the same one, that link to an object: the users with a post, or with a recent post, or with none. It is `ANY` in the [query language](./query-language.md#objects-that-link-here).
+
+::: lang rust
+
+`Filter::linked` takes the linking collection and its link field; `Filter::linked_where` also a filter on that collection's fields.
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let writers = Filter::linked("posts", "author");
+    let recent = Filter::linked_where(
+        "posts",
+        "author",
+        Filter::ge("year", 2020).and(Filter::eq("draft", false)),
+    );
+    let silent = !Filter::linked("posts", "author");
+    let _ = (writers, recent, silent);
+}
+```
+
+:::
+
+::: lang node
+
+`conditions.linked` takes the linking collection, its link field, and a condition on its fields, or a function that makes one.
+
+```ts
+users.find((q) => q.where((c) => c.linked('posts', 'author')));
+users.find((q) =>
+  q.where((c) =>
+    c.linked('posts', 'author', (p) => p.and(p.ge('year', 2020), p.eq('draft', false)))
+  )
+);
+users.find((q) => q.where((c) => c.not(c.linked('posts', 'author'))));
+```
+
+:::
+
+::: lang dart
+
+`linkedFrom` takes the linking collection's schema constant, a function that picks its link field from that collection's query builder, and a function that makes a condition on its typed fields.
+
+```dart
+users.find((q) => q.where(q.linkedFrom(postSchema, (p) => p.author)));
+users.find((q) => q.where(q.linkedFrom(
+  postSchema,
+  (p) => p.author,
+  (p) => p.year.atLeast(2020) & p.draft.equals(false),
+)));
+users.find((q) => q.where(~q.linkedFrom(postSchema, (p) => p.author)));
+```
+
+:::
+
+::: lang python
+
+`linked` takes the linking collection's class, or its name, its link field by attribute or as an `F` path, and a condition on its attributes.
+
+```python
+from darudb import F, linked
+
+users.find(linked(Post, "author"))
+users.find(linked(Post, "author", (F.year >= 2020) & (F.draft == False)))
+users.find(~linked(Post, "author"))
+```
+
+:::
+
+One linking object has to meet the whole condition, and `not` of the test finds the objects nothing links to. The link may be a list of links. The engine reads the linking objects once for each query, through their own indexes.
+
 ## Combine conditions
 
 ::: lang rust

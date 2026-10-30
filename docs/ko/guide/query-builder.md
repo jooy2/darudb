@@ -255,6 +255,79 @@ users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
 
 접기는 한 글자를 한 글자로 바꾸므로 `ß`는 `ẞ`와 맞지만 `ss`와는 맞지 않습니다. 문자열을 담지 않은 필드에서 대소문자를 무시하면 `INVALID_QUERY`로 실패합니다. 인덱스는 이런 조건에 답하지 않으므로, 검사할 객체를 읽습니다.
 
+## 이 객체를 가리키는 객체
+
+조건은 다른 컬렉션, 또는 같은 컬렉션에서 어떤 객체를 가리키는 객체를 검사할 수 있습니다. 글이 있는 사용자, 최근 글이 있는 사용자, 글이 없는 사용자를 찾는 식입니다. [쿼리 언어](./query-language.md#이-객체를-가리키는-객체)의 `ANY`와 같습니다.
+
+::: lang rust
+
+`Filter::linked`는 가리키는 컬렉션과 그 링크 필드를 받고, `Filter::linked_where`는 그 컬렉션의 필드로 쓴 필터도 받습니다.
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let writers = Filter::linked("posts", "author");
+    let recent = Filter::linked_where(
+        "posts",
+        "author",
+        Filter::ge("year", 2020).and(Filter::eq("draft", false)),
+    );
+    let silent = !Filter::linked("posts", "author");
+    let _ = (writers, recent, silent);
+}
+```
+
+:::
+
+::: lang node
+
+`conditions.linked`는 가리키는 컬렉션과 그 링크 필드, 그리고 그 컬렉션의 필드로 쓴 조건이나 조건을 만드는 함수를 받습니다.
+
+```ts
+users.find((q) => q.where((c) => c.linked('posts', 'author')));
+users.find((q) =>
+  q.where((c) =>
+    c.linked('posts', 'author', (p) => p.and(p.ge('year', 2020), p.eq('draft', false)))
+  )
+);
+users.find((q) => q.where((c) => c.not(c.linked('posts', 'author'))));
+```
+
+:::
+
+::: lang dart
+
+`linkedFrom`은 가리키는 컬렉션의 스키마 상수, 그 컬렉션의 쿼리 빌더에서 링크 필드를 고르는 함수, 그리고 타입이 있는 필드로 조건을 만드는 함수를 받습니다.
+
+```dart
+users.find((q) => q.where(q.linkedFrom(postSchema, (p) => p.author)));
+users.find((q) => q.where(q.linkedFrom(
+  postSchema,
+  (p) => p.author,
+  (p) => p.year.atLeast(2020) & p.draft.equals(false),
+)));
+users.find((q) => q.where(~q.linkedFrom(postSchema, (p) => p.author)));
+```
+
+:::
+
+::: lang python
+
+`linked`는 가리키는 컬렉션의 클래스나 이름, 속성 이름이나 `F` 경로로 쓴 링크 필드, 그리고 그 클래스의 속성으로 쓴 조건을 받습니다.
+
+```python
+from darudb import F, linked
+
+users.find(linked(Post, "author"))
+users.find(linked(Post, "author", (F.year >= 2020) & (F.draft == False)))
+users.find(~linked(Post, "author"))
+```
+
+:::
+
+가리키는 객체 하나가 조건 전체를 만족해야 하며, 이 검사에 `not`을 씌우면 아무것도 가리키지 않는 객체를 찾습니다. 링크는 링크 목록이어도 됩니다. 엔진은 쿼리마다 한 번, 가리키는 객체를 그 컬렉션의 인덱스로 읽습니다.
+
 ## 조건 묶기
 
 ::: lang rust

@@ -191,3 +191,19 @@ ignoreCase(condition: Condition): Condition;
 ```
 
 `condition` 안의 `eq`, `ne`, `in`, `contains`, `startsWith`, `endsWith` 검사가 모두 Unicode의 단순 대소문자 접기로 대소문자를 무시하고 문자열을 비교하게 바꾼 조건입니다. 다른 검사는 그대로 둡니다. 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#대소문자-무시하기)의 `IGNORE CASE`와 같으며, 인덱스는 이 검사에 답하지 않습니다.
+
+### linked
+
+```ts
+linked(
+  collection: string,
+  link: string,
+  condition?: Condition | ((conditions: Conditions) => Condition)
+): Condition;
+```
+
+`collection`의 어떤 객체가 링크 필드 `link`로 가리키고, 주어졌다면 `collection`의 필드로 쓴 `condition`도 만족하는 객체에서 참이 됩니다. `link`는 이름이거나 점으로 이은 경로이며, 쿼리를 실행하는 컬렉션을 가리켜야 합니다. 가리키는 객체 하나가 조건 전체를 만족해야 하며, `not`을 씌우면 아무것도 가리키지 않는 객체를 찾습니다. 링크는 링크 목록이어도 됩니다. 엔진이 컬렉션과 링크, 조건을 검사하고 맞지 않으면 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#이-객체를-가리키는-객체)의 `ANY posts.author (year >= 2020)`과 같습니다.
+
+```ts
+users.find((q) => q.where((c) => c.linked('posts', 'author', (p) => p.ge('year', 2020))));
+```

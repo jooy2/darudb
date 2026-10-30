@@ -145,6 +145,22 @@ pub fn is_not_null(field: &str) -> Self
 
 The field is not null. It is `!Filter::is_null(field)`.
 
+### linked
+
+```rust
+pub fn linked(collection: &str, link: &str) -> Self
+```
+
+Holds for an object that some object of `collection` links to through its link field `link`, a name or a path such as `meta.author`, to the collection the query runs on: `Filter::linked("posts", "author")` finds the users with a post, and `!` of it those without. The link may be a list of links. A collection that is not there, or a field that is not such a link, fails with `INVALID_QUERY` when the query runs. It is `ANY posts.author` in the [query language](../../guide/query-language.md#objects-that-link-here).
+
+### linked_where
+
+```rust
+pub fn linked_where(collection: &str, link: &str, filter: Filter) -> Self
+```
+
+[`linked`](#linked), with `filter` on the fields of `collection`, which one linking object has to meet whole: `Filter::linked_where("posts", "author", Filter::ge("year", 2020))`. It is `ANY posts.author (year >= 2020)`.
+
 ## Methods
 
 ### and

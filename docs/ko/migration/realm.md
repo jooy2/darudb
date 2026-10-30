@@ -465,7 +465,7 @@ final db = await Database.openAsync(path, schema: app);
 
 - `CONTAINS[c]`의 `[c]`는 조건 뒤의 `IGNORE CASE`가 됩니다. `name CONTAINS "li" IGNORE CASE`처럼 씁니다. 와일드카드를 쓰는 `LIKE`에는 대응하는 것이 없습니다.
 - 필드의 집계 `@sum`, `@min`, `@max`, `@avg`는 쿼리와 함께 컬렉션의 `sum`, `min`, `max`, `avg`가 되고, `@count`는 `count`가 됩니다. `items.@sum.price > 10`처럼 필터 안에서 쓰는 집계에는 대응하는 것이 없습니다.
-- 백링크는 링크 필드로 하는 쿼리가 됩니다. 사용자의 글은 `posts`에서 사용자의 키로 `author == $0`을 찾으면 됩니다.
+- 백링크는 링크 필드로 하는 쿼리가 됩니다. 사용자의 글은 `posts`에서 사용자의 키로 `author == $0`을 찾으면 됩니다. `@links.Post.author.year > 2020`처럼 백링크에 거는 필터는 `users`에서 `ANY posts.author (year > 2020)`이 됩니다.
 
 쿼리 언어 전체와 빌더는 [쿼리](../guide/queries.md)에 있습니다.
 

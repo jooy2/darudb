@@ -131,6 +131,21 @@ tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
 - **No index.** An index keeps the exact bytes, so a condition that ignores case is tested on each object read. A query that also has a condition an index answers, joined with `AND`, still reads only those objects.
 - **Not keywords.** `IGNORE` and `CASE` are read as such only after a condition, so a field may be called `ignore` or `case` without backticks.
 
+## Objects that link here
+
+`ANY`, then a collection, a dot and a link field of its objects, holds for an object that some object of that collection links to through that field. A filter in parentheses after it narrows the linking objects: one of them has to meet the whole filter.
+
+```text
+ANY posts.author
+ANY posts.author (year >= 2020 AND draft == false)
+NOT ANY posts.author
+```
+
+- **The link** is a field of the other collection, a to-one link or a list of links, to the collection the query runs on; a path through an embedded object is allowed, such as `posts.meta.author`. Anything else fails with `INVALID_QUERY`, as a filter on fields the other collection does not have does.
+- **`NOT ANY`** finds the objects that nothing links to through that field.
+- **Cost.** The engine finds the linking objects once for each query, through their own indexes, and gathers the keys their links name. When that set is small, it reads only those objects.
+- **Not a keyword.** `ANY` is read so only before a collection's name, so a field may be called `any`.
+
 ## Combine conditions
 
 | Keyword     | Example                              | Holds when                      |
@@ -211,7 +226,7 @@ An integer has to fit in 64 bits. `true`, `false` and `null` are case-insensitiv
 
 ## Keywords
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts. `IGNORE CASE` is read only after a condition, so its words are not among them.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts. `IGNORE CASE` is read only after a condition, and `ANY` only before a collection's name, so neither is among them.
 
 ## Errors
 
@@ -233,7 +248,8 @@ query       = [ filter ] [ "SORT" "BY" sort { "," sort } ] [ "LIMIT" int ] [ "OF
 sort        = path [ "ASC" | "DESC" ]
 filter      = and { "OR" and }
 and         = not { "AND" not }
-not         = "NOT" not | "(" filter ")" | condition
+not         = "NOT" not | "(" filter ")" | linked | condition
+linked      = "ANY" name "." path [ "(" filter ")" ]
 condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
             | path "IN" "[" [ value { "," value } ] "]" [ case ]
@@ -260,6 +276,8 @@ The examples below run against a collection of users with these fields: `name` a
 | `email ENDSWITH "@example.com"` | Users with an address at that domain |
 | `tags CONTAINS "admin"` | Users with the tag `admin` |
 | `name == "ada" IGNORE CASE` | Users named Ada, ADA or ada |
+| `ANY posts.author (year >= 2020)` | Users with a post from 2020 or later |
+| `NOT ANY posts.author` | Users without a post |
 | `tags STARTSWITH "team-"` | Users with a tag that starts with `team-` |
 | `email IS NULL` | Users without an email |
 | `city != "Seoul"` | Users with a city other than Seoul |

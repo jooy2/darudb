@@ -145,6 +145,22 @@ pub fn is_not_null(field: &str) -> Self
 
 필드가 null이 아닙니다. `!Filter::is_null(field)`와 같습니다.
 
+### linked
+
+```rust
+pub fn linked(collection: &str, link: &str) -> Self
+```
+
+`collection`의 어떤 객체가 링크 필드 `link`로 가리키는 객체에서 참이 됩니다. `link`는 이름이거나 `meta.author` 같은 경로이며, 쿼리를 실행하는 컬렉션을 가리켜야 합니다. `Filter::linked("posts", "author")`는 글이 있는 사용자를, 여기에 `!`를 씌우면 글이 없는 사용자를 찾습니다. 링크는 링크 목록이어도 됩니다. 없는 컬렉션이나 그런 링크가 아닌 필드는 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#이-객체를-가리키는-객체)의 `ANY posts.author`와 같습니다.
+
+### linked_where
+
+```rust
+pub fn linked_where(collection: &str, link: &str, filter: Filter) -> Self
+```
+
+[`linked`](#linked)에 `collection`의 필드로 쓴 `filter`를 더한 것으로, 가리키는 객체 하나가 필터 전체를 만족해야 합니다. `Filter::linked_where("posts", "author", Filter::ge("year", 2020))`은 `ANY posts.author (year >= 2020)`과 같습니다.
+
 ## 메서드
 
 ### and

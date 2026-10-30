@@ -63,3 +63,21 @@ QueryBuilder<T> limit(int count);
 ```
 
 Keeps at most `count` objects. A negative count throws `INVALID_ARGUMENT`. A query sorted by an indexed field alone stops reading at the limit.
+
+### linkedFrom
+
+```dart
+Condition linkedFrom<L, LQ extends QueryBuilder<L>>(
+  CollectionSchema<L, LQ, Object> schema,
+  Field Function(LQ q) link, [
+  Condition Function(LQ q)? where,
+]);
+```
+
+A condition that holds for an object some object of `schema`'s collection links to, through the link field `link` picks from that collection's query builder, and that meets `where`, a condition on that collection's typed fields, if it is given: one linking object has to meet it whole. `~` of it finds the objects nothing links to. The link may be a list of links, and has to link to the collection the query runs on, or the query fails with `INVALID_QUERY`. It is `ANY posts.author (year >= 2020)` in the [query language](../../guide/query-language.md#objects-that-link-here).
+
+```dart
+users.find((q) => q.where(
+  q.linkedFrom(postSchema, (p) => p.author, (p) => p.year.atLeast(2020)),
+));
+```
