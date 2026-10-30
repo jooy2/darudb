@@ -92,6 +92,46 @@ count(prepared: Prepared<O>, parameters?: QueryParameters): number;
 
 How many objects a query finds, after its offset and within its limit. Without a query it counts every object, which reads only the number the collection keeps rather than the objects.
 
+### sum
+
+```ts
+sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): SumOf<O[K]>;
+sum(path: DottedPath, ...query: QueryArguments<O>): number | bigint;
+```
+
+The sum of a number field, or of a path through embedded objects and links such as `'order.total'`, over the objects a query finds, after its sort, offset and limit. The query comes after the field in any form `find` takes: built, as text with its parameters, or prepared with them; without one, every object. The sum is exact, and 0 when there is no value. A `t.bigint()` field sums to a `bigint`; an int field sums to a number, and a sum beyond 2^53 fails with `INVALID_ARGUMENT`, as reading such an int does. A field that holds no numbers, or several values, fails with `INVALID_QUERY`.
+
+```ts
+users.sum('age', (q) => q.where('team', '==', 'north'));
+users.sum('age', 'age >= $0', [18]);
+```
+
+### min
+
+```ts
+min<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+min(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+```
+
+The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+
+### max
+
+```ts
+max<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+max(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+```
+
+The greatest value of a field over the objects a query finds, or `null`.
+
+### avg
+
+```ts
+avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): number | null;
+```
+
+The mean of a number field over the objects a query finds: the exact sum over the number of values, rounded once, or `null` when there is none.
+
 ## AsyncReadCollection
 
 ```ts
@@ -107,6 +147,19 @@ interface AsyncReadCollection<O> {
   count(query?: QueryInput<O>): Promise<number>;
   count(text: string, parameters?: QueryParameters): Promise<number>;
   count(prepared: Prepared<O>, parameters?: QueryParameters): Promise<number>;
+  sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): Promise<SumOf<O[K]>>;
+  sum(path: DottedPath, ...query: QueryArguments<O>): Promise<number | bigint>;
+  min<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  min(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  max<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  max(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): Promise<number | null>;
 }
 ```
 

@@ -126,6 +126,64 @@ int countPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
 
 준비한 쿼리가 찾은 객체의 개수를 돌려줍니다.
 
+### sum
+
+```dart
+V sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+쿼리가 찾은 객체에서 `field`가 쿼리 빌더에서 고른 숫자 필드의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상이고, 쿼리가 없으면 모든 객체가 대상입니다. 필드는 `(q) => q.customer.age`처럼 내장 객체나 링크한 객체의 필드여도 됩니다. 합계는 정확하며 필드의 타입을 따릅니다. `IntField`는 `int`, `FloatField`는 `double`이고, 값이 없으면 0입니다. 정수 합계가 64비트 정수 범위를 넘으면 `INVALID_ARGUMENT`로 실패합니다.
+
+```dart
+users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
+```
+
+### min
+
+```dart
+V? min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+쿼리가 찾은 객체에서 숫자, 문자열, 바이트 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+
+### max
+
+```dart
+V? max<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+쿼리가 찾은 객체에서 필드의 최댓값을 구합니다. 값이 없으면 `null`입니다.
+
+### avg
+
+```dart
+double? avg(OrderedField<num> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+쿼리가 찾은 객체에서 숫자 필드의 평균을 구합니다. 정확한 합계를 값의 개수로 나눠 한 번만 반올림하며, 값이 없으면 `null`입니다.
+
+### sumText, minText, maxText, avgText
+
+```dart
+V sumText<V extends num>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+V? minText<V extends Object>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+V? maxText<V extends Object>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+double? avgText(OrderedField<num> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+```
+
+쿼리 언어로 쓴 `text`가 `parameters`로 찾은 객체에서 위의 집계를 구합니다.
+
+### sumPrepared, minPrepared, maxPrepared, avgPrepared
+
+```dart
+V sumPrepared<V extends num>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+V? minPrepared<V extends Object>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+V? maxPrepared<V extends Object>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+double? avgPrepared(OrderedField<num> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+준비한 쿼리가 `parameters`로 찾은 객체에서 위의 집계를 구합니다.
+
 ## AsyncReadCollection
 
 ```dart
@@ -141,6 +199,11 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   Future<List<T>> findPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
   Future<T?> findOnePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
   Future<int> countPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
+  Future<V> sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<V?> min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<V?> max<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<double?> avg(OrderedField<num> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  // And `sumText`, `sumPrepared` and the like, as above.
 }
 ```
 

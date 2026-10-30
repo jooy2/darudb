@@ -93,6 +93,46 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 How many objects `query` finds, after its offset and within its limit. A filter that an index or the primary key answers alone is counted without reading the objects. It fails as `query` does.
 
+### sum
+
+```rust
+pub fn sum(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+The sum of `field`, an int or float field or a path to one through embedded objects and links such as `order.total`, over the objects `query` finds, after its sort, offset and limit. An int field sums to `Value::Int`, exactly, and a float field to `Value::Float`, the exact sum rounded once. Null values are left out, and a sum of no values is zero. A sum of ints outside the range of an `i64` fails with `INVALID_ARGUMENT`, and a field of another type, or one that holds several values, with `INVALID_QUERY`.
+
+### min
+
+```rust
+pub fn min(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+The least value of `field`, an int, float, string or bytes field, over the objects `query` finds, in the order a sort gives, or `Value::Null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+
+### max
+
+```rust
+pub fn max(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+The greatest value of `field`, as [`min`](#min) gives the least.
+
+### avg
+
+```rust
+pub fn avg(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+The mean of `field`, an int or float field, over the objects `query` finds, as `Value::Float`: the exact sum divided by the number of values, rounded once. `Value::Null` when there are no values.
+
+### aggregate
+
+```rust
+pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value>
+```
+
+The [`Aggregate`](../../types/rust/aggregate.md) `function` of the field at `path`, one name for each step, as a binding's IR carries it. `sum`, `min`, `max` and `avg` take the path as text and call this.
+
 ### get_record
 
 ```rust

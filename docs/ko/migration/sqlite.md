@@ -563,11 +563,12 @@ sqlite.close()
 | `WHERE name LIKE '%li%'` | `name CONTAINS "li"` |
 | `ORDER BY age DESC LIMIT 10 OFFSET 20` | `SORT BY age DESC LIMIT 10 OFFSET 20` |
 | `SELECT count(*) ...` | 같은 쿼리로 `count` |
+| `SELECT sum(total) ...`, `min`, `max`, `avg` | 같은 쿼리로 `sum("total")`, `min`, `max`, `avg` |
 | `JOIN users ON users.id = posts.author_id WHERE users.name = 'Alice'` | `posts`에서 `author.name == "Alice"` |
 | `JOIN post_tags ... WHERE tag = 'news'` | `posts`에서 `tags CONTAINS "news"` |
 
 - `LIKE`는 ASCII 문자의 대소문자를 가리지 않지만, `STARTSWITH`와 `CONTAINS`는 바이트를 그대로 비교하므로 가립니다. 대소문자 없이 찾으려면 필드를 소문자로 바꾼 사본을 따로 두고 그 필드로 찾으세요.
-- 조인은 링크를 따라가는 경로가 되고, 경로는 링크가 가리키는 객체를 읽습니다. `GROUP BY`, 개수 말고 다른 집계, 서브쿼리, 링크가 아닌 것으로 하는 조인에는 대응하는 것이 없습니다.
+- 조인은 링크를 따라가는 경로가 되고, 경로는 링크가 가리키는 객체를 읽습니다. `GROUP BY`, 서브쿼리, 링크가 아닌 것으로 하는 조인에는 대응하는 것이 없습니다.
 - 프로그램 바깥에서 들어온 값은 prepared statement에서처럼 `$0` 같은 매개변수로 넘기세요. 쿼리 언어 전체와 빌더는 [쿼리](../guide/queries.md)에 있습니다.
 
 ## 애플리케이션에서 바뀌는 것

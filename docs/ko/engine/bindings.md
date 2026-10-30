@@ -141,10 +141,11 @@ value   = tag payload
 | 4 | offset | `int` |
 | 5 | limit | `int` |
 | 6 | count | `bool`. 객체를 돌려주는 대신 개수를 셉니다 |
+| 7 | aggregate | 내장 객체. 필드 1은 함수(1 `sum`, 2 `min`, 3 `max`, 4 `avg`)이고 필드 2는 읽을 필드의 경로입니다. 객체를 돌려주는 대신 그 집계를 구합니다 |
 
 식 안의 값 자리에는 매개변수가 올 수도 있습니다. 필드 1에 매개변수 번호가 든 내장 객체입니다.
 
-[`QueryRequest::decode`](../api/rust/query-request.md)는 IR을 읽어 컬렉션과 [`Query`](../api/rust/query.md), 개수를 셀지 여부로 나누고, 해석할 수 없는 IR은 `INVALID_QUERY`로 거부합니다. 바인딩은 그다음 컬렉션에서 쿼리를 실행합니다.
+[`QueryRequest::decode`](../api/rust/query-request.md)는 IR을 읽어 컬렉션과 [`Query`](../api/rust/query.md), 개수를 셀지 여부, 집계로 나누고, 해석할 수 없는 IR은 `INVALID_QUERY`로 거부합니다. 바인딩은 그다음 컬렉션에서 쿼리를 실행합니다. 집계의 결과는 값 하나이며, 바이트로 넘기는 바인딩을 위해 `darudb::__binding::tagged`가 레코드에 값을 담는 형식대로 태그부터 인코딩합니다. null은 태그 `0x01`입니다.
 
 ```rust
 use darudb::{QueryRequest, ReadTransaction};

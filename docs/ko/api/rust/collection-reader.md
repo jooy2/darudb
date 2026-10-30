@@ -93,6 +93,46 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 `query`가 찾는 객체 수를 오프셋을 건너뛰고 개수 제한 안에서 셉니다. 인덱스나 기본 키만으로 답할 수 있는 필터라면 객체를 읽지 않고 셉니다. 실패하는 경우는 `query`와 같습니다.
 
+### sum
+
+```rust
+pub fn sum(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+`query`가 찾은 객체에서 `field`의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상입니다. `field`는 정수나 실수 필드, 또는 `order.total`처럼 내장 객체와 링크를 거쳐 그런 필드에 닿는 경로입니다. 정수 필드는 정확한 합계를 `Value::Int`로, 실수 필드는 정확한 합계를 한 번 반올림해 `Value::Float`로 돌려줍니다. null 값은 빼고, 값이 하나도 없으면 0입니다. 정수 합계가 `i64` 범위를 넘으면 `INVALID_ARGUMENT`로, 다른 타입의 필드나 값을 여럿 담은 필드면 `INVALID_QUERY`로 실패합니다.
+
+### min
+
+```rust
+pub fn min(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+`query`가 찾은 객체에서 정수, 실수, 문자열, 바이트 필드인 `field`의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `Value::Null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+
+### max
+
+```rust
+pub fn max(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+[`min`](#min)이 최솟값을 구하듯 `field`의 최댓값을 구합니다.
+
+### avg
+
+```rust
+pub fn avg(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+`query`가 찾은 객체에서 정수나 실수 필드인 `field`의 평균을 `Value::Float`로 구합니다. 정확한 합계를 값의 개수로 나눈 뒤 한 번만 반올림합니다. 값이 없으면 `Value::Null`입니다.
+
+### aggregate
+
+```rust
+pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value>
+```
+
+바인딩의 IR처럼 경로를 단계별 이름 목록으로 받아, `path`에 있는 필드의 [`Aggregate`](../../types/rust/aggregate.md) `function`을 구합니다. `sum`, `min`, `max`, `avg`는 경로를 문자열로 받아 이 메서드를 부릅니다.
+
 ### get_record
 
 ```rust

@@ -92,6 +92,46 @@ count(prepared: Prepared<O>, parameters?: QueryParameters): number;
 
 쿼리가 찾은 객체의 수입니다. 오프셋을 건너뛰고 개수 제한 안에서 셉니다. 쿼리를 주지 않으면 모든 객체를 세는데, 이때는 객체를 읽지 않고 컬렉션이 기록해 둔 개수만 읽습니다.
 
+### sum
+
+```ts
+sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): SumOf<O[K]>;
+sum(path: DottedPath, ...query: QueryArguments<O>): number | bigint;
+```
+
+쿼리가 찾은 객체에서 숫자 필드, 또는 `'order.total'`처럼 내장 객체와 링크를 거치는 경로의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상입니다. 쿼리는 필드 뒤에 `find`가 받는 어떤 형태로든 줍니다. 빌더로 만든 쿼리, 매개변수와 함께 주는 문자열, 매개변수와 함께 주는 준비된 쿼리 모두 됩니다. 쿼리가 없으면 모든 객체가 대상입니다. 합계는 정확하며, 값이 없으면 0입니다. `t.bigint()` 필드의 합계는 `bigint`입니다. 정수 필드의 합계는 숫자이고, 2^53을 넘으면 그런 정수를 읽을 때처럼 `INVALID_ARGUMENT`로 실패합니다. 숫자를 담지 않거나 값을 여럿 담은 필드는 `INVALID_QUERY`로 실패합니다.
+
+```ts
+users.sum('age', (q) => q.where('team', '==', 'north'));
+users.sum('age', 'age >= $0', [18]);
+```
+
+### min
+
+```ts
+min<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+min(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+```
+
+쿼리가 찾은 객체에서 숫자, 문자열, 바이트 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+
+### max
+
+```ts
+max<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+max(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+```
+
+쿼리가 찾은 객체에서 필드의 최댓값을 구합니다. 값이 없으면 `null`입니다.
+
+### avg
+
+```ts
+avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): number | null;
+```
+
+쿼리가 찾은 객체에서 숫자 필드의 평균을 구합니다. 정확한 합계를 값의 개수로 나눠 한 번만 반올림하며, 값이 없으면 `null`입니다.
+
 ## AsyncReadCollection
 
 ```ts
@@ -107,6 +147,19 @@ interface AsyncReadCollection<O> {
   count(query?: QueryInput<O>): Promise<number>;
   count(text: string, parameters?: QueryParameters): Promise<number>;
   count(prepared: Prepared<O>, parameters?: QueryParameters): Promise<number>;
+  sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): Promise<SumOf<O[K]>>;
+  sum(path: DottedPath, ...query: QueryArguments<O>): Promise<number | bigint>;
+  min<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  min(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  max<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  max(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): Promise<number | null>;
 }
 ```
 

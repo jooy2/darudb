@@ -126,6 +126,64 @@ int countPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
 
 How many objects a prepared query finds.
 
+### sum
+
+```dart
+V sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+The sum of a number field, which `field` picks from the query builder, over the objects a query finds, after its sort, offset and limit: every object without one. The field may be one of an embedded object or of a linked object, `(q) => q.customer.age`. The sum is exact and has the field's type, an `int` for an `IntField` and a `double` for a `FloatField`, and is 0 when there is no value. A sum of ints outside the range of a 64-bit int fails with `INVALID_ARGUMENT`.
+
+```dart
+users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
+```
+
+### min
+
+```dart
+V? min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+
+### max
+
+```dart
+V? max<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+The greatest value of a field over the objects a query finds, or `null`.
+
+### avg
+
+```dart
+double? avg(OrderedField<num> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+```
+
+The mean of a number field over the objects a query finds: the exact sum over the number of values, rounded once, or `null` when there is none.
+
+### sumText, minText, maxText, avgText
+
+```dart
+V sumText<V extends num>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+V? minText<V extends Object>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+V? maxText<V extends Object>(OrderedField<V> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+double? avgText(OrderedField<num> Function(Q q) field, String text, [List<Object?> parameters = const []]);
+```
+
+The aggregates above over the objects `text`, a query in the query language, finds with `parameters`.
+
+### sumPrepared, minPrepared, maxPrepared, avgPrepared
+
+```dart
+V sumPrepared<V extends num>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+V? minPrepared<V extends Object>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+V? maxPrepared<V extends Object>(OrderedField<V> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+double? avgPrepared(OrderedField<num> Function(Q q) field, Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+The aggregates above over the objects a prepared query finds with `parameters`.
+
 ## AsyncReadCollection
 
 ```dart
@@ -141,6 +199,11 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   Future<List<T>> findPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
   Future<T?> findOnePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
   Future<int> countPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
+  Future<V> sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<V?> min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<V?> max<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  Future<double?> avg(OrderedField<num> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
+  // And `sumText`, `sumPrepared` and the like, as above.
 }
 ```
 

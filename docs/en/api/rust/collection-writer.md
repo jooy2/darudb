@@ -135,6 +135,25 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 How many objects `query` finds, with this transaction's changes; see [`CollectionReader::count`](./collection-reader.md#count).
 
+### sum, min, max, avg
+
+```rust
+pub fn sum(&self, query: &Query, field: &str) -> Result<Value>
+pub fn min(&self, query: &Query, field: &str) -> Result<Value>
+pub fn max(&self, query: &Query, field: &str) -> Result<Value>
+pub fn avg(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+An aggregate of `field` over the objects `query` finds, with this transaction's changes; see [`CollectionReader::sum`](./collection-reader.md#sum) and the methods after it.
+
+### aggregate
+
+```rust
+pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value>
+```
+
+[`CollectionReader::aggregate`](./collection-reader.md#aggregate), with this transaction's changes.
+
 ### insert_record
 
 ```rust

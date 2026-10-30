@@ -559,7 +559,7 @@ export const SECTIONS: Section[] = [
         redb: no()
       }),
       row('aggregates', 'Aggregations beyond counting', '개수 외의 집계', {
-        darudb: no('Counting only', '개수만'),
+        darudb: yes('Sum, min, max and mean, exact', '합계, 최솟값, 최댓값, 평균, 정확한 값'),
         sqlite: yes(),
         realm: yes(),
         objectbox: yes(),

@@ -141,10 +141,11 @@ A query crosses as IR, in one buffer: a record of a fixed shape.
 | 4 | offset | `int` |
 | 5 | limit | `int` |
 | 6 | count | `bool`: count the objects rather than return them |
+| 7 | aggregate | An embedded object: field 1 the function, 1 `sum`, 2 `min`, 3 `max`, 4 `avg`, and field 2 the path of the field it reads; work out that aggregate rather than return the objects |
 
 A value in an expression may instead be a parameter: an embedded object whose field 1 is the parameter's number.
 
-[`QueryRequest::decode`](../api/rust/query-request.md) reads the IR into the collection, the [`Query`](../api/rust/query.md) and whether to count, and refuses IR that does not decode with `INVALID_QUERY`. The binding then runs the query on the collection:
+[`QueryRequest::decode`](../api/rust/query-request.md) reads the IR into the collection, the [`Query`](../api/rust/query.md), whether to count, and the aggregate, and refuses IR that does not decode with `INVALID_QUERY`. The binding then runs the query on the collection. An aggregate's result is one value, which `darudb::__binding::tagged` encodes as a record holds a value, tag first, with null as the tag `0x01`, for a binding that hands it on as bytes:
 
 ```rust
 use darudb::{QueryRequest, ReadTransaction};

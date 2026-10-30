@@ -88,6 +88,43 @@ def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...
 
 쿼리가 찾은 객체의 수입니다. 오프셋을 건너뛰고 개수 제한 안에서 셉니다. 쿼리를 주지 않으면 모든 객체를 세는데, 이때는 객체를 읽지 않고 컬렉션이 기록해 둔 개수만 읽습니다.
 
+### sum
+
+```python
+def sum(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> int | float: ...
+```
+
+쿼리가 찾은 객체에서 정수나 실수 필드의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상입니다. 쿼리는 `find`가 받는 어떤 형태로든 주고 매개변수는 그 뒤에 이어 주며, 쿼리가 없으면 모든 객체가 대상입니다. `field`는 속성 이름, `"address.zip"`처럼 내장 객체와 링크를 거치는 경로, 또는 `F.address.zip` 같은 `F` 경로이며, 패키지가 파일에 저장된 이름으로 바꿔 엔진에 넘깁니다. 합계는 정확합니다. 정수 필드는 `int`, 실수 필드는 `float`이고, 값이 없으면 0입니다. 정수 합계가 64비트 정수 범위를 넘으면 `INVALID_ARGUMENT`로, 숫자를 담지 않거나 값을 여럿 담은 필드면 `INVALID_QUERY`로 실패합니다.
+
+```python
+users.sum("age", F.team.city == "Seoul")
+users.sum(F.age, "age >= $0", 18)
+```
+
+### min
+
+```python
+def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+```
+
+쿼리가 찾은 객체에서 숫자, 문자열, 바이트 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 None입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+
+### max
+
+```python
+def max(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+```
+
+쿼리가 찾은 객체에서 필드의 최댓값을 구합니다. 값이 없으면 None입니다.
+
+### avg
+
+```python
+def avg(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> float | None: ...
+```
+
+쿼리가 찾은 객체에서 정수나 실수 필드의 평균을 구합니다. 정확한 합계를 값의 개수로 나눠 한 번만 반올림하며, 값이 없으면 None입니다.
+
 ## AsyncReadCollection
 
 ```python
@@ -98,6 +135,10 @@ class AsyncReadCollection(Generic[T]):
     async def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]: ...
     async def find_one(self, query: QueryInput = None, /, *parameters: object) -> T | None: ...
     async def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...
+    async def sum(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> int | float: ...
+    async def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+    async def max(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+    async def avg(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> float | None: ...
 ```
 
 비동기 트랜잭션의 컬렉션입니다. 멤버가 하는 일은 위와 같되 코루틴이고, `CLOSED`를 포함해 실패하면 작업을 await한 자리에서 같은 오류를 일으킵니다. 작업은 패키지의 스레드 풀에서 시작한 순서대로 하나씩 실행되고, 작업마다 풀을 따로 오갑니다.

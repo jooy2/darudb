@@ -273,6 +273,104 @@ with db.read() as txn:
 
 준비해 두면 실행할 때마다 쿼리를 해석하거나 인코딩하는 비용이 빠지고, 문자열 쿼리에서 효과가 가장 큽니다. 실행 계획은 값에 맞춰 매번 새로 세웁니다.
 
+## 객체에서 값 하나 계산하기
+
+집계는 쿼리가 찾은 객체의 한 필드에서 값 하나를 계산합니다. 합계, 최솟값이나 최댓값, 평균을 구할 수 있습니다. 개수를 셀 때처럼 쿼리의 정렬, 오프셋, 개수 제한을 거친 뒤 남는 객체를 읽으며, 객체 자체는 프로그램에 넘기지 않습니다.
+
+::: lang rust
+
+`sum`, `min`, `max`, `avg`는 쿼리와 필드를 받습니다. 필드는 내장 객체와 링크를 거치는 경로여도 됩니다. 결과는 [`Value`](../types/rust/value.md)입니다.
+
+```rust
+use darudb::{Database, Filter, Query, Value};
+
+fn totals(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let orders = read.collection("orders")?;
+    let paid = Query::new().filter(Filter::eq("status", "paid"));
+
+    let revenue = orders.sum(&paid, "total")?;
+    let largest = orders.max(&paid, "total")?;
+    let mean = orders.avg(&paid, "total")?;
+    let first = orders.min(&Query::new(), "customer.name")?;
+
+    if let Value::Float(revenue) = revenue {
+        println!("{revenue} from paid orders, the largest {largest:?}, on average {mean:?}");
+    }
+
+    println!("first customer by name: {first:?}");
+    Ok(())
+}
+```
+
+실행 중에 함수를 고르는 프로그램은 `aggregate`에 [`Aggregate`](../types/rust/aggregate.md)와 경로의 이름 목록을 넘깁니다.
+
+:::
+
+::: lang node
+
+`sum`, `min`, `max`, `avg`는 필드를 먼저 받고, 그다음에 `find`가 받는 모든 형태의 쿼리와 그 매개변수를 받습니다.
+
+```ts
+db.read((txn) => {
+  const orders = txn.collection('orders');
+
+  const revenue = orders.sum('total', (q) => q.where('status', '==', 'paid'));
+  const largest = orders.max('total', 'status == $0', ['paid']);
+  const mean = orders.avg('total');
+  const first = orders.min('customer.name');
+});
+```
+
+TypeScript에서 `sum`과 `avg`는 숫자를 담은 필드만 받고, 결과는 필드의 타입을 따릅니다. `t.bigint()` 필드의 합계는 `bigint`입니다. 내장 객체나 링크를 거치는 경로는 엔진이 검사합니다.
+
+:::
+
+::: lang dart
+
+`sum`, `min`, `max`, `avg`는 쿼리 빌더에서 필드를 고르는 함수를 먼저 받고, 그다음에 쿼리를 받습니다. 결과는 필드의 타입을 따릅니다. 정수 필드의 `sum`은 `int`, 실수 필드의 `sum`은 `double`입니다.
+
+```dart
+db.read((txn) {
+  final orders = txn.collection(orderSchema);
+
+  final int count = orders.sum((q) => q.items);
+  final double revenue = orders.sum((q) => q.total, (q) => q.where(q.status.equals('paid')));
+  final largest = orders.maxText((q) => q.total, r'status == $0', ['paid']);
+  final mean = orders.avg((q) => q.total);
+  final first = orders.min((q) => q.customer.name);
+});
+```
+
+`sumText`, `minText`, `maxText`, `avgText`는 쿼리 언어로 쓴 쿼리를, `sumPrepared` 등은 준비한 쿼리를 받습니다.
+
+:::
+
+::: lang python
+
+`sum`, `min`, `max`, `avg`는 필드를 이름이나 `"customer.name"` 같은 경로, 또는 `F.total`로 받고, 그다음에 `find`가 받는 모든 형태의 쿼리와 그 매개변수를 받습니다.
+
+```python
+from darudb import F
+
+with db.read() as txn:
+    orders = txn.collection(Order)
+
+    revenue = orders.sum(F.total, F.status == "paid")
+    largest = orders.max("total", "status == $0", "paid")
+    mean = orders.avg("total")
+    first = orders.min(F.customer.name)
+```
+
+:::
+
+집계가 주는 값은 모든 언어에서 같습니다.
+
+- **필드**는 객체마다 값을 하나만 담아야 합니다. 내장 객체와 링크는 거칠 수 있지만 리스트는 거칠 수 없습니다. `sum`과 `avg`는 숫자를, `min`과 `max`는 숫자와 문자열과 바이트를 읽으며, 정렬과 같은 순서로 비교합니다. 그 밖의 필드는 `INVALID_QUERY`로 실패합니다.
+- **null은 빼고 계산합니다.** 없는 객체를 가리키는 링크처럼 값에 닿지 않는 경로도 뺍니다. 값이 하나도 없으면 합계는 0이고, 최솟값과 최댓값과 평균은 null입니다.
+- **합계는 정확합니다.** 정수는 반올림 없이 더하고, 합계가 64비트 정수 범위를 넘으면 `INVALID_ARGUMENT`로 실패합니다. 실수의 합계와 평균은 정확한 값을 한 번만 반올림하므로 객체를 읽는 순서에 따라 달라지지 않습니다. 평균은 언제나 실수입니다.
+- **인덱스가 있으면 빨라집니다.** 객체가 만족해야 할 조건이 남아 있지 않으면, 인덱스가 있는 필드의 최솟값이나 최댓값은 객체를 읽지 않고 인덱스의 끝에서 읽습니다. 그렇지 않으면 쿼리가 찾은 객체마다 필드 하나를 읽습니다.
+
 ## 엔진이 읽는 방법
 
 기본 키나 인덱스가 있는 필드에 건 조건이 나머지 조건과 AND로 이어져 있으면, 엔진은 그 조건에 맞는 객체만 읽습니다. 인덱스가 있는 필드 하나로만 정렬하면 그 순서대로 읽다가 개수 제한에서 멈춥니다. 그렇지 않으면 컬렉션의 객체를 모두 읽습니다. 어느 쪽으로 읽든 결과는 같습니다.

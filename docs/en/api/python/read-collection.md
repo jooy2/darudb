@@ -88,6 +88,43 @@ def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...
 
 How many objects a query finds, after its offset and within its limit. Without a query it counts every object, which reads only the number the collection keeps rather than the objects.
 
+### sum
+
+```python
+def sum(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> int | float: ...
+```
+
+The sum of an int or float field over the objects a query finds, after its sort, offset and limit, with the query in any form `find` takes and its parameters after it; every object without one. `field` is an attribute's name, a path through embedded objects and links such as `"address.zip"`, or an `F` path such as `F.address.zip`, and the package gives the engine the names the file stores. The sum is exact: an `int` for an int field and a `float` for a float field, and 0 when there is no value. A sum of ints outside the range of a 64-bit int fails with `INVALID_ARGUMENT`, and a field that holds no numbers, or several values, with `INVALID_QUERY`.
+
+```python
+users.sum("age", F.team.city == "Seoul")
+users.sum(F.age, "age >= $0", 18)
+```
+
+### min
+
+```python
+def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+```
+
+The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or None when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+
+### max
+
+```python
+def max(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+```
+
+The greatest value of a field over the objects a query finds, or None.
+
+### avg
+
+```python
+def avg(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> float | None: ...
+```
+
+The mean of an int or float field over the objects a query finds: the exact sum over the number of values, rounded once, or None when there is none.
+
 ## AsyncReadCollection
 
 ```python
@@ -98,6 +135,10 @@ class AsyncReadCollection(Generic[T]):
     async def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]: ...
     async def find_one(self, query: QueryInput = None, /, *parameters: object) -> T | None: ...
     async def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...
+    async def sum(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> int | float: ...
+    async def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+    async def max(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
+    async def avg(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> float | None: ...
 ```
 
 The collection of an asynchronous transaction. Its members do what the members above do as coroutines, and every failure, `CLOSED` included, raises the same error where the operation is awaited. Operations run on the package's thread pool one at a time, in the order they started, each a trip of its own.

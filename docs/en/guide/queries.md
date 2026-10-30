@@ -273,6 +273,104 @@ A prepared query runs only on the collection it was prepared on, and fails with 
 
 Preparing saves parsing or encoding the query on each run, which matters most for text. The engine still plans each run for its values.
 
+## Work out a value from the objects
+
+An aggregate works out one value from a field of the objects a query finds: their sum, the least or the greatest value, or the mean. It reads the objects the query would return, after its sort, offset and limit, as a count does, without handing any of them to the program.
+
+::: lang rust
+
+`sum`, `min`, `max` and `avg` take the query and the field, which may be a path through embedded objects and links. Each returns a [`Value`](../types/rust/value.md).
+
+```rust
+use darudb::{Database, Filter, Query, Value};
+
+fn totals(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let orders = read.collection("orders")?;
+    let paid = Query::new().filter(Filter::eq("status", "paid"));
+
+    let revenue = orders.sum(&paid, "total")?;
+    let largest = orders.max(&paid, "total")?;
+    let mean = orders.avg(&paid, "total")?;
+    let first = orders.min(&Query::new(), "customer.name")?;
+
+    if let Value::Float(revenue) = revenue {
+        println!("{revenue} from paid orders, the largest {largest:?}, on average {mean:?}");
+    }
+
+    println!("first customer by name: {first:?}");
+    Ok(())
+}
+```
+
+`aggregate` takes the function as an [`Aggregate`](../types/rust/aggregate.md) and the path as its names, for a program that chooses the function as it runs.
+
+:::
+
+::: lang node
+
+`sum`, `min`, `max` and `avg` take the field first, then the query in any form `find` takes, with its parameters.
+
+```ts
+db.read((txn) => {
+  const orders = txn.collection('orders');
+
+  const revenue = orders.sum('total', (q) => q.where('status', '==', 'paid'));
+  const largest = orders.max('total', 'status == $0', ['paid']);
+  const mean = orders.avg('total');
+  const first = orders.min('customer.name');
+});
+```
+
+In TypeScript, `sum` and `avg` take only a field that holds numbers, and the result has the field's type: a `t.bigint()` field sums to a `bigint`. A path through an embedded object or a link is checked by the engine.
+
+:::
+
+::: lang dart
+
+`sum`, `min`, `max` and `avg` take a function that picks the field from the query builder, then the query. The result has the field's type: `sum` of an int field is an `int`, of a float field a `double`.
+
+```dart
+db.read((txn) {
+  final orders = txn.collection(orderSchema);
+
+  final int count = orders.sum((q) => q.items);
+  final double revenue = orders.sum((q) => q.total, (q) => q.where(q.status.equals('paid')));
+  final largest = orders.maxText((q) => q.total, r'status == $0', ['paid']);
+  final mean = orders.avg((q) => q.total);
+  final first = orders.min((q) => q.customer.name);
+});
+```
+
+`sumText`, `minText`, `maxText` and `avgText` take a query in the query language, and `sumPrepared` and the others a prepared one.
+
+:::
+
+::: lang python
+
+`sum`, `min`, `max` and `avg` take the field, by name, as a path such as `"customer.name"`, or as `F.total`, then the query in any form `find` takes, with its parameters.
+
+```python
+from darudb import F
+
+with db.read() as txn:
+    orders = txn.collection(Order)
+
+    revenue = orders.sum(F.total, F.status == "paid")
+    largest = orders.max("total", "status == $0", "paid")
+    mean = orders.avg("total")
+    first = orders.min(F.customer.name)
+```
+
+:::
+
+What an aggregate gives is the same in every language:
+
+- **The field** holds one value for each object: it can go through embedded objects and links, but not through a list. `sum` and `avg` read numbers; `min` and `max` read numbers, strings and bytes, in the order a sort gives. Any other field fails with `INVALID_QUERY`.
+- **Nulls are left out**, and so are paths that reach no value, such as a link to an object that is not there. A sum of no values is 0; the least, the greatest and the mean of no values are null.
+- **Sums are exact.** Integers add up without rounding, and a sum outside the range of a 64-bit integer fails with `INVALID_ARGUMENT`. A sum or a mean of floats is the exact value rounded once, so it does not depend on the order the objects are read in. A mean is always a float.
+- **An index helps.** With no condition left for the objects to meet, the least or greatest value of an indexed field is read from the end of its index, without reading any object. Otherwise the engine reads the objects the query finds, one field from each.
+
 ## How the engine reads
 
 A condition on the primary key or on an indexed field, joined to the rest of the filter with AND, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.

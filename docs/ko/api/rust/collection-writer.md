@@ -135,6 +135,25 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 `query`가 찾는 객체 수를 이 트랜잭션의 변경까지 반영해 셉니다. [`CollectionReader::count`](./collection-reader.md#count)를 보세요.
 
+### sum, min, max, avg
+
+```rust
+pub fn sum(&self, query: &Query, field: &str) -> Result<Value>
+pub fn min(&self, query: &Query, field: &str) -> Result<Value>
+pub fn max(&self, query: &Query, field: &str) -> Result<Value>
+pub fn avg(&self, query: &Query, field: &str) -> Result<Value>
+```
+
+`query`가 찾은 객체에서 `field`의 집계를 이 트랜잭션의 변경까지 반영해 구합니다. [`CollectionReader::sum`](./collection-reader.md#sum)과 그 뒤의 메서드를 보세요.
+
+### aggregate
+
+```rust
+pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value>
+```
+
+[`CollectionReader::aggregate`](./collection-reader.md#aggregate)와 같고, 이 트랜잭션의 변경까지 반영합니다.
+
 ### insert_record
 
 ```rust
