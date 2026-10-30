@@ -80,6 +80,21 @@ export interface EmbeddedType<T, I, M extends FieldMode = 'required'> extends Ty
   optional(): EmbeddedType<T, I, 'optional'>;
 }
 
+/**
+ * A list of embedded objects, which has no index, and no default but the
+ * empty list.
+ */
+export interface EmbeddedListType<T, I, M extends FieldMode = 'required'> extends Typed<
+  T[],
+  M,
+  false,
+  I[]
+> {
+  optional(): EmbeddedListType<T, I, 'optional'>;
+  /** The field is required, and holds the empty list when left out. */
+  default(value: readonly []): EmbeddedListType<T, I, 'default'>;
+}
+
 /** Any field's type. */
 export type AnyField = Typed<any, FieldMode, boolean, any>;
 
@@ -152,6 +167,11 @@ export interface TypeBuilders {
   ): FieldType<T[], 'required', I[]>;
   /** A list of links: a to-many link. */
   list(element: LinkType): FieldType<Key[]>;
+  /**
+   * A list of embedded objects. A query path through it, such as
+   * `stops.city`, tests the field of each element.
+   */
+  list<T, I>(element: EmbeddedType<T, I>): EmbeddedListType<T, I>;
   /** An embedded object with fields of its own. */
   object<F extends Fields>(fields: F): EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>;
 }

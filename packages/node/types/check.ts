@@ -19,8 +19,17 @@ const app = schema(1, {
     address: t.object({ city: t.string(), zip: t.int().optional() }).optional(),
     visits: t.bigint().default(0n)
   }),
-  events: collection({ at: t.date().index(), ends: t.date().optional() })
+  events: collection({ at: t.date().index(), ends: t.date().optional() }),
+  trips: collection({
+    stops: t.list(t.object({ city: t.string(), minutes: t.int().optional() })).default([])
+  })
 });
+
+// A list of embedded objects has no index, and no default but the empty list.
+// @ts-expect-error a list of embedded objects has no index.
+t.list(t.object({ city: t.string() })).index();
+// @ts-expect-error its only default is the empty list.
+t.list(t.object({ city: t.string() })).default([{ city: 'Busan' }]);
 
 // What the engine refuses in a declaration is refused here too.
 // @ts-expect-error a link has no default.
@@ -182,6 +191,16 @@ db.write((txn) => {
   events.sum('at');
 
   return [at, ends, first, last];
+});
+
+// A list of embedded objects reads as an array of its objects.
+db.read((txn) => {
+  const trips = txn.collection('trips');
+  const stops: { city: string; minutes: number | null }[] = trips.get(1)!.stops;
+
+  trips.find((q) => q.where('stops.city', '==', 'Busan'));
+
+  return stops;
 });
 
 // A change of the objects a query finds takes the query, in any form.

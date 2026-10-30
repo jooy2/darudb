@@ -1310,3 +1310,55 @@ describe('dates', () => {
     );
   });
 });
+
+describe('lists of embedded objects', () => {
+  const trips = collection({
+    name: t.string(),
+    stops: t.list(t.object({ city: t.string(), minutes: t.int().optional() })).default([])
+  });
+  const travel = schema(1, { trips });
+
+  it('are written and read as arrays of objects, and queried through each element', (context) => {
+    const db = Database.open(tempPath(context), { schema: travel });
+
+    context.after(() => db.close());
+
+    const coast = [{ city: 'Busan', minutes: 30 }, { city: 'Ulsan' }];
+
+    db.write((txn) => {
+      const all = txn.collection('trips');
+
+      all.insert({ name: 'coast', stops: coast });
+      all.insert({ name: 'none' });
+      assertCode(() => all.insert({ name: 'x', stops: ['Busan'] }), 'INVALID_ARGUMENT');
+    });
+
+    db.read((txn) => {
+      const all = txn.collection('trips');
+      const ids = (found) => found.map((trip) => trip.id);
+
+      assert.deepEqual(all.get(1).stops, [
+        { city: 'Busan', minutes: 30 },
+        { city: 'Ulsan', minutes: null }
+      ]);
+      assert.deepEqual(all.get(2).stops, []);
+      assert.deepEqual(ids(all.find((q) => q.where('stops.city', '==', 'Ulsan'))), [1]);
+      assert.deepEqual(ids(all.find('stops.minutes > 10')), [1]);
+      assertCode(() => all.find((q) => q.sortBy('stops.city')), 'INVALID_QUERY');
+    });
+  });
+
+  it('refuse a default but the empty list', (context) => {
+    assertCode(
+      () =>
+        Database.open(tempPath(context), {
+          schema: schema(1, {
+            trips: collection({
+              stops: t.list(t.object({ city: t.string() })).default([{ city: 'Busan' }])
+            })
+          })
+        }),
+      'INVALID_ARGUMENT'
+    );
+  });
+});

@@ -2042,7 +2042,21 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
           );
           break;
         case 'default':
-          writeValue(w, kindOfSpec(value, ids), value.default, where);
+          // A list of embedded objects holds no default but the empty list,
+          // which needs no element kind to write.
+          if (value.type === 'list' && value.element.type === 'object') {
+            if (!Array.isArray(value.default) || value.default.length > 0) {
+              throw invalid(
+                `\`${where}\` is a list of embedded objects, whose only default is the empty list`
+              );
+            }
+
+            w.byte(LIST);
+            w.varint(0);
+          } else {
+            writeValue(w, kindOfSpec(value, ids), value.default, where);
+          }
+
           break;
         case 'raw':
           value(w);
