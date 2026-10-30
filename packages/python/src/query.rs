@@ -10,7 +10,8 @@
 //! The tuples, by their first element:
 //!
 //! - `(0, op, path, values)`: a test of the field at `path`, a tuple of
-//!   names, with the operator's code of `design/objects.md` and its values.
+//!   names, with the operator's code of `design/objects.md` and its values;
+//!   `(0, op, path, values, True)` the same test ignoring case.
 //! - `(1, terms)` and `(2, terms)`: `AND` and `OR` of a tuple of filters.
 //! - `(3, term)`: `NOT` of a filter.
 
@@ -214,8 +215,12 @@ fn expression(out: &mut Vec<u8>, node: &Bound<'_, PyAny>, depth: usize) -> Resul
                 .get_item(3)?
                 .cast_into::<PyTuple>()
                 .map_err(PyErr::from)?;
+            let ignore_case = node.len() > 4 && node.get_item(4)?.is_truthy()?;
 
-            varint(&mut record, if values.is_empty() { 2 } else { 3 });
+            varint(
+                &mut record,
+                2 + u64::from(!values.is_empty()) + u64::from(ignore_case),
+            );
             varint(&mut record, 1);
             record.push(INT);
             int(&mut record, op);
@@ -230,6 +235,12 @@ fn expression(out: &mut Vec<u8>, node: &Bound<'_, PyAny>, depth: usize) -> Resul
                 for value in values.iter() {
                     write_value(&mut record, &value)?;
                 }
+            }
+
+            // Field 5, after the values: the test ignores case.
+            if ignore_case {
+                varint(&mut record, 5);
+                record.push(TRUE);
             }
         }
         1..=3 => {

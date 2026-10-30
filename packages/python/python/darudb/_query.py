@@ -88,12 +88,36 @@ class Condition:
     def __repr__(self) -> str:
         return f"Condition({self._node!r})"
 
+    def ignore_case(self) -> Condition:
+        """This condition, with every test in it of ``==``, ``!=``, ``is_in``,
+        ``contains``, ``startswith`` and ``endswith`` comparing strings
+        ignoring case, by Unicode's simple case folding:
+        ``(F.name == "kim").ignore_case()``. Such a test of a field that holds
+        no strings fails with ``INVALID_QUERY`` when the query runs."""
+        return Condition(_ignoring_case(self._node))
+
     def query(self) -> Query:
         """A query with this condition alone, made once."""
         if self._query is None:
             self._query = Query()._with(filter=self._node)
 
         return self._query
+
+
+_FOLDING: Final = frozenset(
+    (_OPS["=="], _OPS["!="], _OPS["in"], _OPS["contains"], _OPS["startswith"], _OPS["endswith"])
+)
+"""The operators whose tests can ignore case."""
+
+
+def _ignoring_case(node: tuple[Any, ...]) -> tuple[Any, ...]:
+    if node[0] == 0:
+        return (*node[:4], True) if node[1] in _FOLDING else node
+
+    if node[0] == _NOT:
+        return (_NOT, _ignoring_case(node[1]))
+
+    return (node[0], tuple(_ignoring_case(term) for term in node[1]))
 
 
 def _combine(kind: int, left: Condition, right: Condition) -> Condition:
@@ -382,7 +406,7 @@ class _Translator:
 
     def node(self, node: tuple[Any, ...]) -> tuple[Any, ...]:
         if node[0] == 0:
-            return (0, node[1], self.path(node[2]), node[3])
+            return (0, node[1], self.path(node[2]), *node[3:])
 
         if node[0] == _NOT:
             return (_NOT, self.node(node[1]))

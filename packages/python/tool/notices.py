@@ -201,8 +201,30 @@ def notices() -> str:
             "below, which are linked into it. Each is listed with the licence it is used",
             "under and the licence files it ships.",
             "",
+            unicode_data(),
+            "",
             *sections,
             "",
+        ]
+    )
+
+
+def unicode_data() -> str:
+    """The notice of the Unicode data compiled into the engine's own source:
+    the table of case folding made from `CaseFolding.txt`, whose licence the
+    engine keeps in `crates/darudb/LICENSE-UNICODE`."""
+    notice = PACKAGE.parent.parent / "crates" / "darudb" / "LICENSE-UNICODE"
+
+    return "\n".join(
+        [
+            "=" * 80,
+            "Unicode Character Database, CaseFolding.txt",
+            "Used under: Unicode-3.0, in DaruDB's own source, for comparisons that ignore case",
+            "Source: https://www.unicode.org/Public/UCD/",
+            "",
+            "--- LICENSE-UNICODE ---",
+            "",
+            notice.read_text(encoding="utf-8").replace("\r\n", "\n").rstrip(),
         ]
     )
 

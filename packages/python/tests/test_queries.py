@@ -178,6 +178,32 @@ def test_prepared_queries_from_text_and_from_the_builder(db: darudb.Database) ->
         assert error.value.code == "INVALID_QUERY"
 
 
+def test_tests_that_ignore_case(db: darudb.Database) -> None:
+    with db.read() as txn:
+        users = txn.collection(User)
+
+        assert names(users.find(F.name == "ALICE")) == []
+        assert names(users.find((F.name == "ALICE").ignore_case())) == ["Alice"]
+        assert names(users.find(F.name.is_in(["bob", "DAVE"]).ignore_case())) == ["Bob", "Dave"]
+        assert names(users.find(F.tags.contains("STAFF").ignore_case())) == ["Alice", "Bob"]
+        assert names(
+            users.find((F.name.startswith("c") | F.address.city.endswith("UL")).ignore_case())
+        ) == ["Alice", "Carol"]
+        assert names(users.find("email == $0 IGNORE CASE", "BOB@EXAMPLE.COM")) == ["Bob"]
+        # Through the name the file stores for the attribute.
+        assert names(users.find((F.address.zip == "04524").ignore_case())) == ["Alice"]
+
+        prepared = db.prepare(User, (F.name == param(0)).ignore_case())
+
+        assert names(users.find(prepared, "carol")) == ["Carol"]
+
+        for refused in [(F.age == 3).ignore_case(), "name < $0 IGNORE CASE"]:
+            with pytest.raises(DaruError) as error:
+                users.find(refused, "b") if isinstance(refused, str) else users.find(refused)
+
+            assert error.value.code == "INVALID_QUERY"
+
+
 def test_aggregates_of_a_field(db: darudb.Database) -> None:
     older = db.prepare(User, where(F.age >= param(0)))
 
