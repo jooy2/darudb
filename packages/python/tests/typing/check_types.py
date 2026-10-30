@@ -6,6 +6,7 @@ run. A line that stops type-checking as written here fails the check.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, assert_type
 
 import darudb
@@ -33,7 +34,27 @@ class Post:
     author: int = field(link=User)
 
 
+@darudb.collection("events")
+class Event:
+    id: int | None = None
+    at: datetime = field(index=True)
+    seen: list[datetime] = field(default_factory=list)
+
+
 schema = darudb.Schema(1, [User, Post])
+
+
+def dates(db: darudb.Database) -> None:
+    event = Event(at=datetime.now(UTC))
+
+    assert_type(event.at, datetime)
+    assert_type(event.seen, list[datetime])
+
+    with db.read() as txn:
+        events = txn.collection(Event)
+
+        assert_type(events.find(F.at >= event.at), list[Event])
+        assert_type(events.min(F.at), Any)
 
 
 def reads(db: darudb.Database) -> None:

@@ -17,6 +17,11 @@
 //! An object of a class whose fields all hold scalars is written the other
 //! way: its values are read as [`Held`] scalars with the GIL, and the engine
 //! writes them into the record through the class's shape without it.
+//!
+//! A date is an aware `datetime`, converted with whole `timedelta`
+//! arithmetic from the Unix epoch in UTC rather than through `timestamp()`,
+//! whose float loses microseconds far from 1970. The stable ABI has no
+//! `datetime` C API, so the `datetime` module's own objects do the work.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -43,6 +48,7 @@ pub(crate) enum Kind {
     Float,
     String,
     Bytes,
+    Date,
     /// A link: the primary key of an object, an int, a string or bytes.
     Key,
     List(Box<Kind>),
@@ -121,7 +127,7 @@ impl Layout {
             && built.iter().all(|field| {
                 matches!(
                     field.kind,
-                    Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+                    Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes | Kind::Date
                 )
             });
 
@@ -154,6 +160,7 @@ fn kind_of(kind: &Bound<'_, PyAny>) -> PyResult<Kind> {
             "float" => Ok(Kind::Float),
             "str" => Ok(Kind::String),
             "bytes" => Ok(Kind::Bytes),
+            "date" => Ok(Kind::Date),
             "key" => Ok(Kind::Key),
             _ => Err(invalid(py, format!("an unknown kind of field: {name}"))),
         };
@@ -294,6 +301,7 @@ impl Layout {
                     | (Kind::Float, Some(Held::Float(_)))
                     | (Kind::String, Some(Held::Str(_)))
                     | (Kind::Bytes, Some(Held::Bytes(_)))
+                    | (Kind::Date, Some(Held::Date(_)))
             );
 
             match value {
@@ -415,6 +423,7 @@ fn read_value<'py>(
         Kind::Float => PyFloat::new(py, value.float().or_raise(py)?).into_any(),
         Kind::String => PyString::new(py, value.str().or_raise(py)?).into_any(),
         Kind::Bytes => PyBytes::new(py, value.bytes().or_raise(py)?).into_any(),
+        Kind::Date => datetime_of(py, value.date().or_raise(py)?)?,
         Kind::Key => match value.linked().or_raise(py)?.scalar().or_raise(py)? {
             Scalar::Int(key) => key.into_pyobject(py)?.into_any(),
             Scalar::Str(key) => PyString::new(py, key).into_any(),
@@ -452,6 +461,8 @@ pub(crate) enum Held<'a> {
     Float(f64),
     Str(&'a str),
     Bytes(Cow<'a, [u8]>),
+    /// Microseconds since the Unix epoch.
+    Date(i64),
 }
 
 impl Held<'_> {
@@ -464,6 +475,7 @@ impl Held<'_> {
             Held::Float(value) => writer.float(*value),
             Held::Str(value) => writer.string(value),
             Held::Bytes(value) => writer.bytes(value),
+            Held::Date(value) => writer.date(*value),
         }
     }
 }
@@ -496,6 +508,8 @@ fn held_value<'a>(kind: &Kind, value: &'a Bound<'_, PyAny>) -> PyResult<Option<H
         Held::Bytes(Cow::Borrowed(bytes.as_bytes()))
     } else if is_bytes(value) {
         Held::Bytes(Cow::Owned(bytes_of(value)?))
+    } else if is_datetime(value)? {
+        Held::Date(micros_of(value)?)
     } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
         return Ok(None);
     } else {
@@ -658,6 +672,8 @@ pub(crate) fn plain(value: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::String(value.extract()?))
     } else if is_bytes(value) {
         Ok(Value::Bytes(bytes_of(value)?))
+    } else if is_datetime(value)? {
+        Ok(Value::Date(micros_of(value)?))
     } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
         value
             .try_iter()?
@@ -670,6 +686,79 @@ pub(crate) fn plain(value: &Bound<'_, PyAny>) -> PyResult<Value> {
             format!("DaruDB cannot store {}", type_name(value)),
         ))
     }
+}
+
+/// What converting a date takes from the `datetime` module, imported once:
+/// its `datetime` class, its `timedelta`, the Unix epoch in UTC, and a
+/// microsecond.
+struct Time {
+    datetime: Py<PyAny>,
+    timedelta: Py<PyAny>,
+    epoch: Py<PyAny>,
+    microsecond: Py<PyAny>,
+}
+
+static TIME: PyOnceLock<Time> = PyOnceLock::new();
+
+fn time(py: Python<'_>) -> PyResult<&Time> {
+    TIME.get_or_try_init(py, || {
+        let module = py.import("datetime")?;
+        let datetime = module.getattr("datetime")?;
+        let timedelta = module.getattr("timedelta")?;
+        let utc = module.getattr("timezone")?.getattr("utc")?;
+        let epoch = datetime.call1((1970, 1, 1, 0, 0, 0, 0, utc))?;
+        let microsecond = timedelta.call1((0, 0, 1))?;
+
+        Ok(Time {
+            datetime: datetime.unbind(),
+            timedelta: timedelta.unbind(),
+            epoch: epoch.unbind(),
+            microsecond: microsecond.unbind(),
+        })
+    })
+}
+
+/// Whether `value` is a `datetime`, which a date field holds. A `date`
+/// alone is not: it names a day, not an instant.
+pub(crate) fn is_datetime(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    value.is_instance(time(value.py())?.datetime.bind(value.py()))
+}
+
+/// The microseconds from the Unix epoch to `value`, an aware `datetime`. A
+/// naive one names no instant, and is refused.
+pub(crate) fn micros_of(value: &Bound<'_, PyAny>) -> PyResult<i64> {
+    let py = value.py();
+    let time = time(py)?;
+
+    if value.call_method0(intern!(py, "utcoffset"))?.is_none() {
+        return Err(invalid(
+            py,
+            format!(
+                "{value} is a naive datetime, which names no instant; give it a time zone, such as datetime.timezone.utc"
+            ),
+        ));
+    }
+
+    // A `timedelta` divided by one microsecond is a whole number of them,
+    // rounded down, which a datetime's range keeps inside an `i64`.
+    value
+        .sub(time.epoch.bind(py))?
+        .floor_div(time.microsecond.bind(py))?
+        .extract()
+}
+
+/// The aware `datetime` in UTC `micros` microseconds from the Unix epoch. A
+/// date beyond the years a `datetime` holds, 1 to 9999, is refused.
+pub(crate) fn datetime_of(py: Python<'_>, micros: i64) -> PyResult<Bound<'_, PyAny>> {
+    let time = time(py)?;
+    let delta = time.timedelta.bind(py).call1((0, 0, micros))?;
+
+    time.epoch.bind(py).add(delta).map_err(|_| {
+        invalid(
+            py,
+            format!("a date {micros} microseconds from 1970 is beyond the years a datetime holds"),
+        )
+    })
 }
 
 /// The bytes of a `bytes`, a `bytearray` or a `memoryview`.
@@ -725,6 +814,7 @@ pub(crate) fn to_python<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'
             list.into_any()
         }
         Value::Object(object) => dict_of(py, object)?.into_any(),
+        Value::Date(micros) => datetime_of(py, *micros)?,
         _ => {
             return Err(crate::failure(
                 py,

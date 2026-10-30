@@ -2,10 +2,11 @@
 
 A class decorated with ``collection`` or ``embedded`` becomes a frozen,
 keyword-only dataclass, and its annotations become its fields' types:
-``bool``, ``int``, ``float``, ``str``, ``bytes``, a ``list`` of those, a class
-decorated with ``embedded``, and any of them ``| None`` for an optional
-field. ``field`` adds what an annotation cannot say: an index, a primary
-key, a link, or a stored name of its own.
+``bool``, ``int``, ``float``, ``str``, ``bytes``, ``datetime``, a ``list`` of
+those, a class decorated with ``embedded``, and any of them ``| None`` for an
+optional field. A ``datetime`` is a date: an instant, written from an aware
+``datetime`` and read as one in UTC. ``field`` adds what an annotation cannot
+say: an index, a primary key, a link, or a stored name of its own.
 
 The classes are read when a ``Schema`` is made rather than when they are
 decorated, so a class may name one declared after it.
@@ -14,6 +15,7 @@ decorated, so a class may name one declared after it.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import threading
 import types
 import typing
@@ -194,6 +196,7 @@ _SCALARS: Final[dict[type, tuple[str, str]]] = {
     float: ("float", "float"),
     str: ("str", "string"),
     bytes: ("bytes", "bytes"),
+    datetime.datetime: ("date", "date"),
 }
 _KEYS: Final = (int, str, bytes)
 
@@ -253,7 +256,7 @@ def by_name(name: str) -> Resolved:
 class StoredType:
     """A field's type, as ``StoredField`` gives it."""
 
-    kind: Literal["bool", "int", "float", "string", "bytes", "link", "list", "object"]
+    kind: Literal["bool", "int", "float", "string", "bytes", "date", "link", "list", "object"]
     collection: str | None = None
     """The collection a link holds the primary key of."""
     element: StoredType | None = None
@@ -420,7 +423,7 @@ def _type_of(annotation: Any, options: _Options, owner: type, attr: str) -> tupl
 
     raise invalid(
         f"{where} has the type {annotation!r}; a field holds a bool, an int, a float, a str, "
-        "bytes, a list of those, or an @embedded class"
+        "bytes, a datetime, a list of those, or an @embedded class"
     )
 
 

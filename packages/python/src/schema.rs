@@ -81,6 +81,7 @@ fn type_of(kind: &Bound<'_, PyAny>) -> PyResult<Type> {
             "float" => Ok(Type::Float),
             "string" => Ok(Type::String),
             "bytes" => Ok(Type::Bytes),
+            "date" => Ok(Type::Date),
             _ => Err(invalid(py, format!("an unknown field type: {name}"))),
         };
     }

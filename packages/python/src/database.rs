@@ -519,6 +519,7 @@ fn type_dict<'py>(py: Python<'py>, kind: &Type) -> PyResult<Bound<'py, PyDict>> 
         Type::Float => "float",
         Type::String => "string",
         Type::Bytes => "bytes",
+        Type::Date => "date",
         Type::Link(collection) => {
             dict.set_item("collection", collection)?;
             "link"

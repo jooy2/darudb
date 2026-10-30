@@ -22,7 +22,7 @@ use darudb::{Query, QueryRequest, Value};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString, PyTuple};
 
-use crate::values::{bytes_of, is_bytes, plain};
+use crate::values::{bytes_of, is_bytes, is_datetime, micros_of, plain};
 use crate::{OrRaise, failure};
 
 /// The record tags of `design/objects.md` the IR uses.
@@ -32,6 +32,7 @@ const INT: u8 = 0x04;
 const FLOAT: u8 = 0x05;
 const STRING: u8 = 0x06;
 const BYTES: u8 = 0x07;
+const DATE: u8 = 0x0B;
 
 /// The operator of a test of the objects that link to an object.
 const LINKED: i64 = 16;
@@ -344,6 +345,15 @@ fn write_value(out: &mut Vec<u8>, value: &Bound<'_, PyAny>) -> Result<(), Fault>
         out.push(BYTES);
         varint(out, bytes.len() as u64);
         out.extend_from_slice(&bytes);
+    } else if is_datetime(value)? {
+        let micros = micros_of(value).map_err(|_| {
+            Fault::Query(format!(
+                "a query compares a date with an aware datetime, not the naive {value}"
+            ))
+        })?;
+
+        out.push(DATE);
+        int(out, micros);
     } else {
         return Err(Fault::Query(format!(
             "a query compares with single values, not {value}"
