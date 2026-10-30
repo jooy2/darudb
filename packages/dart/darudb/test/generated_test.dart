@@ -248,4 +248,56 @@ void main() {
       );
     });
   });
+
+  test('a DateTime field is a date, kept to the microsecond in UTC', () {
+    final events = Database.open(
+      '${directory.path}/events.darudb',
+      schema: const Schema(1, [eventSchema]),
+    );
+
+    addTearDown(events.close);
+
+    final launch = DateTime.utc(2026, 10, 30, 12, 0, 0, 123, 456);
+    final local = DateTime.fromMicrosecondsSinceEpoch(-1);
+    final ancient = DateTime.utc(1, 1, 1);
+
+    events.write((txn) {
+      txn.collection(eventSchema)
+        ..insert(Event(at: launch, seen: [launch, local]))
+        ..insert(Event(at: local, ends: launch))
+        ..insert(Event(at: ancient));
+    });
+    events.read((txn) {
+      final all = txn.collection(eventSchema);
+      final first = all.get(1)!;
+
+      expect(first.at, launch);
+      expect(first.at.isUtc, isTrue);
+      expect(first.seen, [launch, local.toUtc()]);
+      expect(all.get(2)!.at.microsecondsSinceEpoch, -1);
+      expect(all.get(2)!.ends, launch);
+      expect(
+        [
+          for (final event in all.find(
+            (q) => q.where(q.at.lessThan(DateTime.utc(1970))).sortBy(q.at),
+          ))
+            event.id,
+        ],
+        [3, 2],
+      );
+      expect(
+        [for (final event in all.findText('at >= DATE "2026-10-30"')) event.id],
+        [1],
+      );
+      expect(
+        [
+          for (final event in all.find((q) => q.where(q.seen.contains(local))))
+            event.id,
+        ],
+        [1],
+      );
+      expect(all.min((q) => q.at), ancient);
+      expect(all.max((q) => q.ends), launch);
+    });
+  });
 }

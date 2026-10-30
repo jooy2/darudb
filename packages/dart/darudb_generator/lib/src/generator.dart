@@ -251,6 +251,11 @@ bool _storable(DartObject value) {
       (value.toListValue()?.every(_storable) ?? false);
 }
 
+bool _isDateTime(DartType type) =>
+    type is InterfaceType &&
+    type.element.name == 'DateTime' &&
+    type.element.library.uri.toString() == 'dart:core';
+
 bool _isUint8List(DartType type) =>
     type is InterfaceType &&
     type.element.name == 'Uint8List' &&
@@ -297,6 +302,16 @@ _Type _typeOf(DartType type, Element where, {bool element = false}) {
       read: 'source.string()',
       readNullable: 'source.stringOrNull()',
       field: 'StringField',
+    );
+  }
+
+  if (_isDateTime(type)) {
+    return _Type(
+      kind: 'DateKind()',
+      write: (value) => 'sink.date($value)',
+      read: 'source.date()',
+      readNullable: 'source.dateOrNull()',
+      field: 'DateField',
     );
   }
 
@@ -394,8 +409,8 @@ _Type _typeOf(DartType type, Element where, {bool element = false}) {
 
   throw InvalidGenerationSourceError(
     '`$base` is not a type the database stores: bool, int, double, String, '
-    'Uint8List, a List of those or of links, a Link to a collection, or a '
-    'class annotated `@Embedded()`.',
+    'Uint8List, DateTime, a List of those or of links, a Link to a '
+    'collection, or a class annotated `@Embedded()`.',
     element: where,
   );
 }

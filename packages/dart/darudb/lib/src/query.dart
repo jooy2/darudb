@@ -257,6 +257,17 @@ final class BytesField extends OrderedField<Uint8List> {
     ..bytesOf(value);
 }
 
+/// A `DateTime` field: an instant, compared in time order whatever the
+/// zone a value is given in.
+final class DateField extends OrderedField<DateTime> {
+  const DateField(super.path);
+
+  @override
+  void _write(Writer writer, DateTime value) => writer
+    ..byte(Tag.date)
+    ..int64(microsOf(value));
+}
+
 /// A list field. A condition on a list holds when it holds for any element.
 base class ListField<E extends Object> extends Field {
   const ListField(super.path);

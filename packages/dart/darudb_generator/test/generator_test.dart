@@ -138,12 +138,38 @@ class Note {
     await refused('''
 @Collection()
 class Note {
-  const Note({this.id, required this.at});
+  const Note({this.id, required this.wait});
 
   final int? id;
-  final DateTime at;
+  final Duration wait;
 }
 ''', 'is not a type the database stores');
+  });
+
+  test('a DateTime field is a date, alone or in a list', () async {
+    final (written, errors) = await generate('''
+@Collection('events')
+class Event {
+  const Event({this.id, required this.at, this.ends, this.seen = const []});
+
+  final int? id;
+  @Index()
+  final DateTime at;
+  final DateTime? ends;
+  final List<DateTime> seen;
+}
+''');
+
+    expect(errors, isEmpty);
+    expect(written, contains("FieldSpec('at', DateKind(), index: true)"));
+    expect(written, contains("FieldSpec('ends', DateKind(), optional: true)"));
+    expect(
+      written,
+      contains("FieldSpec('seen', ListKind(DateKind()), defaultValue: [])"),
+    );
+    expect(written, contains("DateField get at => const DateField(['at']);"));
+    expect(written, contains('source.dateOrNull()'));
+    expect(written, contains('sink.date('));
   });
 
   test('a nullable field with a default is refused', () async {

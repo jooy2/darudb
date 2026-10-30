@@ -153,6 +153,7 @@ Kind _kind(Map<int, Object?> type, Map<int, String> names) => switch (type[1]) {
   ),
   7 => ListKind(_kind(type[3] as Map<int, Object?>, names)),
   8 => ObjectKind(_embedded(type[4], names)),
+  9 => const DateKind(),
   _ => throw corrupted('the stored schema names an unknown type'),
 };
 
@@ -211,6 +212,8 @@ void _write(
       sink.string(_typed<String>(value, field));
     case BytesKind():
       sink.bytes(_typed<Uint8List>(value, field));
+    case DateKind():
+      sink.date(_typed<DateTime>(value, field));
     case LinkKind():
       sink.link(_link(value, field));
     case ListKind(:final element):
@@ -274,6 +277,7 @@ Map<String, Object?> _read(List<FieldSpec> fields, FieldSource source) {
       FloatKind() => source.floatOrNull(),
       StringKind() => source.stringOrNull(),
       BytesKind() => source.bytesOrNull(),
+      DateKind() => source.dateOrNull(),
       LinkKind() => source.linkOrNull<Object?>(),
       ListKind(element: LinkKind()) => source.linkListOrNull<Object?>(),
       ListKind() => source.listOrNull<Object?>(),
@@ -292,6 +296,7 @@ String _describe(Kind kind) => switch (kind) {
   FloatKind() => 'a double',
   StringKind() => 'a String',
   BytesKind() => 'a Uint8List',
+  DateKind() => 'a DateTime',
   LinkKind() => 'a link',
   ListKind() => 'a List',
   ObjectKind() => 'a Map',

@@ -66,6 +66,15 @@ final class BytesKind extends Kind {
 }
 
 /// A link to an object of the collection [collection]: its primary key.
+/// An instant, a [DateTime], kept to the microsecond. A file with one is in
+/// object format 2.
+final class DateKind extends Kind {
+  const DateKind();
+
+  @override
+  int get code => 9;
+}
+
 final class LinkKind extends Kind {
   const LinkKind(this.collection);
 
@@ -338,6 +347,15 @@ final class FieldSink {
     }
   }
 
+  /// A date, written to the microsecond, in UTC whatever the time's zone.
+  void date(DateTime? value) {
+    if (value != null) {
+      _begin()
+        ..byte(Tag.date)
+        ..int64(microsOf(value));
+    }
+  }
+
   /// A list, whose elements are `bool`, `int`, `double`, `String`,
   /// `Uint8List` or [Link] values.
   void list(List<Object?>? values) {
@@ -413,10 +431,14 @@ void writeElement(Writer writer, Object? value) {
         ..bytesOf(value);
     case Link<Object?>():
       writeKey(writer..byte(Tag.link), value.key);
+    case DateTime():
+      writer
+        ..byte(Tag.date)
+        ..int64(microsOf(value));
     default:
       throw invalidArgument(
-        'a list holds `bool`, `int`, `double`, `String`, `Uint8List` and '
-        '`Link` values, not $value',
+        'a list holds `bool`, `int`, `double`, `String`, `Uint8List`, '
+        '`DateTime` and `Link` values, not $value',
       );
   }
 }
@@ -622,6 +644,11 @@ final class FieldSource {
 
   Uint8List? bytesOrNull() => isNull ? null : bytes();
 
+  /// A date, as a [DateTime] in UTC.
+  DateTime date() => dateOf(_value(Tag.date).int64());
+
+  DateTime? dateOrNull() => isNull ? null : date();
+
   Link<T> link<T>() => Link<T>(_key(_value(Tag.link)));
 
   Link<T>? linkOrNull<T>() => isNull ? null : link<T>();
@@ -691,6 +718,8 @@ final class FieldSource {
         return reader.string();
       case Tag.bytes:
         return Uint8List.fromList(reader.counted());
+      case Tag.date:
+        return dateOf(reader.int64());
       case Tag.link:
         return Link<Object?>(_key(reader));
       default:
@@ -974,7 +1003,7 @@ final class _SchemaEncoder {
       ..varint(5)
       ..varint(1)
       ..byte(Tag.int64)
-      ..int64(1)
+      ..int64(objectFormat)
       ..varint(2)
       ..byte(Tag.int64)
       ..int64(schema.version)
@@ -1188,6 +1217,7 @@ void writeDefault(Writer writer, Kind kind, Object? value, String where) {
     FloatKind() => value is double || value is int,
     StringKind() => value is String,
     BytesKind() => value is Uint8List,
+    DateKind() => value is DateTime,
     ListKind() => value is List,
     _ => false,
   };

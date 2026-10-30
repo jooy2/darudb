@@ -26,6 +26,29 @@ abstract final class Tag {
   static const int list = 0x08;
   static const int object = 0x09;
   static const int link = 0x0A;
+
+  /// A date: microseconds since the Unix epoch, as an int's payload.
+  static const int date = 0x0B;
+}
+
+/// The object format a declared schema is written in: the newest, which
+/// reads every declaration. The engine stores the file's schema in the
+/// lowest format that holds it, whatever this says.
+const int objectFormat = 2;
+
+/// The microseconds since the Unix epoch of [value], as a date holds them.
+int microsOf(DateTime value) => value.microsecondsSinceEpoch;
+
+/// The [DateTime] in UTC of a date, [micros] since the Unix epoch. A date
+/// beyond what a `DateTime` holds is refused.
+DateTime dateOf(int micros) {
+  try {
+    return DateTime.fromMicrosecondsSinceEpoch(micros, isUtc: true);
+  } on ArgumentError {
+    throw invalidArgument(
+      'a date $micros microseconds from 1970 is beyond what a DateTime holds',
+    );
+  }
 }
 
 /// How deeply a record read from the engine may nest, as the engine allows.
@@ -363,7 +386,7 @@ final class Reader {
     switch (byte()) {
       case Tag.falseValue || Tag.trueValue:
         break;
-      case Tag.int64:
+      case Tag.int64 || Tag.date:
         varint();
       case Tag.float:
         if (at + 8 > end) {
@@ -405,6 +428,8 @@ final class Reader {
         return string();
       case Tag.bytes:
         return Uint8List.fromList(counted());
+      case Tag.date:
+        return dateOf(int64());
       case Tag.list:
         return [for (var left = count(); left > 0; left--) any(depth + 1)];
       case Tag.object:

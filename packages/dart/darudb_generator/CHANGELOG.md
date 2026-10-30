@@ -2,6 +2,12 @@
 
 > This package's history. It generates code for the `darudb` package, whose changelog says what that code lets an application do.
 
+## vNext (2026--)
+
+### Added
+
+- A `DateTime` field, or a `List<DateTime>`, is a date: the generator declares it with `DateKind`, writes and reads it with `FieldSink.date` and `FieldSource.date`, and gives the query builder a `DateField` for it. It needs `darudb` with date support, the version released with this one. A `DateTime` has no constant, so a date field has no default.
+
 ## v1.1.0 (2026-10-09)
 
 ### Added

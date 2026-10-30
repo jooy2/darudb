@@ -90,3 +90,14 @@ class Place {
   final int? id;
   final Spot? spot;
 }
+
+@Collection('events')
+class Event {
+  const Event({this.id, required this.at, this.ends, this.seen = const []});
+
+  final int? id;
+  @Index()
+  final DateTime at;
+  final DateTime? ends;
+  final List<DateTime> seen;
+}
