@@ -2,6 +2,7 @@
 //! language made it, and its encoding as a record for the language boundary
 //! (`design/objects.md`, "The IR").
 
+use super::aggregate::Aggregate;
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::codec::{self, Raw};
@@ -317,8 +318,20 @@ pub(crate) fn missing(index: usize, count: usize) -> Error {
 }
 
 /// The IR record of `ir` on collection `collection`, counting the objects
-/// rather than returning them if `count` is set.
-pub(crate) fn encode(collection: &str, ir: &Ir, count: bool) -> Result<Vec<u8>> {
+/// rather than returning them if `count` is set, or working out `aggregate`
+/// of the field at its path.
+pub(crate) fn encode(
+    collection: &str,
+    ir: &Ir,
+    count: bool,
+    aggregate: Option<(Aggregate, &[String])>,
+) -> Result<Vec<u8>> {
+    if count && aggregate.is_some() {
+        return Err(invalid(
+            "a query counts or works out an aggregate, not both",
+        ));
+    }
+
     let mut fields = vec![(1, Raw::String(collection.to_owned()))];
 
     if let Some(filter) = &ir.filter {
@@ -349,6 +362,13 @@ pub(crate) fn encode(collection: &str, ir: &Ir, count: bool) -> Result<Vec<u8>> 
 
     if count {
         fields.push((6, Raw::Bool(true)));
+    }
+
+    if let Some((function, path)) = aggregate {
+        fields.push((
+            7,
+            Raw::Object(vec![(1, Raw::Int(function.code())), (2, encode_path(path))]),
+        ));
     }
 
     Ok(codec::write(&fields))
@@ -439,12 +459,23 @@ fn value_raw(value: &Value) -> Result<Raw> {
     })
 }
 
-/// Reads an IR record: the collection, the query, and whether it counts.
-pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
+/// An IR record, read: the collection, the query, and whether it counts the
+/// objects or works out an aggregate of them.
+#[derive(Debug)]
+pub(crate) struct Decoded {
+    pub(crate) collection: String,
+    pub(crate) ir: Ir,
+    pub(crate) count: bool,
+    pub(crate) aggregate: Option<(Aggregate, Vec<String>)>,
+}
+
+/// Reads an IR record.
+pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded> {
     let fields = codec::read(bytes).map_err(|reason| invalid(format!("the IR: {reason}")))?;
     let mut collection = None;
     let mut ir = Ir::default();
     let mut count = false;
+    let mut aggregate = None;
 
     for (id, raw) in fields {
         match (id, raw) {
@@ -475,13 +506,48 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(String, Ir, bool)> {
             (4, Raw::Int(offset)) => ir.offset = count_of(offset)?,
             (5, Raw::Int(limit)) => ir.limit = Some(count_of(limit)?),
             (6, Raw::Bool(value)) => count = value,
+            (7, Raw::Object(fields)) => aggregate = Some(decode_aggregate(fields)?),
             (id, _) => return Err(invalid(format!("the IR holds field {id}, which it cannot"))),
         }
     }
 
     let collection = collection.ok_or_else(|| invalid("the IR names no collection"))?;
 
-    Ok((collection, ir, count))
+    if count && aggregate.is_some() {
+        return Err(invalid("the IR both counts and works out an aggregate"));
+    }
+
+    Ok(Decoded {
+        collection,
+        ir,
+        count,
+        aggregate,
+    })
+}
+
+/// Reads an aggregate: its function and the path of the field it reads.
+fn decode_aggregate(fields: Vec<(u64, Raw)>) -> Result<(Aggregate, Vec<String>)> {
+    let mut function = None;
+    let mut path = None;
+
+    for (id, raw) in fields {
+        match (id, raw) {
+            (1, Raw::Int(code)) => {
+                function = Some(Aggregate::from_code(code).ok_or_else(|| {
+                    invalid(format!("the IR holds the unknown aggregate {code}"))
+                })?);
+            }
+            (2, raw) => path = Some(decode_path(raw)?),
+            _ => return Err(invalid("the IR holds an aggregate it cannot read")),
+        }
+    }
+
+    match (function, path) {
+        (Some(function), Some(path)) => Ok((function, path)),
+        _ => Err(invalid(
+            "the IR holds an aggregate without a function or a path",
+        )),
+    }
 }
 
 fn count_of(value: i64) -> Result<u64> {
@@ -732,13 +798,78 @@ mod tests {
             offset: 5,
             limit: Some(10),
         };
-        let bytes = encode("users", &ir, true).unwrap();
+        let bytes = encode("users", &ir, true, None).unwrap();
+        let decoded = decode(&bytes).unwrap();
 
-        assert_eq!(decode(&bytes).unwrap(), ("users".to_owned(), ir, true));
         assert_eq!(
-            decode(&encode("users", &Ir::default(), false).unwrap()).unwrap(),
+            (
+                decoded.collection,
+                decoded.ir,
+                decoded.count,
+                decoded.aggregate
+            ),
+            ("users".to_owned(), ir.clone(), true, None)
+        );
+
+        let decoded = decode(&encode("users", &Ir::default(), false, None).unwrap()).unwrap();
+
+        assert_eq!(
+            (decoded.collection, decoded.ir, decoded.count),
             ("users".to_owned(), Ir::default(), false)
         );
+
+        let bytes = encode(
+            "users",
+            &ir,
+            false,
+            Some((Aggregate::Avg, path("address.zip").as_slice())),
+        )
+        .unwrap();
+        let decoded = decode(&bytes).unwrap();
+
+        assert_eq!(
+            (decoded.ir, decoded.count, decoded.aggregate),
+            (ir, false, Some((Aggregate::Avg, path("address.zip"))))
+        );
+    }
+
+    #[test]
+    fn a_query_counts_or_aggregates_not_both() {
+        let error = encode(
+            "users",
+            &Ir::default(),
+            true,
+            Some((Aggregate::Sum, path("age").as_slice())),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY");
+
+        let aggregate = |fields: Vec<(u64, Raw)>| {
+            codec::write(&[(1, Raw::String("c".into())), (7, Raw::Object(fields))])
+        };
+        let age = (2, Raw::List(vec![Raw::String("age".into())]));
+
+        for broken in [
+            codec::write(&[
+                (1, Raw::String("c".into())),
+                (6, Raw::Bool(true)),
+                (7, Raw::Object(vec![(1, Raw::Int(1)), age.clone()])),
+            ]),
+            aggregate(vec![(1, Raw::Int(0)), age.clone()]),
+            aggregate(vec![(1, Raw::Int(9)), age.clone()]),
+            aggregate(vec![(1, Raw::Int(1))]),
+            aggregate(vec![age.clone()]),
+            aggregate(vec![(1, Raw::Int(1)), (2, Raw::List(Vec::new()))]),
+            aggregate(vec![(1, Raw::Int(1)), age.clone(), (3, Raw::Int(0))]),
+            codec::write(&[(1, Raw::String("c".into())), (7, Raw::Int(1))]),
+        ] {
+            assert_eq!(
+                decode(&broken).err().map(|error| error.code()),
+                Some("INVALID_QUERY"),
+                "{broken:?}"
+            );
+        }
     }
 
     #[test]
@@ -753,7 +884,9 @@ mod tests {
             ])),
             ..Ir::default()
         };
-        let (_, decoded, _) = decode(&encode("c", &nested, false).unwrap()).unwrap();
+        let decoded = decode(&encode("c", &nested, false, None).unwrap())
+            .unwrap()
+            .ir;
 
         assert_eq!(decoded.filter, Some(Expr::And(vec![a, b, c])));
     }

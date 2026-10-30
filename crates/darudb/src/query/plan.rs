@@ -18,6 +18,7 @@
 use std::borrow::Cow;
 use std::ops::{Bound, Deref};
 
+use super::aggregate::Aggregate;
 use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
 use crate::error::{Error, Result};
 use crate::format::object::Value;
@@ -103,6 +104,9 @@ pub(crate) struct Resolved<'s> {
     pub(crate) list_leaf: bool,
     /// Whether the path reads more than one value: it passes a list.
     pub(crate) many: bool,
+    /// Whether the path ends at a link field, whose values are the keys of
+    /// the objects it links to.
+    pub(crate) link: bool,
     /// The field, when the path is a field of the collection itself.
     pub(crate) direct: Option<&'s FieldDef>,
 }
@@ -508,6 +512,60 @@ fn resolve<'s>(
     Ok((filter, sort))
 }
 
+/// The path `function` reads in `collection`, resolved: it has to read one
+/// value of each object, not a list or through one, and of a type the
+/// function takes.
+pub(crate) fn aggregated<'s>(
+    schema: &'s StoredSchema,
+    collection: &'s CollectionDef,
+    path: &[String],
+    function: Aggregate,
+) -> Result<Resolved<'s>> {
+    let resolver = Resolver {
+        schema,
+        collection,
+        parameters: &[],
+    };
+    let resolved = resolver.path(path)?;
+    let text = || path.join(".");
+
+    if resolved.many || resolved.list_leaf {
+        return Err(invalid(format!(
+            "`{}` holds several values, and `{}` reads one value of each object",
+            text(),
+            function.text()
+        )));
+    }
+
+    if resolved.link {
+        return Err(invalid(format!(
+            "`{}` is a link, and `{}` reads a field of the object it links to, such as `{}.name`",
+            text(),
+            function.text(),
+            text()
+        )));
+    }
+
+    let takes = match function {
+        Aggregate::Sum | Aggregate::Avg => matches!(resolved.leaf, Kind::Int | Kind::Float),
+        Aggregate::Min | Aggregate::Max => matches!(
+            resolved.leaf,
+            Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+        ),
+    };
+
+    if !takes {
+        return Err(invalid(format!(
+            "`{}` holds {}, which `{}` does not read",
+            text(),
+            resolved.leaf.describe(),
+            function.text()
+        )));
+    }
+
+    Ok(resolved)
+}
+
 struct Resolver<'s> {
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
@@ -639,6 +697,7 @@ impl<'s> Resolver<'s> {
                             leaf,
                             list_leaf: matches!(field.kind, Kind::List(_)),
                             many,
+                            link: true,
                             direct,
                         });
                     }
@@ -652,6 +711,7 @@ impl<'s> Resolver<'s> {
                         leaf: scalar.clone(),
                         list_leaf: matches!(field.kind, Kind::List(_)),
                         many,
+                        link: false,
                         direct,
                     });
                 }

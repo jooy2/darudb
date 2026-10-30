@@ -4,6 +4,14 @@
 
 ## vNext (2026--)
 
+### Breaking changes
+
+- `QueryRequest` is `#[non_exhaustive]` and has a new field, `aggregate`. Make one with `QueryRequest::new(collection, query)` and set `count` or `aggregate` on it, rather than with a struct literal.
+
+### Added
+
+- Aggregates: `sum`, `min`, `max` and `avg` on `CollectionReader` and `CollectionWriter` work out one value from a field of the objects a query finds, after its sort, offset and limit, and `aggregate` takes the function as an `Aggregate` and the field's path as names, as a binding's IR carries it. The path goes through embedded objects and links. Nulls are left out; a sum of no values is zero and the rest are null. Sums are exact: ints add up without rounding and fail with `INVALID_ARGUMENT` outside an `i64`, and a sum or a mean of floats is the exact value rounded once, so every plan of a query gives the same answer. The least or greatest value of an indexed field, with nothing of the filter left to test, is read from the end of the index.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

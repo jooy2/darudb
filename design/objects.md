@@ -195,7 +195,7 @@ A query names a collection and holds, all optional:
 - **A sort**: fields, each ascending or descending. Null sorts first ascending and last descending. Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too.
 - **An offset and a limit** on the sorted result.
 
-A query either returns the objects or counts them. A count is of the objects the query would return, after its offset and within its limit.
+A query returns the objects, counts them, or works out an [aggregate](#aggregates) of the values of one of their fields. A count and an aggregate are of the objects the query would return, after its offset and within its limit.
 
 ### The filter
 
@@ -227,6 +227,7 @@ A query is a tree that every binding builds and the engine executes. It crosses 
 | 4     | offset     | `int`                                                              |
 | 5     | limit      | `int`                                                              |
 | 6     | count      | `bool`: count the objects rather than return them                  |
+| 7     | aggregate  | `object`: work out an aggregate rather than return them, below     |
 
 An expression is an object: field 1 is its operator, field 2 the path it tests as a `list(string)`, field 3 its values as a list of the field's type, and field 4 its sub-expressions as a `list(object)`. A value may instead be a **parameter**: an `object` whose field 1 is the parameter's number as an `int`, which no value a query compares with is. A query with parameters is a **prepared** one: it is kept, and given values each time it runs, without being built, sent or parsed again. Giving it values makes the tests they complete what the same values in the text would, `== null` becoming `IS NULL` among them; running it with a parameter that has no value is `INVALID_QUERY`. A language binding sends the values in one record: field 0 is how many there are, as an `int`, and field `n + 1` the value of parameter `n`, a null one left out, since a record holds no null. It holds at most 65536.
 
@@ -242,6 +243,8 @@ An expression is an object: field 1 is its operator, field 2 the path it tests a
 | `>`      | 8    | path, one value    |              |      |                  |
 
 `IS NOT NULL` is `NOT` over `IS NULL`. An `AND` inside an `AND`, and an `OR` inside an `OR`, flatten when the IR is read, as they do when a query is built. An IR that does not decode, uses an unknown operator, or leaves out what its operator uses, is `INVALID_QUERY`.
+
+An aggregate is an object: field 1 its function as an `int`, 1 `sum`, 2 `min`, 3 `max` and 4 `avg`, and field 2 the path of the field it reads, as a `list(string)`. An IR with both a count and an aggregate is `INVALID_QUERY`.
 
 ### The query language
 
@@ -268,6 +271,24 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 - **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent, and either may start with `-`.
 - **Parameters** `$0`, `$1` and so on take the values passed with the call, in order and with their types. Text parsed without values keeps them as parameters, for a prepared query. A value that comes from outside the application belongs in a parameter, never in the text.
 - **A query that does not parse**, or does not fit the schema, fails with `INVALID_QUERY`, naming the position, as a character counted from 1, and what was expected. Parentheses and `NOT` nest at most 48 levels in the text, twice the filter's own limit, so that parsing stops before the filter would be refused anyway.
+
+### Aggregates
+
+An aggregate reads the values at one path of the objects a query would return, after its sort, offset and limit, and works out one value from them:
+
+| Function | Reads                             | Gives                                                      |
+| -------- | --------------------------------- | ---------------------------------------------------------- |
+| `sum`    | `int`, `float`                    | An `int` for an `int` field, a `float` for a `float` field |
+| `min`    | `int`, `float`, `string`, `bytes` | The least value, in the order a sort gives                 |
+| `max`    | `int`, `float`, `string`, `bytes` | The greatest value, in the order a sort gives              |
+| `avg`    | `int`, `float`                    | The mean, a `float`                                        |
+
+- **The path reads one value of each object**: it goes through embedded objects and to-one links, and ends at a field of a type the function reads. A path through a list or a to-many link, one that ends at a link, and a type the function does not read are `INVALID_QUERY`.
+- **Nulls are left out**, and so are paths that reach no value, such as one through a link to an object that is not there. A `sum` of no values is zero of the field's type; `min`, `max` and `avg` of no values are null.
+- **Sums are exact.** A `sum` of ints adds them as 128-bit integers and fails with `INVALID_ARGUMENT` when the sum is outside a 64-bit int. A `sum` of floats is the exact sum of the values, rounded once to the nearest float, ties to even, and `avg` is the exact sum divided by the number of values, rounded once, for ints and floats alike. A NaN, or infinities of both signs, make a NaN, and an infinity of one sign makes that infinity. Being exact, neither depends on the order the objects are read in, so every plan of a query gives the same answer.
+- **Floats come out canonical**, as an index keeps them: `-0.0` as `0.0` and every NaN as one NaN, and `min` and `max` order them as a sort does, NaN greatest.
+
+An aggregate over every object a query finds, with no offset and no limit, reads the objects in whatever order the run finds them, the way a count does, without gathering or sorting them. With an offset or a limit, it reads the objects of the result in the query's order. A `min` or `max` of a field of the collection itself with an index, of a query with no offset, no limit and nothing of its filter left to test, reads the first or the last entry of the index that is not null, and no object.
 
 ## Running a query
 
@@ -362,7 +383,7 @@ An engine error inside a migration function keeps its own code: a function that 
 - **Keys order as values do.** For random values of every type, including the edges of each, encodings compare as the values do, and concatenations compare field by field.
 - **Records survive a round trip**, and random bytes read as a record give `CORRUPTED` or a valid object, never a panic.
 - **Indexes agree with records.** After random writes, and after every cut of the crash suite, every index entry names an object that has the entry's value, and every object has its entries.
-- **Every query gives the scan's answer.** Random queries over random data, run through the planner and as a plain scan, return the same objects in the same order; the IR a builder makes and the IR the query language parses from the same query are the same.
+- **Every query gives the scan's answer.** Random queries over random data, run through the planner and as a plain scan, return the same objects in the same order; the IR a builder makes and the IR the query language parses from the same query are the same. Each also works out an aggregate through every way a run can take, and gives what folding the values of the scan's objects gives.
 - **Migrations are atomic.** A migration interrupted anywhere, by a failing function or a simulated power cut, leaves the file at the old schema with its data, and a completed one leaves every object readable under the new schema.
 - **Several processes.** A process whose schema another process migrated fails with `SCHEMA_MISMATCH` rather than reading or writing under the old schema.
 
@@ -372,4 +393,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Composite indexes, indexes inside embedded objects, collation and case-insensitive comparison, full-text search, aggregates other than count, joins beyond following links, a date and time type, and cascading deletes.
+Composite indexes, indexes inside embedded objects, collation and case-insensitive comparison, full-text search, joins beyond following links, a date and time type, and cascading deletes.

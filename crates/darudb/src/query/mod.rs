@@ -10,10 +10,13 @@
 //! - `run`: reading the objects, testing them, sorting, and counting.
 //! - `keys`: sets of primary keys, which a run gathers from the indexes for
 //!   the parts of a filter they answer alone.
+//! - `aggregate`: sums, means, and the least and greatest values, worked out
+//!   exactly from the objects a query finds.
 //!
 //! Whatever the plan, a query gives the objects a walk of every object would,
 //! in the same order; `tests` checks that on random data and random queries.
 
+mod aggregate;
 mod build;
 pub(crate) mod ir;
 mod keys;
@@ -23,12 +26,13 @@ mod run;
 #[cfg(test)]
 mod tests;
 
+pub use aggregate::{Aggregate, tagged};
 pub use build::{Filter, Query, QueryRequest};
 
 use crate::error::Result;
-use crate::format::object::Object;
 use crate::format::object::codec::NameOrder;
 use crate::format::object::schema::{CollectionDef, StoredSchema};
+use crate::format::object::{Object, Value};
 use crate::schema::objects::{Decoder, Source};
 use crate::schema::{CollectionReader, CollectionType, CollectionWriter, TypedReader, TypedWriter};
 
@@ -95,6 +99,31 @@ fn objects(
     run::objects(source, &plan(schema, collection, query)?, order)
 }
 
+/// `function` over the field at `path` of the objects `query` finds.
+fn aggregate_at(
+    source: &dyn Source,
+    schema: &StoredSchema,
+    collection: &CollectionDef,
+    query: &Query,
+    function: Aggregate,
+    path: &[String],
+) -> Result<Value> {
+    let resolved = plan::aggregated(schema, collection, path, function)?;
+
+    run::aggregate(
+        source,
+        &plan(schema, collection, query)?,
+        &resolved,
+        path,
+        function,
+    )
+}
+
+/// A path to a field as the builders take it: names joined by `.`.
+fn dotted(field: &str) -> Vec<String> {
+    field.split('.').map(str::to_owned).collect()
+}
+
 /// The records `query` finds, as [`run::stored`] gives them, through
 /// [`run::point`] when it is a lookup of one value.
 fn stored(
@@ -144,6 +173,53 @@ impl CollectionReader<'_> {
         run::count(source, &plan(schema, collection, query)?)
     }
 
+    /// Works out `function` over the values of the field at `path`, one name
+    /// for each step, of the objects `query` finds, after its offset and
+    /// within its limit, as a binding's IR asks for it. [`sum`](Self::sum),
+    /// [`min`](Self::min), [`max`](Self::max) and [`avg`](Self::avg) take the
+    /// path as text.
+    ///
+    /// Null values, and paths that reach none, are left out. The path reads
+    /// one value of each object, through embedded objects and links but not
+    /// lists; another fails with
+    /// [`Error::InvalidQuery`](crate::Error::InvalidQuery), as a field of a
+    /// type the function does not read does.
+    pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value> {
+        let (source, schema, collection) = self.parts();
+
+        aggregate_at(source, schema, collection, query, function, path)
+    }
+
+    /// The sum of `field`, an int or float field, or a path such as
+    /// `order.total`, over the objects `query` finds: an int for an int
+    /// field, exact, and a float for a float field, the exact sum rounded
+    /// once. A sum of no values is zero. A sum of ints outside the range of
+    /// an `i64` fails with
+    /// [`Error::InvalidArgument`](crate::Error::InvalidArgument).
+    pub fn sum(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Sum, &dotted(field))
+    }
+
+    /// The least value of `field`, an int, float, string or bytes field, over
+    /// the objects `query` finds, in the order a sort gives; null when there
+    /// is none. With nothing of the filter left to test, a field with an
+    /// index is read from the index's first entry.
+    pub fn min(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Min, &dotted(field))
+    }
+
+    /// The greatest value of `field`, as [`min`](Self::min) gives the least.
+    pub fn max(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Max, &dotted(field))
+    }
+
+    /// The mean of `field`, an int or float field, over the objects `query`
+    /// finds, as a float: the exact sum divided by the number of values,
+    /// rounded once. Null when there are no values.
+    pub fn avg(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Avg, &dotted(field))
+    }
+
     /// The records of the objects `query` finds, in its order, as the file
     /// holds them (`design/objects.md`, "Records"), for a language binding
     /// that decodes them itself. An object the filter and the sort need not
@@ -185,6 +261,33 @@ impl CollectionWriter<'_> {
         let (source, schema, collection) = self.parts();
 
         run::count(source, &plan(schema, collection, query)?)
+    }
+
+    /// [`CollectionReader::aggregate`], with this transaction's changes.
+    pub fn aggregate(&self, query: &Query, function: Aggregate, path: &[String]) -> Result<Value> {
+        let (source, schema, collection) = self.parts();
+
+        aggregate_at(source, schema, collection, query, function, path)
+    }
+
+    /// [`CollectionReader::sum`], with this transaction's changes.
+    pub fn sum(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Sum, &dotted(field))
+    }
+
+    /// [`CollectionReader::min`], with this transaction's changes.
+    pub fn min(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Min, &dotted(field))
+    }
+
+    /// [`CollectionReader::max`], with this transaction's changes.
+    pub fn max(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Max, &dotted(field))
+    }
+
+    /// [`CollectionReader::avg`], with this transaction's changes.
+    pub fn avg(&self, query: &Query, field: &str) -> Result<Value> {
+        self.aggregate(query, Aggregate::Avg, &dotted(field))
     }
 
     /// The records of the objects `query` finds, with this transaction's

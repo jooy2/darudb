@@ -2,11 +2,12 @@
 //! through the planner and as a walk of every record, return the same
 //! objects in the same order, and count the same.
 
+use super::aggregate::Aggregate;
 use super::build::{Filter, Query};
 use super::ir::{self, Ir};
 use super::{plan, run};
 use crate::format::object::codec::NameOrder;
-use crate::format::object::{Object, Value};
+use crate::format::object::{Object, Value, key};
 use crate::schema::objects::Source;
 use crate::schema::{Collection, Embedded, Schema, Type};
 use crate::testing::Rng;
@@ -371,7 +372,144 @@ fn agree(
         "{ir:?}"
     );
 
+    // An aggregate, a different one each time, gives what folding the values
+    // of the scan's objects gives, whichever way the run takes.
+    let turn = AGGREGATES.with(|turn| {
+        turn.set(turn.get() + 1);
+        turn.get()
+    });
+    let path = AGGREGATED[turn % AGGREGATED.len()];
+    let function = [
+        Aggregate::Sum,
+        Aggregate::Min,
+        Aggregate::Max,
+        Aggregate::Avg,
+    ][turn / AGGREGATED.len() % 4];
+    let names: Vec<String> = path.split('.').map(str::to_owned).collect();
+    let objects = run::whole(|| run::objects(source, &scanned, None)).unwrap();
+
+    match (
+        plan::aggregated(db_schema, collection, &names, function),
+        folded(&objects, path, function),
+    ) {
+        (Err(error), None) => assert_eq!(error.code(), "INVALID_QUERY", "{function:?} {path}"),
+        (Ok(resolved), Some(expected)) => {
+            for way in [
+                run::Forced::Weigh,
+                run::Forced::Plain,
+                run::Forced::Keys,
+                run::Forced::Through,
+            ] {
+                let got = run::forced(way, || {
+                    run::aggregate(source, &planned, &resolved, &names, function)
+                })
+                .unwrap();
+
+                assert_eq!(
+                    key::encoded(&got),
+                    key::encoded(&expected),
+                    "{function:?} of {path}: {got:?} for {expected:?} by {way:?}, {ir:?}"
+                );
+            }
+        }
+        (a, b) => panic!("{function:?} of {path}: planned {a:?}, folded {b:?}"),
+    }
+
     Some(found)
+}
+
+thread_local! {
+    /// How many aggregates [`agree`] has tried, which picks the next.
+    static AGGREGATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The paths [`agree`] works out aggregates of, the ones no aggregate reads
+/// among them.
+const AGGREGATED: [&str; 11] = [
+    "id",
+    "score",
+    "rating",
+    "handle",
+    "note",
+    "team.city",
+    "address.zip",
+    "address.city",
+    "tags",
+    "team",
+    "active",
+];
+
+/// `function` of the values at `path` of `objects`, worked out from the
+/// objects alone, or `None` where no aggregate reads the path.
+fn folded(objects: &[Object], path: &str, function: Aggregate) -> Option<Value> {
+    let numeric = matches!(path, "id" | "score" | "rating" | "address.zip");
+    let ordered = numeric || matches!(path, "handle" | "note" | "team.city" | "address.city");
+
+    match function {
+        Aggregate::Sum | Aggregate::Avg if !numeric => return None,
+        _ if !ordered => return None,
+        _ => {}
+    }
+
+    let values: Vec<Value> = objects
+        .iter()
+        .map(|object| match path {
+            "team.city" => match object.get("team").and_then(Value::as_str) {
+                // The teams the test writes: north in Seoul, south in no
+                // city, and gone not there at all.
+                Some("north") => Value::from("Seoul"),
+                _ => Value::Null,
+            },
+            "address.zip" | "address.city" => match object.get("address") {
+                Some(Value::Object(address)) => address
+                    .get(&path["address.".len()..])
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                _ => Value::Null,
+            },
+            path => object.get(path).cloned().unwrap_or(Value::Null),
+        })
+        .filter(|value| !value.is_null())
+        .collect();
+    let float = path == "rating";
+
+    Some(match function {
+        Aggregate::Sum | Aggregate::Avg if values.is_empty() => match (function, float) {
+            (Aggregate::Sum, true) => Value::Float(0.0),
+            (Aggregate::Sum, false) => Value::Int(0),
+            _ => Value::Null,
+        },
+        // The ratings are small sums of halves, which a float adds exactly
+        // in any order, so a plain sum is the exact one.
+        Aggregate::Sum if float => Value::Float(values.iter().filter_map(Value::as_float).sum()),
+        Aggregate::Sum => Value::Int(values.iter().filter_map(Value::as_int).sum()),
+        Aggregate::Avg => {
+            let sum: f64 = if float {
+                values.iter().filter_map(Value::as_float).sum()
+            } else {
+                values
+                    .iter()
+                    .filter_map(Value::as_int)
+                    .map(|int| int as f64)
+                    .sum()
+            };
+
+            Value::Float(sum / values.len() as f64)
+        }
+        _ => {
+            let mut sorted = values;
+
+            sorted.sort_by(key::compare);
+
+            let extreme = if function == Aggregate::Min {
+                sorted.first()
+            } else {
+                sorted.last()
+            };
+
+            extreme.cloned().unwrap_or(Value::Null)
+        }
+    })
 }
 
 #[test]
@@ -427,10 +565,10 @@ fn every_query_gives_the_scans_answer() {
             // The IR a query crosses the language boundary as reads back as
             // the same query. Compared as bytes, since NaN is not equal to
             // itself as a value.
-            let bytes = ir::encode("players", query.ir(), false).unwrap();
-            let (_, decoded, _) = ir::decode(&bytes).unwrap();
+            let bytes = ir::encode("players", query.ir(), false, None).unwrap();
+            let decoded = ir::decode(&bytes).unwrap().ir;
 
-            assert_eq!(ir::encode("players", &decoded, false).unwrap(), bytes);
+            assert_eq!(ir::encode("players", &decoded, false, None).unwrap(), bytes);
 
             let found = agree(&read, &open.schema, query.ir(), &[]);
 
@@ -565,6 +703,152 @@ fn find(db: &Database, query: Query) -> Vec<i64> {
     let read = db.begin_read().unwrap();
 
     ids(&read.collection("players").unwrap().query(&query).unwrap())
+}
+
+#[test]
+fn aggregates_follow_the_documented_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+    let all = Query::new();
+    let bytes = |value: Value| key::encoded(&value).unwrap();
+
+    // Scores 3, 1, 3 and the default 0; the least is read from the index.
+    assert_eq!(players.sum(&all, "score").unwrap(), Value::Int(7));
+    assert_eq!(players.min(&all, "score").unwrap(), Value::Int(0));
+    assert_eq!(players.max(&all, "score").unwrap(), Value::Int(3));
+    assert_eq!(players.avg(&all, "score").unwrap(), Value::Float(1.75));
+
+    // A NaN rating is the greatest, and makes the sum NaN; `-0.0` is `0.0`.
+    assert_eq!(
+        bytes(players.sum(&all, "rating").unwrap()),
+        bytes(f64::NAN.into())
+    );
+    assert_eq!(
+        bytes(players.max(&all, "rating").unwrap()),
+        bytes(f64::NAN.into())
+    );
+    assert_eq!(
+        players
+            .min(&all, "rating")
+            .unwrap()
+            .as_float()
+            .unwrap()
+            .to_bits(),
+        0.0f64.to_bits()
+    );
+
+    let below_one = Query::new().filter(Filter::lt("rating", 1.0));
+
+    assert_eq!(
+        players.sum(&below_one, "rating").unwrap(),
+        Value::Float(0.0)
+    );
+    assert_eq!(
+        players.avg(&below_one, "rating").unwrap(),
+        Value::Float(0.0)
+    );
+
+    // Strings and bytes order as their bytes do, and paths go through
+    // embedded objects and links; a link to nothing reads as null.
+    assert_eq!(players.min(&all, "handle").unwrap(), Value::from("a\0b"));
+    assert_eq!(players.max(&all, "handle").unwrap(), Value::from("ace"));
+    assert_eq!(
+        players.min(&all, "team.city").unwrap(),
+        Value::from("Seoul")
+    );
+    assert_eq!(
+        players.max(&all, "address.city").unwrap(),
+        Value::from("Busan")
+    );
+
+    // Through the index of the field, with the filter answered by it.
+    let from_one = Query::new().filter(Filter::ge("score", 1));
+
+    assert_eq!(players.min(&from_one, "score").unwrap(), Value::Int(1));
+    assert_eq!(players.max(&from_one, "score").unwrap(), Value::Int(3));
+    assert_eq!(players.sum(&from_one, "score").unwrap(), Value::Int(7));
+
+    // Of no values: zero for a sum, null for the rest.
+    let none = Query::new().filter(Filter::gt("score", 10));
+
+    assert_eq!(players.sum(&none, "score").unwrap(), Value::Int(0));
+    assert_eq!(players.sum(&none, "rating").unwrap(), Value::Float(0.0));
+    assert_eq!(players.avg(&none, "score").unwrap(), Value::Null);
+    assert_eq!(players.min(&none, "handle").unwrap(), Value::Null);
+    assert_eq!(players.max(&none, "score").unwrap(), Value::Null);
+
+    // After the sort, the offset and the limit, as a count is.
+    let by_score = Query::new().sort_by_desc("score");
+
+    assert_eq!(
+        players.sum(&by_score.clone().limit(2), "score").unwrap(),
+        Value::Int(6)
+    );
+    assert_eq!(
+        players
+            .sum(&by_score.clone().offset(1).limit(2), "score")
+            .unwrap(),
+        Value::Int(4)
+    );
+    assert_eq!(
+        players.min(&by_score.clone().limit(2), "score").unwrap(),
+        Value::Int(3)
+    );
+    assert_eq!(
+        players.max(&by_score.offset(3), "score").unwrap(),
+        Value::Int(0)
+    );
+
+    // What no aggregate reads, or no aggregate of this kind.
+    for (function, path) in [
+        (Aggregate::Sum, "handle"),
+        (Aggregate::Avg, "note"),
+        (Aggregate::Sum, "tags"),
+        (Aggregate::Min, "tags"),
+        (Aggregate::Max, "friends.score"),
+        (Aggregate::Sum, "team"),
+        (Aggregate::Min, "active"),
+        (Aggregate::Max, "address"),
+        (Aggregate::Min, "nothing"),
+    ] {
+        let names: Vec<String> = path.split('.').map(str::to_owned).collect();
+        let error = players.aggregate(&all, function, &names).unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY", "{function:?} of {path}");
+    }
+
+    drop(read);
+
+    // A sum of ints is exact, and fails past the range of an int; the mean
+    // is of the exact sum.
+    let mut txn = db.begin_write().unwrap();
+    let mut players = txn.collection("players").unwrap();
+
+    players
+        .insert(Object::new().with("score", i64::MAX))
+        .unwrap();
+    players
+        .insert(Object::new().with("score", i64::MAX))
+        .unwrap();
+
+    let big = Query::new().filter(Filter::gt("score", 3));
+    let error = players.sum(&big, "score").unwrap_err();
+
+    assert_eq!(error.code(), "INVALID_ARGUMENT");
+    assert!(error.to_string().contains("`score`"), "{error}");
+    assert_eq!(
+        players.avg(&big, "score").unwrap(),
+        Value::Float(i64::MAX as f64)
+    );
+    assert_eq!(
+        players
+            .sum(&Query::new().filter(Filter::ge("score", 0)), "score")
+            .unwrap_err()
+            .code(),
+        "INVALID_ARGUMENT"
+    );
 }
 
 #[test]
@@ -870,8 +1154,8 @@ fn the_query_language_builds_the_builders_query() {
 
         // Compared as IR, where NaN equals itself.
         assert_eq!(
-            ir::encode("players", parsed.ir(), false).unwrap(),
-            ir::encode("players", built.ir(), false).unwrap(),
+            ir::encode("players", parsed.ir(), false, None).unwrap(),
+            ir::encode("players", built.ir(), false, None).unwrap(),
             "{written}"
         );
     }
@@ -1121,8 +1405,8 @@ fn a_prepared_query_runs_as_the_parsed_one_does() {
         assert_eq!(find(&db, bound), find(&db, parsed), "{text}");
 
         // Through the IR, as a binding sends a prepared query.
-        let bytes = ir::encode("players", prepared.ir(), false).unwrap();
-        let (_, decoded, _) = ir::decode(&bytes).unwrap();
+        let bytes = ir::encode("players", prepared.ir(), false, None).unwrap();
+        let decoded = ir::decode(&bytes).unwrap().ir;
 
         assert_eq!(&decoded, prepared.ir(), "{text}");
         assert_eq!(

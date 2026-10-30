@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::ops::Not;
 use std::sync::Arc;
 
+use super::aggregate::Aggregate;
 use super::ir::{Expr, Ir, Op};
 use crate::error::Result;
 use crate::format::object::Value;
@@ -126,13 +127,15 @@ impl Not for Filter {
 }
 
 /// A query as the IR carries it across the language boundary: the query, the
-/// collection it names, and whether it counts the objects rather than
-/// returning them (`design/objects.md`, "The IR").
+/// collection it names, and whether it counts the objects or works out an
+/// aggregate of them rather than returning them (`design/objects.md`, "The
+/// IR").
 ///
 /// A language binding builds the IR in its own language and hands the bytes
 /// to the engine, which reads them with [`decode`](Self::decode). Rust code
 /// has no need of it and uses [`Query`] directly.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct QueryRequest {
     /// The collection the query runs on.
     pub collection: String,
@@ -140,28 +143,47 @@ pub struct QueryRequest {
     pub query: Query,
     /// Whether to count the objects rather than return them.
     pub count: bool,
+    /// The aggregate to work out from the objects rather than return them,
+    /// and the path of the field it reads, one name for each step.
+    pub aggregate: Option<(Aggregate, Vec<String>)>,
 }
 
 impl QueryRequest {
+    /// A request for the objects `query` finds in `collection`.
+    pub fn new(collection: impl Into<String>, query: Query) -> Self {
+        Self {
+            collection: collection.into(),
+            query,
+            count: false,
+            aggregate: None,
+        }
+    }
+
     /// Reads the IR in `bytes`. IR that does not decode, or that names an
     /// unknown operator or leaves out what one uses, is
     /// [`Error::InvalidQuery`](crate::Error::InvalidQuery).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let (collection, ir, count) = super::ir::decode(bytes)?;
+        let decoded = super::ir::decode(bytes)?;
 
         Ok(Self {
-            collection,
-            query: Query::from_ir(ir),
-            count,
+            collection: decoded.collection,
+            query: Query::from_ir(decoded.ir),
+            count: decoded.count,
+            aggregate: decoded.aggregate,
         })
     }
 
     /// The IR of this request, a bound query's with its parameters' values
-    /// in their places.
+    /// in their places. A request that both counts and works out an
+    /// aggregate is [`Error::InvalidQuery`](crate::Error::InvalidQuery).
     pub fn encode(&self) -> Result<Vec<u8>> {
         let ir = self.query.bound_ir()?;
+        let aggregate = self
+            .aggregate
+            .as_ref()
+            .map(|(function, path)| (*function, path.as_slice()));
 
-        super::ir::encode(&self.collection, &ir, self.count)
+        super::ir::encode(&self.collection, &ir, self.count, aggregate)
     }
 }
 

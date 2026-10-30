@@ -86,7 +86,7 @@ fn write_fields(fields: &[(u64, Raw)], out: &mut Vec<u8>) {
     }
 }
 
-fn write_value(value: &Raw, out: &mut Vec<u8>) {
+pub(crate) fn write_value(value: &Raw, out: &mut Vec<u8>) {
     match value {
         Raw::Bool(false) => out.push(FALSE),
         Raw::Bool(true) => out.push(TRUE),

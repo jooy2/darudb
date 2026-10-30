@@ -85,7 +85,7 @@ pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};
 pub use options::OpenOptions;
-pub use query::{Filter, Query, QueryRequest};
+pub use query::{Aggregate, Filter, Query, QueryRequest};
 /// What the code of `#[derive(Object)]` and `#[derive(Embedded)]` calls.
 #[doc(hidden)]
 pub use schema::typed::derive as __derive;
@@ -94,6 +94,7 @@ pub use schema::typed::derive as __derive;
 /// documented API.
 #[doc(hidden)]
 pub mod __binding {
+    pub use crate::query::tagged;
     pub use crate::schema::{Scalar, Shape, ShapeField};
 }
 pub use schema::{

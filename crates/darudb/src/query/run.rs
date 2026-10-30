@@ -8,6 +8,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 
+use super::aggregate::{Aggregate, Exact, of_nothing};
 use super::ir::{Expr, Ir, Op, Operand};
 use super::keys::KeySet;
 use super::plan::{Access, Cond, Part, Plan, Range, Resolved, Step, Test, terms_of};
@@ -1523,6 +1524,244 @@ pub(crate) fn count(source: &dyn Source, plan: &Plan<'_>) -> Result<u64> {
     let found = found.saturating_sub(plan.offset);
 
     Ok(plan.limit.map_or(found, |limit| found.min(limit)))
+}
+
+/// Runs `plan` and works out `function` over the values at `path`, whose
+/// names are `names`, of the objects it finds, after its offset and within
+/// its limit (`design/objects.md`, "Aggregates").
+pub(crate) fn aggregate(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    path: &Resolved<'_>,
+    names: &[String],
+    function: Aggregate,
+) -> Result<Value> {
+    if let Some(extreme) = extreme_in_index(source, plan, path, function)? {
+        return Ok(extreme);
+    }
+
+    let mut fold = Fold::new(function, &path.leaf);
+
+    if plan.offset == 0 && plan.limit.is_none() {
+        // Every object found counts, whatever its order, so the objects are
+        // neither gathered nor sorted: each is read as the walk finds it.
+        let strategy = strategy(source, plan, false)?;
+        let (route, skip, _) = strategy.route(plan);
+        let reader = Reader::skipping(source, plan, skip);
+
+        walk(source, plan, route, &mut |key, walked| {
+            with_record(&reader, plan, key, walked, &mut |lent| {
+                if meets(&reader, plan, Some(lent), None)? {
+                    fold.read(&reader, plan, path, lent)?;
+                }
+
+                Ok(())
+            })?;
+
+            Ok(false)
+        })?;
+    } else {
+        let reader = Reader::new(source);
+
+        found(source, plan, &mut |record| {
+            fold.read(&reader, plan, path, Lent::unmarked(&record))
+        })?;
+    }
+
+    fold.finish(names)
+}
+
+/// The least or greatest value at `path`, read from the end of its field's
+/// index rather than from the objects, when the index alone says it: the
+/// path is a field of the collection itself with an index, the query has no
+/// offset and no limit, and nothing of its filter is left to test, the
+/// access being a walk of every record, or of ranges of that index. `None`
+/// when the index cannot say.
+fn extreme_in_index(
+    source: &dyn Source,
+    plan: &Plan<'_>,
+    path: &Resolved<'_>,
+    function: Aggregate,
+) -> Result<Option<Value>> {
+    let backward = match function {
+        Aggregate::Min => false,
+        Aggregate::Max => true,
+        _ => return Ok(None),
+    };
+    let Some(field) = path.direct.filter(|_| !path.many && path.steps.len() == 1) else {
+        return Ok(None);
+    };
+
+    if plan.offset != 0 || plan.limit.is_some() || plan.filter.is_some() {
+        return Ok(None);
+    }
+
+    let whole;
+    let (index, ranges): (&IndexDef, &[Range]) = match &plan.access {
+        Access::Index { index, ranges, .. } if index.field == field.id => (index, ranges),
+        Access::Records {
+            range: (Bound::Unbounded, Bound::Unbounded),
+            ..
+        } if !plan.exact => {
+            let Some(index) = plan
+                .collection
+                .indexes
+                .iter()
+                .find(|index| index.field == field.id)
+            else {
+                return Ok(None);
+            };
+
+            whole = [(Bound::Unbounded, Bound::Unbounded)];
+            (index, &whole)
+        }
+        _ => return Ok(None),
+    };
+    let tree = index_tree(index.id);
+    let mut found = None;
+
+    for at in 0..ranges.len() {
+        let range = &ranges[in_order(at, ranges.len(), backward)];
+
+        source
+            .range_in(&tree, as_ref(&range.0), as_ref(&range.1), backward)?
+            .for_each(&mut |entry, stored| {
+                let (value, _) = entry_parts(source, index, entry, stored)?;
+
+                // Nulls sort first and are left out.
+                if value.first() == Some(&key::NULL) {
+                    return Ok(false);
+                }
+
+                let (value, _) = key::decode(value).map_err(|reason| {
+                    source.corrupted(format!("an entry of index {}: {reason}", index.id))
+                })?;
+
+                found = Some(value);
+
+                Ok(true)
+            })?;
+
+        if found.is_some() {
+            break;
+        }
+    }
+
+    Ok(Some(found.unwrap_or(Value::Null)))
+}
+
+/// An aggregate as it is worked out, one value at a time.
+struct Fold {
+    function: Aggregate,
+    /// Whether the values are floats rather than ints, for a sum.
+    float: bool,
+    /// A sum of ints, which cannot overflow before 2^64 values.
+    ints: i128,
+    /// A sum of floats, or of the values of a mean.
+    exact: Exact,
+    /// How many values a mean read.
+    count: u64,
+    /// The least or the greatest value so far.
+    best: Option<Value>,
+}
+
+impl Fold {
+    fn new(function: Aggregate, leaf: &Kind) -> Self {
+        Self {
+            function,
+            float: matches!(leaf, Kind::Float),
+            ints: 0,
+            exact: Exact::default(),
+            count: 0,
+            best: None,
+        }
+    }
+
+    /// Adds the value at `path` of the object whose record is `lent`.
+    fn read(
+        &mut self,
+        reader: &Reader<'_>,
+        plan: &Plan<'_>,
+        path: &Resolved<'_>,
+        lent: Lent<'_>,
+    ) -> Result<()> {
+        let view = View::new(reader, plan, lent);
+
+        reader.any_in(&view, path, &mut |value| {
+            self.add(value);
+            true
+        })?;
+
+        Ok(())
+    }
+
+    fn add(&mut self, value: ValueRef<'_>) {
+        // An int as `Ok`, a float as `Err`.
+        let number = match value {
+            ValueRef::Int(int) => Some(Ok(int)),
+            ValueRef::Value(Value::Int(int)) => Some(Ok(*int)),
+            ValueRef::Float(float) => Some(Err(float)),
+            ValueRef::Value(Value::Float(float)) => Some(Err(*float)),
+            _ => None,
+        };
+
+        match (self.function, number) {
+            _ if value.is_null() => {}
+            (Aggregate::Sum, Some(Ok(int))) => self.ints += i128::from(int),
+            (Aggregate::Avg, Some(Ok(int))) => {
+                self.exact.add_int(int);
+                self.count += 1;
+            }
+            (Aggregate::Sum, Some(Err(float))) => self.exact.add_float(float),
+            (Aggregate::Avg, Some(Err(float))) => {
+                self.exact.add_float(float);
+                self.count += 1;
+            }
+            (Aggregate::Sum | Aggregate::Avg, None) => {}
+            (function, _) => {
+                let better = self.best.as_ref().is_none_or(|best| {
+                    let order = value.compare(best);
+
+                    if function == Aggregate::Max {
+                        order.is_gt()
+                    } else {
+                        order.is_lt()
+                    }
+                });
+
+                if better {
+                    self.best = Some(match value.to_value() {
+                        Value::Float(float) => Value::Float(key::canonical_float(float)),
+                        value => value,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The aggregate of the values added, for the field at `names`.
+    fn finish(self, names: &[String]) -> Result<Value> {
+        Ok(match self.function {
+            Aggregate::Sum if self.float => {
+                Value::Float(key::canonical_float(self.exact.rounded(1)))
+            }
+            Aggregate::Sum => {
+                Value::Int(
+                    i64::try_from(self.ints).map_err(|_| Error::InvalidArgument {
+                        message: format!(
+                            "the sum of `{}` is outside the range of a 64-bit int",
+                            names.join(".")
+                        ),
+                    })?,
+                )
+            }
+            Aggregate::Avg if self.count == 0 => of_nothing(Aggregate::Avg, self.float),
+            Aggregate::Avg => Value::Float(key::canonical_float(self.exact.rounded(self.count))),
+            function => self
+                .best
+                .unwrap_or_else(|| of_nothing(function, self.float)),
+        })
+    }
 }
 
 /// The number of objects `plan`'s access and filter find, before its offset

@@ -1621,13 +1621,14 @@ pub fn parse_query(
     parameters: BufferSlice<'_>,
     count: bool,
 ) -> Result<Buffer> {
-    let request = darudb::QueryRequest {
+    let mut request = darudb::QueryRequest::new(
         collection,
-        query: darudb::Query::prepare(&text)
+        darudb::Query::prepare(&text)
             .and_then(|query| query.bind_encoded(&parameters))
             .map_err(to_js_error)?,
-        count,
-    };
+    );
+
+    request.count = count;
 
     Ok(request.encode().map_err(to_js_error)?.into())
 }
@@ -1678,11 +1679,12 @@ impl NativePrepared {
     /// asynchronous API, which passes queries to the thread pool as IR.
     #[napi]
     pub fn bind(&self, parameters: BufferSlice<'_>, count: bool) -> Result<Buffer> {
-        let request = darudb::QueryRequest {
-            collection: self.inner.collection.clone(),
-            query: self.inner.bound(&parameters, false)?,
-            count,
-        };
+        let mut request = darudb::QueryRequest::new(
+            self.inner.collection.clone(),
+            self.inner.bound(&parameters, false)?,
+        );
+
+        request.count = count;
 
         Ok(request.encode().map_err(to_js_error)?.into())
     }

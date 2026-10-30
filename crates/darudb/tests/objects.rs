@@ -1244,14 +1244,21 @@ fn records_and_the_ir_carry_objects_and_queries_across_the_language_boundary() {
     let query = Query::new()
         .filter(Filter::ge("age", 0))
         .sort_by_desc("age");
-    let request = QueryRequest {
-        collection: "users".to_owned(),
-        query: query.clone(),
-        count: false,
-    };
+    let request = QueryRequest::new("users", query.clone());
     let decoded = QueryRequest::decode(&request.encode().unwrap()).unwrap();
 
     assert_eq!(decoded, request);
+
+    // An aggregate crosses with its function and the path of its field.
+    let mut summing = QueryRequest::new("users", query.clone());
+
+    summing.aggregate = Some((darudb::Aggregate::Sum, vec!["age".to_owned()]));
+
+    let summed = QueryRequest::decode(&summing.encode().unwrap()).unwrap();
+
+    assert_eq!(summed, summing);
+    summing.count = true;
+    assert_eq!(code(summing.encode()), "INVALID_QUERY");
 
     let read = db.begin_read().unwrap();
     let users = read.collection("users").unwrap();
