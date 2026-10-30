@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Final, Generic, NoReturn, TypeVar
 
 from . import _native
 from ._errors import DaruError
-from ._schema import resolve
+from ._schema import by_name, resolve
 
 if TYPE_CHECKING:
     from ._schema import Resolved, Schema
@@ -49,6 +49,8 @@ _IS_NULL: Final = 15
 _AND: Final = 1
 _OR: Final = 2
 _NOT: Final = 3
+_LINKED: Final = 4
+"""The kinds of the filter's tuples beside a test, 0."""
 
 
 def param(index: int) -> Param:
@@ -116,6 +118,11 @@ def _ignoring_case(node: tuple[Any, ...]) -> tuple[Any, ...]:
 
     if node[0] == _NOT:
         return (_NOT, _ignoring_case(node[1]))
+
+    if node[0] == _LINKED:
+        inner = None if node[3] is None else _ignoring_case(node[3])
+
+        return (_LINKED, node[1], node[2], inner)
 
     return (node[0], tuple(_ignoring_case(term) for term in node[1]))
 
@@ -358,6 +365,32 @@ class Query:
         return compiled
 
 
+def linked(
+    linking: type | str, link: str | FieldRef, condition: Condition | None = None
+) -> Condition:
+    """A condition that holds for an object some object of ``linking``, a
+    collection's class or a name, links to through its link field ``link``,
+    and that meets ``condition``, on ``linking``'s fields, if it is given:
+    ``linked(Post, "author", F.year >= 2020)`` holds for a user some post of
+    2020 or later names as its author. ``~`` of it holds for the objects
+    nothing links to. It is ``ANY posts.author (year >= 2020)`` in the query
+    language."""
+    if not isinstance(linking, (type, str)) or linking == "":
+        raise _invalid_query(f"linked takes a collection's class or name, not {linking!r}")
+
+    if condition is not None and not isinstance(condition, Condition):
+        raise _invalid_query(f"linked takes a condition, not {condition!r}")
+
+    if isinstance(link, FieldRef):
+        path = link._path
+    elif isinstance(link, str) and link:
+        path = tuple(link.split("."))
+    else:
+        raise _invalid_query(f"linked names a link field, not {link!r}")
+
+    return Condition((_LINKED, linking, path, None if condition is None else condition._node))
+
+
 def where(condition: Condition) -> Query:
     """A query with ``condition``: ``where(F.age >= 18).sort_by(F.age)``."""
     return Query().where(condition)
@@ -410,6 +443,20 @@ class _Translator:
 
         if node[0] == _NOT:
             return (_NOT, self.node(node[1]))
+
+        if node[0] == _LINKED:
+            # The link and the filter name the linking collection's fields: a
+            # class's by their attributes, and one reached by name as they
+            # are.
+            linking = resolve(node[1]) if isinstance(node[1], type) else by_name(node[1])
+            translate = _Translator(linking, self._schema)
+
+            return (
+                _LINKED,
+                linking.name,
+                translate.path(node[2]),
+                None if node[3] is None else translate.node(node[3]),
+            )
 
         return (node[0], tuple(self.node(term) for term in node[1]))
 

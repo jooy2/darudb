@@ -178,6 +178,37 @@ def test_prepared_queries_from_text_and_from_the_builder(db: darudb.Database) ->
         assert error.value.code == "INVALID_QUERY"
 
 
+def test_linked_conditions(db: darudb.Database) -> None:
+    with db.read() as txn:
+        users = txn.collection(User)
+
+        # Post `intro` is Alice's, read by Bob and Carol; `news` is Carol's.
+        assert names(users.find(darudb.linked(Post, "author"))) == ["Alice", "Carol"]
+        assert names(users.find(darudb.linked(Post, F.author, F.title == "News"))) == ["Carol"]
+        assert names(users.find(darudb.linked(Post, "readers"))) == ["Bob", "Carol"]
+        assert names(users.find(~darudb.linked(Post, "author"))) == ["Bob", "Dave"]
+        assert names(users.find(darudb.linked(Post, "author") & (F.age > 40))) == ["Carol"]
+        assert names(users.find("ANY posts.author (title == $0)", "Hello")) == ["Alice"]
+
+        prepared = db.prepare(User, darudb.linked(Post, "author", F.title == param(0)))
+
+        assert names(users.find(prepared, "News")) == ["Carol"]
+
+        # The linking collection by its name, whose fields pass as they are.
+        assert names(users.find(darudb.linked("posts", "author"))) == ["Alice", "Carol"]
+
+        with pytest.raises(DaruError) as error:
+            users.find(darudb.linked(Post, "title"))
+
+        assert error.value.code == "INVALID_QUERY"
+
+        for refused in [lambda: darudb.linked(3, "author"), lambda: darudb.linked(Post, "")]:  # type: ignore[arg-type]
+            with pytest.raises(DaruError) as error:
+                refused()
+
+            assert error.value.code == "INVALID_QUERY"
+
+
 def test_tests_that_ignore_case(db: darudb.Database) -> None:
     with db.read() as txn:
         users = txn.collection(User)

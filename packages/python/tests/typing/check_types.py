@@ -50,6 +50,7 @@ def reads(db: darudb.Database) -> None:
         assert_type(users.find_one(F.name == "Alice"), User | None)
         assert_type(users.count(), int)
         assert_type((F.name == "a").ignore_case(), darudb.Condition)
+        assert_type(darudb.linked(Post, "author", F.title == "a"), darudb.Condition)
         assert_type(users.sum("age"), int | float)
         assert_type(users.sum(F.rating, F.age > 3), int | float)
         assert_type(users.avg("age", "age > $0", 3), float | None)

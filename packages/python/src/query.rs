@@ -14,6 +14,9 @@
 //!   `(0, op, path, values, True)` the same test ignoring case.
 //! - `(1, terms)` and `(2, terms)`: `AND` and `OR` of a tuple of filters.
 //! - `(3, term)`: `NOT` of a filter.
+//! - `(4, collection, path, term)`: `ANY` of the objects of `collection`
+//!   whose link at `path` names an object, and that meet `term`, a filter or
+//!   `None`.
 
 use darudb::{Query, QueryRequest, Value};
 use pyo3::prelude::*;
@@ -29,6 +32,9 @@ const INT: u8 = 0x04;
 const FLOAT: u8 = 0x05;
 const STRING: u8 = 0x06;
 const BYTES: u8 = 0x07;
+
+/// The operator of a test of the objects that link to an object.
+const LINKED: i64 = 16;
 const LIST: u8 = 0x08;
 const OBJECT: u8 = 0x09;
 
@@ -266,6 +272,30 @@ fn expression(out: &mut Vec<u8>, node: &Bound<'_, PyAny>, depth: usize) -> Resul
                     expression(&mut record, &term, depth + 1)?;
                 }
             }
+        }
+        4 => {
+            let collection: String = node.get_item(1)?.extract()?;
+            let path: Vec<String> = node.get_item(2)?.extract()?;
+            let term = node.get_item(3)?;
+
+            varint(&mut record, if term.is_none() { 3 } else { 4 });
+            varint(&mut record, 1);
+            record.push(INT);
+            int(&mut record, LINKED);
+            varint(&mut record, 2);
+            write_path(&mut record, &path);
+
+            if !term.is_none() {
+                varint(&mut record, 4);
+                record.push(LIST);
+                varint(&mut record, 1);
+                expression(&mut record, &term, depth + 1)?;
+            }
+
+            // Field 6, last: the collection whose objects link.
+            varint(&mut record, 6);
+            record.push(STRING);
+            string(&mut record, &collection);
         }
         _ => {
             return Err(Fault::Query(

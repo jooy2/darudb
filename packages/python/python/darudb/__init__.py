@@ -52,7 +52,7 @@ from ._database import (
     WriteTransaction,
 )
 from ._errors import DaruError
-from ._query import Condition, F, FieldRef, Param, Prepared, Query, param, where
+from ._query import Condition, F, FieldRef, Param, Prepared, Query, linked, param, where
 from ._schema import (
     Migration,
     Schema,
@@ -107,6 +107,7 @@ __all__ = [
     "collection",
     "embedded",
     "field",
+    "linked",
     "param",
     "where",
 ]
