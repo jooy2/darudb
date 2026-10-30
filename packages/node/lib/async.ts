@@ -30,10 +30,21 @@ import {
   encodeRecords,
   encodeChanges,
   decodeRecord,
-  decodeRecords
+  decodeRecords,
+  decodeAggregate
 } from './codec.js';
 import type { CollectionLayout, SchemaLayout } from './codec.js';
-import { toBuffer, keyOf, irOf, collectionOf } from './shared.js';
+import {
+  toBuffer,
+  keyOf,
+  irOf,
+  aggregationOf,
+  SUM,
+  MIN,
+  MAX,
+  AVG,
+  collectionOf
+} from './shared.js';
 import type { NoSchema } from './shared.js';
 import type { Key, QueryInput } from './shared.js';
 
@@ -219,6 +230,7 @@ const DELETE = 6;
 const PREVIOUS_RECORD = 7;
 const PREVIOUS_KEYS = 8;
 const UPDATE = 9;
+const AGGREGATE = 10;
 
 // How `src/lib.rs` tags each result of a batch, and each key among them.
 const TAG_BYTES = 0;
@@ -510,6 +522,39 @@ class AsyncReadCollection {
     const ir = irOf(this.#layout.name, query, parameters, true);
 
     return this.#serial.call(COUNT, '', null, ir);
+  }
+
+  /** The sum of a number field over the objects a query finds; zero for none. */
+  async sum(field: unknown, query: QueryInput, parameters?: unknown): Promise<unknown> {
+    return this.#aggregate(SUM, field, query, parameters);
+  }
+
+  /** The least value of a field over the objects a query finds, or `null`. */
+  async min(field: unknown, query: QueryInput, parameters?: unknown): Promise<unknown> {
+    return this.#aggregate(MIN, field, query, parameters);
+  }
+
+  /** The greatest value of a field over the objects a query finds, or `null`. */
+  async max(field: unknown, query: QueryInput, parameters?: unknown): Promise<unknown> {
+    return this.#aggregate(MAX, field, query, parameters);
+  }
+
+  /** The mean of a number field over the objects a query finds, or `null`. */
+  async avg(field: unknown, query: QueryInput, parameters?: unknown): Promise<unknown> {
+    return this.#aggregate(AVG, field, query, parameters);
+  }
+
+  async #aggregate(
+    code: number,
+    field: unknown,
+    query: QueryInput,
+    parameters: unknown
+  ): Promise<unknown> {
+    const [aggregate, kind] = aggregationOf(this.#layout, code, field);
+    const ir = irOf(this.#layout.name, query, parameters, false, false, false, aggregate);
+
+    // An aggregate resolves to its value, tagged.
+    return decodeAggregate((await this.#serial.call(AGGREGATE, '', null, ir)) as Buffer, kind);
   }
 
   get [SERIAL](): Serial {

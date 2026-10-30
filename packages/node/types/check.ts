@@ -135,6 +135,29 @@ const preparedCount: number = db.read((txn) => {
   return found === null || inTeam === undefined ? 0 : users.count(byEmail, [null]);
 });
 
+// An aggregate reads a field of the type it takes, in any form of query.
+db.read((txn) => {
+  const users = txn.collection('users');
+  const total: number = users.sum('age');
+  const visitsTotal: bigint = users.sum('visits', (q) => q.where('age', '>', 18));
+  const youngest: number | null = users.min('age', 'age > $0', [18]);
+  const lastName: string | null = users.max('name', byEmail, ['alice@example.com']);
+  const mean: number | null = users.avg('age');
+  const zip: number | bigint = users.sum('address.zip');
+  const deepest: unknown = users.max('address.city');
+
+  // @ts-expect-error a sum reads numbers.
+  users.sum('name');
+  // @ts-expect-error a mean reads numbers.
+  users.avg('tags');
+  // @ts-expect-error the collection has no such field.
+  users.min('agee');
+  // @ts-expect-error a built query takes no parameters.
+  users.sum('age', (q) => q, [1]);
+
+  return [total, visitsTotal, youngest, lastName, mean, zip, deepest];
+});
+
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 

@@ -1636,6 +1636,27 @@ function readAnyFields(reader: Reader, depth: number): AnyRecord {
   return fields;
 }
 
+/**
+ * An aggregate's result as the engine gives it, one tagged value, read as a
+ * value of `kind`, the field's, where the caller knows it, and by its tag
+ * otherwise. Null is the tag `NULL`.
+ */
+function decodeAggregate(bytes: Uint8Array, kind: Kind | null): unknown {
+  const reader = new Reader(bytes, 0, bytes.length);
+
+  if (bytes[0] === NULL) {
+    return null;
+  }
+
+  const value = kind === null ? untag(readAny(reader, 0)) : readValue(reader, kind, 0);
+
+  if (reader.at !== reader.end) {
+    throw corrupted('an aggregate has bytes after its value');
+  }
+
+  return value;
+}
+
 /** A tagged value as the JavaScript value it holds. */
 function untag(tagged: Tagged): unknown {
   switch (tagged.tag) {
@@ -2124,7 +2145,7 @@ const AND = 1;
 const OR = 2;
 const NOT = 3;
 
-function writePath(writer: Writer, path: string[]): void {
+function writePath(writer: Writer, path: readonly string[]): void {
   writer.byte(LIST);
   writer.varint(path.length);
 
@@ -2257,12 +2278,25 @@ function encodeParameters(parameters: readonly unknown[]): Buffer {
 const queryWriter = new Writer(256);
 
 /**
- * The IR of a query on `collection`: its filter, sort, offset and limit, and
- * whether it counts rather than returns the objects. With `lend`, the IR is
- * a view of the buffer the next query is encoded in, for a caller that
- * hands it to the engine at once; otherwise it is a copy.
+ * An aggregate a query asks for: its function's code in the IR, 1 sum, 2
+ * min, 3 max, 4 avg, and the path of the field it reads.
  */
-function encodeQuery(collection: string, query: QueryParts, count: boolean, lend = false): Buffer {
+export type Aggregation = readonly [number, readonly string[]];
+
+/**
+ * The IR of a query on `collection`: its filter, sort, offset and limit, and
+ * whether it counts the objects or works out `aggregate` of them rather than
+ * returns them. With `lend`, the IR is a view of the buffer the next query
+ * is encoded in, for a caller that hands it to the engine at once;
+ * otherwise it is a copy.
+ */
+function encodeQuery(
+  collection: string,
+  query: QueryParts,
+  count: boolean,
+  lend = false,
+  aggregate: Aggregation | null = null
+): Buffer {
   const writer = queryWriter;
 
   writer.at = 0;
@@ -2286,6 +2320,10 @@ function encodeQuery(collection: string, query: QueryParts, count: boolean, lend
 
   if (count) {
     entries.push(6);
+  }
+
+  if (aggregate !== null) {
+    entries.push(7);
   }
 
   writer.varint(entries.length);
@@ -2327,9 +2365,23 @@ function encodeQuery(collection: string, query: QueryParts, count: boolean, lend
         // Entry 5 is there only with a limit.
         writer.int(query.limit!);
         break;
-      default:
+      case 6:
         writer.byte(TRUE);
         break;
+      default: {
+        // Entry 7 is there only with an aggregate.
+        const [code, path] = aggregate!;
+        const mark = writer.open();
+
+        writer.varint(2);
+        writer.varint(1);
+        writer.byte(INT);
+        writer.int(code);
+        writer.varint(2);
+        writePath(writer, path);
+        writer.close(mark);
+        break;
+      }
     }
   }
 
@@ -2356,6 +2408,7 @@ export {
   decodeSchema,
   encodeSchema,
   encodeQuery,
+  decodeAggregate,
   encodeParameters,
   writeParameters,
   parameterBytes

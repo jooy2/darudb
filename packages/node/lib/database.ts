@@ -24,6 +24,7 @@ import {
   decodeRecord,
   decodeRecords,
   decodeFirst,
+  decodeAggregate,
   encodeSchema,
   parameterBytes
 } from './codec.js';
@@ -40,6 +41,11 @@ import {
   keyOf,
   lendParameters,
   irOf,
+  aggregationOf,
+  SUM,
+  MIN,
+  MAX,
+  AVG,
   prepare,
   preparedOf,
   layoutOf,
@@ -163,6 +169,33 @@ class ReadCollection {
     }
 
     return native.count(this.#txn, irOf(name, query, parameters, true, false, true));
+  }
+
+  /** The sum of a number field over the objects a query finds; zero for none. */
+  sum(field: unknown, query: QueryInput, parameters?: unknown): unknown {
+    return this.#aggregate(SUM, field, query, parameters);
+  }
+
+  /** The least value of a field over the objects a query finds, or `null`. */
+  min(field: unknown, query: QueryInput, parameters?: unknown): unknown {
+    return this.#aggregate(MIN, field, query, parameters);
+  }
+
+  /** The greatest value of a field over the objects a query finds, or `null`. */
+  max(field: unknown, query: QueryInput, parameters?: unknown): unknown {
+    return this.#aggregate(MAX, field, query, parameters);
+  }
+
+  /** The mean of a number field over the objects a query finds, or `null`. */
+  avg(field: unknown, query: QueryInput, parameters?: unknown): unknown {
+    return this.#aggregate(AVG, field, query, parameters);
+  }
+
+  #aggregate(code: number, field: unknown, query: QueryInput, parameters: unknown): unknown {
+    const [aggregate, kind] = aggregationOf(this.#layout, code, field);
+    const ir = irOf(this.#layout.name, query, parameters, false, false, true, aggregate);
+
+    return decodeAggregate(native.aggregate(this.#txn, ir), kind);
   }
 
   /**

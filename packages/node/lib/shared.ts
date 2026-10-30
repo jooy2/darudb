@@ -16,6 +16,7 @@ import {
   writeParameters
 } from './codec.js';
 import type {
+  Aggregation,
   CollectionLayout,
   FieldLayout,
   IntKind,
@@ -200,7 +201,8 @@ function lendParameters(parameters: unknown): number {
 /**
  * The IR of a query given in any of the forms `find` and `count` take. With
  * `first`, a query built here keeps only its first object; text leaves that
- * to the native layer, and so does a prepared query.
+ * to the native layer, and so does a prepared query. With `aggregate`, the
+ * query works out that aggregate rather than returning the objects.
  */
 function irOf(
   collection: string,
@@ -208,16 +210,19 @@ function irOf(
   parameters: unknown,
   count: boolean,
   first = false,
-  lend = false
+  lend = false,
+  aggregate: Aggregation | null = null
 ): Buffer {
   const prepared = preparedOf(collection, query);
+  const code = aggregate === null ? null : aggregate[0];
+  const path = aggregate === null ? null : [...aggregate[1]];
 
   if (prepared !== null) {
-    return prepared.prepared.bind(parametersOf(parameters), count);
+    return prepared.prepared.bind(parametersOf(parameters), count, code, path);
   }
 
   if (typeof query === 'string') {
-    return native.parseQuery(collection, query, parametersOf(parameters), count);
+    return native.parseQuery(collection, query, parametersOf(parameters), count, code, path);
   }
 
   let built: unknown = query ?? new Query();
@@ -241,7 +246,64 @@ function irOf(
     parts.limit = parts.limit === null ? 1 : Math.min(parts.limit, 1);
   }
 
-  return encodeQuery(collection, parts, count, lend);
+  return encodeQuery(collection, parts, count, lend, aggregate);
+}
+
+/** The codes of the aggregate functions in the IR. */
+const SUM = 1;
+const MIN = 2;
+const MAX = 3;
+const AVG = 4;
+
+/** A mean, which is a float whatever the field holds. */
+const FLOAT: Kind = Object.freeze({ type: 'float' });
+
+/**
+ * The aggregate `code` of `field`, a field's name or a path through embedded
+ * objects and links such as `address.zip`, on `collection`, and the kind its
+ * result reads as: the field's for a sum, a least or a greatest value, so
+ * that a `t.bigint()` field sums to a `bigint`, and a float for a mean.
+ * `null` where the path names no field, which the engine refuses.
+ */
+function aggregationOf(
+  collection: CollectionLayout,
+  code: number,
+  field: unknown
+): [Aggregation, Kind | null] {
+  if (typeof field !== 'string' || field === '') {
+    throw invalid('an aggregate names a field, such as `age` or `address.zip`');
+  }
+
+  const path = field.split('.');
+
+  return [[code, path], code === AVG ? FLOAT : kindAt(collection.fields, path)];
+}
+
+/** The kind of the field at `path` from `fields`, through embedded objects and links. */
+function kindAt(fields: Layout, path: readonly string[]): Kind | null {
+  let layout = fields;
+
+  for (let at = 0; at < path.length; at++) {
+    const field = layout.list.find((candidate) => candidate.name === path[at]);
+
+    if (field === undefined) {
+      return null;
+    }
+
+    if (at === path.length - 1) {
+      return field.kind;
+    }
+
+    if (field.kind.type === 'object') {
+      layout = field.kind.fields;
+    } else if (field.kind.type === 'link') {
+      layout = field.kind.target.fields;
+    } else {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 const PREPARE = Symbol('prepare');
@@ -529,6 +591,11 @@ export {
   parametersOf,
   lendParameters,
   irOf,
+  aggregationOf,
+  SUM,
+  MIN,
+  MAX,
+  AVG,
   prepare,
   preparedOf,
   layoutOf,

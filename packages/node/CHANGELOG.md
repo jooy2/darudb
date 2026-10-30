@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- Aggregates: `sum`, `min`, `max` and `avg` on a collection, and on an asynchronous one, work out one value from a field of the objects a query finds, after its sort, offset and limit, with the query in any form `find` takes: `users.sum('age', (q) => q.where('age', '>', 18))`, `users.max('age', 'team == $0', ['north'])`. The field may be a path through embedded objects and links. Nulls are left out; a sum of no values is 0 and the rest are `null`. A sum is exact, and a `t.bigint()` field sums to a `bigint`; a mean is a number. TypeScript allows `sum` and `avg` only on number fields, and types the result by the field.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

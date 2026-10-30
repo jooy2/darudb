@@ -311,6 +311,31 @@ export interface Prepared<O> {
 /** The values of a query's parameters, `$0` or `param(0)` first. */
 export type QueryParameters = readonly (QueryValue | null)[];
 
+/**
+ * A query in any of the forms `find` takes, as an aggregate takes it after
+ * its field: built, in the query language with its parameters' values, or
+ * prepared with them; every object without one.
+ */
+export type QueryArguments<O> =
+  | [query?: QueryInput<O>]
+  | [text: string, parameters?: QueryParameters]
+  | [prepared: Prepared<O>, parameters?: QueryParameters];
+
+/** The fields of `O` holding numbers, which a sum and a mean read. */
+export type NumberFields<O> = {
+  [K in FieldNames<O>]-?: NonNullable<O[K]> extends number | bigint ? K : never;
+}[FieldNames<O>];
+
+/** The fields of `O` holding values a least or a greatest value reads. */
+export type OrderedFields<O> = {
+  [K in FieldNames<O>]-?: NonNullable<O[K]> extends number | bigint | string | Uint8Array
+    ? K
+    : never;
+}[FieldNames<O>];
+
+/** What a sum of a field holding `T` comes to: a `bigint` for a `t.bigint()` field. */
+export type SumOf<T> = NonNullable<T> extends bigint ? bigint : number;
+
 /** A collection of a transaction, for reading its objects. */
 export interface ReadCollection<O> {
   /** The collection's name. */
@@ -331,6 +356,25 @@ export interface ReadCollection<O> {
   count(query?: QueryInput<O>): number;
   count(text: string, parameters?: QueryParameters): number;
   count(prepared: Prepared<O>, parameters?: QueryParameters): number;
+  /**
+   * The sum of a number field, or of a path through embedded objects and
+   * links such as `order.total`, over the objects a query finds, after its
+   * sort, offset and limit. Exact, and zero for none; a `t.bigint()` field
+   * sums to a `bigint`.
+   */
+  sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): SumOf<O[K]>;
+  sum(path: DottedPath, ...query: QueryArguments<O>): number | bigint;
+  /**
+   * The least value of a field over the objects a query finds, in the order
+   * a sort gives, or `null` when there is none.
+   */
+  min<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+  min(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+  /** The greatest value of a field over the objects a query finds, or `null`. */
+  max<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNullable<O[K]> | null;
+  max(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
+  /** The mean of a number field over the objects a query finds, or `null` for none. */
+  avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): number | null;
 }
 
 /** A collection of a write transaction, for reading and writing its objects. */
@@ -391,6 +435,26 @@ export interface AsyncReadCollection<O> {
   count(query?: QueryInput<O>): Promise<number>;
   count(text: string, parameters?: QueryParameters): Promise<number>;
   count(prepared: Prepared<O>, parameters?: QueryParameters): Promise<number>;
+  /**
+   * The sum of a number field over the objects a query finds; see
+   * `ReadCollection.sum`.
+   */
+  sum<K extends NumberFields<O>>(field: K, ...query: QueryArguments<O>): Promise<SumOf<O[K]>>;
+  sum(path: DottedPath, ...query: QueryArguments<O>): Promise<number | bigint>;
+  /** The least value of a field over the objects a query finds, or `null`. */
+  min<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  min(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  /** The greatest value of a field over the objects a query finds, or `null`. */
+  max<K extends OrderedFields<O>>(
+    field: K,
+    ...query: QueryArguments<O>
+  ): Promise<NonNullable<O[K]> | null>;
+  max(path: DottedPath, ...query: QueryArguments<O>): Promise<QueryValue | null>;
+  /** The mean of a number field over the objects a query finds, or `null` for none. */
+  avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): Promise<number | null>;
 }
 
 /** A collection of an asynchronous write transaction, for reading and writing. */

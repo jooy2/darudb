@@ -966,6 +966,28 @@ impl Txn {
         self.count(&request.collection, &request.query)
     }
 
+    /// The aggregate the query in `ir` asks for, as a tagged value
+    /// (`darudb::__binding::tagged`), null as the tag `0x01`.
+    fn aggregate_ir(&mut self, ir: &[u8]) -> Result<Vec<u8>> {
+        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+        let (function, path) = request
+            .aggregate
+            .as_ref()
+            .ok_or_else(|| invalid("the query asks for no aggregate"))?;
+        let value = match self {
+            Txn::Read(txn) => txn
+                .collection(&request.collection)
+                .and_then(|collection| collection.aggregate(&request.query, *function, path)),
+            _ => self
+                .writing()?
+                .collection(&request.collection)
+                .and_then(|collection| collection.aggregate(&request.query, *function, path)),
+        }
+        .map_err(to_js_error)?;
+
+        Ok(darudb::__binding::tagged(&value))
+    }
+
     /// Writes the records in `records`, each after its length, and returns
     /// their keys. A refused record stops the batch there, and the records
     /// before it stay written.
@@ -1232,6 +1254,7 @@ const OP_DELETE: u8 = 6;
 const OP_PREVIOUS_RECORD: u8 = 7;
 const OP_PREVIOUS_KEYS: u8 = 8;
 const OP_UPDATE: u8 = 9;
+const OP_AGGREGATE: u8 = 10;
 
 /// One operation of a batch, with what it takes checked and copied, so that
 /// it can move to a pool thread.
@@ -1239,6 +1262,7 @@ enum Op {
     Get(String, darudb::Value),
     Find(Vec<u8>, bool),
     Count(Vec<u8>),
+    Aggregate(Vec<u8>),
     Write(String, Vec<u8>, bool),
     Delete(String, darudb::Value),
     Update(String, darudb::Value, Vec<u8>),
@@ -1263,6 +1287,7 @@ impl Op {
             OP_GET => key().map(|key| Op::Get(collection, key)),
             OP_FIND | OP_FIND_FIRST => payload().map(|ir| Op::Find(ir, kind == OP_FIND_FIRST)),
             OP_COUNT => payload().map(Op::Count),
+            OP_AGGREGATE => payload().map(Op::Aggregate),
             OP_INSERT | OP_PUT => {
                 payload().map(|records| Op::Write(collection, records, kind == OP_PUT))
             }
@@ -1283,6 +1308,7 @@ impl Op {
             Op::Get(collection, key) => Outcome::Record(txn.get_record(&collection, key)?),
             Op::Find(ir, first) => Outcome::Bytes(txn.find_ir(&ir, first)?),
             Op::Count(ir) => Outcome::Number(txn.count_ir(&ir)?),
+            Op::Aggregate(ir) => Outcome::Bytes(txn.aggregate_ir(&ir)?),
             Op::Write(collection, records, replace) => {
                 Outcome::Keys(txn.write_records(&collection, &records, replace)?.0)
             }
@@ -1469,6 +1495,15 @@ pub fn count(
     with(txn, |txn| txn.count_ir(&ir))
 }
 
+/// The aggregate the query in `ir` asks for, as a tagged value.
+#[napi]
+pub fn aggregate(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    ir: BufferSlice<'_>,
+) -> Result<Buffer> {
+    with(txn, |txn| txn.aggregate_ir(&ir)).map(Buffer::from)
+}
+
 /// The records a prepared query finds with the parameters in the first
 /// `length` bytes of `parameters`, encoded as `Query::bind_encoded` reads
 /// them, as `find` delivers them. The buffer is one the JavaScript side
@@ -1620,6 +1655,8 @@ pub fn parse_query(
     text: String,
     parameters: BufferSlice<'_>,
     count: bool,
+    aggregate: Option<u32>,
+    path: Option<Vec<String>>,
 ) -> Result<Buffer> {
     let mut request = darudb::QueryRequest::new(
         collection,
@@ -1629,8 +1666,24 @@ pub fn parse_query(
     );
 
     request.count = count;
+    request.aggregate = aggregation(aggregate, path)?;
 
     Ok(request.encode().map_err(to_js_error)?.into())
+}
+
+/// The aggregate a query asks for, by its code in the IR and the path of the
+/// field it reads; none without a code.
+fn aggregation(
+    code: Option<u32>,
+    path: Option<Vec<String>>,
+) -> Result<Option<(darudb::Aggregate, Vec<String>)>> {
+    let Some(code) = code else {
+        return Ok(None);
+    };
+    let function = darudb::Aggregate::from_code(i64::from(code))
+        .ok_or_else(|| invalid(format!("{code} is not an aggregate")))?;
+
+    Ok(Some((function, path.unwrap_or_default())))
 }
 
 /// A query parsed once, whose parameters are given values each time it runs.
@@ -1678,13 +1731,20 @@ impl NativePrepared {
     /// The IR of the query with `parameters` for its parameters, for the
     /// asynchronous API, which passes queries to the thread pool as IR.
     #[napi]
-    pub fn bind(&self, parameters: BufferSlice<'_>, count: bool) -> Result<Buffer> {
+    pub fn bind(
+        &self,
+        parameters: BufferSlice<'_>,
+        count: bool,
+        aggregate: Option<u32>,
+        path: Option<Vec<String>>,
+    ) -> Result<Buffer> {
         let mut request = darudb::QueryRequest::new(
             self.inner.collection.clone(),
             self.inner.bound(&parameters, false)?,
         );
 
         request.count = count;
+        request.aggregate = aggregation(aggregate, path)?;
 
         Ok(request.encode().map_err(to_js_error)?.into())
     }

@@ -268,6 +268,62 @@ describe('objects', () => {
     });
   });
 
+  it('give aggregates of a field, through every form of query', (context) => {
+    const { db } = withData(context);
+    const older = db.prepare('users', (q) => q.where('age', '>', param(0)));
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+
+      assert.equal(users.sum('age'), 88);
+      assert.equal(users.min('age'), 17);
+      assert.equal(users.max('age'), 40);
+      assert.equal(users.avg('age'), 88 / 3);
+      assert.equal(users.sum('score'), 3.5);
+      assert.equal(users.avg('score'), 1.75, 'a null score is left out');
+      assert.equal(users.sum('big'), 2n ** 60n, 'a `t.bigint()` field sums to a bigint');
+      assert.equal(users.max('big'), 2n ** 60n);
+      assert.equal(users.min('name'), 'Alice');
+      assert.equal(users.max('name'), 'Carol');
+      assert.deepEqual(users.min('avatar'), new Uint8Array([1, 2, 3]));
+      assert.equal(users.max('team.city'), 'Seoul', 'through a link');
+      assert.equal(users.min('address.city'), 'Seoul', 'through an embedded object');
+
+      assert.equal(
+        users.sum('age', (q) => q.where('age', '>', 18)),
+        71
+      );
+      assert.equal(users.sum('age', 'age > $0', [18]), 71);
+      assert.equal(users.sum('age', older, [18]), 71);
+      assert.equal(users.max('age', older, [35]), 40);
+      assert.equal(
+        users.sum('age', (q) => q.sortBy('age', 'desc').limit(2)),
+        71,
+        'after the sort and the limit'
+      );
+
+      assert.equal(users.sum('age', 'age > 100'), 0);
+      assert.equal(users.sum('score', 'age > 100'), 0);
+      assert.equal(users.avg('age', 'age > 100'), null);
+      assert.equal(users.min('name', 'age > 100'), null);
+
+      assertCode(() => users.sum('name'), 'INVALID_QUERY');
+      assertCode(() => users.sum('tags'), 'INVALID_QUERY');
+      assertCode(() => users.min('team'), 'INVALID_QUERY');
+      assertCode(() => users.max('nothing'), 'INVALID_QUERY');
+      assertCode(() => users.sum(''), 'INVALID_ARGUMENT');
+      assertCode(() => users.sum(3), 'INVALID_ARGUMENT');
+    });
+
+    db.write((txn) => {
+      const users = txn.collection('users');
+
+      users.insert({ name: 'Dave', age: 2 });
+      assert.equal(users.sum('age'), 90, "with the transaction's own changes");
+      assert.equal(users.min('age'), 2);
+    });
+  });
+
   it('are found by prepared queries, with values given each run', (context) => {
     const { db } = withData(context);
     const adults = db.prepare('users', (q) =>

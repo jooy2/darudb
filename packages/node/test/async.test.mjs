@@ -77,9 +77,22 @@ describe('asynchronous transactions', () => {
         first: await users.findOne('age < $0', [20]),
         count: await users.count((q) => q.where('name', 'startsWith', 'A')),
         prepared: await users.find(byAge, [18]),
-        preparedCount: await users.count(byAge, [0])
+        preparedCount: await users.count(byAge, [0]),
+        sum: await users.sum('age'),
+        bigSum: await users.sum('big'),
+        min: await users.min('name', (q) => q.where('age', '>', 18)),
+        max: await users.max('age', 'age < $0', [40]),
+        avg: await users.avg('age', byAge, [18]),
+        none: await users.avg('age', 'age > 100')
       };
     });
+
+    assert.equal(found.sum, 88);
+    assert.equal(found.bigSum, 2n ** 60n);
+    assert.equal(found.min, 'Alice');
+    assert.equal(found.max, 31);
+    assert.equal(found.avg, 35.5);
+    assert.equal(found.none, null);
 
     assert.deepEqual(found.alice, {
       id: 1,
