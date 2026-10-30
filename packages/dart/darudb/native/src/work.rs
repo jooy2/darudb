@@ -516,6 +516,36 @@ pub unsafe extern "C" fn darudb_count_async(
     }
 }
 
+/// [`crate::darudb_aggregate`] on a thread of the library: the aggregate,
+/// tagged.
+///
+/// # Safety
+///
+/// As [`crate::darudb_aggregate`], without `out`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_aggregate_async(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    // SAFETY: the caller's promises for `prepared`, `parameters` and `ir`.
+    match caught(|| unsafe { crate::aggregated(prepared, parameters, parameters_len, ir, ir_len) })
+    {
+        // SAFETY: the caller's promise for `txn`.
+        Ok((name, query, aggregate)) => unsafe {
+            on_txn(txn, id, callback, move |held, out| {
+                ops::aggregate(held, &name, &query, &aggregate, out)
+            });
+        },
+        Err(failure) => refuse(id, callback, failure),
+    }
+}
+
 /// The prepared query a handle points to, bound to the values at
 /// `parameters`, with the collection it is on.
 ///

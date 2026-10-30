@@ -91,6 +91,70 @@ void main() {
     });
   });
 
+  test('aggregates work out one value from a field', () {
+    db.write((txn) {
+      txn.collection(userSchema).insertMany([
+        for (var n = 0; n < 10; n++)
+          User(
+            name: 'person $n',
+            age: n,
+            score: n / 4,
+            address: n.isEven ? Address(city: 'city ${n % 3}') : null,
+          ),
+      ]);
+    });
+
+    db.read((txn) {
+      final users = txn.collection(userSchema);
+
+      final int total = users.sum((q) => q.age);
+      final double scores = users.sum((q) => q.score);
+
+      expect(total, 45);
+      expect(scores, 11.25);
+      expect(users.min((q) => q.age), 0);
+      expect(users.max((q) => q.name), 'person 9');
+      expect(users.avg((q) => q.age), 4.5);
+      expect(users.max((q) => q.address.city), 'city 2');
+      expect(users.sum((q) => q.age, (q) => q.where(q.age.atLeast(5))), 35);
+      expect(
+        users.sum((q) => q.age, (q) => q.sortBy(q.age).limit(3)),
+        3,
+        reason: 'after the sort and the limit',
+      );
+      expect(users.sum((q) => q.age, (q) => q.where(q.age.greaterThan(99))), 0);
+      expect(
+        users.avg((q) => q.age, (q) => q.where(q.age.greaterThan(99))),
+        isNull,
+      );
+      expect(
+        users.min((q) => q.name, (q) => q.where(q.age.greaterThan(99))),
+        isNull,
+      );
+
+      expect(users.sumText((q) => q.age, r'age < $0', [3]), 3);
+      expect(users.maxText((q) => q.score, 'age < 4'), 0.75);
+      expect(users.avgText((q) => q.age, 'age >= 8'), 8.5);
+
+      final older = db.prepare(userSchema, r'age > $0');
+
+      expect(users.sumPrepared((q) => q.age, older, [7]), 17);
+      expect(users.minPrepared((q) => q.name, older, [7]), 'person 8');
+      expect(users.avgPrepared((q) => q.age, older, [100]), isNull);
+    });
+
+    db.write((txn) {
+      final users = txn.collection(userSchema);
+
+      users.insert(const User(name: 'late', age: 100));
+      expect(
+        users.max((q) => q.age),
+        100,
+        reason: "with the transaction's changes",
+      );
+    });
+  });
+
   test('put replaces, update sets fields and delete removes', () {
     final id = db.write(
       (txn) => txn.collection(userSchema).insert(const User(name: 'Ada')),

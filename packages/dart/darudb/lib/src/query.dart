@@ -486,13 +486,21 @@ void _writeExpression(Writer writer, Condition node, int depth) {
   writer.close(mark);
 }
 
+/// The codes of the aggregate functions in the IR.
+const int sumCode = 1;
+const int minCode = 2;
+const int maxCode = 3;
+const int avgCode = 4;
+
 /// Writes the IR of [query] on [collection] into [writer]: its filter, sort,
-/// offset and limit.
+/// offset and limit, and with [aggregate], the function's code and the
+/// field's path, the aggregate it works out rather than return the objects.
 void encodeQuery(
   Writer writer,
   String collection,
-  QueryBuilder<Object?>? query,
-) {
+  QueryBuilder<Object?>? query, {
+  (int, List<String>)? aggregate,
+}) {
   final filter = query?._filter;
   final sort = query?._sort ?? const [];
   final offset = query?._offset ?? 0;
@@ -502,7 +510,8 @@ void encodeQuery(
       (filter == null ? 0 : 1) +
       (sort.isEmpty ? 0 : 1) +
       (offset > 0 ? 1 : 0) +
-      (limit == null ? 0 : 1);
+      (limit == null ? 0 : 1) +
+      (aggregate == null ? 0 : 1);
 
   writer
     ..varint(entries)
@@ -548,6 +557,40 @@ void encodeQuery(
       ..byte(Tag.int64)
       ..int64(limit);
   }
+
+  if (aggregate != null) {
+    final (code, path) = aggregate;
+
+    writer.varint(7);
+
+    final mark = writer.open();
+
+    writer
+      ..varint(2)
+      ..varint(1)
+      ..byte(Tag.int64)
+      ..int64(code)
+      ..varint(2);
+    _writePath(writer, path);
+    writer.close(mark);
+  }
+}
+
+/// An aggregate's result as the engine gives it, one value, tag first, and
+/// null as [Tag.nil].
+Object? decodeAggregate(Uint8List bytes) {
+  if (bytes.isNotEmpty && bytes[0] == Tag.nil) {
+    return null;
+  }
+
+  final reader = Reader(bytes);
+  final value = reader.any();
+
+  if (!reader.isDone) {
+    throw corrupted('an aggregate has bytes after its value');
+  }
+
+  return value;
 }
 
 /// Writes the values of a query's parameters as the engine reads them: a

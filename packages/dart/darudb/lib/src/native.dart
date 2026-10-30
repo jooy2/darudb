@@ -247,6 +247,27 @@ external int darudb_find_prepared(
     Pointer<NativePrepared>,
     Pointer<Uint8>,
     Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Buf>,
+  )
+>()
+external int darudb_aggregate(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
+  Pointer<Buf> out,
+);
+
+@Native<
+  Int32 Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
     Pointer<Uint64>,
   )
 >()
@@ -565,6 +586,29 @@ external void darudb_find_prepared_async(
   Pointer<Uint8> parameters,
   int parametersLength,
   int first,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_aggregate_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,
 );

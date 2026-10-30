@@ -124,6 +124,18 @@ impl Collection<'_> {
         }
     }
 
+    fn aggregate(
+        &self,
+        query: &darudb::Query,
+        function: darudb::Aggregate,
+        path: &[String],
+    ) -> darudb::Result<darudb::Value> {
+        match self {
+            Collection::Read(c) => c.aggregate(query, function, path),
+            Collection::Write(c) => c.aggregate(query, function, path),
+        }
+    }
+
     fn query_records_with(
         &self,
         query: &darudb::Query,
@@ -535,6 +547,36 @@ pub(crate) fn find(
 
 pub(crate) fn count(held: &Held, name: &str, query: &darudb::Query) -> Result<u64> {
     held.with(|txn| txn.reading(name, |collection| collection.count(query)))
+}
+
+/// An aggregate a query asks for: its function and the path of its field.
+pub(crate) type Aggregation = (darudb::Aggregate, Vec<String>);
+
+/// The aggregate the IR of `request` asks for.
+pub(crate) fn aggregation(request: darudb::QueryRequest) -> Result<Aggregation> {
+    request
+        .aggregate
+        .ok_or_else(|| invalid("the query asks for no aggregate"))
+}
+
+/// `aggregate` of the objects `query` finds on collection `name`, as one
+/// tagged value, null as the tag `0x01`, into `out`.
+pub(crate) fn aggregate(
+    held: &Held,
+    name: &str,
+    query: &darudb::Query,
+    aggregate: &Aggregation,
+    out: &mut Vec<u8>,
+) -> Result<i32> {
+    let value = held.with(|txn| {
+        txn.reading(name, |collection| {
+            collection.aggregate(query, aggregate.0, &aggregate.1)
+        })
+    })?;
+
+    out.extend_from_slice(&darudb::__binding::tagged(&value));
+
+    Ok(0)
 }
 
 /// Inserts, or with `replace` puts, the objects whose records are in

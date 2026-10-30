@@ -743,6 +743,78 @@ pub unsafe extern "C" fn darudb_count(
     })
 }
 
+/// The collection, the query and the aggregate of an aggregate's arguments:
+/// the query whose IR is at `ir`, or, with `prepared`, that prepared query
+/// bound to the parameters' values at `parameters`, the IR at `ir` then
+/// giving only the aggregate.
+///
+/// # Safety
+///
+/// `prepared` is null or came from this library and has not been freed;
+/// `parameters` and `ir` point to as many readable bytes as their lengths
+/// say.
+unsafe fn aggregated(
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+) -> Result<(String, darudb::Query, ops::Aggregation)> {
+    // SAFETY: the caller's promise for `ir`.
+    let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+
+    if prepared.is_null() {
+        let (name, query) = (request.collection.clone(), request.query.clone());
+
+        return Ok((name, query, ops::aggregation(request)?));
+    }
+
+    // SAFETY: the caller's promise for `prepared`.
+    let prepared = unsafe { at(prepared, gone_prepared) }?;
+    // SAFETY: the caller's promise for `parameters`.
+    let query = prepared.bound(unsafe { bytes(parameters, parameters_len) }, false)?;
+
+    Ok((
+        prepared.collection.clone(),
+        query,
+        ops::aggregation(request)?,
+    ))
+}
+
+/// The aggregate a query asks for, as one tagged value, null as the tag
+/// `0x01`, into `out`: of the query whose IR is at `ir`, or of a prepared
+/// query, as [`aggregated`] reads its arguments.
+///
+/// # Safety
+///
+/// `txn` came from this library and has not been freed; `out` points to a
+/// `Buf` the caller can write; the rest as [`aggregated`] says.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_aggregate(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    out: *mut Buf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `txn`.
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promises for the rest.
+        let (name, query, aggregate) =
+            unsafe { aggregated(prepared, parameters, parameters_len, ir, ir_len) }?;
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe {
+            hand_out(out, |bytes| {
+                ops::aggregate(held, &name, &query, &aggregate, bytes)
+            })
+        }
+    })
+}
+
 /// Prepares the query in the query language at `query` on collection
 /// `name`, into `prepared`.
 ///

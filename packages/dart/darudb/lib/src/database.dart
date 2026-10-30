@@ -1666,6 +1666,199 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     Prepared<T> prepared, [
     List<Object?> parameters = const [],
   ]) => _countPrepared(_preparedOf(prepared), parameters);
+
+  /// The field [field] picks from the collection's query builder.
+  Field _picked(Field Function(Q q) field) => field(_schema.newQuery());
+
+  /// The aggregate [code] of [field] over the objects [query] finds, or,
+  /// with [prepared], over those it finds with [parameters].
+  Object? _aggregate(
+    int code,
+    Field field, {
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) {
+    final handle = _txn._live();
+    final writer = _io.writer..reset();
+
+    // The parameters, if any, then the IR, one after the other in one
+    // buffer; with a prepared query the IR holds only the aggregate.
+    if (prepared != null) {
+      encodeParameters(writer, parameters);
+    }
+
+    final split = writer.at;
+
+    encodeQuery(
+      writer,
+      _schema.name,
+      prepared == null ? _built(query) : null,
+      aggregate: (code, field.path),
+    );
+
+    final loaded = _io.load(writer.written);
+
+    _check(
+      darudb_aggregate(
+        handle,
+        prepared?._handle ?? nullptr,
+        loaded,
+        split,
+        loaded + split,
+        writer.at - split,
+        _io.out,
+      ),
+    );
+
+    return decodeAggregate(_io.outBytes());
+  }
+
+  /// The sum of a number [field] over the objects the query finds, after its
+  /// sort, offset and limit: every object without one. Exact, and zero when
+  /// there is no value; null values are left out. A sum of ints outside the
+  /// range of a 64-bit int fails with `INVALID_ARGUMENT`.
+  ///
+  /// ```dart
+  /// users.sum((q) => q.age, (q) => q.where(q.team.name.equals('north')));
+  /// ```
+  V sum<V extends num>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) => _aggregate(sumCode, _picked(field), query: query) as V;
+
+  /// The least value of [field] over the objects the query finds, in the
+  /// order a sort gives, or `null` when there is none.
+  V? min<V extends Object>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) => _aggregate(minCode, _picked(field), query: query) as V?;
+
+  /// The greatest value of [field] over the objects the query finds, or
+  /// `null` when there is none.
+  V? max<V extends Object>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) => _aggregate(maxCode, _picked(field), query: query) as V?;
+
+  /// The mean of a number [field] over the objects the query finds: the
+  /// exact sum over the number of values, or `null` when there is none.
+  double? avg(
+    OrderedField<num> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) => _aggregate(avgCode, _picked(field), query: query) as double?;
+
+  /// [sum] over the objects the query language's [text] finds.
+  V sumText<V extends num>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            sumCode,
+            _picked(field),
+            prepared: _kept(text),
+            parameters: parameters,
+          )
+          as V;
+
+  /// [min] over the objects [text] finds.
+  V? minText<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            minCode,
+            _picked(field),
+            prepared: _kept(text),
+            parameters: parameters,
+          )
+          as V?;
+
+  /// [max] over the objects [text] finds.
+  V? maxText<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            maxCode,
+            _picked(field),
+            prepared: _kept(text),
+            parameters: parameters,
+          )
+          as V?;
+
+  /// [avg] over the objects [text] finds.
+  double? avgText(
+    OrderedField<num> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            avgCode,
+            _picked(field),
+            prepared: _kept(text),
+            parameters: parameters,
+          )
+          as double?;
+
+  /// [sum] over the objects a prepared query finds.
+  V sumPrepared<V extends num>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            sumCode,
+            _picked(field),
+            prepared: _preparedOf(prepared),
+            parameters: parameters,
+          )
+          as V;
+
+  /// [min] over the objects a prepared query finds.
+  V? minPrepared<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            minCode,
+            _picked(field),
+            prepared: _preparedOf(prepared),
+            parameters: parameters,
+          )
+          as V?;
+
+  /// [max] over the objects a prepared query finds.
+  V? maxPrepared<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            maxCode,
+            _picked(field),
+            prepared: _preparedOf(prepared),
+            parameters: parameters,
+          )
+          as V?;
+
+  /// [avg] over the objects a prepared query finds.
+  double? avgPrepared(
+    OrderedField<num> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) =>
+      _aggregate(
+            avgCode,
+            _picked(field),
+            prepared: _preparedOf(prepared),
+            parameters: parameters,
+          )
+          as double?;
 }
 
 /// A collection of a write transaction, for reading and writing its

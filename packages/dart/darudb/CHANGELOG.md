@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- Aggregates: `sum`, `min`, `max` and `avg` on a collection, and on one of the `Future` API, work out one value from a field of the objects a query finds, after its sort, offset and limit: `users.sum((q) => q.age, (q) => q.where(q.age.atLeast(18)))`. The field is picked from the query builder, so it may be a field of an embedded object or of a linked object, and the result has its type: `sum` of an `IntField` is an `int`, of a `FloatField` a `double`, and `min` and `max` are of the field's type or `null`. `avg` is a `double` or `null`. Nulls are left out, and a sum of no values is 0. `sumText`, `sumPrepared` and the like take the query in the query language or prepared.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

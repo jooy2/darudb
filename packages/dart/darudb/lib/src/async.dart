@@ -465,6 +465,188 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     Prepared<T> prepared, [
     List<Object?> parameters = const [],
   ]) async => _countPrepared(_sync._preparedOf(prepared), parameters);
+
+  /// The aggregate [code] of [field]; see [ReadCollection.sum] and the
+  /// others.
+  Future<Object?> _aggregate(
+    int code,
+    Field field, {
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) => _run((txn) async {
+    final writer = _io.writer..reset();
+
+    if (prepared != null) {
+      encodeParameters(writer, parameters);
+    }
+
+    final split = writer.at;
+
+    encodeQuery(
+      writer,
+      _sync._schema.name,
+      prepared == null ? _sync._built(query) : null,
+      aggregate: (code, field.path),
+    );
+
+    final loaded = _io.load(writer.written);
+    final reply = await _call(
+      (id, callback) => darudb_aggregate_async(
+        txn,
+        prepared?._handle ?? nullptr,
+        loaded,
+        split,
+        loaded + split,
+        writer.at - split,
+        id,
+        callback,
+      ),
+    );
+
+    return decodeAggregate(reply.bytes);
+  });
+
+  /// The sum of a number [field] over the objects the query finds; see [ReadCollection.sum].
+  Future<V> sum<V extends num>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) async =>
+      (await _aggregate(sumCode, _sync._picked(field), query: query)) as V;
+
+  /// The least value of [field] over the objects the query finds, or `null`.
+  Future<V?> min<V extends Object>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) async =>
+      (await _aggregate(minCode, _sync._picked(field), query: query)) as V?;
+
+  /// The greatest value of [field] over the objects the query finds, or `null`.
+  Future<V?> max<V extends Object>(
+    OrderedField<V> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) async =>
+      (await _aggregate(maxCode, _sync._picked(field), query: query)) as V?;
+
+  /// The mean of a number [field] over the objects the query finds, or `null`.
+  Future<double?> avg(
+    OrderedField<num> Function(Q q) field, [
+    QueryBuilder<T> Function(Q q)? query,
+  ]) async =>
+      (await _aggregate(avgCode, _sync._picked(field), query: query))
+          as double?;
+
+  /// [sum] over the objects the query language's [text] finds.
+  Future<V> sumText<V extends num>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            sumCode,
+            _sync._picked(field),
+            prepared: _sync._kept(text),
+            parameters: parameters,
+          ))
+          as V;
+
+  /// [min] over the objects the query language's [text] finds.
+  Future<V?> minText<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            minCode,
+            _sync._picked(field),
+            prepared: _sync._kept(text),
+            parameters: parameters,
+          ))
+          as V?;
+
+  /// [max] over the objects the query language's [text] finds.
+  Future<V?> maxText<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            maxCode,
+            _sync._picked(field),
+            prepared: _sync._kept(text),
+            parameters: parameters,
+          ))
+          as V?;
+
+  /// [avg] over the objects the query language's [text] finds.
+  Future<double?> avgText(
+    OrderedField<num> Function(Q q) field,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            avgCode,
+            _sync._picked(field),
+            prepared: _sync._kept(text),
+            parameters: parameters,
+          ))
+          as double?;
+
+  /// [sum] over the objects a prepared query finds.
+  Future<V> sumPrepared<V extends num>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            sumCode,
+            _sync._picked(field),
+            prepared: _sync._preparedOf(prepared),
+            parameters: parameters,
+          ))
+          as V;
+
+  /// [min] over the objects a prepared query finds.
+  Future<V?> minPrepared<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            minCode,
+            _sync._picked(field),
+            prepared: _sync._preparedOf(prepared),
+            parameters: parameters,
+          ))
+          as V?;
+
+  /// [max] over the objects a prepared query finds.
+  Future<V?> maxPrepared<V extends Object>(
+    OrderedField<V> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            maxCode,
+            _sync._picked(field),
+            prepared: _sync._preparedOf(prepared),
+            parameters: parameters,
+          ))
+          as V?;
+
+  /// [avg] over the objects a prepared query finds.
+  Future<double?> avgPrepared(
+    OrderedField<num> Function(Q q) field,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async =>
+      (await _aggregate(
+            avgCode,
+            _sync._picked(field),
+            prepared: _sync._preparedOf(prepared),
+            parameters: parameters,
+          ))
+          as double?;
 }
 
 /// A collection of a write transaction of the `Future` API, for reading and

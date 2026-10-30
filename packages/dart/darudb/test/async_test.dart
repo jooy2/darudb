@@ -112,6 +112,25 @@ void main() {
       );
       expect((await users.findOneText(r'name == $0', ['person 7']))!.id, 8);
       expect(await users.countText(r'age < $0', [2]), 10);
+      // Ages 0, 1, 2 and 3, five of each.
+      expect(await users.sum((q) => q.age), 30);
+      expect(
+        await users.max((q) => q.name, (q) => q.where(q.age.equals(0))),
+        'person 8',
+      );
+      expect(await users.avgText((q) => q.age, r'age >= $0', [2]), 2.5);
+      expect(
+        await users.minPrepared(
+          (q) => q.age,
+          db.prepare(userSchema, r'name != $0'),
+          ['person 0'],
+        ),
+        0,
+      );
+      expect(
+        await users.sum((q) => q.age, (q) => q.where(q.age.greaterThan(9))),
+        0,
+      );
     });
 
     await db.writeAsync((txn) async {
