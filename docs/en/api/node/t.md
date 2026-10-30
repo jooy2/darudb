@@ -140,7 +140,7 @@ The field is required, and holds `value` when it is left out. The default is wri
 index(): FieldType<T, M, I>;
 ```
 
-Queries on the field read an index rather than every object. A field inside an embedded object cannot be indexed.
+Queries on the field read an index rather than every object. A field inside an embedded object is indexed by its path, in the `indexes` option of [collection](./collection.md#indexes-on-several-fields).
 
 ### unique
 

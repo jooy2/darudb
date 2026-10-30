@@ -59,9 +59,10 @@ A field of a collection or of an embedded object, by the name the file stores. `
 class StoredIndex:
     field: str
     unique: bool
+    fields: tuple[str, ...] = ()
 ```
 
-An index of a collection: the field it is on, and whether two objects may not hold the same value.
+An index of a collection: the fields it is on, in order, each a stored name or a path such as `"address.city"`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `field(index=True)` or `field(unique=True)`. A `StoredIndex` made without `fields` gets `(field,)`.
 
 ## StoredType
 

@@ -60,11 +60,12 @@ interface StoredField {
 ```ts
 interface StoredIndex {
   readonly field: string;
+  readonly fields: readonly string[];
   readonly unique: boolean;
 }
 ```
 
-컬렉션의 인덱스입니다. 인덱스를 둔 필드와, 두 객체가 같은 값을 가질 수 없는 고유 인덱스인지를 담습니다.
+컬렉션의 인덱스입니다. 인덱스를 둔 필드들을 순서대로 담고, 각 필드는 이름이거나 `address.city` 같은 경로입니다. `unique`는 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지 알려 줍니다. `field`는 `fields`의 첫 필드이며, `index()`나 `unique()`로 선언한 인덱스에는 이 필드 하나뿐입니다.
 
 ## StoredType
 

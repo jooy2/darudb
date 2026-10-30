@@ -140,7 +140,7 @@ default(value: I): FieldType<T, 'default', I>;
 index(): FieldType<T, M, I>;
 ```
 
-그 필드로 찾는 쿼리가 모든 객체를 읽는 대신 인덱스를 읽게 합니다. 내장 객체 안의 필드에는 인덱스를 둘 수 없습니다.
+그 필드로 찾는 쿼리가 모든 객체를 읽는 대신 인덱스를 읽게 합니다. 내장 객체 안의 필드에는 [collection](./collection.md#여러-필드에-두는-인덱스)의 `indexes` 옵션에서 경로로 인덱스를 둡니다.
 
 ### unique
 

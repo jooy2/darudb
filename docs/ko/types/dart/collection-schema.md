@@ -61,6 +61,14 @@ final bool autoKey;
 
 엔진이 기본 키를 정하는지 나타냅니다. 그렇다면 키는 `fields`의 첫 필드인 `int` 필드 `id`입니다.
 
+### indexes
+
+```dart
+final List<IndexSpec> indexes;
+```
+
+`@IndexOn`으로 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스들입니다. 필드 하나에 둔 인덱스는 그 필드의 [FieldSpec](#fieldspec)에 `index`나 `unique`로 들어 있습니다.
+
 ## 메서드
 
 ### newQuery
@@ -82,6 +90,19 @@ final class EmbeddedSchema<E> {
 ```
 
 생성기가 `@Embedded()`를 붙인 클래스에 써 주는 것으로, 필드와 객체를 쓰고 읽는 방법을 담습니다. `Address`라면 `addressSchema`입니다. `ObjectKind`가 이것을 가리킵니다.
+
+## IndexSpec
+
+```dart
+final class IndexSpec {
+  const IndexSpec(this.fields, {this.unique = false});
+
+  final List<String> fields;
+  final bool unique;
+}
+```
+
+`@IndexOn`이 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스입니다. 각 필드의 경로를 `'home.city'`처럼 파일에 저장된 이름을 `.`으로 이어 담고, 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지를 담습니다.
 
 ## FieldSpec
 

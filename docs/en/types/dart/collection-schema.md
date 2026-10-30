@@ -61,6 +61,14 @@ final bool autoKey;
 
 Whether the engine assigns the primary key: an `int` field `id`, the first of `fields`.
 
+### indexes
+
+```dart
+final List<IndexSpec> indexes;
+```
+
+The indexes on several fields or on fields inside embedded objects, which `@IndexOn` declares. An index on one field is in its [FieldSpec](#fieldspec), as `index` or `unique`.
+
 ## Methods
 
 ### newQuery
@@ -82,6 +90,19 @@ final class EmbeddedSchema<E> {
 ```
 
 What the generator writes for a class annotated `@Embedded()`, such as `addressSchema` for `Address`: its fields, and how one is written and read. An `ObjectKind` names it.
+
+## IndexSpec
+
+```dart
+final class IndexSpec {
+  const IndexSpec(this.fields, {this.unique = false});
+
+  final List<String> fields;
+  final bool unique;
+}
+```
+
+An index on several fields, or on a field inside an embedded object, as `@IndexOn` declares it: each field's path by the names the file stores, joined by `.`, such as `'home.city'`, and whether two objects may not hold the same values in all of them.
 
 ## FieldSpec
 

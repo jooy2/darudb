@@ -60,11 +60,12 @@ A field of a collection or of an embedded object. `optional` says whether it may
 ```ts
 interface StoredIndex {
   readonly field: string;
+  readonly fields: readonly string[];
   readonly unique: boolean;
 }
 ```
 
-An index of a collection: the field it is on, and whether two objects may not hold the same value.
+An index of a collection: the fields it is on, in order, each a name or a path such as `address.city`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `index()` or `unique()`.
 
 ## StoredType
 

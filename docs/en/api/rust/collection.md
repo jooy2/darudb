@@ -43,7 +43,7 @@ The declaration is checked when a file is opened with it. Each of these fails `o
 - **Primary key.** A primary key that is not an `Int`, a `String` or `Bytes`.
 - **Types.** A link to a collection the schema does not have, or a list of lists.
 - **Defaults.** A default that does not have the field's type, or one on a link or an embedded object.
-- **Indexes.** An index on a field the collection does not have, on an embedded object or a list of them, or on one field twice.
+- **Indexes.** An index on a field the collection does not have, on an embedded object or a list of them, on a path that goes on past a scalar or through a link, or on the same fields twice; an index on no field or on more than eight; an index on several fields with a path through a list.
 
 ## Associated functions
 
@@ -118,6 +118,37 @@ pub fn unique(mut self, name: impl Into<String>) -> Self
 
 Indexes field `name` and keeps its values unique: two objects cannot hold the same value, though any number may hold null. A write that would take a value another object holds fails with `DUPLICATE_KEY`, and so does opening a file whose objects hold one value twice when a new version adds the unique index.
 
+### index_on
+
+```rust
+pub fn index_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) -> Self
+```
+
+Indexes the fields `paths`, in order, as one index, whose entries sort by the first field, then by the second, and so on. Each is a field's name, or names joined by `.` through embedded objects, such as `address.city`, and there are one to eight of them. `index_on(["address.city"])` indexes one field inside an embedded object, which `index` cannot, since `index("address.city")` names a field called `address.city`.
+
+```rust
+use darudb::{Collection, Embedded, Type};
+
+fn posts() -> Collection {
+    Collection::new("posts")
+        .field("author", Type::String)
+        .field("written", Type::Date)
+        .field("place", Type::object(Embedded::new().field("city", Type::String)))
+        .index_on(["author", "written"])
+        .index_on(["place.city"])
+}
+```
+
+A query reads the index when it tests the first fields for equality, with `==`, `IS NULL` or `IN`, and the next one, if any, for a range or with `STARTSWITH`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: `author == $0 SORT BY written DESC LIMIT 20` reads the twenty newest posts of one author and stops. A path may go through a list of embedded objects, such as `stops.city`, only in an index of that one field, which has an entry for each element. A file with an index on several fields, or on a field inside an embedded object, is in object format 2, which [`OpenOptions::upgrade_format`](./open-options.md#upgrade-format) governs.
+
+### unique_on
+
+```rust
+pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) -> Self
+```
+
+[`index_on`](#index-on), keeping the fields' values unique together: two objects cannot hold the same values in all of them, though any number may hold null in one of them. A write that would repeat another object's values fails with `DUPLICATE_KEY`, as with [`unique`](#unique).
+
 ### name
 
 ```rust
@@ -153,7 +184,7 @@ Whether the primary key is the auto-increment: an `int` field called `id`, which
 ### indexes
 
 ```rust
-pub fn indexes(&self) -> impl ExactSizeIterator<Item = (&str, bool)> + '_
+pub fn indexes(&self) -> &[Index]
 ```
 
-The indexed fields, each with whether its index is unique, in the order they were declared.
+The indexes, as [`Index`](../../types/rust/index-type.md)es, in the order they were declared, or in the file's order for a schema read from a file. An index declared with `index` or `unique` has one field.

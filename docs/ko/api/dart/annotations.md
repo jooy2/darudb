@@ -79,7 +79,7 @@ final db = Database.open('app.darudb', schema: const Schema(1, [userSchema, post
 
 - **필드는 모두 `final`이고**, 클래스에는 타입 매개변수가 없습니다.
 - **이름 없는 생성자가 모든 필드를 받습니다.** 이름 있는 매개변수든 위치 매개변수든 필드와 이름이 같아야 합니다. 저장하는 것은 클래스가 직접 선언한 인스턴스 필드뿐이고, getter와 static 필드, 상속한 필드는 저장하지 않습니다.
-- **필드의 타입이 파일에서의 타입입니다.** `bool`, `int`, `double`, `String`, `Uint8List`, 이들이나 링크의 `List`, 컬렉션을 가리키는 [Link](../../types/dart/link.md), `@Embedded()`를 붙인 클래스를 쓸 수 있습니다. 목록에는 null이 들어가지 않습니다. 전체 목록은 [필드 타입](../../types/dart/field-types.md)에 있습니다.
+- **필드의 타입이 파일에서의 타입입니다.** `bool`, `int`, `double`, `String`, `Uint8List`, 이들이나 링크, 내장 클래스의 `List`, 컬렉션을 가리키는 [Link](../../types/dart/link.md), `@Embedded()`를 붙인 클래스를 쓸 수 있습니다. 목록에는 null이 들어가지 않습니다. 전체 목록은 [필드 타입](../../types/dart/field-types.md)에 있습니다.
 - **null이 될 수 있으면 선택 필드입니다.** 그런 필드는 null일 수 있고, 레코드에 없으면 null이 됩니다. null이 될 수 없는 필드는 필수입니다.
 - **매개변수의 기본값이 필드의 기본값입니다.** 필드가 생기기 전에 쓴 레코드는 이 값을 읽습니다. 기본값은 파일에 저장할 수 있는 상수, 즉 `bool`, `int`, `double`, `String`이나 이들의 목록입니다. 기본값이 있는 필드는 필수이므로 null이 될 수 없습니다.
 
@@ -101,7 +101,7 @@ const Collection([String? name]);
 const Embedded();
 ```
 
-클래스를 내장 객체로 만듭니다. 내장 객체는 다른 객체의 필드에 담깁니다. 키가 없고, 그 필드에는 인덱스를 둘 수 없습니다.
+클래스를 내장 객체로 만듭니다. 내장 객체는 다른 객체의 필드에 담깁니다. 키가 없고, 그 필드에는 `@Index()`나 `@Unique()`를 붙이지 않습니다. 그 필드에 인덱스를 두려면 내장 객체를 담은 컬렉션에서 [`@IndexOn`](#indexon)으로 경로를 적습니다.
 
 ### PrimaryKey
 
@@ -126,6 +126,30 @@ const Unique();
 ```
 
 필드에 인덱스를 두되, 값이 같은 객체 둘을 `DUPLICATE_KEY`로 거부합니다. null은 몇 개가 있어도 됩니다.
+
+### IndexOn
+
+```dart
+const IndexOn(List<String> fields, {bool unique = false});
+```
+
+`@Collection()`을 붙인 클래스에 붙여 `fields`에 차례대로 인덱스 하나를 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 Dart 필드 이름이거나, `'home.city'`처럼 내장 객체를 따라 Dart 이름을 `.`으로 이은 경로이며, 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. 한 클래스에 여러 번 붙여도 됩니다.
+
+```dart
+@Collection('posts')
+@IndexOn(['author', 'written'])
+@IndexOn(['place.city'])
+class Post {
+  const Post({this.id, required this.author, required this.written, required this.place});
+
+  final int? id;
+  final String author;
+  final DateTime written;
+  final Place place;
+}
+```
+
+쿼리가 앞쪽 필드들을 `equals`, `isNull`, `isIn`으로 같은지 검사하고, 그다음 필드가 있다면 그 필드를 범위나 `startsWith`로 검사하면 이 인덱스를 읽습니다. 같은지 검사한 필드 뒤의 필드를 모두 인덱스의 순서대로 정렬하는 쿼리에는 인덱스가 객체를 정렬된 순서로 내줍니다. 그래서 작성자 한 명의 글을 `written` 내림차순으로 정렬해 20개만 가져오는 쿼리는 항목 스무 개를 읽고 멈춥니다. `unique: true`이면 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다. 같은 값 조합을 쓰려는 쓰기는 `DUPLICATE_KEY`로 실패합니다. 클래스에 없는 필드, 링크를 거치는 경로, 필드가 하나도 없거나 여덟 개를 넘는 경우, 필드가 여럿인데 목록을 거치는 경로가 있으면 생성기가 멈춥니다. 이런 인덱스가 있는 파일은 객체 형식 2이며, 이 형식으로 올릴지는 [open](./database.md#open)의 `upgradeFormat` 옵션이 정합니다.
 
 ### Name
 

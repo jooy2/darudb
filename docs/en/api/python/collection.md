@@ -102,10 +102,12 @@ with db.write() as txn:
 @overload
 def collection(cls: type[T], /) -> type[T]: ...
 @overload
-def collection(name: str | None = None, /) -> Callable[[type[T]], type[T]]: ...
+def collection(
+    name: str | None = None, /, *, indexes: Sequence[Index] = ()
+) -> Callable[[type[T]], type[T]]: ...
 ```
 
-Makes the class the objects of a collection named `name`, or named as the class is: `@darudb.collection("users")`, or `@darudb.collection` and `@darudb.collection()` for a collection called `User`. The name is what the file stores and the query language, [Migration](./migration.md) and `txn.collection("users")` use. A name that is not a `str`, or a decorated value that is not a class, fails with `INVALID_ARGUMENT`.
+Makes the class the objects of a collection named `name`, or named as the class is: `@darudb.collection("users")`, or `@darudb.collection` and `@darudb.collection()` for a collection called `User`. The name is what the file stores and the query language, [Migration](./migration.md) and `txn.collection("users")` use. A name that is not a `str`, or a decorated value that is not a class, fails with `INVALID_ARGUMENT`. `indexes` declares indexes on several fields, or on fields inside embedded objects, each made by [index](#index-1).
 
 ## @embedded
 
@@ -113,7 +115,7 @@ Makes the class the objects of a collection named `name`, or named as the class 
 def embedded(cls: type[T], /) -> type[T]: ...
 ```
 
-Makes the class an embedded object, which a field of another object holds whole. It is written without parentheses, `@darudb.embedded`, and a decorated value that is not a class fails with `INVALID_ARGUMENT`. An embedded object has no key and no collection, and none of its fields can be a primary key, indexed or unique, which fails with `INVALID_ARGUMENT`. An embedded class may hold another, but a list cannot hold embedded objects. A query reaches its fields with a path such as `F.address.city`.
+Makes the class an embedded object, which a field of another object holds whole. It is written without parentheses, `@darudb.embedded`, and a decorated value that is not a class fails with `INVALID_ARGUMENT`. An embedded object has no key and no collection, and none of its fields can be a primary key, indexed or unique, which fails with `INVALID_ARGUMENT`. An embedded class may hold another, and a list may hold embedded objects, `list[Stop]`. A query reaches their fields with a path such as `F.address.city`, and the collection indexes them by their paths, with `indexes=[darudb.index(F.address.city)]`.
 
 ## field
 
@@ -155,3 +157,33 @@ The field holds the primary key of an object of another collection, or of its ow
 ### name
 
 The name the file stores the field under, when it is not the attribute's. Queries built with [F](./conditions.md) and the changes of `update` name the attribute, and the package gives the engine the stored name. Text in the query language, a [Migration](./migration.md) and [Migrating.previous](./migrating.md#previous) use the stored name.
+
+## index
+
+```python
+def index(*fields: Any, unique: bool = False) -> Index: ...
+```
+
+An index on `fields`, in order, for `@collection(indexes=[...])`. Its entries sort by the first field, then by the second, and so on. Each field is an attribute's name, a path of names through embedded objects such as `"address.city"`, or an [F](./conditions.md) path such as `F.address.city`, and an index has one to eight of them.
+
+```python
+from datetime import datetime
+
+import darudb
+from darudb import F
+
+
+@darudb.embedded
+class Place:
+    city: str
+
+
+@darudb.collection("posts", indexes=[darudb.index("author", "written"), darudb.index(F.place.city)])
+class Post:
+    id: int | None = None
+    author: str
+    written: datetime
+    place: Place
+```
+
+A query reads the index when it tests the first fields for equality, with `==`, `is_null()` or `is_in()`, and the next one, if any, for a range or with `startswith()`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. With `unique=True`, two objects cannot hold the same values in all the fields, though any number may hold `None` in one of them, and a write that would repeat them fails with `DUPLICATE_KEY`. No field, a value that is not a name or a path, or a `unique` that is not a `bool` fails with `INVALID_ARGUMENT` at once; a field the class does not have, a path through a link, more than eight fields, or several fields with a path through a list fail when the database opens. A file with such an index is in object format 2, which the `upgrade_format` option of [open](./database.md#open) governs.

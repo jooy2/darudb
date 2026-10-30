@@ -102,10 +102,12 @@ with db.write() as txn:
 @overload
 def collection(cls: type[T], /) -> type[T]: ...
 @overload
-def collection(name: str | None = None, /) -> Callable[[type[T]], type[T]]: ...
+def collection(
+    name: str | None = None, /, *, indexes: Sequence[Index] = ()
+) -> Callable[[type[T]], type[T]]: ...
 ```
 
-클래스를 `name`이라는 컬렉션의 객체로 만듭니다. 이름을 주지 않으면 클래스 이름을 씁니다. `@darudb.collection("users")`처럼 쓰고, 클래스 `User`에 `@darudb.collection`이나 `@darudb.collection()`을 붙이면 컬렉션 이름은 `User`입니다. 이 이름은 파일에 저장되고, 쿼리 언어와 [Migration](./migration.md), `txn.collection("users")`가 이 이름을 씁니다. 이름이 `str`이 아니거나 데코레이터를 클래스가 아닌 값에 붙이면 `INVALID_ARGUMENT`로 실패합니다.
+클래스를 `name`이라는 컬렉션의 객체로 만듭니다. 이름을 주지 않으면 클래스 이름을 씁니다. `@darudb.collection("users")`처럼 쓰고, 클래스 `User`에 `@darudb.collection`이나 `@darudb.collection()`을 붙이면 컬렉션 이름은 `User`입니다. 이 이름은 파일에 저장되고, 쿼리 언어와 [Migration](./migration.md), `txn.collection("users")`가 이 이름을 씁니다. 이름이 `str`이 아니거나 데코레이터를 클래스가 아닌 값에 붙이면 `INVALID_ARGUMENT`로 실패합니다. `indexes`로는 여러 필드나 내장 객체 안의 필드에 인덱스를 선언하며, 각 인덱스는 [index](#index-1)로 만듭니다.
 
 ## @embedded
 
@@ -113,7 +115,7 @@ def collection(name: str | None = None, /) -> Callable[[type[T]], type[T]]: ...
 def embedded(cls: type[T], /) -> type[T]: ...
 ```
 
-클래스를 내장 객체로 만듭니다. 내장 객체는 다른 객체의 필드에 통째로 담깁니다. 괄호 없이 `@darudb.embedded`로 쓰고, 클래스가 아닌 값에 붙이면 `INVALID_ARGUMENT`로 실패합니다. 내장 객체에는 키도 컬렉션도 없고, 그 필드는 기본 키도 인덱스도 고유 필드도 될 수 없습니다. 이를 어기면 `INVALID_ARGUMENT`로 실패합니다. 내장 클래스 안에 다른 내장 클래스를 담을 수는 있지만, 목록에는 내장 객체를 담을 수 없습니다. 쿼리는 `F.address.city` 같은 경로로 내장 객체의 필드에 닿습니다.
+클래스를 내장 객체로 만듭니다. 내장 객체는 다른 객체의 필드에 통째로 담깁니다. 괄호 없이 `@darudb.embedded`로 쓰고, 클래스가 아닌 값에 붙이면 `INVALID_ARGUMENT`로 실패합니다. 내장 객체에는 키도 컬렉션도 없고, 그 필드는 기본 키도 인덱스도 고유 필드도 될 수 없습니다. 이를 어기면 `INVALID_ARGUMENT`로 실패합니다. 내장 클래스 안에 다른 내장 클래스를 담을 수 있고, `list[Stop]`처럼 목록에 내장 객체를 담을 수도 있습니다. 쿼리는 `F.address.city` 같은 경로로 그 필드에 닿고, 컬렉션은 `indexes=[darudb.index(F.address.city)]`처럼 경로로 그 필드에 인덱스를 둡니다.
 
 ## field
 
@@ -155,3 +157,33 @@ def field(
 ### name
 
 파일에 저장할 필드 이름을 속성 이름 대신 정합니다. [F](./conditions.md)로 만든 쿼리와 `update`의 변경은 속성 이름으로 필드를 가리키고, 패키지가 엔진에는 저장된 이름을 넘깁니다. 쿼리 언어 문자열과 [Migration](./migration.md), [Migrating.previous](./migrating.md#previous)는 저장된 이름을 씁니다.
+
+## index
+
+```python
+def index(*fields: Any, unique: bool = False) -> Index: ...
+```
+
+`@collection(indexes=[...])`에 넣을 인덱스를 `fields`에 차례대로 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 속성 이름이거나, `"address.city"`처럼 내장 객체를 따라 이름을 이은 경로이거나, `F.address.city` 같은 [F](./conditions.md) 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다.
+
+```python
+from datetime import datetime
+
+import darudb
+from darudb import F
+
+
+@darudb.embedded
+class Place:
+    city: str
+
+
+@darudb.collection("posts", indexes=[darudb.index("author", "written"), darudb.index(F.place.city)])
+class Post:
+    id: int | None = None
+    author: str
+    written: datetime
+    place: Place
+```
+
+쿼리가 앞쪽 필드들을 `==`, `is_null()`, `is_in()`으로 같은지 검사하고, 그다음 필드가 있다면 그 필드를 범위나 `startswith()`로 검사하면 이 인덱스를 읽습니다. 같은지 검사한 필드 뒤의 필드를 모두 인덱스의 순서대로 정렬하는 쿼리에는 인덱스가 객체를 정렬된 순서로 내줍니다. 그래서 작성자 한 명의 글을 `written` 내림차순으로 정렬해 20개만 가져오는 쿼리는 항목 스무 개를 읽고 멈춥니다. `unique=True`이면 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 `None`인 객체는 몇 개가 있어도 됩니다. 같은 값 조합을 쓰려는 쓰기는 `DUPLICATE_KEY`로 실패합니다. 필드를 하나도 주지 않거나, 이름이나 경로가 아닌 값을 주거나, `unique`가 `bool`이 아니면 곧바로 `INVALID_ARGUMENT`로 실패합니다. 클래스에 없는 필드, 링크를 거치는 경로, 여덟 개를 넘는 필드, 필드가 여럿인데 목록을 거치는 경로는 데이터베이스를 열 때 실패합니다. 이런 인덱스가 있는 파일은 객체 형식 2이며, 이 형식으로 올릴지는 [open](./database.md#open)의 `upgrade_format` 옵션이 정합니다.

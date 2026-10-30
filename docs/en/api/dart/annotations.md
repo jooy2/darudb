@@ -79,7 +79,7 @@ An annotated class is a value, which the generated code builds with its construc
 
 - **Every field is `final`**, and the class has no type parameters.
 - **The unnamed constructor takes every field**, by name or by position, as a parameter of the same name. The fields are the instance fields the class declares itself: a getter, a static field and an inherited field are not stored.
-- **A field's type is its type in the file**: `bool`, `int`, `double`, `String`, `Uint8List`, a `List` of those or of links, a [Link](../../types/dart/link.md) to a collection, or a class annotated `@Embedded()`. A list holds no null. [Field types](../../types/dart/field-types.md) has the whole list.
+- **A field's type is its type in the file**: `bool`, `int`, `double`, `String`, `Uint8List`, a `List` of those, of links or of embedded classes, a [Link](../../types/dart/link.md) to a collection, or a class annotated `@Embedded()`. A list holds no null. [Field types](../../types/dart/field-types.md) has the whole list.
 - **Nullable means optional.** A nullable field may be null, and is null when a record leaves it out. A field that is not nullable is required.
 - **A parameter's default is the field's default**, which a record written before the field existed reads as. It is a constant the file can store: a `bool`, an `int`, a `double`, a `String`, or a list of them. A field with a default is required, so it is not nullable.
 
@@ -101,7 +101,7 @@ Makes the class the objects of a collection named `name`, or named as the class 
 const Embedded();
 ```
 
-Makes the class an embedded object, which a field of another object holds. An embedded object has no key, and none of its fields can be indexed.
+Makes the class an embedded object, which a field of another object holds. An embedded object has no key, and its fields take no `@Index()` or `@Unique()`; the collection that holds it indexes them by their paths, with [`@IndexOn`](#indexon).
 
 ### PrimaryKey
 
@@ -126,6 +126,30 @@ const Unique();
 ```
 
 Keeps an index on the field that also refuses two objects with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null.
+
+### IndexOn
+
+```dart
+const IndexOn(List<String> fields, {bool unique = false});
+```
+
+On a class annotated `@Collection()`, keeps an index on `fields`, in order, whose entries sort by the first field, then by the second, and so on. Each is a field's Dart name, or Dart names joined by `.` through embedded objects, such as `'home.city'`, and an index has one to eight of them. A class may carry several.
+
+```dart
+@Collection('posts')
+@IndexOn(['author', 'written'])
+@IndexOn(['place.city'])
+class Post {
+  const Post({this.id, required this.author, required this.written, required this.place});
+
+  final int? id;
+  final String author;
+  final DateTime written;
+  final Place place;
+}
+```
+
+A query reads the index when it tests the first fields for equality, with `equals`, `isNull` or `isIn`, and the next one, if any, for a range or with `startsWith`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. With `unique: true`, two objects cannot hold the same values in all the fields, though any number may hold null in one of them, and a write that would repeat them fails with `DUPLICATE_KEY`. The generator stops on a field the class does not have, a path through a link, no field or more than eight, and several fields with a path through a list. A file with such an index is in object format 2, which the `upgradeFormat` option of [open](./database.md#open) governs.
 
 ### Name
 

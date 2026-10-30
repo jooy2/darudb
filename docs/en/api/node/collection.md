@@ -8,7 +8,7 @@ order: 3
 `collection` declares one collection of a schema: its fields, by name, and through them its primary key and indexes.
 
 ```ts
-const collection: <F extends Fields>(fields: F) => Collection<F>;
+const collection: <F extends Fields>(fields: F, options?: CollectionOptions<F>) => Collection<F>;
 ```
 
 Each value of `fields` is a field type from [t](./t.md); anything else throws `INVALID_ARGUMENT` at once. The collection gets its name from [schema](./schema.md), which takes it under that name. The types of its objects follow from the fields: [ObjectOf](../../types/node/object-types.md) is an object as it is read, and `InsertOf` an object as it is written.
@@ -38,6 +38,38 @@ db.write((txn) => {
   txn.collection('teams').insert({ name: 'north' }); // 'north'
 });
 ```
+
+## Indexes on several fields
+
+A field marked `index()` or `unique()` in [t](./t.md) has an index of its own. `options.indexes` declares an index on several fields, whose entries sort by the first field, then by the second, and so on, or one on a field inside an embedded object, named by its path:
+
+```ts
+interface CollectionOptions<F extends Fields = Fields> {
+  readonly indexes?: readonly IndexDeclaration<F>[];
+}
+
+interface IndexDeclaration<F extends Fields = Fields> {
+  readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
+  readonly unique?: boolean;
+}
+```
+
+```ts
+const posts = collection(
+  {
+    author: t.string(),
+    written: t.date(),
+    place: t.object({ city: t.string() })
+  },
+  {
+    indexes: [{ fields: ['author', 'written'] }, { fields: ['place.city'] }]
+  }
+);
+```
+
+Each of `fields` is a field's name, or names joined by `.` through embedded objects, and an index has one to eight of them. With `unique: true`, two objects cannot hold the same values in all of them, though any number may hold null in one. Options of another shape throw `INVALID_ARGUMENT` at once; an index the schema cannot have, on a field it does not have, through a link, or on several fields with a path through a list, fails to open with `INVALID_ARGUMENT`.
+
+A query reads the index when it tests the first fields for equality, with `eq`, `isNull` or `in`, and the next one, if any, for a range or with `startsWith`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. A file with such an index is in object format 2, which the `upgradeFormat` option of [OpenOptions](../../types/node/open-options.md#upgradeformat) governs.
 
 The returned `Collection` is frozen:
 

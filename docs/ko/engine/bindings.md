@@ -74,7 +74,7 @@ fn open(options: &OpenOptions, path: &str) -> darudb::Result<Database> {
 
 ### 객체 형식
 
-저장된 스키마는 첫 필드에 객체 형식을 기록합니다. 날짜 타입이 생기기 전 릴리스가 쓴 파일은 모두 1이고, 날짜를 선언한 파일은 2입니다([design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#object-formats)). 바인딩은 선언한 스키마를 자신이 아는 가장 새 형식으로 인코딩합니다. `Schema::decode`는 이 빌드가 읽는 어느 형식이든 받고, 파일의 형식은 엔진이 정합니다. 스키마를 담을 수 있는 가장 낮은 형식이며, 첫 날짜가 올리고 내려가지는 않습니다. `schema_record`를 읽는 바인딩은 두 형식의 종류를 모두 읽어야 하며, 날짜의 코드는 9입니다. `OpenOptions::upgrade_format(false)`는 파일 형식처럼 파일의 객체 형식도 그대로 두고, 형식을 올려야 하는 스키마는 `INVALID_ARGUMENT`로 실패합니다.
+저장된 스키마는 첫 필드에 객체 형식을 기록합니다. 날짜 타입이 생기기 전 릴리스가 쓴 파일은 모두 1이고, 날짜나 내장 객체의 목록, 여러 필드나 내장 객체 안의 필드에 둔 인덱스를 선언한 파일은 2입니다([design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#object-formats)). 바인딩은 선언한 스키마를 자신이 아는 가장 새 형식으로 인코딩합니다. `Schema::decode`는 이 빌드가 읽는 어느 형식이든 받고, 파일의 형식은 엔진이 정합니다. 스키마를 담을 수 있는 가장 낮은 형식이며, 그런 선언이 처음 나오면 올라가고 내려가지는 않습니다. `schema_record`를 읽는 바인딩은 두 형식의 종류를 모두 읽어야 하며, 날짜의 코드는 9입니다. 인덱스도 두 모양을 모두 읽어야 합니다. 필드 2는 인덱스를 둔 최상위 필드 하나의 id이고, 필드 4는 구성 요소의 목록입니다. 각 구성 요소는 객체이며, 그 필드 1이 컬렉션에서 필드까지 내려가는 필드 id의 경로입니다. `OpenOptions::upgrade_format(false)`는 파일 형식처럼 파일의 객체 형식도 그대로 두고, 형식을 올려야 하는 스키마는 `INVALID_ARGUMENT`로 실패합니다.
 
 ## 필드 ID
 

@@ -24,7 +24,7 @@ This page moves the data of a SQLite database into DaruDB: how tables, columns a
 | `DEFAULT` | A default on the field |
 | `UNIQUE`, or a unique index on one column | A unique index |
 | An index on one column | An index |
-| An index on several columns | No counterpart yet: index the column that narrows a query most |
+| An index on several columns | An index on several fields, in the same order, up to eight |
 | A foreign key | A link, which holds the other object's primary key |
 | A join table between two tables | A list of links on one side, or a list of values |
 | A view, a trigger, a `CHECK` constraint | No counterpart: keep that logic in the application |

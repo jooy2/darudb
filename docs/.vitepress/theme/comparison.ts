@@ -470,7 +470,7 @@ export const SECTIONS: Section[] = [
         redb: no()
       }),
       row('composite', 'Composite indexes', '복합 인덱스', {
-        darudb: no('Planned', '계획됨'),
+        darudb: yes('Up to eight fields', '최대 여덟 필드'),
         sqlite: yes(),
         realm: no(),
         objectbox: no(),
