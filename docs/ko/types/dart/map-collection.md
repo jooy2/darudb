@@ -52,6 +52,7 @@ final class MapQuery extends QueryBuilder<Map<String, Object?>>
 | `intField(name)`        | `IntField`                                                   |
 | `floatField(name)`      | `FloatField`                                                 |
 | `stringField(name)`     | `StringField`                                                |
+| `dateField(name)`       | `DateField`                                                  |
 | `bytesField(name)`      | `BytesField`                                                 |
 | `linkField(name)`       | `LinkField`                                                  |
 | `listField<E>(name)`    | `ListField<E>`                                               |

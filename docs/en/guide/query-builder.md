@@ -95,7 +95,7 @@ with db.read() as txn:
 
 ::: lang rust
 
-Each associated function of `Filter` tests one field, named by a path, against values of any type that converts into a `Value`: integers, `f64`, `bool`, `&str` and `String`, and `&[u8]` or `Vec<u8>` for bytes.
+Each associated function of `Filter` tests one field, named by a path, against values of any type that converts into a `Value`: integers, `f64`, `bool`, `&str` and `String`, `&[u8]` or `Vec<u8>` for bytes, and `Value::Date` for a date, which `Value::try_from` makes from a `SystemTime`.
 
 | Builder | Text | Finds objects whose field |
 | --- | --- | --- |
@@ -172,7 +172,7 @@ The query is not tied to the type, so the engine still checks every field when t
 | `where('email', '==', null)` | `c.isNull('email')` | `email IS NULL` | is null |
 | `where('email', '!=', null)` | `c.isNotNull('email')` | `email IS NOT NULL` | holds a value |
 
-A `bytes` field compares with a `Uint8Array`, and a link with the linked collection's key.
+A `bytes` field compares with a `Uint8Array`, a date field with a `Date`, and a link with the linked collection's key.
 
 :::
 

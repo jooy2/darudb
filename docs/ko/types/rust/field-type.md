@@ -28,6 +28,7 @@ pub trait FieldType: Sized {
 | `f64`                     | `Type::Float`                            |
 | `String`                  | `Type::String`                           |
 | `Vec<u8>`                 | `Type::Bytes`                            |
+| `SystemTime`              | `Type::Date`                             |
 | `Vec<T>`, `T`는 요소 타입 | `Type::list(T::kind())`                  |
 | [`Link<T>`](./link.md)    | `Type::link(T::COLLECTION)`              |
 | `Option<T>`               | `T`의 타입, 선택 필드                    |

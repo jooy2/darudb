@@ -72,6 +72,10 @@ fn open(options: &OpenOptions, path: &str) -> darudb::Result<Database> {
 
 An error from a step ends the migration. Dropping the `PendingMigration`, whether after an error or instead of finishing, leaves the file with its old schema and data. The migration holds the writer lock until then, so a binding must not let its migration functions wait for a write on the same file.
 
+### Object formats
+
+The stored schema records its object format in its first field: 1 for every file a release before the date type wrote, and 2 for one that declares a date ([design/objects.md](https://github.com/jooy2/darudb/blob/main/design/objects.md#object-formats)). A binding encodes its declared schema in the newest format it knows, which `Schema::decode` takes from any format this build reads, and the engine works out the file's format itself: the lowest that holds the schema, raised by the first date and never lowered. A binding that reads `schema_record` reads the kinds of both formats, the date's code being 9. `OpenOptions::upgrade_format(false)` keeps the file's object format as it keeps the file format, and a schema that would raise it fails with `INVALID_ARGUMENT`.
+
 ## Field ids
 
 Records hold field ids rather than names. `Database::schema_record` returns the schema a handle was opened with as the record the file holds it in, with the file's ids for every collection, field and index. A handle opened without a schema gets the file's own, so a binding reads a file it has no declaration for the same way; it is `None` only when the handle has no schema at all, and the binding then asks the engine why, rather than writing an error of its own. The binding decodes it once, and maps names to ids from then on.
@@ -92,17 +96,18 @@ value   = tag payload
 
 `count`, `id` and every length are unsigned LEB128 varints, and a field whose value is null is left out.
 
-| Tag    | Type            | Payload                           |
-| ------ | --------------- | --------------------------------- |
-| `0x02` | `bool` false    | None                              |
-| `0x03` | `bool` true     | None                              |
-| `0x04` | `int`           | Zigzag LEB128 varint              |
-| `0x05` | `float`         | 8 bytes, little-endian            |
-| `0x06` | `string`        | Length, then the UTF-8 bytes      |
-| `0x07` | `bytes`         | Length, then the bytes            |
-| `0x08` | `list`          | Count, then that many values      |
-| `0x09` | embedded object | Length, then a record             |
-| `0x0A` | `link`          | A value: the target's primary key |
+| Tag    | Type            | Payload                                           |
+| ------ | --------------- | ------------------------------------------------- |
+| `0x02` | `bool` false    | None                                              |
+| `0x03` | `bool` true     | None                                              |
+| `0x04` | `int`           | Zigzag LEB128 varint                              |
+| `0x05` | `float`         | 8 bytes, little-endian                            |
+| `0x06` | `string`        | Length, then the UTF-8 bytes                      |
+| `0x07` | `bytes`         | Length, then the bytes                            |
+| `0x08` | `list`          | Count, then that many values                      |
+| `0x09` | embedded object | Length, then a record                             |
+| `0x0A` | `link`          | A value: the target's primary key                 |
+| `0x0B` | `date`          | Zigzag LEB128 varint, microseconds since 1970 UTC |
 
 The changes of an update are a record of the fields it changes, in which a field may also hold the tag `0x01` with no payload: the field becomes null. No other record holds that tag.
 

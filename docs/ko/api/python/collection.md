@@ -66,7 +66,7 @@ db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [User, Post]))
 
 데코레이터는 클래스를 `dataclasses.dataclass(frozen=True, kw_only=True)`처럼 필드를 바꿀 수 없고 키워드 인자로만 만드는 데이터 클래스로 만듭니다. 이미 데이터 클래스이면 그대로 둡니다. 그래서 객체는 `User(name="Alice")`처럼 키워드로 만들고, 기본값이 있는 필드를 기본값이 없는 필드보다 앞에 둘 수 있으며, 객체를 바꿀 때는 `dataclasses.replace`를 씁니다. 데코레이터는 `dataclass_transform`으로 선언돼 있어서 타입 검사기도 생성자를 압니다.
 
-- **필드는 데이터 클래스의 필드입니다.** 클래스가 선언한 순서를 따르고, 어노테이션이 파일에서의 필드 타입입니다. `bool`, `int`, `float`, `str`, `bytes`, 이들의 `list`, `@embedded`를 붙인 클래스를 쓸 수 있습니다. 전체 목록은 [필드 타입](../../types/python/field-types.md)에 있습니다.
+- **필드는 데이터 클래스의 필드입니다.** 클래스가 선언한 순서를 따르고, 어노테이션이 파일에서의 필드 타입입니다. `bool`, `int`, `float`, `str`, `bytes`, `datetime`, 이들의 `list`, `@embedded`를 붙인 클래스를 쓸 수 있습니다. 전체 목록은 [필드 타입](../../types/python/field-types.md)에 있습니다.
 - **`X | None`은 선택 필드입니다.** 필드는 `None`일 수 있고, 빠지면 `None`이 됩니다. 기본값은 `None`이거나 아예 없어야 하며, 다른 기본값은 `INVALID_ARGUMENT`로 실패합니다. 기본값 `None`이 없으면 파일에는 그 필드가 없어도 되지만, 생성자에는 넘겨야 합니다.
 - **기본값**은 빠진 필드에 들어가는 값입니다. 객체를 만들 때도, 필드가 생기기 전에 쓴 레코드를 읽을 때도 이 값이 들어갑니다. 기본값은 파일에 저장할 수 있는 상수여서, 파일에 저장할 값을 얻으려고 스키마를 만들 때 `default_factory`를 한 번 부릅니다. 데이터 클래스는 목록을 기본값으로 받지 않으므로 목록 필드에는 `default_factory=list`를 씁니다. 내장 객체는 기본값이 될 수 없고, 필드와 타입이 다른 기본값은 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다.
 - **기본값이 없고 선택 필드도 아닌 필드는 필수입니다.**

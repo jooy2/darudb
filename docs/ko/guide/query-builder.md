@@ -95,7 +95,7 @@ with db.read() as txn:
 
 ::: lang rust
 
-`Filter`의 연관 함수는 저마다 경로로 가리킨 필드 하나를 검사합니다. 값은 `Value`로 바뀌는 타입이면 됩니다. 정수와 `f64`, `bool`, `&str`과 `String`, 그리고 바이트에는 `&[u8]`이나 `Vec<u8>`을 씁니다.
+`Filter`의 연관 함수는 저마다 경로로 가리킨 필드 하나를 검사합니다. 값은 `Value`로 바뀌는 타입이면 됩니다. 정수와 `f64`, `bool`, `&str`과 `String`, 바이트에는 `&[u8]`이나 `Vec<u8>`, 날짜에는 `Value::try_from`으로 `SystemTime`에서 만든 `Value::Date`를 씁니다.
 
 | 빌더 | 문자열 | 찾는 객체 |
 | --- | --- | --- |
@@ -172,7 +172,7 @@ fn main() {
 | `where('email', '==', null)` | `c.isNull('email')` | `email IS NULL` | 필드가 null인 객체 |
 | `where('email', '!=', null)` | `c.isNotNull('email')` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 
-`bytes` 필드는 `Uint8Array`와 비교하고, 링크는 링크한 컬렉션의 키와 비교합니다.
+`bytes` 필드는 `Uint8Array`와, 날짜 필드는 `Date`와, 링크는 링크한 컬렉션의 키와 비교합니다.
 
 :::
 

@@ -79,6 +79,14 @@ bytes(): KeyableType<Uint8Array>;
 
 Any bytes, written and read as a `Uint8Array`. A `Buffer` is one.
 
+### date
+
+```ts
+date(): FieldType<Date>;
+```
+
+An instant, written as a `Date` and read as one. The file keeps a date to the microsecond, and a `Date` holds milliseconds, so a date another language wrote with a part of a millisecond reads rounded down. An invalid `Date` is refused with `INVALID_ARGUMENT`, and so is a date read beyond what a `Date` holds, about 275,000 years from 1970. A query compares the field with a `Date`, and sorts it in time order. The first date a schema declares moves the file to object format 2, which releases before it do not open.
+
 ### link
 
 ```ts

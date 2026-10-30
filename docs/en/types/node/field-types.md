@@ -19,6 +19,7 @@ A field type describes a field to the engine, and to TypeScript through type par
 | `t.float()`          | `FieldType<number>`                                               |
 | `t.string()`         | `KeyableType<string>`                                             |
 | `t.bytes()`          | `KeyableType<Uint8Array>`                                         |
+| `t.date()`           | `FieldType<Date>`                                                 |
 | `t.link(collection)` | `LinkType`                                                        |
 | `t.list(element)`    | `FieldType<T[], 'required', I[]>`, or `FieldType<Key[]>` of links |
 | `t.object(fields)`   | `EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>`                 |

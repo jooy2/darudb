@@ -45,6 +45,7 @@ The values of a query's parameters, in order, as positional arguments after the 
 - A `bool` is a bool, and an `int` is an int, which has to fit in 64 bits.
 - A `float` is a float. An `int` field compares only with an int, and a `float` field with a float or with an int from -2^53 to 2^53.
 - A `str` is a string, and `bytes`, a `bytearray` or a `memoryview` is bytes.
+- An aware `datetime` is a date. A naive one fails with `INVALID_QUERY`.
 - `None` is allowed only where the parameter is compared with `==` or `!=`, which then test whether the field is `None`. Anywhere else it fails with `INVALID_QUERY`.
 
 A run that leaves a parameter without a value fails with `INVALID_QUERY`, and so does a value of another type than its field's, or one that is not a single value, such as a list. Values given to a query without parameters are ignored.

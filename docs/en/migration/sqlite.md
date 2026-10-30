@@ -31,7 +31,7 @@ This page moves the data of a SQLite database into DaruDB: how tables, columns a
 
 - **Types are checked.** A SQLite column can hold a value of any type, whatever type it declares; a DaruDB field holds values of its own type only. Look for the strays before copying, such as `SELECT count(*) FROM users WHERE typeof(age) != 'integer'`, and convert them in the script, or the copy stops with `INVALID_ARGUMENT` at the first one.
 - **Booleans** stored as `0` and `1` can become a boolean field, with the script converting each value.
-- **Dates and times** have no type of their own in either database. Text in ISO 8601, in UTC, sorts in time order as bytes, so it can stay a string field and still be compared and sorted; a number of seconds or milliseconds stays an integer.
+- **Dates and times** have no type of their own in SQLite: they are text in ISO 8601 or a number of seconds or milliseconds. The script can make each a date field, which compares and sorts in time order and keeps the microsecond, or leave it a string or an int field as it was.
 - **Keys carry over.** Copying each row's key as the object's key keeps every foreign key valid as a link, and a collection with the automatic `id` goes on numbering after the largest `id` copied into it.
 
 ## Declare the schema

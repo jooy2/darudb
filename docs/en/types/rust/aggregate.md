@@ -25,8 +25,8 @@ pub enum Aggregate {
 | Variant | Reads | Gives |
 | --- | --- | --- |
 | `Sum` | `int`, `float` | The exact sum: an int for an int field, a float for a float field; zero for none |
-| `Min` | `int`, `float`, `string`, `bytes` | The least value, in the order a sort gives, or null |
-| `Max` | `int`, `float`, `string`, `bytes` | The greatest value, or null |
+| `Min` | `int`, `float`, `string`, `bytes`, `date` | The least value, in the order a sort gives, or null |
+| `Max` | `int`, `float`, `string`, `bytes`, `date` | The greatest value, or null |
 | `Avg` | `int`, `float` | The mean as a float, the exact sum over the count rounded once, or null |
 
 ## Methods

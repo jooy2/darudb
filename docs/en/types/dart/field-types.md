@@ -17,6 +17,7 @@ A field's Dart type decides what the field holds in the file, whether it may be 
 | `double` | `FloatKind`, 64 bits | `FloatField` |
 | `String` | `StringKind` | `StringField` |
 | `Uint8List` | `BytesKind` | `BytesField` |
+| `DateTime` | `DateKind` | `DateField` |
 | `List<E>` of those | `ListKind` | `ListField<E>`, or `StringListField` for `List<String>` |
 | `Link<User>` | `LinkKind('users')` | `UserLink` |
 | `List<Link<User>>` | `ListKind(LinkKind('users'))` | `ListField<Object>` |

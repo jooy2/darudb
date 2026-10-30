@@ -17,7 +17,7 @@ This page moves the data of a Realm file into DaruDB: how object schemas and pro
 | `primaryKey` | A primary key, of type integer, string or bytes |
 | `indexed: true` | An index |
 | `bool`, `int`, `float` or `double`, `string`, `data` | A boolean, integer, float, string or bytes field |
-| `date` | An integer field of milliseconds since the epoch, or ISO 8601 text |
+| `date` | A date field: `t.date()` read as a `Date`, or a `DateTime` in Dart |
 | `objectId` | Its 24 hexadecimal characters as a string, or its 12 bytes |
 | `uuid`, `decimal128` | A string field: DaruDB has neither type |
 | A link to an object | A link, which holds the other object's primary key |
@@ -73,7 +73,7 @@ const Post = {
 };
 ```
 
-`_id` becomes a string key named `id`, the date a number of milliseconds, the `decimal128` and the `uuid` text, and the dictionary JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
+`_id` becomes a string key named `id`, the date a date field, the `decimal128` and the `uuid` text, and the dictionary JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
 
 The DaruDB schema, in TypeScript:
 
@@ -88,7 +88,7 @@ const app = schema(1, {
     age: t.int().default(0).index(),
     score: t.float().optional(),
     avatar: t.bytes().optional(),
-    joined: t.int(),
+    joined: t.date(),
     tags: t.list(t.string()),
     address: t.object({ city: t.string(), zip: t.string().optional() }).optional()
   }),
@@ -153,7 +153,7 @@ class _Post {
 }
 ```
 
-`id` becomes a string key, the date a number of milliseconds, the `Decimal128` and the `Uuid` text, and the map JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
+`id` becomes a string key, the date a `DateTime` field, the `Decimal128` and the `Uuid` text, and the map JSON text. The backlink `posts` is not copied: an index on `author` makes the posts of a user one query.
 
 The `realm` package depends on `realm_generator`, which pins an older `analyzer` and `source_gen` than `darudb_generator` needs, so the two generators do not resolve in one package. The DaruDB classes go in a package of their own inside the app's repository, `packages/app_data`, with `darudb_generator` among its `dev_dependencies`:
 
@@ -210,7 +210,7 @@ class User {
   final int age;
   final double? score;
   final Uint8List? avatar;
-  final int joined;
+  final DateTime joined;
   final List<String> tags;
   final Address? address;
 }
@@ -293,7 +293,7 @@ copy(realm.objects('User'), 'users', (user) => ({
   age: user.age,
   score: user.score,
   avatar: user.avatar === null ? null : new Uint8Array(user.avatar),
-  joined: user.joined.getTime(),
+  joined: user.joined,
   tags: [...user.tags],
   address: user.address === null ? null : { city: user.address.city, zip: user.address.zip }
 }));
@@ -396,7 +396,7 @@ Future<void> moveFromRealm(String from, String path) async {
       age: user.age,
       score: user.score,
       avatar: user.avatar,
-      joined: user.joined.millisecondsSinceEpoch,
+      joined: user.joined,
       tags: List.of(user.tags),
       address: user.address == null
           ? null

@@ -44,6 +44,7 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 | [`NotFound`](#notfound) | `NOT_FOUND` | No database is at the path, and creating one was not allowed |
 | [`NotADatabase`](#notadatabase) | `NOT_A_DATABASE` | The file is not a DaruDB database |
 | [`UnsupportedFormatVersion`](#unsupportedformatversion) | `UNSUPPORTED_FORMAT_VERSION` | The file is in a format version this build does not read |
+| [`UnsupportedObjectFormat`](#unsupportedobjectformat) | `UNSUPPORTED_FORMAT_VERSION` | The stored schema is in an object format this build does not read |
 | [`Corrupted`](#corrupted) | `CORRUPTED` | Part of the file is damaged |
 | [`InvalidArgument`](#invalidargument) | `INVALID_ARGUMENT` | The call asked for something that cannot be done |
 | [`Closed`](#closed) | `CLOSED` | The handle can no longer be used |
@@ -89,7 +90,15 @@ NotADatabase { path: PathBuf }
 UnsupportedFormatVersion { path: PathBuf, found: u32, supported: u32 }
 ```
 
-`UNSUPPORTED_FORMAT_VERSION`. The file is a DaruDB database in a format this build does not read. `found` is the version the file records and `supported` the newest this build reads: the file format version, [`FORMAT_VERSION`](./constants.md#format-version), or the object format version of the schema stored in the file.
+`UNSUPPORTED_FORMAT_VERSION`. The file is a DaruDB database in a file format this build does not read. `found` is the version the file records and `supported` the newest this build reads, [`FORMAT_VERSION`](./constants.md#format-version).
+
+### UnsupportedObjectFormat
+
+```rust
+UnsupportedObjectFormat { path: PathBuf, found: u32, supported: u32 }
+```
+
+`UNSUPPORTED_FORMAT_VERSION`, as a file format this build does not read. The schema stored in the file is in an object format this build does not read: a newer build stored it, for a type or a declaration this one does not have. `found` is the object format the stored schema records and `supported` the newest this build reads.
 
 ### Corrupted
 

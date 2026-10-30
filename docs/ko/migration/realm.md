@@ -17,7 +17,7 @@ Realm 파일의 데이터를 DaruDB로 옮기는 방법을 다룹니다. 객체 
 | `primaryKey` | 기본 키. 타입은 정수, 문자열, 바이트 중 하나 |
 | `indexed: true` | 인덱스 |
 | `bool`, `int`, `float`나 `double`, `string`, `data` | 불리언, 정수, 실수, 문자열, 바이트 필드 |
-| `date` | 에포크 기준 밀리초를 담는 정수 필드, 또는 ISO 8601 문자열 |
+| `date` | 날짜 필드. `Date`로 읽는 `t.date()`, Dart에서는 `DateTime` |
 | `objectId` | 16진수 24자리 문자열, 또는 12바이트 |
 | `uuid`, `decimal128` | 문자열 필드. DaruDB에는 두 타입이 없습니다 |
 | 객체를 가리키는 링크 | 링크. 다른 객체의 기본 키를 담습니다 |
@@ -73,7 +73,7 @@ const Post = {
 };
 ```
 
-`_id`는 `id`라는 문자열 키로, 날짜는 밀리초 숫자로, `decimal128`과 `uuid`는 문자열로, 딕셔너리는 JSON 문자열로 바꿉니다. 백링크 `posts`는 옮기지 않습니다. `author`에 인덱스를 두면 사용자의 글은 쿼리 한 번으로 찾을 수 있습니다.
+`_id`는 `id`라는 문자열 키로, 날짜는 날짜 필드로, `decimal128`과 `uuid`는 문자열로, 딕셔너리는 JSON 문자열로 바꿉니다. 백링크 `posts`는 옮기지 않습니다. `author`에 인덱스를 두면 사용자의 글은 쿼리 한 번으로 찾을 수 있습니다.
 
 DaruDB 스키마는 TypeScript로 이렇게 선언합니다.
 
@@ -88,7 +88,7 @@ const app = schema(1, {
     age: t.int().default(0).index(),
     score: t.float().optional(),
     avatar: t.bytes().optional(),
-    joined: t.int(),
+    joined: t.date(),
     tags: t.list(t.string()),
     address: t.object({ city: t.string(), zip: t.string().optional() }).optional()
   }),
@@ -153,7 +153,7 @@ class _Post {
 }
 ```
 
-`id`는 문자열 키로, 날짜는 밀리초 숫자로, `Decimal128`과 `Uuid`는 문자열로, 맵은 JSON 문자열로 바꿉니다. 백링크 `posts`는 옮기지 않습니다. `author`에 인덱스를 두면 사용자의 글은 쿼리 한 번으로 찾을 수 있습니다.
+`id`는 문자열 키로, 날짜는 `DateTime` 필드로, `Decimal128`과 `Uuid`는 문자열로, 맵은 JSON 문자열로 바꿉니다. 백링크 `posts`는 옮기지 않습니다. `author`에 인덱스를 두면 사용자의 글은 쿼리 한 번으로 찾을 수 있습니다.
 
 `realm` 패키지는 `realm_generator`에 의존하고, 이 생성기는 `darudb_generator`가 요구하는 것보다 오래된 `analyzer`와 `source_gen`에 묶여 있습니다. 그래서 두 생성기는 한 패키지 안에서 의존성이 풀리지 않습니다. DaruDB 클래스는 앱 저장소 안의 별도 패키지 `packages/app_data`에 두고, `darudb_generator`는 그 패키지의 `dev_dependencies`에 넣습니다.
 
@@ -210,7 +210,7 @@ class User {
   final int age;
   final double? score;
   final Uint8List? avatar;
-  final int joined;
+  final DateTime joined;
   final List<String> tags;
   final Address? address;
 }
@@ -293,7 +293,7 @@ copy(realm.objects('User'), 'users', (user) => ({
   age: user.age,
   score: user.score,
   avatar: user.avatar === null ? null : new Uint8Array(user.avatar),
-  joined: user.joined.getTime(),
+  joined: user.joined,
   tags: [...user.tags],
   address: user.address === null ? null : { city: user.address.city, zip: user.address.zip }
 }));
@@ -396,7 +396,7 @@ Future<void> moveFromRealm(String from, String path) async {
       age: user.age,
       score: user.score,
       avatar: user.avatar,
-      joined: user.joined.millisecondsSinceEpoch,
+      joined: user.joined,
       tags: List.of(user.tags),
       address: user.address == null
           ? null

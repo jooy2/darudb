@@ -202,6 +202,7 @@ NOT ANY posts.author
 | 불리언   | `true`, `false`                        | `active == true`                  |
 | null     | `null`                                 | `email == null`                   |
 | 매개변수 | `$`와 매개변수 번호                    | `$0`, `$1`                        |
+| 날짜     | `DATE`와 큰따옴표 안의 RFC 3339 문자열 | `DATE "2026-10-30T12:00:00Z"`     |
 | 바이트   | 리터럴이 없습니다. 매개변수로 넘깁니다 | `hash == $0`                      |
 
 문자열에서 쓸 수 있는 이스케이프는 다섯 가지이며, 그 밖의 글자 앞에 백슬래시를 쓰면 `INVALID_QUERY`로 실패합니다.
@@ -215,6 +216,8 @@ NOT ANY posts.author
 | `\u{...}`  | 그 16진수 코드의 글자. `\u{AC00}`은 `가`입니다 |
 
 정수는 64비트 안에 들어가야 합니다. `true`와 `false`, `null`은 다른 키워드처럼 대소문자를 가리지 않습니다.
+
+날짜는 초까지 쓴 날짜와 시각에, 소수점 아래 여섯 자리까지의 초와 `Z` 또는 UTC와의 차이를 붙여 씁니다. `DATE "2026-10-30T21:00:00.25+09:00"`처럼 씁니다. `DATE "2026-10-30"`처럼 날짜만 쓰면 그날 UTC 자정입니다. 연도는 0000년부터 9999년까지이고, 날짜는 하루를 늘 86,400초로 세므로 윤초는 거부합니다. 날짜는 날짜 필드와만 비교하고 정수와는 비교하지 않습니다. `DATE`는 문자열 앞에서만 그렇게 읽으므로 `date`라는 필드도 쓸 수 있습니다.
 
 ## 매개변수
 
@@ -258,7 +261,8 @@ condition   = path compare value [ case ]
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
-value       = int | float | string | "true" | "false" | "null" | "$" digits
+value       = int | float | string | "true" | "false" | "null" | date | "$" digits
+date        = "DATE" string
 ```
 
 ## 예제

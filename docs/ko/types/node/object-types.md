@@ -123,6 +123,7 @@ type EmbeddedInputOf<F extends Fields> = Simplify<
 | `t.float()`          | `number`                | `number`                               |
 | `t.string()`         | `string`                | `string`                               |
 | `t.bytes()`          | `Uint8Array`            | `Buffer`를 포함한 `Uint8Array`         |
+| `t.date()`           | 밀리초 단위의 `Date`    | 시각을 담은 `Date`                     |
 | `t.link(collection)` | `Key`                   | 대상 컬렉션의 키 타입에 맞는 `Key`     |
 | `t.list(element)`    | 원소 값의 배열          | null이 없는 원소 값의 배열             |
 | `t.object(fields)`   | `fields`의 `EmbeddedOf` | `fields`의 `EmbeddedInputOf`           |

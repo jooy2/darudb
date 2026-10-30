@@ -52,6 +52,7 @@ The query builder of a `MapCollection`, which `find`, `findOne`, `count` and `up
 | `intField(name)`        | `IntField`                                                |
 | `floatField(name)`      | `FloatField`                                              |
 | `stringField(name)`     | `StringField`                                             |
+| `dateField(name)`       | `DateField`                                               |
 | `bytesField(name)`      | `BytesField`                                              |
 | `linkField(name)`       | `LinkField`                                               |
 | `listField<E>(name)`    | `ListField<E>`                                            |

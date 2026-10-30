@@ -25,8 +25,8 @@ pub enum Aggregate {
 | 변형 | 읽는 타입 | 결과 |
 | --- | --- | --- |
 | `Sum` | `int`, `float` | 정확한 합계. 정수 필드는 정수, 실수 필드는 실수이며 값이 없으면 0 |
-| `Min` | `int`, `float`, `string`, `bytes` | 정렬과 같은 순서의 최솟값, 없으면 null |
-| `Max` | `int`, `float`, `string`, `bytes` | 최댓값, 없으면 null |
+| `Min` | `int`, `float`, `string`, `bytes`, `date` | 정렬과 같은 순서의 최솟값, 없으면 null |
+| `Max` | `int`, `float`, `string`, `bytes`, `date` | 최댓값, 없으면 null |
 | `Avg` | `int`, `float` | 정확한 합계를 개수로 나눠 한 번 반올림한 실수 평균, 없으면 null |
 
 ## 메서드

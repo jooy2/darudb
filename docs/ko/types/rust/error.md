@@ -44,6 +44,7 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 | [`NotFound`](#notfound) | `NOT_FOUND` | 경로에 데이터베이스가 없고, 새로 만들지 못하게 했습니다 |
 | [`NotADatabase`](#notadatabase) | `NOT_A_DATABASE` | DaruDB 데이터베이스가 아닌 파일입니다 |
 | [`UnsupportedFormatVersion`](#unsupportedformatversion) | `UNSUPPORTED_FORMAT_VERSION` | 이 빌드가 읽지 못하는 형식 버전의 파일입니다 |
+| [`UnsupportedObjectFormat`](#unsupportedobjectformat) | `UNSUPPORTED_FORMAT_VERSION` | 저장된 스키마가 이 빌드가 읽지 못하는 객체 형식입니다 |
 | [`Corrupted`](#corrupted) | `CORRUPTED` | 파일 일부가 손상됐습니다 |
 | [`InvalidArgument`](#invalidargument) | `INVALID_ARGUMENT` | 할 수 없는 일을 요청했습니다 |
 | [`Closed`](#closed) | `CLOSED` | 더는 쓸 수 없는 핸들입니다 |
@@ -89,7 +90,15 @@ NotADatabase { path: PathBuf }
 UnsupportedFormatVersion { path: PathBuf, found: u32, supported: u32 }
 ```
 
-`UNSUPPORTED_FORMAT_VERSION`. DaruDB 데이터베이스지만 이 빌드가 읽지 못하는 형식입니다. `found`는 파일에 기록된 버전이고 `supported`는 이 빌드가 읽는 가장 새 버전입니다. 두 값은 파일 형식 버전인 [`FORMAT_VERSION`](./constants.md#format-version)이거나, 파일에 저장된 스키마의 객체 형식 버전입니다.
+`UNSUPPORTED_FORMAT_VERSION`. DaruDB 데이터베이스지만 이 빌드가 읽지 못하는 파일 형식입니다. `found`는 파일에 기록된 버전이고 `supported`는 이 빌드가 읽는 가장 새 버전인 [`FORMAT_VERSION`](./constants.md#format-version)입니다.
+
+### UnsupportedObjectFormat
+
+```rust
+UnsupportedObjectFormat { path: PathBuf, found: u32, supported: u32 }
+```
+
+코드는 읽지 못하는 파일 형식과 같은 `UNSUPPORTED_FORMAT_VERSION`입니다. 파일에 저장된 스키마가 이 빌드가 읽지 못하는 객체 형식입니다. 이 빌드에 없는 타입이나 선언 때문에 더 새 빌드가 저장한 스키마입니다. `found`는 저장된 스키마에 기록된 객체 형식이고 `supported`는 이 빌드가 읽는 가장 새 형식입니다.
 
 ### Corrupted
 

@@ -28,6 +28,7 @@ The crate implements it for these types, and [`#[derive(Embedded)]`](../../api/r
 | `f64`                    | `Type::Float`                                |
 | `String`                 | `Type::String`                               |
 | `Vec<u8>`                | `Type::Bytes`                                |
+| `SystemTime`             | `Type::Date`                                 |
 | `Vec<T>`, `T` an element | `Type::list(T::kind())`                      |
 | [`Link<T>`](./link.md)   | `Type::link(T::COLLECTION)`                  |
 | `Option<T>`              | `T`'s type, optional                         |

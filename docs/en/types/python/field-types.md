@@ -17,6 +17,7 @@ A field's annotation decides what the field holds in the file, which Python valu
 | `float` | A float, 64 bits | `float`, or an `int` | `float` |
 | `str` | A string, as UTF-8 | `str` | `str` |
 | `bytes` | Bytes | `bytes`, `bytearray` or `memoryview` | `bytes` |
+| `datetime` | A date, to the microsecond | An aware `datetime`, in any time zone | An aware `datetime` in UTC |
 | `list[E]` of those | A list | Any iterable of `E` but a `str` or bytes | `list` |
 | `int`, `str` or `bytes` with `field(link=...)` | A link | The linked object's key | The key |
 | `list[int]`, `list[str]` or `list[bytes]` with `field(link=...)` | A list of links | Any iterable of keys | `list` of keys |
@@ -63,6 +64,7 @@ A default is a constant the file can store: a `bool`, an `int`, a `float`, a `st
 - **Ints** are 64-bit. A `bool` is refused in an `int` field and in a `float` field, although Python counts it as an `int`.
 - **Floats** take an `int` too, since Python code writes a whole number as an `int` as often as not, and it reads back as a `float`.
 - **Strings** are stored as UTF-8 and compared by their bytes.
+- **A `datetime`** names an instant only with a time zone, so a naive one fails with `INVALID_ARGUMENT`. It is converted with whole `timedelta` arithmetic from 1970 in UTC, never through a float timestamp, and comes back in UTC, the same instant whatever zone it was written in. A date beyond the years a `datetime` holds, 1 to 9999, fails with `INVALID_ARGUMENT` when it is read.
 - **Bytes** come in any of the three types Python keeps them in, and come back as `bytes` of their own.
 - **Lists** take any iterable but a `str` and bytes, which would be read as a list of characters or numbers, and come back as a new `list`. A list holds no `None`.
 - **Embedded objects** are instances of their class, or of a subclass of it, and come back as instances of the class, built without its `__init__`. A `dict` is refused.

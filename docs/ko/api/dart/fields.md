@@ -23,6 +23,7 @@ abstract base class Field {
 | `double` | `FloatField` |
 | `String` | `StringField` |
 | `Uint8List` | `BytesField` |
+| `DateTime` | `DateField` |
 | `List<String>` | `StringListField` |
 | 그 밖의 `List` | `ListField<E>`. `E`는 원소 타입이고, 링크 목록이면 `Object`입니다 |
 | `Link<User>` | `User`의 필드가 있는 `LinkField`인 `UserLink` |
@@ -83,7 +84,7 @@ Condition isNotNull();
 
 ## 값 필드의 메서드
 
-`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField`는 필드 타입 `V`의 값을 받습니다.
+`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`는 필드 타입 `V`의 값을 받습니다.
 
 ### equals
 
@@ -119,7 +120,7 @@ Change set(V? value);
 
 ## 순서가 있는 필드의 메서드
 
-`IntField`, `FloatField`, `StringField`, `BytesField`에는 순서가 있습니다. 숫자는 값으로, 문자열과 바이트는 바이트 순서로 비교합니다.
+`IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`에는 순서가 있습니다. 숫자는 값으로, 문자열과 바이트는 바이트 순서로, 날짜는 `DateTime`의 시간대와 상관없이 시간 순서로 비교합니다.
 
 ### lessThan
 

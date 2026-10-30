@@ -45,9 +45,12 @@ A field of a schema holds one of these. Each package declares it in its own way 
 | A 64-bit float | `Type::Float`, `f64` | `t.float()`, `number` | `double` | `float` |
 | Text | `Type::String`, `String` | `t.string()`, `string` | `String` | `str` |
 | Bytes | `Type::Bytes`, `Vec<u8>` | `t.bytes()`, `Uint8Array` | `Uint8List` | `bytes` |
+| An instant, to the microsecond | `Type::Date`, `SystemTime` | `t.date()`, `Date` | `DateTime` | `datetime`, aware |
 | A list | `Type::list(...)`, `Vec<T>` | `t.list(...)`, an array | `List<E>` | `list[E]` |
 | A link to another collection | `Type::link(...)`, `Link<T>` | `t.link(...)`, the key | `Link<T>` | the key type, with `field(link=...)` |
 | An embedded object | `Type::object(...)`, a struct with `#[derive(Embedded)]` | `t.object({...})`, an object | an `@Embedded()` class | an `@darudb.embedded` class |
 | Nothing, when optional | `optional(...)`, `Option<T>` | `.optional()`, `null` | a nullable type, `null` | `X \| None`, `None` |
 
 In Rust, the first of each pair declares the field in a [`Schema`](../api/rust/schema.md) and the second is its type in a struct that [`#[derive(Object)]`](../api/rust/derive.md) makes a collection. In Node.js, the first is the [`t`](../api/node/t.md) builder and the second what an object holds. Dart and Python declare a field by its type in a class. The field types page of each language has the details.
+
+A date is an instant with no time zone: each language gives one in UTC, and a time is kept to the microsecond, rounded down. The first date a schema declares moves the file to object format 2, which releases before it do not open; [`upgrade_format`](../engine/bindings.md#object-formats) set to false refuses that.

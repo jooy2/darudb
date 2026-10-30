@@ -17,6 +17,7 @@ pageClass: reference-page
 | `float` | 64비트 부동소수점 수 | `float`나 `int` | `float` |
 | `str` | UTF-8 문자열 | `str` | `str` |
 | `bytes` | 바이트 | `bytes`, `bytearray`, `memoryview` | `bytes` |
+| `datetime` | 마이크로초 단위의 날짜 | 시간대가 있는 `datetime`. 시간대는 무엇이든 됩니다 | UTC의 `datetime` |
 | 위 타입의 `list[E]` | 목록 | `str`과 바이트를 뺀, `E`를 담은 반복할 수 있는 값 | `list` |
 | `field(link=...)`를 붙인 `int`, `str`, `bytes` | 링크 | 가리키는 객체의 키 | 키 |
 | `field(link=...)`를 붙인 `list[int]`, `list[str]`, `list[bytes]` | 링크의 목록 | 키를 담은 반복할 수 있는 값 | 키의 `list` |
@@ -63,6 +64,7 @@ class User:
 - **정수**는 64비트입니다. Python은 `bool`을 `int`로 치지만, `int` 필드와 `float` 필드는 `bool`을 거부합니다.
 - **부동소수점 수** 필드는 `int`도 받습니다. Python 코드는 정수를 `int`로 쓰는 일이 흔하기 때문이며, 다시 읽으면 `float`입니다.
 - **문자열**은 UTF-8로 저장하고 바이트로 비교합니다.
+- **`datetime`은** 시간대가 있어야 시각을 가리키므로, 시간대가 없는 값은 `INVALID_ARGUMENT`로 실패합니다. 1970년 UTC에서부터 정수 `timedelta` 계산으로 바꾸며 부동소수점 타임스탬프는 쓰지 않습니다. 어느 시간대로 썼든 같은 시각을 UTC로 돌려줍니다. `datetime`이 담는 1년부터 9999년 밖의 날짜는 읽을 때 `INVALID_ARGUMENT`로 실패합니다.
 - **바이트**는 Python이 바이트를 담는 세 타입 중 어느 것으로든 넘길 수 있고, 따로 만든 `bytes`로 돌아옵니다.
 - **목록**은 `str`과 바이트를 뺀 반복할 수 있는 값이면 받습니다. `str`과 바이트를 받으면 글자나 숫자의 목록으로 읽히기 때문입니다. 목록은 새 `list`로 돌아오고, 목록에는 `None`이 들어가지 않습니다.
 - **내장 객체**는 그 클래스나 하위 클래스의 인스턴스로 넘기고, `__init__` 없이 만든 그 클래스의 인스턴스로 돌아옵니다. `dict`는 거부합니다.

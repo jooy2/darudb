@@ -202,6 +202,7 @@ A path names a field, or goes through embedded objects and links with `.`.
 | Boolean   | `true`, `false`                                 | `active == true`                  |
 | Null      | `null`                                          | `email == null`                   |
 | Parameter | `$` and the parameter's number                  | `$0`, `$1`                        |
+| Date      | `DATE` and RFC 3339 text in double quotes       | `DATE "2026-10-30T12:00:00Z"`     |
 | Bytes     | No literal: pass bytes as a parameter           | `hash == $0`                      |
 
 A string escapes five things, and a backslash before anything else fails with `INVALID_QUERY`:
@@ -215,6 +216,8 @@ A string escapes five things, and a backslash before anything else fails with `I
 | `\u{...}` | The character with that hexadecimal code: `\u{AC00}` |
 
 An integer has to fit in 64 bits. `true`, `false` and `null` are case-insensitive, like every keyword.
+
+A date is a date and a time with seconds, up to six digits of a second, and `Z` or an offset from UTC: `DATE "2026-10-30T21:00:00.25+09:00"`. A date alone, `DATE "2026-10-30"`, is its midnight in UTC. Years run from 0000 to 9999, and a leap second is refused, since a date counts every day as 86,400 seconds. A date compares only with a date field, never an int. `DATE` is read so only before a string, so a field may be called `date`.
 
 ## Parameters
 
@@ -258,7 +261,8 @@ condition   = path compare value [ case ]
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
-value       = int | float | string | "true" | "false" | "null" | "$" digits
+value       = int | float | string | "true" | "false" | "null" | date | "$" digits
+date        = "DATE" string
 ```
 
 ## Examples

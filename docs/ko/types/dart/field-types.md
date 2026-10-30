@@ -17,6 +17,7 @@ pageClass: reference-page
 | `double` | 64비트 `FloatKind` | `FloatField` |
 | `String` | `StringKind` | `StringField` |
 | `Uint8List` | `BytesKind` | `BytesField` |
+| `DateTime` | `DateKind` | `DateField` |
 | 위 타입의 `List<E>` | `ListKind` | `ListField<E>`. `List<String>`은 `StringListField` |
 | `Link<User>` | `LinkKind('users')` | `UserLink` |
 | `List<Link<User>>` | `ListKind(LinkKind('users'))` | `ListField<Object>` |

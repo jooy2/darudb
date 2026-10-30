@@ -123,6 +123,7 @@ The fields of an embedded object as it is written, which is `InsertOf` without t
 | `t.float()` | `number` | `number` |
 | `t.string()` | `string` | `string` |
 | `t.bytes()` | `Uint8Array` | `Uint8Array`, a `Buffer` included |
+| `t.date()` | `Date`, to the millisecond | A `Date` that holds a time |
 | `t.link(collection)` | `Key` | `Key` of the linked collection's key type |
 | `t.list(element)` | An array of the element's values | An array of the element's values, without nulls |
 | `t.object(fields)` | `EmbeddedOf` of `fields` | `EmbeddedInputOf` of `fields` |

@@ -12,6 +12,7 @@ pageClass: reference-page
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Type
 ```
 
@@ -54,6 +55,7 @@ fn schema() -> Schema {
 | `Link(String)`     | The primary key of an object in the named collection |
 | `List(Box<Type>)`  | A list of values of a scalar type or of links        |
 | `Object(Embedded)` | An embedded object with fields of its own            |
+| `Date`             | An instant, in microseconds since 1970 UTC           |
 
 ## Associated functions
 

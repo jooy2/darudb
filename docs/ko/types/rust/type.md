@@ -12,6 +12,7 @@ pageClass: reference-page
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Type
 ```
 
@@ -54,6 +55,7 @@ fn schema() -> Schema {
 | `Link(String)`     | 지정한 컬렉션에 있는 객체의 기본 키   |
 | `List(Box<Type>)`  | 스칼라 타입이나 링크의 값으로 된 목록 |
 | `Object(Embedded)` | 자기 필드를 가진 내장 객체            |
+| `Date`             | 1970년 UTC부터의 마이크로초로 센 시각 |
 
 ## 연관 함수
 

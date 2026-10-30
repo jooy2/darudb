@@ -41,7 +41,7 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, a link to another collection's object (`Type::link`), a list of any of those (`Type::list`), and an embedded object with fields of its own (`Type::object(Embedded::new().field(...))`).
+The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, `Date` (an instant, to the microsecond), a link to another collection's object (`Type::link`), a list of any of those (`Type::list`), and an embedded object with fields of its own (`Type::object(Embedded::new().field(...))`).
 
 - **Required and optional fields.** `field` is required, and writing an object without it fails. `optional` may be null, which is what it holds when it is left out. `with_default` is required, and an object written without it gets the default.
 - **Primary keys.** `primary_key` names a field of type `Int`, `String` or `Bytes`.
@@ -74,7 +74,7 @@ const app = schema(1, {
 const db = Database.open('app.darudb', { schema: app });
 ```
 
-The types are `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t.bytes()`, `t.link(collection)`, `t.list(type)` and `t.object(fields)`.
+The types are `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t.bytes()`, `t.date()`, `t.link(collection)`, `t.list(type)` and `t.object(fields)`.
 
 - **Required and optional fields.** A field is required unless it says otherwise, and writing an object without it fails. `optional()` lets it be null, which is what it holds when it is left out. `default(value)` keeps it required and fills it in when it is left out.
 - **Primary keys.** `primaryKey()` makes an `int`, `bigint`, `string` or `bytes` field the key.
@@ -139,7 +139,7 @@ final db = Database.open(
 );
 ```
 
-A field's Dart type is its type: `bool`, `int` (64-bit), `double`, `String`, `Uint8List` for bytes, a `List` of those or of links, a `Link<T>` to an object of another collection, and a class annotated `@Embedded()` for an embedded object.
+A field's Dart type is its type: `bool`, `int` (64-bit), `double`, `String`, `Uint8List` for bytes, `DateTime` for an instant, a `List` of those or of links, a `Link<T>` to an object of another collection, and a class annotated `@Embedded()` for an embedded object.
 
 - **Required and optional fields.** A field whose type is not nullable is required, and writing an object without it fails. A nullable one is optional, and null when it is left out. A constructor parameter's default is the field's default: the field stays required and holds the default when a record leaves it out.
 - **Primary keys.** `@PrimaryKey()` makes an `int`, `String` or `Uint8List` field the key. Without one, the class has a field `final int? id`, which is `null` until the object is inserted.
@@ -183,14 +183,14 @@ class User:
 db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [Team, User]))
 ```
 
-A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes`, a `list` of those or of links, and a class decorated with `@darudb.embedded` for an embedded object. The classes are read when the `Schema` is made, so an annotation may name a class declared after it.
+A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes`, `datetime` for an instant, a `list` of those or of links, and a class decorated with `@darudb.embedded` for an embedded object. The classes are read when the `Schema` is made, so an annotation may name a class declared after it.
 
 - **Required and optional fields.** A field without a default whose type is not `X | None` is required, and writing an object without it fails. An `X | None` field is optional, `None` when it is left out, and takes no default but `None`. A default, given as `= value`, `field(default=...)` or `field(default_factory=...)`, keeps the field required and fills it in when it is left out, in an object you make and in one the file holds from before the field existed.
 - **Primary keys.** `field(primary_key=True)` makes an `int`, `str` or `bytes` field the key, which is required and has no default. Without one, the class has the field `id: int | None = None`, which is `None` until the object is inserted.
 - **Links.** `field(link=Team)` makes an `int`, `str` or `bytes` field, or a list of them, hold primary keys of another collection, named by its class or by its name.
 - **Indexes.** `field(index=True)` keeps an index on a field, and `field(unique=True)` an index that also refuses two objects with the same value. `field(name="...")` gives a field another name in the file than in Python. An embedded object's fields have no index.
 - **Objects are values.** The class is frozen, and a changed object is a copy, made with `dataclasses.replace`, written back with `put`. An object read from the file is made without calling the class's `__init__`, so a `__post_init__` does not run for it.
-- **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A list holds no `None`, and a list of lists or of embedded objects is refused.
+- **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A `datetime` has to be aware, and comes out in UTC. A list holds no `None`, and a list of lists or of embedded objects is refused.
 
 :::
 

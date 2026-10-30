@@ -45,9 +45,12 @@ TypeScript용 타입은 패키지 최상위에서 `import type { OpenOptions } f
 | 64비트 실수 | `Type::Float`, `f64` | `t.float()`, `number` | `double` | `float` |
 | 문자열 | `Type::String`, `String` | `t.string()`, `string` | `String` | `str` |
 | 바이트 | `Type::Bytes`, `Vec<u8>` | `t.bytes()`, `Uint8Array` | `Uint8List` | `bytes` |
+| 마이크로초 단위의 시각 | `Type::Date`, `SystemTime` | `t.date()`, `Date` | `DateTime` | 시간대가 있는 `datetime` |
 | 목록 | `Type::list(...)`, `Vec<T>` | `t.list(...)`, 배열 | `List<E>` | `list[E]` |
 | 다른 컬렉션으로 가는 링크 | `Type::link(...)`, `Link<T>` | `t.link(...)`, 키 | `Link<T>` | 키 타입과 `field(link=...)` |
 | 내장 객체 | `Type::object(...)`, `#[derive(Embedded)]`를 붙인 구조체 | `t.object({...})`, 객체 | `@Embedded()`를 붙인 클래스 | `@darudb.embedded`를 붙인 클래스 |
 | 선택 필드의 빈 값 | `optional(...)`, `Option<T>` | `.optional()`, `null` | 널 허용 타입, `null` | `X \| None`, `None` |
 
 Rust에서 짝의 앞쪽은 [`Schema`](../api/rust/schema.md)에서 필드를 선언하는 방법이고, 뒤쪽은 [`#[derive(Object)]`](../api/rust/derive.md)로 컬렉션으로 만든 구조체에서 쓰는 타입입니다. Node.js에서 앞쪽은 [`t`](../api/node/t.md) 빌더이고, 뒤쪽은 객체에 담기는 값입니다. Dart와 Python은 클래스에 적은 타입으로 필드를 선언합니다. 자세한 내용은 언어별 필드 타입 페이지에 있습니다.
+
+날짜는 시간대가 없는 시각입니다. 언어마다 UTC로 돌려주며, 시각은 마이크로초까지 내림해서 담습니다. 스키마가 처음으로 날짜를 선언하면 파일이 객체 형식 2가 되고, 그 전 릴리스는 이 파일을 열지 못합니다. [`upgrade_format`](../engine/bindings.md#객체-형식)을 끄면 이를 거부합니다.

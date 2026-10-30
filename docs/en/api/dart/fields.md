@@ -23,6 +23,7 @@ The query builder `darudb_generator` writes has a getter for each field of the c
 | `double` | `FloatField` |
 | `String` | `StringField` |
 | `Uint8List` | `BytesField` |
+| `DateTime` | `DateField` |
 | `List<String>` | `StringListField` |
 | Any other `List` | `ListField<E>`, where `E` is the element type, and `Object` for a list of links |
 | `Link<User>` | `UserLink`, a `LinkField` with `User`'s fields |
@@ -83,7 +84,7 @@ Holds when the field is not null.
 
 ## Methods of value fields
 
-`BoolField`, `IntField`, `FloatField`, `StringField` and `BytesField` take values of their field's type, `V`.
+`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` take values of their field's type, `V`.
 
 ### equals
 
@@ -119,7 +120,7 @@ The change that sets the field to `value`. Null makes an optional field null, an
 
 ## Methods of ordered fields
 
-`IntField`, `FloatField`, `StringField` and `BytesField` have an order: numbers by value, strings and bytes by their bytes.
+`IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` have an order: numbers by value, strings and bytes by their bytes, and dates in time order, whatever zone a `DateTime` is in.
 
 ### lessThan
 

@@ -11,23 +11,25 @@ pageClass: reference-page
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Value
 ```
 
-An [`Object`](./object.md) holds a `Value` for each field. The calls that take a key, such as [`get`](../../api/rust/collection-reader.md) and [`delete`](../../api/rust/collection-writer.md), take `impl Into<Value>`, so a key can be passed as `42` or `"alice"`, and `insert` returns the key it stored as a `Value`. [`Filter`](../../api/rust/filter.md) takes its values the same way, and [`Query::parse`](../../api/rust/query.md) takes its parameters as a `&[Value]`. A value carries no field type of its own: the schema says whether an `Int` is a number, a link or a date. There is no date type, and a date or a time is an `Int` in a unit the application chooses.
+An [`Object`](./object.md) holds a `Value` for each field. The calls that take a key, such as [`get`](../../api/rust/collection-reader.md) and [`delete`](../../api/rust/collection-writer.md), take `impl Into<Value>`, so a key can be passed as `42` or `"alice"`, and `insert` returns the key it stored as a `Value`. [`Filter`](../../api/rust/filter.md) takes its values the same way, and [`Query::parse`](../../api/rust/query.md) takes its parameters as a `&[Value]`. A value carries no field type of its own: the schema says whether an `Int` is a number or a link. A date is a `Date`, which [`TryFrom<SystemTime>`](#tryfrom-systemtime) makes from a time. New variants may come in a release, so a `match` on a `Value` needs a wildcard arm.
 
 ## Variants
 
-| Variant            | Holds                                |
-| ------------------ | ------------------------------------ |
-| `Null`             | No value: an optional field left out |
-| `Bool(bool)`       | `false` or `true`                    |
-| `Int(i64)`         | A signed 64-bit integer              |
-| `Float(f64)`       | A 64-bit floating-point number       |
-| `String(String)`   | UTF-8 text                           |
-| `Bytes(Vec<u8>)`   | Any bytes                            |
-| `List(Vec<Value>)` | A list of values of one type         |
-| `Object(Object)`   | An embedded object                   |
+| Variant            | Holds                                                                      |
+| ------------------ | -------------------------------------------------------------------------- |
+| `Null`             | No value: an optional field left out                                       |
+| `Bool(bool)`       | `false` or `true`                                                          |
+| `Int(i64)`         | A signed 64-bit integer                                                    |
+| `Float(f64)`       | A 64-bit floating-point number                                             |
+| `String(String)`   | UTF-8 text                                                                 |
+| `Bytes(Vec<u8>)`   | Any bytes                                                                  |
+| `List(Vec<Value>)` | A list of values of one type                                               |
+| `Object(Object)`   | An embedded object                                                         |
+| `Date(i64)`        | An instant: microseconds since 1970-01-01T00:00:00 UTC, negative before it |
 
 ## Field types
 
@@ -40,6 +42,7 @@ Each [`Type`](./type.md) a field can have takes one variant.
 | `Type::Float` | `Float` |
 | `Type::String` | `String` |
 | `Type::Bytes` | `Bytes` |
+| `Type::Date` | `Date` |
 | `Type::Link` | The linked object's primary key: `Int`, `String` or `Bytes`, as that collection's key is |
 | `Type::List` | `List`, whose elements each take the element type's variant |
 | `Type::Object` | `Object`, whose fields follow these same rules |
@@ -57,16 +60,18 @@ A query is the one place where an `Int` stands for a `Float`: compared with a `F
 
 ## Methods
 
-| Method                    | Returns            | For a value that is |
-| ------------------------- | ------------------ | ------------------- |
-| [`is_null`](#is-null)     | `bool`             | `Null`              |
-| [`as_bool`](#as-bool)     | `Option<bool>`     | `Bool`              |
-| [`as_int`](#as-int)       | `Option<i64>`      | `Int`               |
-| [`as_float`](#as-float)   | `Option<f64>`      | `Float`             |
-| [`as_str`](#as-str)       | `Option<&str>`     | `String`            |
-| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`    | `Bytes`             |
-| [`as_list`](#as-list)     | `Option<&[Value]>` | `List`              |
-| [`as_object`](#as-object) | `Option<&Object>`  | `Object`            |
+| Method                    | Returns              | For a value that is |
+| ------------------------- | -------------------- | ------------------- |
+| [`is_null`](#is-null)     | `bool`               | `Null`              |
+| [`as_bool`](#as-bool)     | `Option<bool>`       | `Bool`              |
+| [`as_int`](#as-int)       | `Option<i64>`        | `Int`               |
+| [`as_float`](#as-float)   | `Option<f64>`        | `Float`             |
+| [`as_str`](#as-str)       | `Option<&str>`       | `String`            |
+| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`      | `Bytes`             |
+| [`as_date`](#as-date)     | `Option<i64>`        | `Date`              |
+| [`as_time`](#as-time)     | `Option<SystemTime>` | `Date`              |
+| [`as_list`](#as-list)     | `Option<&[Value]>`   | `List`              |
+| [`as_object`](#as-object) | `Option<&Object>`    | `Object`            |
 
 None of these converts: `as_float` on an `Int` is `None`.
 
@@ -133,6 +138,30 @@ pub fn as_object(&self) -> Option<&Object>
 ```
 
 The embedded object, if the value is an `Object`.
+
+### as_date
+
+```rust
+pub fn as_date(&self) -> Option<i64>
+```
+
+The microseconds since 1970-01-01T00:00:00 UTC, if the value is a `Date`.
+
+### as_time
+
+```rust
+pub fn as_time(&self) -> Option<SystemTime>
+```
+
+The date as a `SystemTime`, if the value is a `Date` that the platform's `SystemTime` holds.
+
+## `TryFrom<SystemTime>`
+
+```rust
+impl TryFrom<SystemTime> for Value
+```
+
+A date of the time, rounded down to the microsecond, so a time before 1970 with a part of a microsecond goes to the microsecond before it. A time more than about 292,000 years from 1970 fails with `INVALID_ARGUMENT`: `Value::try_from(SystemTime::now())?`.
 
 ## Conversions
 

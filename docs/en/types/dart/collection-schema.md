@@ -126,6 +126,7 @@ What values a field holds, one class for each kind:
 | `FloatKind()`          | A 64-bit floating-point number                                    |
 | `StringKind()`         | UTF-8 text                                                        |
 | `BytesKind()`          | Any bytes, as a `Uint8List`                                       |
+| `DateKind()`           | An instant, to the microsecond, as a `DateTime` in UTC            |
 | `LinkKind(collection)` | The primary key of an object of the collection named `collection` |
 | `ListKind(element)`    | A list of values of a scalar kind or of links                     |
 | `ObjectKind(embedded)` | An embedded object, whose fields an `EmbeddedSchema` declares     |
@@ -134,7 +135,7 @@ What values a field holds, one class for each kind:
 
 The functions the generator writes, `_$writeUser` and `_$readUser` above, write and read an object a field at a time through these two classes.
 
-- **`FieldSink`** takes each field's value by slot: `boolean`, `int64`, `float`, `string`, `bytes`, `link`, `list` and `object`, each of which takes null for a field left out.
+- **`FieldSink`** takes each field's value by slot: `boolean`, `int64`, `float`, `string`, `bytes`, `date`, `link`, `list` and `object`, each of which takes null for a field left out.
 - **`FieldSource`** walks a record field by field. `next` moves to the next field and `slot` says which it is; `int64`, `string` and the others read its value, and the `OrNull` form of each reads one that may be null. A field the record leaves out comes with its default, or null, so a record written before a field existed still reads. A record that does not fit its layout fails with `CORRUPTED`.
 
 Neither is meant for code other than the generated functions and hand-written ones in their form.

@@ -11,23 +11,25 @@ pageClass: reference-page
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Value
 ```
 
-[`Object`](./object.md)는 필드마다 `Value`를 하나씩 담습니다. [`get`](../../api/rust/collection-reader.md)이나 [`delete`](../../api/rust/collection-writer.md)처럼 키를 받는 메서드는 `impl Into<Value>`를 받으므로 키를 `42`나 `"alice"`처럼 넘기면 되고, `insert`는 저장한 키를 `Value`로 돌려줍니다. [`Filter`](../../api/rust/filter.md)도 값을 같은 방식으로 받고, [`Query::parse`](../../api/rust/query.md)는 매개변수를 `&[Value]`로 받습니다. 값에는 필드 타입이 따로 붙지 않아서, `Int`가 숫자인지 링크인지 날짜인지는 스키마가 정합니다. 날짜 타입은 없으며, 날짜와 시각은 애플리케이션이 정한 단위의 `Int`로 담습니다.
+[`Object`](./object.md)는 필드마다 `Value`를 하나씩 담습니다. [`get`](../../api/rust/collection-reader.md)이나 [`delete`](../../api/rust/collection-writer.md)처럼 키를 받는 메서드는 `impl Into<Value>`를 받으므로 키를 `42`나 `"alice"`처럼 넘기면 되고, `insert`는 저장한 키를 `Value`로 돌려줍니다. [`Filter`](../../api/rust/filter.md)도 값을 같은 방식으로 받고, [`Query::parse`](../../api/rust/query.md)는 매개변수를 `&[Value]`로 받습니다. 값에는 필드 타입이 따로 붙지 않아서, `Int`가 숫자인지 링크인지는 스키마가 정합니다. 날짜는 `Date`이며, [`TryFrom<SystemTime>`](#tryfrom-systemtime)으로 시각에서 만듭니다. 릴리스마다 배리언트가 늘 수 있으므로 `Value`에 쓰는 `match`에는 와일드카드 갈래가 있어야 합니다.
 
 ## 배리언트
 
-| 배리언트           | 담는 값                  |
-| ------------------ | ------------------------ |
-| `Null`             | 값 없음. 빠진 선택 필드  |
-| `Bool(bool)`       | `false` 또는 `true`      |
-| `Int(i64)`         | 부호 있는 64비트 정수    |
-| `Float(f64)`       | 64비트 부동소수점 수     |
-| `String(String)`   | UTF-8 텍스트             |
-| `Bytes(Vec<u8>)`   | 임의의 바이트            |
-| `List(Vec<Value>)` | 한 타입의 값으로 된 목록 |
-| `Object(Object)`   | 내장 객체                |
+| 배리언트           | 담는 값                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| `Null`             | 값 없음. 빠진 선택 필드                                          |
+| `Bool(bool)`       | `false` 또는 `true`                                              |
+| `Int(i64)`         | 부호 있는 64비트 정수                                            |
+| `Float(f64)`       | 64비트 부동소수점 수                                             |
+| `String(String)`   | UTF-8 텍스트                                                     |
+| `Bytes(Vec<u8>)`   | 임의의 바이트                                                    |
+| `List(Vec<Value>)` | 한 타입의 값으로 된 목록                                         |
+| `Object(Object)`   | 내장 객체                                                        |
+| `Date(i64)`        | 시각. 1970-01-01T00:00:00 UTC부터의 마이크로초이며, 그 전은 음수 |
 
 ## 필드 타입
 
@@ -40,6 +42,7 @@ pub enum Value
 | `Type::Float`  | `Float`                                                                         |
 | `Type::String` | `String`                                                                        |
 | `Type::Bytes`  | `Bytes`                                                                         |
+| `Type::Date`   | `Date`                                                                          |
 | `Type::Link`   | 가리키는 객체의 기본 키. 그 컬렉션의 키에 따라 `Int`, `String`, `Bytes` 중 하나 |
 | `Type::List`   | `List`. 원소마다 원소 타입의 배리언트                                           |
 | `Type::Object` | `Object`. 그 필드에도 같은 규칙이 적용됨                                        |
@@ -57,16 +60,18 @@ pub enum Value
 
 ## 메서드
 
-| 메서드                    | 반환               | 값이 이것일 때 |
-| ------------------------- | ------------------ | -------------- |
-| [`is_null`](#is-null)     | `bool`             | `Null`         |
-| [`as_bool`](#as-bool)     | `Option<bool>`     | `Bool`         |
-| [`as_int`](#as-int)       | `Option<i64>`      | `Int`          |
-| [`as_float`](#as-float)   | `Option<f64>`      | `Float`        |
-| [`as_str`](#as-str)       | `Option<&str>`     | `String`       |
-| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`    | `Bytes`        |
-| [`as_list`](#as-list)     | `Option<&[Value]>` | `List`         |
-| [`as_object`](#as-object) | `Option<&Object>`  | `Object`       |
+| 메서드                    | 반환                 | 값이 이것일 때 |
+| ------------------------- | -------------------- | -------------- |
+| [`is_null`](#is-null)     | `bool`               | `Null`         |
+| [`as_bool`](#as-bool)     | `Option<bool>`       | `Bool`         |
+| [`as_int`](#as-int)       | `Option<i64>`        | `Int`          |
+| [`as_float`](#as-float)   | `Option<f64>`        | `Float`        |
+| [`as_str`](#as-str)       | `Option<&str>`       | `String`       |
+| [`as_bytes`](#as-bytes)   | `Option<&[u8]>`      | `Bytes`        |
+| [`as_date`](#as-date)     | `Option<i64>`        | `Date`         |
+| [`as_time`](#as-time)     | `Option<SystemTime>` | `Date`         |
+| [`as_list`](#as-list)     | `Option<&[Value]>`   | `List`         |
+| [`as_object`](#as-object) | `Option<&Object>`    | `Object`       |
 
 아래 메서드는 값을 변환하지 않습니다. `Int`에 `as_float`를 부르면 `None`이 나옵니다.
 
@@ -126,7 +131,31 @@ pub fn as_list(&self) -> Option<&[Value]>
 
 값이 `List`이면 그 원소를 돌려줍니다.
 
-### as_object
+#### as_date
+
+```rust
+pub fn as_date(&self) -> Option<i64>
+```
+
+값이 `Date`라면 1970-01-01T00:00:00 UTC부터의 마이크로초입니다.
+
+### as_time
+
+```rust
+pub fn as_time(&self) -> Option<SystemTime>
+```
+
+값이 플랫폼의 `SystemTime`이 담을 수 있는 `Date`라면 그 날짜를 `SystemTime`으로 돌려줍니다.
+
+## `TryFrom<SystemTime>`
+
+```rust
+impl TryFrom<SystemTime> for Value
+```
+
+시각을 마이크로초 단위로 내림한 날짜입니다. 그래서 1970년 이전의 시각에 마이크로초보다 작은 부분이 있으면 바로 앞 마이크로초가 됩니다. 1970년에서 약 29만 2천 년보다 먼 시각은 `INVALID_ARGUMENT`로 실패합니다. `Value::try_from(SystemTime::now())?`처럼 씁니다.
+
+## as_object
 
 ```rust
 pub fn as_object(&self) -> Option<&Object>
