@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- Aggregates: `sum`, `min`, `max` and `avg` on a collection, and their `async` twins, work out one value from a field of the objects a query finds, after its sort, offset and limit, with the query in any form `find` takes: `users.sum("age", F.age > 18)`, `users.max(F.address.city, "age > $0", 18)`. The field is an attribute's name, a path through embedded objects and links, or an `F` path, and goes to the name the file stores. Nulls are left out; a sum of no values is 0 and the rest are `None`. A sum is exact, an `int` for an int field and a `float` for a float field, and a mean is a `float`.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

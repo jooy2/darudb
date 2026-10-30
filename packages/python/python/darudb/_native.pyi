@@ -61,6 +61,14 @@ class NativeTransaction:
         parameters: tuple[object, ...],
     ) -> Any: ...
     def count(self, collection: str, query: NativeQuery, parameters: tuple[object, ...]) -> int: ...
+    def aggregate(
+        self,
+        collection: str,
+        query: NativeQuery,
+        parameters: tuple[object, ...],
+        function: int,
+        path: list[str],
+    ) -> Any: ...
     def insert(self, collection: str, layout: Layout | None, obj: object) -> Any: ...
     def insert_many(
         self, collection: str, layout: Layout | None, objects: Iterable[object]

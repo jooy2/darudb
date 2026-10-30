@@ -38,6 +38,11 @@ def test_open_read_and_write(path: Path) -> None:
             assert [user.name for user in await users.find(where(F.age >= 18))] == ["Alice", "Bob"]
             assert await users.find_one("age == $0", 18) == await users.get(2)
             assert await users.count() == 3
+            # Ages 32, 18 and the default 0.
+            assert await users.sum("age") == 50
+            assert await users.max(F.age, F.age < 30) == 18
+            assert await users.min("name", "age > $0", 10) == "Alice"
+            assert await users.avg("age", F.age > 99) is None
             assert repr(users) == "<AsyncReadCollection 'users'>"
 
         await db.close_async()

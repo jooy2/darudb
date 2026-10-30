@@ -178,6 +178,54 @@ def test_prepared_queries_from_text_and_from_the_builder(db: darudb.Database) ->
         assert error.value.code == "INVALID_QUERY"
 
 
+def test_aggregates_of_a_field(db: darudb.Database) -> None:
+    older = db.prepare(User, where(F.age >= param(0)))
+
+    with db.read() as txn:
+        users = txn.collection(User)
+
+        assert users.sum("age") == 124
+        assert users.min("age") == 17
+        assert users.max(F.age) == 45
+        assert users.avg("age") == 31.0
+        assert users.sum("rating") == 7.5
+        assert isinstance(users.sum("rating"), float)
+        assert users.avg(F.rating) == 1.875
+        assert users.min("name") == "Alice"
+        assert users.max("address.city") == "Seoul"
+        # Through the name the file stores for the attribute.
+        assert users.min(F.address.zip) == "04524"
+        assert txn.collection(Post).max("author.name") == "Carol"
+
+        assert users.sum("age", F.age > 20) == 107
+        assert users.sum("age", "age > $0", 20) == 107
+        assert users.sum("age", older, 31) == 107
+        assert users.sum("age", Query().sort_by(F.age).limit(2)) == 48
+
+        assert users.sum("age", F.age > 100) == 0
+        assert users.sum("rating", F.age > 100) == 0.0
+        assert users.avg("age", F.age > 100) is None
+        assert users.min("name", F.age > 100) is None
+
+        for function, field in [("sum", "name"), ("max", "tags"), ("min", "nothing")]:
+            with pytest.raises(DaruError) as error:
+                getattr(users, function)(field)
+
+            assert error.value.code == "INVALID_QUERY"
+
+        for field in ["", 3]:
+            with pytest.raises(DaruError) as error:
+                users.sum(field)  # type: ignore[arg-type]
+
+            assert error.value.code == "INVALID_ARGUMENT"
+
+    with db.write() as txn:
+        users = txn.collection(User)
+        users.insert(User(name="Eve", age=6))
+
+        assert users.min("age") == 6
+
+
 def test_a_query_the_engine_refuses_is_invalid_query(db: darudb.Database) -> None:
     with db.read() as txn:
         users = txn.collection(User)

@@ -49,6 +49,10 @@ def reads(db: darudb.Database) -> None:
         assert_type(users.find("age >= $0", 18), list[User])
         assert_type(users.find_one(F.name == "Alice"), User | None)
         assert_type(users.count(), int)
+        assert_type(users.sum("age"), int | float)
+        assert_type(users.sum(F.rating, F.age > 3), int | float)
+        assert_type(users.avg("age", "age > $0", 3), float | None)
+        assert_type(users.min("name"), Any)
         assert_type(txn.collection("users"), darudb.ReadCollection[Any])
 
     prepared = db.prepare(User, where(F.age >= param(0)))

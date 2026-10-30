@@ -228,6 +228,30 @@ def _path_of(field: str | FieldRef) -> tuple[str, ...]:
     raise _invalid_query(f"a query sorts by a field, not {field!r}")
 
 
+SUM: Final = 1
+MIN: Final = 2
+MAX: Final = 3
+AVG: Final = 4
+"""The codes of the aggregate functions in the IR."""
+
+
+def aggregate_path(field: str | FieldRef, resolved: Resolved, schema: Schema | None) -> list[str]:
+    """The names the file stores for the path an aggregate reads: an
+    attribute's name, a path through embedded objects and links such as
+    ``"address.zip"``, or ``F.address.zip``."""
+    if isinstance(field, FieldRef):
+        path = field._path
+    elif isinstance(field, str) and field:
+        path = tuple(field.split("."))
+    else:
+        raise DaruError(
+            "INVALID_ARGUMENT",
+            f"an aggregate names a field, such as 'age' or F.age, not {field!r}",
+        )
+
+    return _Translator(resolved, schema).path(path)
+
+
 class Query:
     """What to find, in what order, and how many.
 

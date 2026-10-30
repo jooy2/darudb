@@ -52,6 +52,7 @@ from ._database import (
     native_query,
 )
 from ._errors import invalid
+from ._query import AVG, MAX, MIN, SUM, FieldRef, aggregate_path
 from ._schema import Migration, Resolved, Schema, by_name
 
 if TYPE_CHECKING:
@@ -243,6 +244,49 @@ class AsyncReadCollection(Generic[T]):
         native = native_query(query, self._resolved, self._schema)
 
         return await self._order.call(self._txn.count, self._resolved.name, native, parameters)
+
+    async def _aggregate(
+        self,
+        function: int,
+        field: str | FieldRef,
+        query: QueryInput,
+        parameters: tuple[object, ...],
+    ) -> Any:
+        native = native_query(query, self._resolved, self._schema)
+        path = aggregate_path(field, self._resolved, self._schema)
+
+        return await self._order.call(
+            self._txn.aggregate, self._resolved.name, native, parameters, function, path
+        )
+
+    async def sum(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> int | float:
+        """The sum of an int or float ``field`` over the objects a query finds;
+        see ``ReadCollection.sum``."""
+        total: int | float = await self._aggregate(SUM, field, query, parameters)
+
+        return total
+
+    async def min(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> Any:
+        """The least value of ``field`` over the objects a query finds, or None."""
+        return await self._aggregate(MIN, field, query, parameters)
+
+    async def max(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> Any:
+        """The greatest value of ``field`` over the objects a query finds, or None."""
+        return await self._aggregate(MAX, field, query, parameters)
+
+    async def avg(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> float | None:
+        """The mean of an int or float ``field`` over the objects a query finds, or None."""
+        mean: float | None = await self._aggregate(AVG, field, query, parameters)
+
+        return mean
 
 
 def _batch(objects: Iterable[T]) -> list[T]:

@@ -83,6 +83,18 @@ impl Reader<'_> {
         }
     }
 
+    fn aggregate(
+        &self,
+        query: &Query,
+        function: darudb::Aggregate,
+        path: &[String],
+    ) -> darudb::Result<Value> {
+        match self {
+            Reader::Read(collection) => collection.aggregate(query, function, path),
+            Reader::Write(collection) => collection.aggregate(query, function, path),
+        }
+    }
+
     /// The object with primary key `key` as the engine reads it, for a
     /// collection reached by name, whose objects are `dict`s.
     fn object(&self, key: Value) -> darudb::Result<Option<Object>> {
@@ -362,6 +374,27 @@ impl NativeTransaction {
         let query = query.bound(py, &parameters_of(parameters)?, false)?;
 
         self.with(py, |txn| txn.reader(collection)?.count(&query))
+    }
+
+    /// The aggregate whose code in the IR is `function` of the field at
+    /// `path`, by the names the file stores, over the objects `query` finds.
+    fn aggregate<'py>(
+        &self,
+        py: Python<'py>,
+        collection: &str,
+        query: &NativeQuery,
+        parameters: &Bound<'_, PyTuple>,
+        function: i64,
+        path: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let function = darudb::Aggregate::from_code(function)
+            .ok_or_else(|| invalid(py, format!("{function} is not an aggregate")))?;
+        let query = query.bound(py, &parameters_of(parameters)?, false)?;
+        let value = self.with(py, |txn| {
+            txn.reader(collection)?.aggregate(&query, function, &path)
+        })?;
+
+        to_python(py, &value)
     }
 
     /// Inserts `object` and returns its primary key.

@@ -20,7 +20,18 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, ove
 from . import _native
 from ._errors import DaruError, invalid
 from ._native import NativeDatabase
-from ._query import Condition, Prepared, Query, parse
+from ._query import (
+    AVG,
+    MAX,
+    MIN,
+    SUM,
+    Condition,
+    FieldRef,
+    Prepared,
+    Query,
+    aggregate_path,
+    parse,
+)
 from ._schema import Migration, Resolved, Schema, StoredSchema, by_name, stored_schema_of
 
 if TYPE_CHECKING:
@@ -304,6 +315,50 @@ class ReadCollection(Generic[T]):
         return self._txn.count(
             self._resolved.name, native_query(query, self._resolved, self._schema), parameters
         )
+
+    def _aggregate(
+        self,
+        function: int,
+        field: str | FieldRef,
+        query: QueryInput,
+        parameters: tuple[object, ...],
+    ) -> Any:
+        return self._txn.aggregate(
+            self._resolved.name,
+            native_query(query, self._resolved, self._schema),
+            parameters,
+            function,
+            aggregate_path(field, self._resolved, self._schema),
+        )
+
+    def sum(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> int | float:
+        """The sum of an int or float ``field`` over the objects a query finds,
+        after its sort, offset and limit: an int for an int field, a float for
+        a float field, exact, and 0 when there is no value. ``field`` is an
+        attribute's name, a path such as ``"address.zip"``, or ``F.age``."""
+        total: int | float = self._aggregate(SUM, field, query, parameters)
+
+        return total
+
+    def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any:
+        """The least value of ``field`` over the objects a query finds, in the
+        order a sort gives, or None when there is none."""
+        return self._aggregate(MIN, field, query, parameters)
+
+    def max(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any:
+        """The greatest value of ``field`` over the objects a query finds, or None."""
+        return self._aggregate(MAX, field, query, parameters)
+
+    def avg(
+        self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object
+    ) -> float | None:
+        """The mean of an int or float ``field`` over the objects a query finds:
+        the exact sum over the number of values, or None when there is none."""
+        mean: float | None = self._aggregate(AVG, field, query, parameters)
+
+        return mean
 
 
 class WriteCollection(ReadCollection[T]):
