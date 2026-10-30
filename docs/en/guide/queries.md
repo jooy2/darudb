@@ -129,7 +129,7 @@ The tests are `==`, `!=`, `<`, `<=`, `>` and `>=`, and the methods `between`, `i
 What a condition means is the same in every language:
 
 - **A path** names a field, or goes through an embedded object or a link with `.`: `address.city`, or `author.name` to test the linked object. A link to an object that is not there reads as null.
-- **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list is not null.
+- **Lists.** A condition on a list holds when it holds for any element, and `contains` on a list looks for an element. An empty list is not null. A path through a list of embedded objects, such as `stops.city`, tests that field of each element, and the condition holds when it holds for any of them.
 - **Null.** Every condition on a null field is false, except the test for null.
 - **Types.** A value has the field's type: an integer field compares with an integer, never a float, a float field with a float or with an integer from -2^53 to 2^53, and a link with the linked collection's key. A query that breaks this, or names a field that is not there, fails with `INVALID_QUERY`.
 - **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.

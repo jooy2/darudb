@@ -104,7 +104,7 @@ list<T, I>(
 list(element: LinkType): FieldType<Key[]>;
 ```
 
-`element` 타입 값의 목록입니다. 원소 타입은 스칼라 타입이나 링크입니다. 링크의 목록은 여러 객체를 가리키는 링크가 됩니다. 목록에는 null이 들어갈 수 없고, 빈 목록은 null이 아닙니다. 원소 타입에 `optional`, `default`, `index`, `unique`를 붙였거나, 목록의 목록이나 내장 객체의 목록이면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 인덱스는 `t.list(t.string()).index()`처럼 목록 자체에 두며, 원소마다 항목이 생깁니다. 목록에 건 조건은 원소 하나라도 맞으면 참입니다.
+`element` 타입 값의 목록입니다. 원소 타입은 스칼라 타입이나 링크입니다. 링크의 목록은 여러 객체를 가리키는 링크가 됩니다. 목록에는 null이 들어갈 수 없고, 빈 목록은 null이 아닙니다. 원소 타입에 `optional`, `default`, `index`, `unique`를 붙였거나 목록의 목록이면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. `t.object(...)`의 목록은 내장 객체의 목록인 [`EmbeddedListType`](../../types/node/field-types.md#embeddedlisttype)입니다. `stops.city`처럼 이 목록을 지나는 경로는 원소마다 그 필드를 검사하며, 인덱스와 정렬이 없고 기본값은 `[]`뿐입니다. 인덱스는 `t.list(t.string()).index()`처럼 목록 자체에 두며, 원소마다 항목이 생깁니다. 목록에 건 조건은 원소 하나라도 맞으면 참입니다.
 
 ### object
 

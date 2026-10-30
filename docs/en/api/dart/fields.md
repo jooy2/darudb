@@ -28,6 +28,7 @@ The query builder `darudb_generator` writes has a getter for each field of the c
 | Any other `List` | `ListField<E>`, where `E` is the element type, and `Object` for a list of links |
 | `Link<User>` | `UserLink`, a `LinkField` with `User`'s fields |
 | An `@Embedded()` class `Address` | `AddressFields`, an `EmbeddedField<Address>` with `Address`'s fields |
+| `List<Address>` | `AddressListFields`, an `EmbeddedListField<Address>` with `Address`'s fields, which test each element |
 
 A field of an embedded object or of a linked object is reached through the field that holds it: `q.address.city`, or `q.team.city` to test the linked object. A link to an object that is not there reads as null. [Queries](../../guide/queries.md) explains what each condition means for lists and for null.
 

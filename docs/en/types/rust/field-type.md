@@ -42,7 +42,7 @@ The crate implements it for these types, and [`#[derive(Embedded)]`](../../api/r
 pub trait ElementType: FieldType {}
 ```
 
-A type a list may hold: `bool`, `i64`, `f64`, `String`, `Vec<u8>` and `Link<T>`. A list holds no null and no embedded object.
+A type a list may hold: `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`, and a struct with [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded), whose list is a list of embedded objects. A list holds no null and no list.
 
 ## KeyType
 

@@ -11,18 +11,18 @@ pageClass: reference-page
 
 필드 타입은 엔진에 필드를 설명하고, 타입 검사기만 아는 타입 매개변수로 TypeScript에도 필드를 설명합니다. `T`는 데이터베이스에서 읽은 객체에 든 값, `M`은 필드의 [모드](#fieldmode), `I`는 쓸 때 넘기는 값입니다. 수식 메서드는 언제나 새 타입을 돌려주고 원래 타입은 건드리지 않으므로, 타입 하나에서 여러 필드를 시작해도 됩니다. 엔진이 거부할 수식 메서드는 타입에 아예 없습니다. JavaScript에서 그래도 부르면 대부분은 그 자리에서, 나머지는 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다.
 
-| 빌더                 | 타입                                                                  |
-| -------------------- | --------------------------------------------------------------------- |
-| `t.bool()`           | `FieldType<boolean>`                                                  |
-| `t.int()`            | `KeyableType<number>`                                                 |
-| `t.bigint()`         | `KeyableType<bigint, bigint \| number>`                               |
-| `t.float()`          | `FieldType<number>`                                                   |
-| `t.string()`         | `KeyableType<string>`                                                 |
-| `t.bytes()`          | `KeyableType<Uint8Array>`                                             |
-| `t.date()`           | `FieldType<Date>`                                                     |
-| `t.link(collection)` | `LinkType`                                                            |
-| `t.list(element)`    | `FieldType<T[], 'required', I[]>`, 링크의 리스트는 `FieldType<Key[]>` |
-| `t.object(fields)`   | `EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>`                     |
+| 빌더 | 타입 |
+| --- | --- |
+| `t.bool()` | `FieldType<boolean>` |
+| `t.int()` | `KeyableType<number>` |
+| `t.bigint()` | `KeyableType<bigint, bigint \| number>` |
+| `t.float()` | `FieldType<number>` |
+| `t.string()` | `KeyableType<string>` |
+| `t.bytes()` | `KeyableType<Uint8Array>` |
+| `t.date()` | `FieldType<Date>` |
+| `t.link(collection)` | `LinkType` |
+| `t.list(element)` | `FieldType<T[], 'required', I[]>`, 링크의 리스트는 `FieldType<Key[]>`, 내장 객체의 리스트는 `EmbeddedListType<T, I>` |
+| `t.object(fields)` | `EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>` |
 
 ```ts
 import { collection, t } from 'darudb';
@@ -37,6 +37,17 @@ const users = collection({
 ```
 
 이런 필드에서 TypeScript가 어떤 객체 타입을 끌어내는지는 [객체 타입](./object-types.md)에 있습니다.
+
+## EmbeddedListType
+
+```ts
+interface EmbeddedListType<T, I, M extends FieldMode = 'required'> {
+  optional(): EmbeddedListType<T, I, 'optional'>;
+  default(value: readonly []): EmbeddedListType<T, I, 'default'>;
+}
+```
+
+`t.list(t.object(...))`, 곧 내장 객체 목록의 타입입니다. 내장 객체 자신의 타입으로 `T[]`로 읽고 `I[]`로 씁니다. 인덱스와 기본 키가 될 수 없고, 기본값은 빈 목록뿐입니다.
 
 ## FieldMode
 

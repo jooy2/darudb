@@ -41,7 +41,7 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-타입은 `Bool`, 64비트 `Int`, 64비트 `Float`, `String`, `Bytes`, 마이크로초 단위의 시각인 `Date`, 다른 컬렉션의 객체를 가리키는 링크(`Type::link`), 이들의 목록(`Type::list`), 그리고 자기 필드를 가진 내장 객체(`Type::object(Embedded::new().field(...))`)가 있습니다.
+타입은 `Bool`, 64비트 `Int`, 64비트 `Float`, `String`, `Bytes`, 마이크로초 단위의 시각인 `Date`, 다른 컬렉션의 객체를 가리키는 링크(`Type::link`), 이들이나 내장 객체의 목록(`Type::list`), 그리고 자기 필드를 가진 내장 객체(`Type::object(Embedded::new().field(...))`)가 있습니다.
 
 - **필수 필드와 선택 필드.** `field`는 필수여서 빠진 객체는 쓸 수 없습니다. `optional`은 null일 수 있고, 빠지면 null이 됩니다. `with_default`는 필수지만 빠지면 기본값이 들어갑니다.
 - **기본 키.** `primary_key`로 `Int`, `String`, `Bytes` 필드 하나를 지정합니다.
@@ -190,7 +190,7 @@ db = darudb.Database.open("app.darudb", schema=darudb.Schema(1, [Team, User]))
 - **링크.** `field(link=Team)`을 붙인 `int`, `str`, `bytes` 필드나 그 목록에는 다른 컬렉션의 기본 키가 들어갑니다. 대상 컬렉션은 클래스로도, 이름으로도 가리킬 수 있습니다.
 - **인덱스.** `field(index=True)`는 필드에 인덱스를 두고, `field(unique=True)`는 값이 같은 객체 둘을 받지 않는 인덱스를 둡니다. `field(name="...")`를 주면 파일 안의 필드 이름을 Python의 이름과 다르게 정할 수 있습니다. 내장 객체의 필드에는 인덱스를 둘 수 없습니다.
 - **객체는 값입니다.** 클래스의 필드는 바꿀 수 없으므로, 바꾼 객체는 `dataclasses.replace`로 만든 사본이고 `put`으로 다시 씁니다. 파일에서 읽은 객체는 클래스의 `__init__`을 부르지 않고 만들기 때문에 `__post_init__`도 돌지 않습니다.
-- **값.** `float` 필드는 `int`도 받지만, `int` 필드는 `float`와 `bool`, 64비트를 넘는 `int`를 받지 않습니다. 바이트는 `bytes`나 `bytearray`, `memoryview`로 넣고 `bytes`로 읽습니다. `datetime`은 시간대가 있어야 하고, UTC로 읽습니다. 목록에는 `None`을 담을 수 없고, 목록의 목록이나 내장 객체의 목록은 선언할 수 없습니다.
+- **값.** `float` 필드는 `int`도 받지만, `int` 필드는 `float`와 `bool`, 64비트를 넘는 `int`를 받지 않습니다. 바이트는 `bytes`나 `bytearray`, `memoryview`로 넣고 `bytes`로 읽습니다. `datetime`은 시간대가 있어야 하고, UTC로 읽습니다. 목록에는 `None`을 담을 수 없고, 목록의 목록은 선언할 수 없습니다. `@darudb.embedded` 클래스의 `list`는 내장 객체의 목록입니다.
 
 :::
 

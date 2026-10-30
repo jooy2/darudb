@@ -28,6 +28,7 @@ abstract base class Field {
 | 그 밖의 `List` | `ListField<E>`. `E`는 원소 타입이고, 링크 목록이면 `Object`입니다 |
 | `Link<User>` | `User`의 필드가 있는 `LinkField`인 `UserLink` |
 | `@Embedded()` 클래스 `Address` | `Address`의 필드가 있는 `EmbeddedField<Address>`인 `AddressFields` |
+| `List<Address>` | `Address`의 필드로 원소마다 검사하는 `EmbeddedListField<Address>`인 `AddressListFields` |
 
 내장 객체나 링크가 가리키는 객체의 필드는 그것을 담은 필드를 거쳐 닿습니다. `q.address.city`처럼 쓰고, `q.team.city`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다. 목록과 null에 건 조건의 뜻은 [쿼리](../../guide/queries.md)에서 설명합니다.
 

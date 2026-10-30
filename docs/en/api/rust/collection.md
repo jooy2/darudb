@@ -41,7 +41,7 @@ The declaration is checked when a file is opened with it. Each of these fails `o
 
 - **Names.** A collection or field with an empty name, or two fields with one name. A field called `id` in a collection without a primary key, since `id` is the auto-increment's.
 - **Primary key.** A primary key that is not an `Int`, a `String` or `Bytes`.
-- **Types.** A link to a collection the schema does not have, or a list of lists or of embedded objects.
+- **Types.** A link to a collection the schema does not have, or a list of lists.
 - **Defaults.** A default that does not have the field's type, or one on a link or an embedded object.
 - **Indexes.** An index on a field the collection does not have, on an embedded object or a list of them, or on one field twice.
 

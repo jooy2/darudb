@@ -26,7 +26,7 @@ This page moves the data of a Realm file into DaruDB: how object schemas and pro
 | A dictionary | No counterpart: an embedded object when its keys are fixed, or JSON text |
 | `mixed` | No counterpart: a field for each type it holds, or JSON text |
 | An embedded object | An embedded object |
-| A list of embedded objects | No counterpart in this version: a collection of its own, linking back to the parent |
+| A list of embedded objects | A list of embedded objects |
 | `linkingObjects`, a backlink | Nothing stored: a query on the link field, which an index makes cheap |
 
 - **A link needs a key.** A link holds the primary key of the object it names, so a class that other objects link to needs a primary key. Give one a key with a Realm migration before copying, or copy it as an embedded object when each of its objects belongs to one parent.

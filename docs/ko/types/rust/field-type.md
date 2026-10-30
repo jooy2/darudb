@@ -42,7 +42,7 @@ pub trait FieldType: Sized {
 pub trait ElementType: FieldType {}
 ```
 
-목록이 담을 수 있는 타입입니다. `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `Link<T>`가 있습니다. 목록에는 null도 내장 객체도 들어가지 않습니다.
+목록이 담을 수 있는 타입입니다. `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`, 그리고 [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded)를 붙인 구조체가 있으며, 마지막의 목록은 내장 객체의 목록입니다. 목록에는 null도 목록도 들어가지 않습니다.
 
 ## KeyType
 

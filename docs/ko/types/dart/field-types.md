@@ -22,6 +22,7 @@ pageClass: reference-page
 | `Link<User>` | `LinkKind('users')` | `UserLink` |
 | `List<Link<User>>` | `ListKind(LinkKind('users'))` | `ListField<Object>` |
 | `@Embedded()` 클래스 `Address` | `ObjectKind(addressSchema)` | `AddressFields` |
+| `List<Address>` | `ListKind(ObjectKind(addressSchema))` | `AddressListFields` |
 
 ```dart
 @Collection('users')

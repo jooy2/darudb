@@ -22,6 +22,7 @@ A field's Dart type decides what the field holds in the file, whether it may be 
 | `Link<User>` | `LinkKind('users')` | `UserLink` |
 | `List<Link<User>>` | `ListKind(LinkKind('users'))` | `ListField<Object>` |
 | An `@Embedded()` class `Address` | `ObjectKind(addressSchema)` | `AddressFields` |
+| `List<Address>` | `ListKind(ObjectKind(addressSchema))` | `AddressListFields` |
 
 ```dart
 @Collection('users')

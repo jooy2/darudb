@@ -104,7 +104,7 @@ list<T, I>(
 list(element: LinkType): FieldType<Key[]>;
 ```
 
-A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type with a modifier, `optional`, `default`, `index` or `unique`, or a list of lists or of embedded objects, fails to open with `INVALID_ARGUMENT`. An index goes on the list itself, as `t.list(t.string()).index()`, with an entry for each element. A condition on a list holds when it holds for any element.
+A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type with a modifier, `optional`, `default`, `index` or `unique`, or a list of lists, fails to open with `INVALID_ARGUMENT`. A list of `t.object(...)` is a list of embedded objects, an [`EmbeddedListType`](../../types/node/field-types.md#embeddedlisttype): a path through it, `stops.city`, tests the field of each element, and it has no index, no sort, and no default but `[]`. An index goes on the list itself, as `t.list(t.string()).index()`, with an entry for each element. A condition on a list holds when it holds for any element.
 
 ### object
 

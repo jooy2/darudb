@@ -11,18 +11,18 @@ The field types are what [`t`](../../api/node/t.md) makes for the fields of a sc
 
 A field type describes a field to the engine, and to TypeScript through type parameters that exist only for the type checker: `T` is the value an object read from the database holds, `M` the field's [mode](#fieldmode), and `I` the value written. Every modifier returns a new type and leaves the one it was called on as it was, so one type can start several fields. A type lacks the modifiers the engine would refuse. Called from JavaScript anyway, most of them fail with `INVALID_ARGUMENT` at once, and the rest when the database opens.
 
-| Builder              | Type                                                              |
-| -------------------- | ----------------------------------------------------------------- |
-| `t.bool()`           | `FieldType<boolean>`                                              |
-| `t.int()`            | `KeyableType<number>`                                             |
-| `t.bigint()`         | `KeyableType<bigint, bigint \| number>`                           |
-| `t.float()`          | `FieldType<number>`                                               |
-| `t.string()`         | `KeyableType<string>`                                             |
-| `t.bytes()`          | `KeyableType<Uint8Array>`                                         |
-| `t.date()`           | `FieldType<Date>`                                                 |
-| `t.link(collection)` | `LinkType`                                                        |
-| `t.list(element)`    | `FieldType<T[], 'required', I[]>`, or `FieldType<Key[]>` of links |
-| `t.object(fields)`   | `EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>`                 |
+| Builder | Type |
+| --- | --- |
+| `t.bool()` | `FieldType<boolean>` |
+| `t.int()` | `KeyableType<number>` |
+| `t.bigint()` | `KeyableType<bigint, bigint \| number>` |
+| `t.float()` | `FieldType<number>` |
+| `t.string()` | `KeyableType<string>` |
+| `t.bytes()` | `KeyableType<Uint8Array>` |
+| `t.date()` | `FieldType<Date>` |
+| `t.link(collection)` | `LinkType` |
+| `t.list(element)` | `FieldType<T[], 'required', I[]>`, or `FieldType<Key[]>` of links, or `EmbeddedListType<T, I>` of embedded objects |
+| `t.object(fields)` | `EmbeddedType<EmbeddedOf<F>, EmbeddedInputOf<F>>` |
 
 ```ts
 import { collection, t } from 'darudb';
@@ -37,6 +37,17 @@ const users = collection({
 ```
 
 [Object types](./object-types.md) shows the object types TypeScript derives from fields like these.
+
+## EmbeddedListType
+
+```ts
+interface EmbeddedListType<T, I, M extends FieldMode = 'required'> {
+  optional(): EmbeddedListType<T, I, 'optional'>;
+  default(value: readonly []): EmbeddedListType<T, I, 'default'>;
+}
+```
+
+The type of `t.list(t.object(...))`, a list of embedded objects: it reads as `T[]` and is written as `I[]`, the embedded object's own types. It has no index and no primary key, and its only default is the empty list.
 
 ## FieldMode
 

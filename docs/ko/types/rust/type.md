@@ -73,7 +73,7 @@ pub fn link(collection: impl Into<String>) -> Self
 pub fn list(element: Type) -> Self
 ```
 
-`element`의 값으로 된 목록입니다. `element`는 스칼라 타입이나 링크여야 하며, 목록의 목록이나 내장 객체의 목록은 거부합니다.
+`element`의 값으로 된 목록입니다. `element`는 스칼라 타입이나 링크, 또는 `Type::list(Type::object(...))`처럼 내장 객체입니다. `stops.city`처럼 내장 객체의 목록을 지나는 경로는 원소마다 그 필드를 검사합니다. 이런 목록에는 인덱스도 정렬도 없고, 기본값은 빈 목록뿐이며, 객체 형식 2가 필요합니다. 목록의 목록은 거부합니다.
 
 ### object
 

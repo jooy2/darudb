@@ -73,7 +73,7 @@ A link to an object of `collection`, which has to be a collection of the same sc
 pub fn list(element: Type) -> Self
 ```
 
-A list of values of `element`, which is a scalar type or a link. A list of lists or of embedded objects is refused.
+A list of values of `element`, which is a scalar type, a link, or an embedded object: `Type::list(Type::object(...))`. A path through a list of embedded objects, such as `stops.city`, tests the field of each element. Such a list has no index and no sort, its default is the empty list, and it needs object format 2. A list of lists is refused.
 
 ### object
 

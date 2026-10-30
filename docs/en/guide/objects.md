@@ -41,7 +41,7 @@ fn main() -> Result<(), darudb::Error> {
 }
 ```
 
-The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, `Date` (an instant, to the microsecond), a link to another collection's object (`Type::link`), a list of any of those (`Type::list`), and an embedded object with fields of its own (`Type::object(Embedded::new().field(...))`).
+The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, `Date` (an instant, to the microsecond), a link to another collection's object (`Type::link`), a list of any of those or of embedded objects (`Type::list`), and an embedded object with fields of its own (`Type::object(Embedded::new().field(...))`).
 
 - **Required and optional fields.** `field` is required, and writing an object without it fails. `optional` may be null, which is what it holds when it is left out. `with_default` is required, and an object written without it gets the default.
 - **Primary keys.** `primary_key` names a field of type `Int`, `String` or `Bytes`.
@@ -190,7 +190,7 @@ A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes
 - **Links.** `field(link=Team)` makes an `int`, `str` or `bytes` field, or a list of them, hold primary keys of another collection, named by its class or by its name.
 - **Indexes.** `field(index=True)` keeps an index on a field, and `field(unique=True)` an index that also refuses two objects with the same value. `field(name="...")` gives a field another name in the file than in Python. An embedded object's fields have no index.
 - **Objects are values.** The class is frozen, and a changed object is a copy, made with `dataclasses.replace`, written back with `put`. An object read from the file is made without calling the class's `__init__`, so a `__post_init__` does not run for it.
-- **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A `datetime` has to be aware, and comes out in UTC. A list holds no `None`, and a list of lists or of embedded objects is refused.
+- **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A `datetime` has to be aware, and comes out in UTC. A list holds no `None`, and a list of lists is refused. A `list` of an `@darudb.embedded` class is a list of embedded objects.
 
 :::
 

@@ -22,6 +22,7 @@ A field's annotation decides what the field holds in the file, which Python valu
 | `int`, `str` or `bytes` with `field(link=...)` | A link | The linked object's key | The key |
 | `list[int]`, `list[str]` or `list[bytes]` with `field(link=...)` | A list of links | Any iterable of keys | `list` of keys |
 | A class decorated with `@embedded` | An embedded object | An instance of the class | An instance of the class |
+| `list[E]` of such a class | A list of embedded objects | Any iterable of instances | `list` of instances |
 | Any of these `\| None` | The same, optional | The same, or `None` | The same, or `None` |
 
 A value of another type than its field's fails with `INVALID_ARGUMENT` when the object is written. Any other annotation fails with `INVALID_ARGUMENT` when the [Schema](../../api/python/schema.md) is made: a `dict`, a `list` without its element type, a union of two types, a list of lists or of embedded objects, and a list whose elements may be `None`.

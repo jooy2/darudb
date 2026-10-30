@@ -534,7 +534,7 @@ export const SECTIONS: Section[] = [
         redb: no()
       }),
       row('embedded', 'Embedded objects and lists', '내장 객체와 리스트', {
-        darudb: partly('No list of embedded objects yet', '내장 객체의 리스트는 아직 없음'),
+        darudb: yes(),
         sqlite: partly('As JSON in a column', '열에 담은 JSON으로'),
         realm: yes(),
         objectbox: partly(

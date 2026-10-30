@@ -22,6 +22,7 @@ pageClass: reference-page
 | `field(link=...)`를 붙인 `int`, `str`, `bytes` | 링크 | 가리키는 객체의 키 | 키 |
 | `field(link=...)`를 붙인 `list[int]`, `list[str]`, `list[bytes]` | 링크의 목록 | 키를 담은 반복할 수 있는 값 | 키의 `list` |
 | `@embedded`를 붙인 클래스 | 내장 객체 | 그 클래스의 인스턴스 | 그 클래스의 인스턴스 |
+| 그런 클래스의 `list[E]` | 내장 객체의 목록 | 인스턴스를 담은 반복할 수 있는 값 | 인스턴스의 `list` |
 | 위 타입에 `\| None`을 붙인 것 | 같은 타입의 선택 필드 | 같은 값이나 `None` | 같은 값이나 `None` |
 
 필드와 타입이 다른 값은 객체를 쓸 때 `INVALID_ARGUMENT`로 실패합니다. 그 밖의 어노테이션은 [Schema](../../api/python/schema.md)를 만들 때 `INVALID_ARGUMENT`로 실패합니다. `dict`, 원소 타입이 없는 `list`, 두 타입의 유니언 타입, 목록의 목록이나 내장 객체의 목록, 원소가 `None`일 수 있는 목록이 그 예입니다.
