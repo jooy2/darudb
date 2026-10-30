@@ -12,15 +12,16 @@ use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::key;
 use crate::format::object::schema::{
-    CollectionDef, FieldDef, Fields, IndexDef, Kind, StoredSchema,
+    CollectionDef, FieldDef, Fields, IndexDef, Kind, OLDEST_OBJECT_FORMAT, StoredSchema,
 };
 
 /// What opening a file with a declared schema does to the stored schema.
 pub(crate) enum Resolution {
     /// The stored schema is the declared one.
     Unchanged,
-    /// The stored schema becomes the plan's.
-    Change(Plan),
+    /// The stored schema becomes the plan's, boxed: it is large, and the
+    /// other variant is empty.
+    Change(Box<Plan>),
 }
 
 /// A new stored schema and the data changes that come with it.
@@ -48,6 +49,7 @@ pub(crate) fn resolve(
 ) -> Result<Resolution> {
     let Some(stored) = stored else {
         let empty = StoredSchema {
+            format: OLDEST_OBJECT_FORMAT,
             version: 0,
             collections: Vec::new(),
             next_collection: 1,
@@ -58,7 +60,7 @@ pub(crate) fn resolve(
         plan.from = None;
         plan.build.clear();
 
-        return Ok(Resolution::Change(plan));
+        return Ok(Resolution::Change(Box::new(plan)));
     };
 
     if stored.version > declared.version {
@@ -100,7 +102,7 @@ pub(crate) fn resolve(
         });
     }
 
-    plan(declared, stored, &steps).map(Resolution::Change)
+    plan(declared, stored, &steps).map(|plan| Resolution::Change(Box::new(plan)))
 }
 
 fn mismatch(version: u64, reason: &str) -> Error {
@@ -183,14 +185,22 @@ fn plan(declared: &Schema, old: &StoredSchema, steps: &[&Migration]) -> Result<P
     // same schema.
     collections.sort_by_key(|collection| collection.id);
 
+    let mut to = StoredSchema {
+        format: old.format,
+        version: declared.version,
+        collections,
+        next_collection,
+        next_index,
+    };
+
+    // Raised to what the new schema declares, and never lowered: records
+    // may still hold dates a later schema no longer declares, which a build
+    // of the lower format could not step over.
+    to.format = to.format.max(to.needs());
+
     Ok(Plan {
         from: Some(old.clone()),
-        to: StoredSchema {
-            version: declared.version,
-            collections,
-            next_collection,
-            next_index,
-        },
+        to,
         build,
         drop,
         delete,
@@ -484,6 +494,7 @@ fn to_kind(
         Type::Float => Kind::Float,
         Type::String => Kind::String,
         Type::Bytes => Kind::Bytes,
+        Type::Date => Kind::Date,
         Type::Link(target) => Kind::Link {
             collection: *ids.get(target).ok_or_else(|| {
                 invalid(format!(
@@ -561,7 +572,7 @@ mod tests {
 
     fn plan_of(schema: &Schema, from: &StoredSchema, migrations: &[Migration]) -> Result<Plan> {
         match resolve(schema, Some(from), migrations)? {
-            Resolution::Change(plan) => Ok(plan),
+            Resolution::Change(plan) => Ok(*plan),
             Resolution::Unchanged => panic!("expected a change"),
         }
     }

@@ -732,7 +732,8 @@ fn scalar_entry(
     let len = match (found, kind) {
         (FieldRef::Bool(_), Kind::Bool)
         | (FieldRef::Int(_), Kind::Int)
-        | (FieldRef::Float(_), Kind::Float) => 0,
+        | (FieldRef::Float(_), Kind::Float)
+        | (FieldRef::Date(_), Kind::Date) => 0,
         (FieldRef::String(text), Kind::String) => text.len(),
         (FieldRef::Bytes(bytes), Kind::Bytes) => bytes.len(),
         _ => return Ok(false),

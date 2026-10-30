@@ -37,17 +37,27 @@ pub enum Error {
         /// The file that was opened.
         path: PathBuf,
     },
-    /// The file is a DaruDB database in a format this build of the library
-    /// cannot read: a file format version, or an object format version of
-    /// the schema stored in it, that this build does not read and write.
-    /// That is a file a newer build wrote, or one a development build wrote
-    /// before the first release.
+    /// The file is a DaruDB database in a file format version this build of
+    /// the library does not read and write: a file a newer build wrote, or
+    /// one a development build wrote before the first release.
     UnsupportedFormatVersion {
         /// The file that was opened.
         path: PathBuf,
         /// The version recorded in the file.
         found: u32,
         /// The newest version this build reads and writes.
+        supported: u32,
+    },
+    /// The schema stored in the file is in an object format this build of
+    /// the library does not read: a newer build stored it, for a type or a
+    /// declaration this build does not have. Its code is
+    /// `UNSUPPORTED_FORMAT_VERSION`, as a file format's is.
+    UnsupportedObjectFormat {
+        /// The file that was opened.
+        path: PathBuf,
+        /// The object format recorded in the stored schema.
+        found: u32,
+        /// The newest object format this build reads and writes.
         supported: u32,
     },
     /// The file is a DaruDB database, but what it records is impossible, so
@@ -162,7 +172,9 @@ impl Error {
             Error::Io { .. } => "IO",
             Error::NotFound { .. } => "NOT_FOUND",
             Error::NotADatabase { .. } => "NOT_A_DATABASE",
-            Error::UnsupportedFormatVersion { .. } => "UNSUPPORTED_FORMAT_VERSION",
+            Error::UnsupportedFormatVersion { .. } | Error::UnsupportedObjectFormat { .. } => {
+                "UNSUPPORTED_FORMAT_VERSION"
+            }
             Error::Corrupted { .. } => "CORRUPTED",
             Error::InvalidArgument { .. } => "INVALID_ARGUMENT",
             Error::Closed => "CLOSED",
@@ -200,6 +212,15 @@ impl fmt::Display for Error {
             } => write!(
                 f,
                 "`{}` uses format version {found}, which this build does not read; the newest it reads is {supported}",
+                path.display()
+            ),
+            Error::UnsupportedObjectFormat {
+                path,
+                found,
+                supported,
+            } => write!(
+                f,
+                "`{}` stores its schema in object format {found}, which this build does not read; the newest it reads is {supported}",
                 path.display()
             ),
             Error::Corrupted { path, reason } => {
@@ -296,6 +317,14 @@ mod tests {
                 "UNSUPPORTED_FORMAT_VERSION",
             ),
             (
+                Error::UnsupportedObjectFormat {
+                    path: path.clone(),
+                    found: 3,
+                    supported: 2,
+                },
+                "UNSUPPORTED_FORMAT_VERSION",
+            ),
+            (
                 Error::Corrupted {
                     path: path.clone(),
                     reason: "a reason".to_owned(),
@@ -372,8 +401,11 @@ mod tests {
 
     #[test]
     fn codes_are_unique_and_screaming_snake_case() {
+        // An object format this build does not read is the same failure as a
+        // file format it does not read, to a program, and has its code.
         let codes: Vec<_> = every_error()
             .iter()
+            .filter(|(error, _)| !matches!(error, Error::UnsupportedObjectFormat { .. }))
             .map(|(error, _)| error.code())
             .collect();
 

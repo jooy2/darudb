@@ -26,7 +26,7 @@ pub(crate) mod typed;
 pub use declare::{Collection, Embedded, Field, Migration, Schema, Type};
 pub use objects::{CollectionReader, CollectionWriter};
 pub use open::Migrating;
-pub(crate) use open::{Opened, Pending, check, open, stored};
+pub(crate) use open::{Opened, Pending, check, open, stored, unsupported_object_format};
 pub use typed::{
     Change, CollectionType, ElementType, EmbeddedType, FieldOf, FieldReader, FieldType, KeyType,
     Link, Scalar, Shape, ShapeField, TypedReader, TypedWriter, ValueReader, ValueWriter,

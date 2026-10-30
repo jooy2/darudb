@@ -29,14 +29,16 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Bound;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::codec::{
-    self, BYTES, FALSE, FLOAT, INT, LINK, LIST, NULL, OBJECT, STRING, TRUE,
+    self, BYTES, DATE, FALSE, FLOAT, INT, LINK, LIST, NULL, OBJECT, STRING, TRUE,
 };
 use crate::format::object::names::records;
 use crate::format::object::schema::{CollectionDef, Fields, Kind, OpenSchema, StoredSchema};
+use crate::format::object::{micros_of, time_of};
 use crate::txn::{ReadTransaction, WriteTransaction, kept};
 
 use super::declare::{Collection, Embedded, Field, Type};
@@ -405,6 +407,19 @@ impl<'a> ValueWriter<'a> {
         Ok(())
     }
 
+    /// Writes a `date`, as the microseconds since the Unix epoch.
+    ///
+    /// # Errors
+    ///
+    /// None; see [`bool`](Self::bool).
+    pub fn date(mut self, micros: i64) -> Result<()> {
+        self.begin();
+        self.out.push(DATE);
+        codec::write_varint(codec::zigzag(micros), self.out);
+
+        Ok(())
+    }
+
     /// Writes a list of `values`.
     ///
     /// # Errors
@@ -759,6 +774,18 @@ impl<'a> ValueReader<'a> {
         Ok(codec::unzigzag(value))
     }
 
+    /// The value as a `date`: microseconds since the Unix epoch.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Corrupted`] for a value of another type.
+    pub fn date(self) -> Result<i64> {
+        let rest = self.tagged(DATE)?;
+        let (value, _) = codec::quick_varint(rest, 0).map_err(|reason| self.fail(reason))?;
+
+        Ok(codec::unzigzag(value))
+    }
+
     /// The value as a `float`.
     ///
     /// # Errors
@@ -873,6 +900,7 @@ impl<'a> ValueReader<'a> {
             Some(&FLOAT) => Scalar::Float(self.float()?),
             Some(&STRING) => Scalar::Str(self.str()?),
             Some(&BYTES) => Scalar::Bytes(self.bytes()?),
+            Some(&DATE) => Scalar::Date(self.date()?),
             Some(_) => return Err(self.fail(wrong_type())),
         })
     }
@@ -951,6 +979,8 @@ pub enum Scalar<'a> {
     Float(f64),
     Str(&'a str),
     Bytes(&'a [u8]),
+    /// Microseconds since the Unix epoch.
+    Date(i64),
 }
 
 impl FieldType for bool {
@@ -1024,6 +1054,34 @@ impl FieldType for Vec<u8> {
     }
 }
 
+/// `date`, to the microsecond: a time is rounded down to one when it is
+/// written. A time more than about 292,000 years from 1970 is refused with
+/// [`Error::InvalidArgument`], and so is a date read that the platform's
+/// `SystemTime` cannot hold.
+impl FieldType for SystemTime {
+    fn kind() -> Type {
+        Type::Date
+    }
+
+    fn write(&self, value: ValueWriter<'_>) -> Result<()> {
+        let micros = micros_of(*self).ok_or_else(|| Error::InvalidArgument {
+            message: format!("{self:?} is outside the range of a date"),
+        })?;
+
+        value.date(micros)
+    }
+
+    fn read(value: ValueReader<'_>) -> Result<Self> {
+        let micros = value.date()?;
+
+        time_of(micros).ok_or_else(|| Error::InvalidArgument {
+            message: format!(
+                "the date {micros} microseconds from 1970 is outside what a `SystemTime` holds here"
+            ),
+        })
+    }
+}
+
 impl<T: FieldType> FieldType for Option<T> {
     const OPTIONAL: bool = true;
 
@@ -1080,6 +1138,7 @@ impl ElementType for i64 {}
 impl ElementType for f64 {}
 impl ElementType for String {}
 impl ElementType for Vec<u8> {}
+impl ElementType for SystemTime {}
 impl<T: CollectionType> ElementType for Link<T> {}
 
 impl KeyType for i64 {
@@ -1232,7 +1291,8 @@ fn same_kind(declared: &Type, stored: &Kind, schema: &StoredSchema) -> bool {
         | (Type::Int, Kind::Int)
         | (Type::Float, Kind::Float)
         | (Type::String, Kind::String)
-        | (Type::Bytes, Kind::Bytes) => true,
+        | (Type::Bytes, Kind::Bytes)
+        | (Type::Date, Kind::Date) => true,
         (Type::Link(target), Kind::Link { collection }) => schema
             .collection_by_id(*collection)
             .is_some_and(|stored| &stored.name == target),

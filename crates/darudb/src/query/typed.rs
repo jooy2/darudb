@@ -13,6 +13,7 @@
 
 use std::fmt;
 use std::marker::PhantomData;
+use std::time::SystemTime;
 
 use super::aggregate::Aggregate;
 use super::build::{Filter, IntoPath, Query};
@@ -20,6 +21,7 @@ use super::ir::{Expr, Op};
 use super::sealed;
 use crate::error::{Error, Result};
 use crate::format::object::Value;
+use crate::format::object::{micros_of, time_of};
 use crate::schema::{
     CollectionType, ElementType, EmbeddedType, FieldOf, KeyType, Link, TypedReader, TypedWriter,
 };
@@ -189,6 +191,38 @@ ordered!(i64, Int);
 ordered!(f64, Float);
 ordered!(String, String);
 ordered!(Vec<u8>, Bytes);
+
+impl sealed::Typed for SystemTime {}
+
+/// A time a condition compares with a date field. One beyond the range of a
+/// date, about 292,000 years from 1970, compares as the nearest date there
+/// is, which orders it as it is ordered against every date a field holds.
+impl ComparableType for SystemTime {
+    type Compared = SystemTime;
+
+    fn compared(time: SystemTime) -> Value {
+        Value::Date(micros_of(time).unwrap_or_else(|| {
+            if time < std::time::UNIX_EPOCH {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }))
+    }
+}
+
+impl OrderedType for SystemTime {
+    fn from_aggregate(value: Value) -> Result<SystemTime> {
+        match value {
+            Value::Date(micros) => time_of(micros).ok_or_else(|| Error::InvalidArgument {
+                message: format!(
+                    "the date {micros} microseconds from 1970 is outside what a `SystemTime` holds here"
+                ),
+            }),
+            value => Err(not_of_the_field(&value)),
+        }
+    }
+}
 
 impl NumberType for i64 {
     type Sum = i64;

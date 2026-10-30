@@ -1113,3 +1113,98 @@ fn a_migration_function_writes_typed_objects() {
 
     assert_eq!(member.nickname.as_deref(), Some("Amazing Grace"));
 }
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "events")]
+struct Event {
+    id: Option<i64>,
+    #[darudb(index)]
+    at: std::time::SystemTime,
+    ends: Option<std::time::SystemTime>,
+    seen: Vec<std::time::SystemTime>,
+}
+
+#[test]
+fn a_system_time_is_a_date_rounded_down_to_the_microsecond() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let dir = TestDir::new();
+    let db = open(&dir, Schema::new(1).collection(Collection::of::<Event>()));
+    let launch = UNIX_EPOCH + Duration::new(1_793_361_600, 123_456_789);
+    let before = UNIX_EPOCH - Duration::new(0, 1_500);
+    let micros = |time: std::time::SystemTime| Value::try_from(time).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut events = txn.collection_of::<Event>().unwrap();
+
+    for (at, ends) in [(launch, None), (before, Some(launch)), (UNIX_EPOCH, None)] {
+        events
+            .insert(&Event {
+                id: None,
+                at,
+                ends,
+                seen: vec![at, UNIX_EPOCH],
+            })
+            .unwrap();
+    }
+
+    drop(events);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let events = read.collection_of::<Event>().unwrap();
+    let first = events.get(1).unwrap().unwrap();
+    let second = events.get(2).unwrap().unwrap();
+
+    // Down to the microsecond: 789 nanoseconds after, and 500 before.
+    assert_eq!(
+        first.at,
+        UNIX_EPOCH + Duration::new(1_793_361_600, 123_456_000)
+    );
+    assert_eq!(second.at, UNIX_EPOCH - Duration::from_micros(2));
+    assert_eq!(second.ends, Some(first.at));
+    assert_eq!(second.seen, [second.at, UNIX_EPOCH]);
+    assert_eq!(micros(second.at), Value::Date(-2));
+
+    let found = |query: &Query| {
+        events
+            .query(query)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(found(&Query::new().filter(Event::AT.lt(UNIX_EPOCH))), [2]);
+    assert_eq!(
+        found(
+            &Query::new()
+                .filter(Event::AT.ge(UNIX_EPOCH))
+                .sort_by_desc(Event::AT)
+        ),
+        [1, 3]
+    );
+    assert_eq!(found(&Query::new().filter(Event::ENDS.is_not_null())), [2]);
+    // A condition rounds its time down as a write does.
+    assert_eq!(
+        found(&Query::new().filter(Event::SEEN.contains(launch))),
+        [1]
+    );
+    assert_eq!(
+        found(&Query::new().filter(Event::SEEN.contains(first.at))),
+        [1]
+    );
+    assert_eq!(
+        events.min(&Query::new(), Event::AT).unwrap(),
+        Some(second.at)
+    );
+    assert_eq!(
+        events.max(&Query::new(), Event::ENDS).unwrap(),
+        Some(first.at)
+    );
+
+    // A time past what a date holds compares as the last date there is.
+    let far = UNIX_EPOCH + Duration::from_secs(u64::MAX / 4);
+
+    assert_eq!(found(&Query::new().filter(Event::AT.lt(far))), [1, 2, 3]);
+    assert_eq!(code(Value::try_from(far)), "INVALID_ARGUMENT");
+}

@@ -22,6 +22,9 @@ pub(crate) const BYTES: u8 = 0x07;
 pub(crate) const LIST: u8 = 0x08;
 pub(crate) const OBJECT: u8 = 0x09;
 pub(crate) const LINK: u8 = 0x0A;
+/// A date, in object format 2: microseconds since the Unix epoch, as an
+/// int's payload.
+pub(crate) const DATE: u8 = 0x0B;
 
 /// How deeply lists and objects may nest in a record read from the file. A
 /// schema nests far less; the bound keeps a damaged record from exhausting
@@ -45,6 +48,7 @@ pub(crate) enum Raw {
     List(Vec<Raw>),
     Object(Vec<(u64, Raw)>),
     Link(Box<Raw>),
+    Date(i64),
 }
 
 /// The bytes of the record whose fields are `fields`, by id in ascending
@@ -127,6 +131,10 @@ pub(crate) fn write_value(value: &Raw, out: &mut Vec<u8>) {
         Raw::Link(key) => {
             out.push(LINK);
             write_value(key, out);
+        }
+        Raw::Date(value) => {
+            out.push(DATE);
+            write_varint(zigzag(*value), out);
         }
     }
 }
@@ -292,6 +300,7 @@ pub(crate) enum FieldRef<'a> {
     /// A string's bytes, checked to be UTF-8 as [`utf8`] checks them.
     String(&'a [u8]),
     Bytes(&'a [u8]),
+    Date(i64),
     Encoded(&'a [u8]),
 }
 
@@ -394,6 +403,7 @@ pub(crate) fn field_at(bytes: &[u8], at: usize) -> Result<FieldRef<'_>, &'static
         FALSE => FieldRef::Bool(false),
         TRUE => FieldRef::Bool(true),
         INT => FieldRef::Int(unzigzag(quick_varint(bytes, at)?.0)),
+        DATE => FieldRef::Date(unzigzag(quick_varint(bytes, at)?.0)),
         FLOAT => {
             let exact = bytes
                 .get(at..)
@@ -433,6 +443,7 @@ pub(crate) fn field_value(found: FieldRef<'_>, kind: &Kind) -> Result<Value, &'s
             .map(Value::String)
             .map_err(|_| "a record holds a string that is not UTF-8"),
         (FieldRef::Bytes(bytes), Kind::Bytes) => Ok(Value::Bytes(bytes.to_vec())),
+        (FieldRef::Date(value), Kind::Date) => Ok(Value::Date(value)),
         (FieldRef::Encoded(bytes), kind) => value_of(bytes, kind),
         _ => Err("a record holds a value of another type than its field"),
     }
@@ -486,7 +497,7 @@ fn varint_at(bytes: &[u8], at: usize) -> Result<(u64, usize), &'static str> {
 pub(crate) fn skip_scalar(bytes: &[u8], at: usize) -> Result<usize, &'static str> {
     match bytes.get(at) {
         Some(&(FALSE | TRUE)) => Ok(at + 1),
-        Some(&INT) => quick_varint(bytes, at + 1).map(|(_, end)| end),
+        Some(&(INT | DATE)) => quick_varint(bytes, at + 1).map(|(_, end)| end),
         Some(&FLOAT) => skip_bytes(bytes, at + 1, 8),
         Some(&(STRING | BYTES)) => {
             let (len, start) = quick_varint(bytes, at + 1)?;
@@ -671,6 +682,7 @@ impl<'a> Reader<'a> {
             (Kind::Bool, FALSE) => Ok(FieldRef::Bool(false)),
             (Kind::Bool, TRUE) => Ok(FieldRef::Bool(true)),
             (Kind::Int, INT) => Ok(FieldRef::Int(unzigzag(self.varint()?))),
+            (Kind::Date, DATE) => Ok(FieldRef::Date(unzigzag(self.varint()?))),
             (Kind::Float, FLOAT) => self.float().map(FieldRef::Float),
             (Kind::String, STRING) => {
                 let len = self.varint()?;
@@ -711,6 +723,7 @@ impl<'a> Reader<'a> {
             (Kind::Bool, FALSE) => Ok(Value::Bool(false)),
             (Kind::Bool, TRUE) => Ok(Value::Bool(true)),
             (Kind::Int, INT) => Ok(Value::Int(unzigzag(self.varint()?))),
+            (Kind::Date, DATE) => Ok(Value::Date(unzigzag(self.varint()?))),
             (Kind::Float, FLOAT) => self.float().map(Value::Float),
             (Kind::String, STRING) => self.string().map(Value::String),
             (Kind::Bytes, BYTES) => self.byte_string().map(Value::Bytes),
@@ -767,7 +780,7 @@ impl<'a> Reader<'a> {
 
         match self.byte()? {
             FALSE | TRUE => {}
-            INT => {
+            INT | DATE => {
                 self.varint()?;
             }
             FLOAT => {
@@ -799,6 +812,7 @@ impl<'a> Reader<'a> {
             FALSE => Ok(Raw::Bool(false)),
             TRUE => Ok(Raw::Bool(true)),
             INT => Ok(Raw::Int(unzigzag(self.varint()?))),
+            DATE => Ok(Raw::Date(unzigzag(self.varint()?))),
             FLOAT => self.float().map(Raw::Float),
             STRING => self.string().map(Raw::String),
             BYTES => self.byte_string().map(Raw::Bytes),
@@ -1112,6 +1126,10 @@ pub(crate) fn encode_value(
             write_varint(value.len() as u64, out);
             out.extend_from_slice(value);
         }
+        (Kind::Date, Value::Date(value)) => {
+            out.push(DATE);
+            write_varint(zigzag(*value), out);
+        }
         (Kind::Link { collection }, value) => {
             let key = keys(*collection).ok_or_else(mismatch)?;
 
@@ -1226,7 +1244,7 @@ fn partial_object(bytes: &[u8], fields: &Fields, nulls: bool) -> Result<Object, 
 }
 
 /// Whether every field of `fields` holds a scalar: a bool, an int, a float,
-/// a string or bytes. The records a binding sends for such a collection are
+/// a string, bytes or a date. The records a binding sends for such a collection are
 /// checked and completed as they are, by [`flat_fields`] and
 /// [`flat_record`], rather than read into an object and written again.
 pub(crate) fn is_flat(fields: &Fields) -> bool {
@@ -1234,11 +1252,11 @@ pub(crate) fn is_flat(fields: &Fields) -> bool {
 }
 
 /// Whether a field of kind `kind` holds a scalar: a bool, an int, a float, a
-/// string or bytes.
+/// string, bytes or a date.
 pub(crate) fn is_scalar(kind: &Kind) -> bool {
     matches!(
         kind,
-        Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+        Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes | Kind::Date
     )
 }
 
@@ -1299,6 +1317,7 @@ pub(crate) fn holds(tag: u8, kind: &Kind) -> bool {
             | (Kind::Float, FLOAT)
             | (Kind::String, STRING)
             | (Kind::Bytes, BYTES)
+            | (Kind::Date, DATE)
     )
 }
 
@@ -1353,6 +1372,7 @@ fn placed_at<'a>(
         (Kind::Bool, FALSE) => FieldRef::Bool(false),
         (Kind::Bool, TRUE) => FieldRef::Bool(true),
         (Kind::Int, INT) => FieldRef::Int(unzigzag(reader.varint()?)),
+        (Kind::Date, DATE) => FieldRef::Date(unzigzag(reader.varint()?)),
         (Kind::Float, FLOAT) => FieldRef::Float(reader.float()?),
         (Kind::String, STRING) => {
             let len = reader.varint()?;
@@ -1591,6 +1611,10 @@ fn write_ref(value: FieldRef<'_>, out: &mut Vec<u8>) {
             write_varint(bytes.len() as u64, out);
             out.extend_from_slice(bytes);
         }
+        FieldRef::Date(value) => {
+            out.push(DATE);
+            write_varint(zigzag(value), out);
+        }
         // Tag included.
         FieldRef::Encoded(bytes) => out.extend_from_slice(bytes),
     }
@@ -1603,6 +1627,7 @@ fn from_raw(raw: Raw, kind: &Kind) -> Result<Value, &'static str> {
         (Kind::Float, Raw::Float(value)) => Ok(Value::Float(value)),
         (Kind::String, Raw::String(value)) => Ok(Value::String(value)),
         (Kind::Bytes, Raw::Bytes(value)) => Ok(Value::Bytes(value)),
+        (Kind::Date, Raw::Date(value)) => Ok(Value::Date(value)),
         (Kind::Link { .. }, Raw::Link(key)) => match *key {
             Raw::Int(value) => Ok(Value::Int(value)),
             Raw::String(value) => Ok(Value::String(value)),

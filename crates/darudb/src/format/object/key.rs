@@ -5,10 +5,16 @@
 //! (`design/objects.md`, "Keys"). Each encoding is a tag and the value, and
 //! ends where it can be told to end, so encodings concatenate: the encoding of
 //! a value followed by a primary key sorts by the value, then the key.
+//!
+//! A date is encoded as the int of its microseconds, which orders the same.
+//! An index holds the values of one field, so its dates are never compared
+//! with ints; [`decode`] gives a date's encoding back as an int, which
+//! [`of_kind`] makes a date again where the field says it is one.
 
 use std::cmp::Ordering;
 
 use super::codec::FieldRef;
+use super::schema::Kind;
 use super::value::Value;
 
 pub(crate) const NULL: u8 = 0x01;
@@ -47,7 +53,7 @@ pub(crate) fn encode(value: &Value, out: &mut Vec<u8>) -> Result<(), &'static st
         Value::Null => out.push(NULL),
         Value::Bool(false) => out.push(FALSE),
         Value::Bool(true) => out.push(TRUE),
-        Value::Int(value) => int(*value, out),
+        Value::Int(value) | Value::Date(value) => int(*value, out),
         Value::Float(value) => number(FLOAT, ordered_float(*value), out),
         Value::String(value) => escape(STRING, value.as_bytes(), out),
         Value::Bytes(value) => escape(BYTES, value, out),
@@ -64,7 +70,7 @@ pub(crate) fn encode_field(value: FieldRef<'_>, out: &mut Vec<u8>) -> Result<(),
     match value {
         FieldRef::Bool(false) => out.push(FALSE),
         FieldRef::Bool(true) => out.push(TRUE),
-        FieldRef::Int(value) => int(value, out),
+        FieldRef::Int(value) | FieldRef::Date(value) => int(value, out),
         FieldRef::Float(value) => number(FLOAT, ordered_float(value), out),
         FieldRef::String(value) => escape(STRING, value, out),
         FieldRef::Bytes(value) => escape(BYTES, value, out),
@@ -92,7 +98,7 @@ pub(crate) fn with_encoded<R>(
     use_key: impl FnOnce(&[u8]) -> R,
 ) -> Result<R, &'static str> {
     let (tag, bytes) = match value {
-        Value::Int(value) => {
+        Value::Int(value) | Value::Date(value) => {
             let (bytes, len) = int_bytes(*value);
 
             return Ok(use_key(&bytes[..len]));
@@ -152,6 +158,16 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(Value, usize), &'static str> {
     }
 }
 
+/// `value`, decoded from a key, as a value of a field of kind `kind`: a
+/// date for a date field, whose encoding [`decode`] read as an int, and
+/// `value` itself otherwise.
+pub(crate) fn of_kind(value: Value, kind: &Kind) -> Value {
+    match (value, kind) {
+        (Value::Int(micros), Kind::Date) => Value::Date(micros),
+        (value, _) => value,
+    }
+}
+
 /// How many bytes the key encoding at the start of `bytes` takes, found
 /// without decoding the value, for a caller that needs only where it ends.
 pub(crate) fn length(bytes: &[u8]) -> Result<usize, &'static str> {
@@ -203,15 +219,15 @@ fn escaped_length(bytes: &[u8]) -> Result<usize, &'static str> {
 
 /// Compares two scalar values as their encodings compare: null first, then
 /// by type in the order of the tags, then by value, with floats in the
-/// canonical order. A list or an object sorts after everything, though no
-/// caller compares one.
+/// canonical order. A date compares as the int its encoding is. A list or
+/// an object sorts after everything, though no caller compares one.
 pub(crate) fn compare(a: &Value, b: &Value) -> Ordering {
     fn rank(value: &Value) -> u8 {
         match value {
             Value::Null => NULL,
             Value::Bool(false) => FALSE,
             Value::Bool(true) => TRUE,
-            Value::Int(_) => INT,
+            Value::Int(_) | Value::Date(_) => INT,
             Value::Float(_) => FLOAT,
             Value::String(_) => STRING,
             Value::Bytes(_) => BYTES,
@@ -220,7 +236,7 @@ pub(crate) fn compare(a: &Value, b: &Value) -> Ordering {
     }
 
     match (a, b) {
-        (Value::Int(a), Value::Int(b)) => a.cmp(b),
+        (Value::Int(a) | Value::Date(a), Value::Int(b) | Value::Date(b)) => a.cmp(b),
         (Value::Float(a), Value::Float(b)) => compare_floats(*a, *b),
         (Value::String(a), Value::String(b)) => a.as_bytes().cmp(b.as_bytes()),
         (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
@@ -554,6 +570,7 @@ mod tests {
                     Value::Float(value) => FieldRef::Float(*value),
                     Value::String(text) => FieldRef::String(text.as_bytes()),
                     Value::Bytes(bytes) => FieldRef::Bytes(bytes),
+                    Value::Date(value) => FieldRef::Date(*value),
                     Value::List(_) | Value::Object(_) => unreachable!(),
                 };
                 let mut out = vec![0xAA];
@@ -564,6 +581,31 @@ mod tests {
         }
 
         assert!(encode_field(FieldRef::Encoded(&[0x08]), &mut Vec::new()).is_err());
+    }
+
+    #[test]
+    fn a_date_is_keyed_as_its_microseconds_and_read_back_by_its_field() {
+        for micros in [i64::MIN, -1, 0, 1, 1_793_361_600_000_000, i64::MAX] {
+            let date = Value::Date(micros);
+            let key = encoded(&date).unwrap();
+
+            assert_eq!(key, encoded(&Value::Int(micros)).unwrap());
+            assert_eq!(with_encoded(&date, <[u8]>::to_vec).unwrap(), key);
+
+            let mut out = Vec::new();
+
+            encode_field(FieldRef::Date(micros), &mut out).unwrap();
+            assert_eq!(out, key);
+
+            let (decoded, used) = decode(&key).unwrap();
+
+            assert_eq!(used, key.len());
+            assert_eq!(of_kind(decoded.clone(), &Kind::Date), date);
+            assert_eq!(of_kind(decoded, &Kind::Int), Value::Int(micros));
+        }
+
+        assert!(compare(&Value::Date(-1), &Value::Date(1)).is_lt());
+        assert!(compare(&Value::Date(2), &Value::Null).is_gt());
     }
 
     #[test]

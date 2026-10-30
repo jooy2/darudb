@@ -25,6 +25,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 | `float`     | 64-bit IEEE 754 numbers                                                      |
 | `string`    | UTF-8 text                                                                   |
 | `bytes`     | Any bytes                                                                    |
+| `date`      | An instant: signed 64-bit microseconds since 1970-01-01T00:00:00 UTC         |
 | `link(C)`   | The primary key of an object in collection `C`: a to-one link                |
 | `list(T)`   | A list of values of a scalar type or of `link(C)`: a to-many link, or a list |
 | `object(E)` | An embedded object: fields of its own, stored inside the owning object       |
@@ -37,7 +38,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 - **Embedded objects** have no primary key and no collection of their own. They are read and written with the object that holds them, and their fields can be queried through it.
 - **Lists** hold values of one type and no nulls. Most comparisons on a list field hold when they hold for any element ([Queries](#queries)).
 
-A date or a time has no type of its own in v1. A binding stores one as an `int`, which is the Unix time in the unit it names, and a later version may add a type for it.
+- **Dates** are instants with no time zone: a binding converts its language's time to UTC, and reads a date back as a time in UTC. A time is rounded down to the microsecond, before 1970 as after it. A date is a scalar: it can be a list's element, a default, an index's field and a sort's, and `min` and `max` read it, but it compares only with a date, never an `int`. A date field makes the stored schema need [object format 2](#object-formats).
 
 ## Primary keys
 
@@ -64,12 +65,12 @@ A declared schema matches a stored one by names: a collection or a field keeps i
 
 Every tree of the object layer has a name that begins with the byte `0x00`, which [File format](file-format.md#the-catalog) reserves for the engine, so that no tree an application creates through the kernel's API can collide with one. The kernel's `tree_names` does not list them.
 
-| Tree      | Key                              | Value                                              |
-| --------- | -------------------------------- | -------------------------------------------------- |
-| `\0meta`  | `schema`                         | The [stored schema](#the-stored-schema)            |
-| `\0meta`  | `next/` and a collection id      | The next auto-increment number, 8 bytes, LE        |
-| `\0rec/n` | The object's encoded primary key | The object, as a [record](#records)                |
-| `\0idx/n` | An [index](#indexes) entry       | Empty, or the encoded primary key for a unique one |
+| Tree | Key | Value |
+| --- | --- | --- |
+| `\0meta` | `schema` | The [stored schema](#the-stored-schema) |
+| `\0meta` | `next/` and a collection id | The next auto-increment number, 8 bytes, LE |
+| `\0rec/n` | The object's encoded primary key | The object, as a [record](#records) |
+| `\0idx/n` | An [index](#indexes) entry | Empty, or the encoded primary key for a unique one |
 
 `n` is the collection id or the index id in decimal ASCII, since tree names are text, and so is the collection id after `next/`. Writing an object writes its record and every index entry it changes, in the same kernel write transaction, so a commit never shows an index that disagrees with its records.
 
@@ -77,20 +78,21 @@ Every tree of the object layer has a name that begins with the byte `0x00`, whic
 
 Keys order as unsigned bytes and nothing else ([File format](file-format.md#key-order)), so the object layer encodes each value so that its bytes order the way the value does. Each encoding is a tag byte followed by the value:
 
-| Tag              | Value        | Bytes after the tag                                                                     |
-| ---------------- | ------------ | --------------------------------------------------------------------------------------- |
-| `0x01`           | null         | None                                                                                    |
-| `0x02`           | false        | None                                                                                    |
-| `0x03`           | true         | None                                                                                    |
-| `0x04` to `0x0B` | negative int | The last `n` bytes, big-endian, of the value's two's complement, with tag `0x0C - n`    |
-| `0x0C`           | int zero     | None                                                                                    |
-| `0x0D` to `0x14` | positive int | The last `n` bytes, big-endian, of the value, with tag `0x0C + n`                       |
-| `0x15`           | float        | 8 bytes, big-endian, of the bits, all flipped if the sign bit is set, else the sign bit |
-| `0x16`           | string       | The bytes, each `0x00` written as `0x00 0xFF`, then `0x00 0x00`                         |
-| `0x17`           | bytes        | As for a string                                                                         |
+| Tag | Value | Bytes after the tag |
+| --- | --- | --- |
+| `0x01` | null | None |
+| `0x02` | false | None |
+| `0x03` | true | None |
+| `0x04` to `0x0B` | negative int | The last `n` bytes, big-endian, of the value's two's complement, with tag `0x0C - n` |
+| `0x0C` | int zero | None |
+| `0x0D` to `0x14` | positive int | The last `n` bytes, big-endian, of the value, with tag `0x0C + n` |
+| `0x15` | float | 8 bytes, big-endian, of the bits, all flipped if the sign bit is set, else the sign bit |
+| `0x16` | string | The bytes, each `0x00` written as `0x00 0xFF`, then `0x00 0x00` |
+| `0x17` | bytes | As for a string |
 
 - **Null sorts first**, before every value of its field.
 - **An int takes the fewest bytes that hold it**, and its tag says how many: `n` bytes of a positive int, `n` bytes of a negative int's two's complement, where `n` is the fewest that hold `-1 - value` and one at least, so that `-1` is `0x0B 0xFF` and `-257` is `0x0A 0xFE 0xFF`. Longer negative ints have lower tags and sort first, and longer positive ints sort last. An int written in more bytes than it needs is refused as damaged, so every int has one encoding. Eight bytes for every int made the key of an entry in an index on a small int, with an int primary key, 18 bytes, mostly zeros. It takes 5 or 6 this way, and a leaf, which adds 7 bytes to each entry, holds about twice as many.
+- **A date** is encoded as the `int` of its microseconds. An index holds the values of one field, so its dates are never compared with ints, and an entry read back is a date again by its field's type.
 - **Floats** are canonicalised before encoding: `-0.0` becomes `0.0` and every NaN becomes the quiet NaN `0x7FF8000000000000`.
 - **Strings and bytes end in `0x00 0x00`**, and a `0x00` inside them becomes `0x00 0xFF`, so an encoding is never a prefix of another's continuation: `"a"` sorts before `"a\0"`, which sorts before `"ab"`. That is what lets encodings be concatenated.
 - **Concatenation orders field by field.** The encoding of `(a, b)` sorts as `a`, then `b`, which is what index entries rely on.
@@ -118,6 +120,7 @@ value   = tag payload
 | `0x08` | `list(T)`    | Count varint, then that many values |
 | `0x09` | `object(E)`  | Length varint, then a record        |
 | `0x0A` | `link(C)`    | A value: the target's primary key   |
+| `0x0B` | `date`       | Zigzag LEB128 varint, microseconds  |
 
 - **Reading a record.** A field absent from a record, which only a record written before the field existed can be, holds its default, or null if it has none. A field id the schema no longer has belongs to a field that was removed, and is skipped. A record read from the file is untrusted input: a varint that runs out, a length past the end, a tag that does not match the field's type, or ids out of order make it `CORRUPTED`.
 - **Writing a record.** The engine checks a record it is given against the schema, types, required fields and all, before it stores it, and refuses one that does not fit with `INVALID_ARGUMENT`. A record from a binding is checked like any other.
@@ -128,35 +131,49 @@ value   = tag payload
 
 The stored schema is a record too, of this shape, where every `object` is itself a record of the shape its row gives:
 
-| Record     | Field | Value                                                                                                |
-| ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| Schema     | 1     | `int`: the object layer's format, 1                                                                  |
-|            | 2     | `int`: the schema version                                                                            |
-|            | 3     | `list(object)`: the collections                                                                      |
-|            | 4     | `int`: the next collection id                                                                        |
-|            | 5     | `int`: the next index id                                                                             |
-| Collection | 1     | `int`: its id                                                                                        |
-|            | 2     | `string`: its name                                                                                   |
-|            | 3     | `list(object)`: its fields                                                                           |
-|            | 4     | `int`: the next field id                                                                             |
-|            | 5     | `int`: the primary key's field id                                                                    |
-|            | 6     | `bool`: whether the primary key is an auto-increment                                                 |
-|            | 7     | `list(object)`: its indexes                                                                          |
-| Field      | 1     | `int`: its id                                                                                        |
-|            | 2     | `string`: its name                                                                                   |
-|            | 3     | `object`: its type                                                                                   |
-|            | 4     | `bool`: whether it is optional                                                                       |
-|            | 5     | Its default, a value of its type, if it has one                                                      |
-| Type       | 1     | `int`: the kind: 1 `bool`, 2 `int`, 3 `float`, 4 `string`, 5 `bytes`, 6 `link`, 7 `list`, 8 `object` |
-|            | 2     | `int`: a link's target collection id                                                                 |
-|            | 3     | `object`: a list's element type                                                                      |
-|            | 4     | `list(object)`: an embedded object's fields                                                          |
-|            | 5     | `int`: an embedded object's next field id                                                            |
-| Index      | 1     | `int`: its id                                                                                        |
-|            | 2     | `int`: its field's id                                                                                |
-|            | 3     | `bool`: whether it is unique                                                                         |
+| Record | Field | Value |
+| --- | --- | --- |
+| Schema | 1 | `int`: the object layer's format, 1 or 2 ([Object formats](#object-formats)) |
+|  | 2 | `int`: the schema version |
+|  | 3 | `list(object)`: the collections |
+|  | 4 | `int`: the next collection id |
+|  | 5 | `int`: the next index id |
+| Collection | 1 | `int`: its id |
+|  | 2 | `string`: its name |
+|  | 3 | `list(object)`: its fields |
+|  | 4 | `int`: the next field id |
+|  | 5 | `int`: the primary key's field id |
+|  | 6 | `bool`: whether the primary key is an auto-increment |
+|  | 7 | `list(object)`: its indexes |
+| Field | 1 | `int`: its id |
+|  | 2 | `string`: its name |
+|  | 3 | `object`: its type |
+|  | 4 | `bool`: whether it is optional |
+|  | 5 | Its default, a value of its type, if it has one |
+| Type | 1 | `int`: the kind: 1 `bool`, 2 `int`, 3 `float`, 4 `string`, 5 `bytes`, 6 `link`, 7 `list`, 8 `object`, 9 `date` |
+|  | 2 | `int`: a link's target collection id |
+|  | 3 | `object`: a list's element type |
+|  | 4 | `list(object)`: an embedded object's fields |
+|  | 5 | `int`: an embedded object's next field id |
+| Index | 1 | `int`: its id |
+|  | 2 | `int`: its field's id |
+|  | 3 | `bool`: whether it is unique |
 
 A stored schema that does not decode, or whose ids repeat or point nowhere, is `CORRUPTED`. Field 1 lets a later layout change be told apart; a build refuses a format it does not know with `UNSUPPORTED_FORMAT_VERSION`.
+
+### Object formats
+
+A build that knows an object format reads every one before it. A build that does not refuses the file, since an older build would ignore a field of the stored schema it does not know, and write objects without what that field asks of it, and could not step over a record's value with a tag it does not know.
+
+| Format | Adds                        |
+| ------ | --------------------------- |
+| 1      | The first released format   |
+| 2      | The `date` type, tag `0x0B` |
+
+- **A schema is stored in the lowest format that holds what it declares**, so a schema that declares nothing of format 2 stays in format 1, byte for byte, and every release still opens the file. A record of format 1 that declares a date is `CORRUPTED`.
+- **The format is never lowered.** A later version of the schema that no longer declares a date keeps format 2, since records still hold dates, which a build of format 1 could not step over.
+- **`upgrade_format(false)`** keeps a file in the object format it has, as it keeps the file format: a schema that would raise it is refused with `INVALID_ARGUMENT`, which names the option, and the file is left as it was. A file already in format 2 opens as it is.
+- **Salvage** in a build that does not know the stored schema's format fails with `UNSUPPORTED_FORMAT_VERSION`, and writes nothing, rather than dropping every object as unreadable. A build that does know it salvages the file.
 
 ## Indexes
 
@@ -207,16 +224,16 @@ A query returns the objects, counts them, or works out an [aggregate](#aggregate
 
 ### The filter
 
-| Expression                              | Holds when                                                            |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| `path == v`, `!=`, `<`, `<=`, `>`, `>=` | The field compares so with `v`                                        |
-| `path BETWEEN a AND b`                  | `a <= path <= b`                                                      |
-| `path IN [v, ...]`                      | The field equals one of the values                                    |
-| `path CONTAINS s`                       | A string field contains `s`, or a list field contains the element `s` |
-| `path STARTSWITH s`, `ENDSWITH s`       | A string field starts or ends with `s`                                |
-| `path IS NULL`, `IS NOT NULL`           | The field is null, or is not                                          |
-| `a AND b`, `a OR b`, `NOT a`            | As in logic                                                           |
-| `ANY C.link`, `ANY C.link (f)`          | Some object of `C` whose `link` names this object meets `f`           |
+| Expression | Holds when |
+| --- | --- |
+| `path == v`, `!=`, `<`, `<=`, `>`, `>=` | The field compares so with `v` |
+| `path BETWEEN a AND b` | `a <= path <= b` |
+| `path IN [v, ...]` | The field equals one of the values |
+| `path CONTAINS s` | A string field contains `s`, or a list field contains the element `s` |
+| `path STARTSWITH s`, `ENDSWITH s` | A string field starts or ends with `s` |
+| `path IS NULL`, `IS NOT NULL` | The field is null, or is not |
+| `a AND b`, `a OR b`, `NOT a` | As in logic |
+| `ANY C.link`, `ANY C.link (f)` | Some object of `C` whose `link` names this object meets `f` |
 
 - **`ANY`** tests the objects of another collection, or of this one, that link to an object: `ANY posts.author (year > 2020)` holds for a user whom some post with that year names as its author, and `ANY posts.author` for one whom any post names. The path after the collection is a link field of its objects, a to-one link or a list of links, through embedded objects if need be, to the collection the query runs on; anything else is `INVALID_QUERY`, as a filter on fields `C` lacks is. One linking object has to meet the whole filter, and `NOT ANY` finds the objects nothing links to. The linking objects are found once for each query, by their own plan with their indexes, and their links gathered into a set of the keys they name; each object tested is looked for in it, and a selective `ANY` is a part of the [sets of keys](#sets-of-keys) whose objects alone are read. A link to an object that is not there names no object, and a count leaves it out. The filter inside nests on from the depth of the `ANY`, toward the same limit.
 - **Ignoring case.** A test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` may ignore case. It then compares strings by Unicode's simple case folding: each character folds as `CaseFolding.txt`, statuses C and S, of the Unicode version the build's table was made from (18.0.0) says, and two strings match when they fold alike. A character folds to one character, so `ß` stays `ß` and `ẞ` folds to it, but neither matches `ss`, and the Turkic `İ` folds to itself. Such a test holds of a string field or a list of strings, through links and embedded objects as any test does; on another field it is `INVALID_QUERY`. No index answers it, so the objects it tests are read; a string that is not UTF-8, which only damage makes, meets none.
@@ -278,10 +295,12 @@ condition   = path compare value [ case ]
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
-value       = int | float | string | "true" | "false" | "null" | "$" digits
+value       = int | float | string | "true" | "false" | "null" | date | "$" digits
+date        = "DATE" string
 ```
 
 - **`ANY`** followed by a name starts a test of the objects that link to an object; anywhere else it is a name, so a field may be called `any`.
+- **`DATE`** followed by a string is a date: RFC 3339 text, a date and a time with seconds, up to six digits of a second, and `Z` or an offset from UTC, such as `DATE "2026-10-30T21:00:00+09:00"`, or a date alone, `DATE "2026-10-30"`, its midnight in UTC. Years run from 0000 to 9999, and a leap second is refused, since a date counts every day as 86,400 seconds. Text that names no such time is `INVALID_QUERY`. Anywhere else `DATE` is a name.
 - **`IGNORE CASE`** after a test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` makes it ignore case; after any other condition it is `INVALID_QUERY`. The two words are read so only there, so they are not keywords, and a field may be called `ignore` or `case` without backticks.
 - **Keywords** are case-insensitive: `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`.
 - **A name** is letters, digits and `_`, not starting with a digit, or any text in backticks. Where a path starts, a keyword is a keyword, so a field with a keyword's name goes in backticks there; after a `.`, every word is a name.
@@ -293,12 +312,12 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 
 An aggregate reads the values at one path of the objects a query would return, after its sort, offset and limit, and works out one value from them:
 
-| Function | Reads                             | Gives                                                      |
-| -------- | --------------------------------- | ---------------------------------------------------------- |
-| `sum`    | `int`, `float`                    | An `int` for an `int` field, a `float` for a `float` field |
-| `min`    | `int`, `float`, `string`, `bytes` | The least value, in the order a sort gives                 |
-| `max`    | `int`, `float`, `string`, `bytes` | The greatest value, in the order a sort gives              |
-| `avg`    | `int`, `float`                    | The mean, a `float`                                        |
+| Function | Reads | Gives |
+| --- | --- | --- |
+| `sum` | `int`, `float` | An `int` for an `int` field, a `float` for a `float` field |
+| `min` | `int`, `float`, `string`, `bytes`, `date` | The least value, in the order a sort gives |
+| `max` | `int`, `float`, `string`, `bytes`, `date` | The greatest value, in the order a sort gives |
+| `avg` | `int`, `float` | The mean, a `float` |
 
 - **The path reads one value of each object**: it goes through embedded objects and to-one links, and ends at a field of a type the function reads. A path through a list or a to-many link, one that ends at a link, and a type the function does not read are `INVALID_QUERY`.
 - **Nulls are left out**, and so are paths that reach no value, such as one through a link to an object that is not there. A `sum` of no values is zero of the field's type; `min`, `max` and `avg` of no values are null.
@@ -347,13 +366,13 @@ A set holds its keys in one buffer, without repeats, and finds a key through a t
 
 Opening a file with a declared schema compares it with the stored one:
 
-| Stored schema                     | Outcome                                                             |
-| --------------------------------- | ------------------------------------------------------------------- |
-| None                              | The declared schema is stored, in one write transaction             |
-| The same version, the same schema | Nothing to do                                                       |
-| The same version, another schema  | `SCHEMA_MISMATCH`: the application changed it without a new version |
-| A newer version                   | `SCHEMA_TOO_NEW`: a newer application wrote the file                |
-| An older version                  | A migration, below                                                  |
+| Stored schema | Outcome |
+| --- | --- |
+| None | The declared schema is stored, in one write transaction |
+| The same version, the same schema | Nothing to do |
+| The same version, another schema | `SCHEMA_MISMATCH`: the application changed it without a new version |
+| A newer version | `SCHEMA_TOO_NEW`: a newer application wrote the file |
+| An older version | A migration, below |
 
 The comparison happens again inside the write transaction that stores or migrates the schema, so two processes that open an old file at once migrate it once: the second finds the new schema stored and has nothing to do.
 
@@ -385,13 +404,13 @@ The same holds between handles in one process. Each handle keeps the schema it w
 
 This document adds five error codes to the engine:
 
-| Code               | When                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `SCHEMA_MISMATCH`  | The declared schema differs from the stored one at the same version, or another process migrated it |
-| `SCHEMA_TOO_NEW`   | The file's schema version is newer than the declared one                                            |
-| `DUPLICATE_KEY`    | An insert found its primary key taken, or a unique index found its value taken                      |
-| `INVALID_QUERY`    | A query does not parse, or names a field or compares a value that does not fit the schema           |
-| `MIGRATION_FAILED` | An application's migration function reported an error, whose message this one carries               |
+| Code | When |
+| --- | --- |
+| `SCHEMA_MISMATCH` | The declared schema differs from the stored one at the same version, or another process migrated it |
+| `SCHEMA_TOO_NEW` | The file's schema version is newer than the declared one |
+| `DUPLICATE_KEY` | An insert found its primary key taken, or a unique index found its value taken |
+| `INVALID_QUERY` | A query does not parse, or names a field or compares a value that does not fit the schema |
+| `MIGRATION_FAILED` | An application's migration function reported an error, whose message this one carries |
 
 An engine error inside a migration function keeps its own code: a function that meets `DUPLICATE_KEY` and returns it ends the migration with `DUPLICATE_KEY`.
 
@@ -410,4 +429,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Composite indexes, indexes inside embedded objects, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, a date and time type, and cascading deletes.
+Composite indexes, indexes inside embedded objects, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, time zones and calendar arithmetic on dates, and cascading deletes.

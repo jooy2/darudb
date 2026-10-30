@@ -631,7 +631,7 @@ pub(crate) fn aggregated<'s>(
         Aggregate::Sum | Aggregate::Avg => matches!(resolved.leaf, Kind::Int | Kind::Float),
         Aggregate::Min | Aggregate::Max => matches!(
             resolved.leaf,
-            Kind::Int | Kind::Float | Kind::String | Kind::Bytes
+            Kind::Int | Kind::Float | Kind::String | Kind::Bytes | Kind::Date
         ),
     };
 
@@ -899,6 +899,7 @@ fn fits(value: &Value, kind: &Kind) -> bool {
             | (Kind::Float, Value::Float(_))
             | (Kind::String, Value::String(_))
             | (Kind::Bytes, Value::Bytes(_))
+            | (Kind::Date, Value::Date(_))
     )
 }
 
@@ -1058,7 +1059,8 @@ fn test<'s>(
 fn type_range(kind: &Kind) -> Range {
     let (first, next) = match kind {
         Kind::Bool => key::BOOL_TAGS,
-        Kind::Int => key::INT_TAGS,
+        // A date's key is its microseconds' int.
+        Kind::Int | Kind::Date => key::INT_TAGS,
         Kind::Float => key::FLOAT_TAGS,
         Kind::String => key::STRING_TAGS,
         _ => key::BYTES_TAGS,

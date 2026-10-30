@@ -8,7 +8,7 @@ use super::typed::{CollectionType, FieldReader, ValueWriter};
 use super::{Collection, Schema, Type};
 use crate::format::object::codec::Raw;
 use crate::format::object::names::{index_tree, records};
-use crate::format::object::schema::Kind;
+use crate::format::object::schema::{Kind, OBJECT_FORMAT};
 use crate::format::object::{Object, Value};
 use crate::testing::Rng;
 use crate::{Database, OpenOptions};
@@ -307,7 +307,7 @@ fn a_stored_schema_that_does_not_read_leaves_a_handle_without_one() {
     use crate::format::object::names::{META, SCHEMA_KEY};
 
     let damaged = vec![0x80];
-    let newer = codec::write(&[(1, Raw::Int(2))]);
+    let newer = codec::write(&[(1, Raw::Int(OBJECT_FORMAT + 1))]);
 
     for (record, expected) in [
         (damaged, "CORRUPTED"),
@@ -1601,4 +1601,180 @@ fn a_put_refused_as_the_first_change_leaves_a_whole_tree() {
 
         assert_eq!(stored.len(), 2001, "{code}");
     }
+}
+
+/// The object format the stored schema of `db` is in.
+fn object_format(db: &Database) -> i64 {
+    use crate::format::object::codec;
+
+    match codec::read(db.schema_record().unwrap()).unwrap()[0] {
+        (1, Raw::Int(format)) => format,
+        ref other => panic!("the schema's first field is {other:?}"),
+    }
+}
+
+/// A schema of `people` at `version`, with a date field `born` when `dated`.
+fn people(version: u64, dated: bool) -> Schema {
+    let people = Collection::new("people").field("name", Type::String);
+
+    Schema::new(version).collection(if dated {
+        people.optional("born", Type::Date).index("born")
+    } else {
+        people
+    })
+}
+
+/// The first date a schema declares raises the file to object format 2, and
+/// the file stays there when a later version drops the date: its records
+/// still hold dates, which a build of format 1 could not read.
+#[test]
+fn the_first_date_raises_the_object_format_and_nothing_lowers_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+
+    {
+        let db = OpenOptions::new()
+            .schema(people(1, false))
+            .open(&path)
+            .unwrap();
+
+        assert_eq!(object_format(&db), 1);
+    }
+
+    {
+        let db = OpenOptions::new()
+            .schema(people(2, true))
+            .open(&path)
+            .unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        assert_eq!(object_format(&db), 2);
+        txn.collection("people")
+            .unwrap()
+            .insert(
+                Object::new()
+                    .with("name", "Ada")
+                    .with("born", Value::Date(-1)),
+            )
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
+    let db = OpenOptions::new()
+        .schema(people(3, false))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(object_format(&db), 2);
+    assert_eq!(
+        db.begin_read()
+            .unwrap()
+            .collection("people")
+            .unwrap()
+            .get(1)
+            .unwrap()
+            .unwrap()
+            .get("born"),
+        None
+    );
+    drop(db);
+
+    // The same declaration opens the file again unchanged.
+    let db = OpenOptions::new()
+        .schema(people(3, false))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(object_format(&db), 2);
+    assert!(db.check().unwrap().is_ok());
+}
+
+/// `upgrade_format(false)` keeps a file in the object format it has, for
+/// the builds before format 2: a schema that needs format 2 is refused,
+/// with the file left as it was, and a file already in format 2 opens.
+#[test]
+fn a_file_kept_from_upgrading_stays_in_object_format_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let kept = |schema: Schema| {
+        let mut options = OpenOptions::new();
+
+        options.schema(schema).upgrade_format(false);
+        options.open(&path)
+    };
+
+    let refused = kept(people(1, true)).err().unwrap();
+
+    assert_eq!(refused.code(), "INVALID_ARGUMENT");
+    assert!(refused.to_string().contains("upgrade_format"), "{refused}");
+
+    // The file made for it holds no schema, and takes one of format 1.
+    drop(kept(people(1, false)).unwrap());
+    assert_eq!(
+        kept(people(2, true)).err().map(|error| error.code()),
+        Some("INVALID_ARGUMENT")
+    );
+    assert_eq!(object_format(&kept(people(1, false)).unwrap()), 1);
+
+    // Allowed, the migration raises it, and a handle kept from upgrading
+    // opens the file of format 2 as it is.
+    drop(
+        OpenOptions::new()
+            .schema(people(2, true))
+            .open(&path)
+            .unwrap(),
+    );
+    assert_eq!(object_format(&kept(people(2, true)).unwrap()), 2);
+}
+
+/// A stored schema in an object format this build does not know is told
+/// apart from damage everywhere: opening with a schema refuses it, the
+/// message names the object format, and salvage refuses to repair under it
+/// rather than dropping every object, with nothing written.
+#[test]
+fn an_object_format_this_build_does_not_read_is_refused_and_not_salvaged() {
+    use crate::format::object::codec;
+    use crate::format::object::names::{META, SCHEMA_KEY};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+
+    {
+        let db = OpenOptions::new()
+            .schema(people(1, true))
+            .open(&path)
+            .unwrap();
+        let mut raw = codec::read(db.schema_record().unwrap()).unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        raw[0].1 = Raw::Int(OBJECT_FORMAT + 1);
+        txn.insert_in(META, SCHEMA_KEY, &codec::write(&raw))
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
+    let refused = OpenOptions::new()
+        .schema(people(1, true))
+        .open(&path)
+        .err()
+        .unwrap();
+
+    assert_eq!(refused.code(), "UNSUPPORTED_FORMAT_VERSION");
+    assert!(
+        refused
+            .to_string()
+            .contains(&format!("object format {}", OBJECT_FORMAT + 1)),
+        "{refused}"
+    );
+
+    let into = dir.path().join("salvaged.darudb");
+
+    assert_eq!(
+        OpenOptions::new()
+            .salvage(&path, &into)
+            .err()
+            .map(|error| error.code()),
+        Some("UNSUPPORTED_FORMAT_VERSION")
+    );
+    assert!(!into.exists());
 }

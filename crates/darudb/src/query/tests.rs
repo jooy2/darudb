@@ -43,13 +43,16 @@ fn schema() -> Schema {
                     ),
                 )
                 .optional("note", Type::Bytes)
+                .optional("born", Type::Date)
+                .optional("seen", Type::list(Type::Date))
                 .index("score")
                 .index("rating")
                 .unique("handle")
                 .index("tags")
                 .index("team")
                 .index("friends")
-                .index("active"),
+                .index("active")
+                .index("born"),
         )
 }
 
@@ -69,6 +72,8 @@ const TAGS: [&str; 4] = ["red", "blue", "green", "re"];
 const TEAMS: [&str; 3] = ["north", "south", "gone"];
 const CITIES: [&str; 3] = ["Seoul", "Busan", "Seo"];
 const RATINGS: [f64; 7] = [-1.0, -0.0, 0.0, 0.5, 2.0, f64::INFINITY, f64::NAN];
+/// Microseconds from 1970: before it, at it, and after it.
+const DATES: [i64; 5] = [-86_400_000_001, -1, 0, 1, 1_793_361_600_000_000];
 
 fn pick<T: Copy>(rng: &mut Rng, of: &[T]) -> T {
     of[rng.index(of.len())]
@@ -135,6 +140,18 @@ fn player(rng: &mut Rng) -> Object {
         object.set("note", rng.bytes(len));
     }
 
+    if rng.below(3) > 0 {
+        object.set("born", Value::Date(pick(rng, &DATES)));
+    }
+
+    if rng.below(3) == 0 {
+        let seen: Vec<Value> = (0..rng.below(3))
+            .map(|_| Value::Date(pick(rng, &DATES)))
+            .collect();
+
+        object.set("seen", seen);
+    }
+
     object
 }
 
@@ -151,6 +168,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
         "team.city" | "address.city" => pick(rng, &["Seoul", "Busan", "Seo", "S", "x"]).into(),
         "active" => (rng.below(2) == 1).into(),
         "address.zip" => (int(rng, 5) - 1).into(),
+        "born" | "seen" => Value::Date(pick(rng, &[-86_400_000_001, -2, -1, 0, 1, 5, i64::MAX])),
         _ => {
             let len = rng.index(3);
 
@@ -159,7 +177,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
     }
 }
 
-const PATHS: [&str; 13] = [
+const PATHS: [&str; 15] = [
     "id",
     "score",
     "rating",
@@ -173,6 +191,8 @@ const PATHS: [&str; 13] = [
     "address.city",
     "address.zip",
     "note",
+    "born",
+    "seen",
 ];
 
 fn is_string(path: &str) -> bool {
@@ -225,7 +245,9 @@ fn test(rng: &mut Rng) -> Filter {
 
             Filter::is_in(path, values)
         }
-        8 if is_string(path) || path == "friends" => Filter::contains(path, value(rng, path)),
+        8 if is_string(path) || matches!(path, "friends" | "seen") => {
+            Filter::contains(path, value(rng, path))
+        }
         9 if is_string(path) => Filter::starts_with(path, value(rng, path)),
         10 if is_string(path) => Filter::ends_with(path, value(rng, path)),
         11 => Filter::is_null(path),
@@ -252,7 +274,7 @@ fn filter(rng: &mut Rng, depth: u32) -> Filter {
     }
 }
 
-const SORTABLE: [&str; 9] = [
+const SORTABLE: [&str; 10] = [
     "id",
     "score",
     "rating",
@@ -262,6 +284,7 @@ const SORTABLE: [&str; 9] = [
     "active",
     "address.zip",
     "note",
+    "born",
 ];
 
 fn query(rng: &mut Rng) -> Query {
@@ -470,7 +493,7 @@ thread_local! {
 
 /// The paths [`agree`] works out aggregates of, the ones no aggregate reads
 /// among them.
-const AGGREGATED: [&str; 11] = [
+const AGGREGATED: [&str; 13] = [
     "id",
     "score",
     "rating",
@@ -482,13 +505,19 @@ const AGGREGATED: [&str; 11] = [
     "tags",
     "team",
     "active",
+    "born",
+    "seen",
 ];
 
 /// `function` of the values at `path` of `objects`, worked out from the
 /// objects alone, or `None` where no aggregate reads the path.
 fn folded(objects: &[Object], path: &str, function: Aggregate) -> Option<Value> {
     let numeric = matches!(path, "id" | "score" | "rating" | "address.zip");
-    let ordered = numeric || matches!(path, "handle" | "note" | "team.city" | "address.city");
+    let ordered = numeric
+        || matches!(
+            path,
+            "handle" | "note" | "team.city" | "address.city" | "born"
+        );
 
     match function {
         Aggregate::Sum | Aggregate::Avg if !numeric => return None,
@@ -1536,6 +1565,15 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>, every: bool) -> String {
             Value::Null => "null".to_owned(),
             Value::Bool(value) => value.to_string(),
             Value::Int(value) => value.to_string(),
+            // Either case of the word, as the language allows.
+            Value::Date(micros) => match super::date::text(*micros) {
+                Some(text) if micros % 2 == 0 => format!("DATE \"{text}\""),
+                Some(text) => format!("date \"{text}\""),
+                None => {
+                    parameters.push(value.clone());
+                    format!("${}", parameters.len() - 1)
+                }
+            },
             Value::String(text) => {
                 let mut out = String::from("\"");
 

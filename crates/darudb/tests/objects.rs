@@ -1779,3 +1779,143 @@ fn a_shape_writes_objects_as_insert_does() {
 
     assert_eq!(found.len(), 2);
 }
+
+#[test]
+fn dates_are_instants_kept_to_the_microsecond_and_queried_in_order() {
+    use darudb::{Aggregate, Filter, Query};
+
+    let dir = TestDir::new();
+    let schema = Schema::new(1).collection(
+        Collection::new("events")
+            .field("name", Type::String)
+            .field("at", Type::Date)
+            .with_default("seen", Type::list(Type::Date), Value::List(Vec::new()))
+            .with_default("due", Type::Date, Value::Date(0))
+            .index("at"),
+    );
+    let db = open(&dir, schema, &[]).unwrap();
+    let dates = [
+        ("launch", 1_793_361_600_000_000),
+        ("epoch", 0),
+        ("just before", -1),
+        ("long ago", -62_167_219_200_000_000),
+        ("later", 1_793_361_600_000_001),
+    ];
+    let mut txn = db.begin_write().unwrap();
+    let mut events = txn.collection("events").unwrap();
+
+    for (name, at) in dates {
+        events
+            .insert(
+                Object::new()
+                    .with("name", name)
+                    .with("at", Value::Date(at))
+                    .with("seen", vec![Value::Date(at), Value::Date(at + 1)]),
+            )
+            .unwrap();
+    }
+
+    // A date field holds a date, never an int.
+    assert_eq!(
+        code(events.insert(Object::new().with("name", "x").with("at", 5))),
+        "INVALID_ARGUMENT"
+    );
+    drop(events);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let events = read.collection("events").unwrap();
+    let names = |query: &Query| {
+        events
+            .query(query)
+            .unwrap()
+            .iter()
+            .map(|event| {
+                event
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let first = events.get(1).unwrap().unwrap();
+
+    assert_eq!(first.get("at"), Some(&Value::Date(1_793_361_600_000_000)));
+    assert_eq!(first.get("due"), Some(&Value::Date(0)));
+    assert_eq!(
+        first.get("seen"),
+        Some(&Value::List(vec![
+            Value::Date(1_793_361_600_000_000),
+            Value::Date(1_793_361_600_000_001)
+        ]))
+    );
+    assert_eq!(
+        names(&Query::new().sort_by("at")),
+        ["long ago", "just before", "epoch", "launch", "later"]
+    );
+    assert_eq!(
+        names(&Query::new().filter(Filter::lt("at", Value::Date(0)))),
+        ["just before", "long ago"]
+    );
+    assert_eq!(
+        names(
+            &Query::parse(
+                r#"at BETWEEN DATE "1969-12-31T23:59:59.999999Z" AND date "1970-01-01" SORT BY at DESC"#,
+                &[]
+            )
+            .unwrap()
+        ),
+        ["epoch", "just before"]
+    );
+    assert_eq!(
+        names(&Query::parse(r#"at == DATE "2026-10-30T21:00:00+09:00""#, &[]).unwrap()),
+        ["launch"]
+    );
+    assert_eq!(
+        names(&Query::parse("seen CONTAINS $0", &[Value::Date(0)]).unwrap()),
+        ["epoch", "just before"]
+    );
+    assert_eq!(
+        events.max(&Query::new(), "at").unwrap(),
+        Value::Date(1_793_361_600_000_001)
+    );
+    assert_eq!(
+        events
+            .aggregate(
+                &Query::new().filter(Filter::gt("at", Value::Date(-1))),
+                Aggregate::Min,
+                &["at".to_owned()]
+            )
+            .unwrap(),
+        Value::Date(0)
+    );
+
+    // A date compares with a date: an int, a sum or a date the text cannot
+    // hold are refused.
+    assert_eq!(
+        code(events.query(&Query::new().filter(Filter::gt("at", 0)))),
+        "INVALID_QUERY"
+    );
+    assert_eq!(code(events.sum(&Query::new(), "at")), "INVALID_QUERY");
+    assert_eq!(
+        code(Query::parse(r#"at > DATE "2026-02-30""#, &[])),
+        "INVALID_QUERY"
+    );
+    assert_eq!(code(Query::parse("at > DATE 5", &[])), "INVALID_QUERY");
+
+    // A field called `date` is still a field.
+    assert_eq!(
+        code(Query::parse(r#"date == DATE "2026-10-30""#, &[])),
+        "OK"
+    );
+
+    let time = std::time::UNIX_EPOCH - std::time::Duration::from_nanos(1);
+
+    assert_eq!(Value::try_from(time).unwrap(), Value::Date(-1));
+    assert_eq!(
+        Value::Date(-1).as_time(),
+        Some(std::time::UNIX_EPOCH - std::time::Duration::from_micros(1))
+    );
+    assert!(db.check().unwrap().is_ok());
+}

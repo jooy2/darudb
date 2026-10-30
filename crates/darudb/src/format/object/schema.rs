@@ -9,8 +9,14 @@ use super::codec::{self, NameOrder, Raw};
 use super::names::CollectionNames;
 use super::value::Value;
 
-/// The object layer's format, field 1 of the stored schema.
-pub(crate) const OBJECT_FORMAT: i64 = 1;
+/// The newest object layer's format this build reads and writes, field 1 of
+/// the stored schema. Format 2 adds the date type.
+pub(crate) const OBJECT_FORMAT: i64 = 2;
+
+/// The oldest object format this build reads: the one every release before
+/// format 2 wrote, which a schema that declares nothing newer keeps, so that
+/// those releases still open the file.
+pub(crate) const OLDEST_OBJECT_FORMAT: i64 = 1;
 
 /// What a field holds.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +34,8 @@ pub(crate) enum Kind {
     List(Box<Kind>),
     /// An embedded object with these fields.
     Object(Fields),
+    /// An instant, in microseconds since the Unix epoch. Object format 2.
+    Date,
 }
 
 impl Kind {
@@ -42,6 +50,7 @@ impl Kind {
             Kind::Link { .. } => "a link",
             Kind::List(_) => "a list",
             Kind::Object(_) => "an object",
+            Kind::Date => "a date",
         }
     }
 
@@ -54,7 +63,13 @@ impl Kind {
     pub(crate) fn is_scalar(&self) -> bool {
         matches!(
             self,
-            Kind::Bool | Kind::Int | Kind::Float | Kind::String | Kind::Bytes | Kind::Link { .. }
+            Kind::Bool
+                | Kind::Int
+                | Kind::Float
+                | Kind::String
+                | Kind::Bytes
+                | Kind::Link { .. }
+                | Kind::Date
         )
     }
 
@@ -68,6 +83,7 @@ impl Kind {
             Kind::Link { .. } => 6,
             Kind::List(_) => 7,
             Kind::Object(_) => 8,
+            Kind::Date => 9,
         }
     }
 }
@@ -235,6 +251,9 @@ impl OpenSchema {
 /// The schema a file holds.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StoredSchema {
+    /// The object format the schema is stored in, which never goes down:
+    /// records may hold what a schema of a later version no longer declares.
+    pub(crate) format: i64,
     pub(crate) version: u64,
     pub(crate) collections: Vec<CollectionDef>,
     pub(crate) next_collection: u64,
@@ -262,10 +281,38 @@ impl StoredSchema {
             .map(|field| field.kind.clone())
     }
 
+    /// The lowest object format that holds what the schema declares: 2 for
+    /// a date anywhere in it, and 1 otherwise.
+    pub(crate) fn needs(&self) -> i64 {
+        fn needs_kind(kind: &Kind) -> i64 {
+            match kind {
+                Kind::Date => 2,
+                Kind::List(element) => needs_kind(element),
+                Kind::Object(fields) => needs_fields(fields),
+                _ => OLDEST_OBJECT_FORMAT,
+            }
+        }
+
+        fn needs_fields(fields: &Fields) -> i64 {
+            fields
+                .list
+                .iter()
+                .map(|field| needs_kind(&field.kind))
+                .max()
+                .unwrap_or(OLDEST_OBJECT_FORMAT)
+        }
+
+        self.collections
+            .iter()
+            .map(|collection| needs_fields(&collection.fields))
+            .max()
+            .unwrap_or(OLDEST_OBJECT_FORMAT)
+    }
+
     /// The record of the stored schema.
     pub(crate) fn encode(&self) -> Vec<u8> {
         codec::write(&[
-            (1, Raw::Int(OBJECT_FORMAT)),
+            (1, Raw::Int(self.format)),
             (2, int(self.version)),
             (
                 3,
@@ -281,12 +328,14 @@ impl StoredSchema {
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, Option<&'static str>> {
         let raw = codec::read(bytes).map_err(Some)?;
         let fields = Record(&raw);
+        let format = fields.int(1).map_err(Some)?;
 
-        if fields.int(1).map_err(Some)? != OBJECT_FORMAT {
+        if !(OLDEST_OBJECT_FORMAT..=OBJECT_FORMAT).contains(&format) {
             return Err(None);
         }
 
         let schema = Self {
+            format,
             version: fields.count(2).map_err(Some)?,
             collections: fields
                 .list(3)
@@ -300,6 +349,12 @@ impl StoredSchema {
         };
 
         schema.check().map_err(Some)?;
+
+        if schema.needs() > format {
+            return Err(Some(
+                "the schema declares what its object format does not have",
+            ));
+        }
 
         Ok(schema)
     }
@@ -387,7 +442,8 @@ fn default_fits(value: &Value, kind: &Kind) -> bool {
         | (Kind::Int, Value::Int(_))
         | (Kind::Float, Value::Float(_))
         | (Kind::String, Value::String(_))
-        | (Kind::Bytes, Value::Bytes(_)) => true,
+        | (Kind::Bytes, Value::Bytes(_))
+        | (Kind::Date, Value::Date(_)) => true,
         (Kind::List(element), Value::List(values)) => {
             values.iter().all(|value| default_fits(value, element))
         }
@@ -470,6 +526,7 @@ fn default_raw(value: &Value) -> Option<Raw> {
         Value::Float(value) => Raw::Float(*value),
         Value::String(value) => Raw::String(value.clone()),
         Value::Bytes(value) => Raw::Bytes(value.clone()),
+        Value::Date(value) => Raw::Date(*value),
         Value::List(values) => Raw::List(values.iter().map(default_raw).collect::<Option<_>>()?),
         Value::Null | Value::Object(_) => return None,
     })
@@ -482,6 +539,7 @@ fn default_value(raw: &Raw) -> Result<Value, &'static str> {
         Raw::Float(value) => Value::Float(*value),
         Raw::String(value) => Value::String(value.clone()),
         Raw::Bytes(value) => Value::Bytes(value.clone()),
+        Raw::Date(value) => Value::Date(*value),
         Raw::List(values) => {
             Value::List(values.iter().map(default_value).collect::<Result<_, _>>()?)
         }
@@ -623,6 +681,7 @@ fn decode_kind(record: &Record<'_>) -> Result<Kind, &'static str> {
             list: decode_fields(record.list(4)?)?,
             next_id: record.count(5)?,
         }),
+        9 => Kind::Date,
         _ => return Err("the schema names an unknown kind"),
     })
 }
@@ -644,6 +703,7 @@ mod tests {
         };
 
         StoredSchema {
+            format: OLDEST_OBJECT_FORMAT,
             version: 3,
             collections: vec![
                 CollectionDef {
@@ -760,10 +820,52 @@ mod tests {
 
     #[test]
     fn another_object_format_is_told_apart_from_damage() {
-        let mut raw = codec::read(&sample().encode()).unwrap();
+        for format in [OLDEST_OBJECT_FORMAT - 1, OBJECT_FORMAT + 1] {
+            let mut raw = codec::read(&sample().encode()).unwrap();
 
-        raw[0].1 = Raw::Int(OBJECT_FORMAT + 1);
+            raw[0].1 = Raw::Int(format);
 
-        assert_eq!(StoredSchema::decode(&codec::write(&raw)), Err(None));
+            assert_eq!(StoredSchema::decode(&codec::write(&raw)), Err(None));
+        }
+    }
+
+    #[test]
+    fn a_schema_is_in_the_lowest_format_that_holds_it_or_a_higher_one() {
+        let mut schema = sample();
+
+        assert_eq!(schema.needs(), 1);
+        assert_eq!(StoredSchema::decode(&schema.encode()), Ok(schema.clone()));
+
+        // A schema of format 1 keeps format 1's bytes, which builds before
+        // format 2 read.
+        assert_eq!(codec::read(&schema.encode()).unwrap()[0], (1, Raw::Int(1)));
+
+        // A format kept higher than the schema needs reads back as it is.
+        schema.format = 2;
+        assert_eq!(StoredSchema::decode(&schema.encode()), Ok(schema.clone()));
+
+        // A date, inside a list inside an embedded object, needs format 2,
+        // and a record of format 1 that declares one is damaged.
+        let Kind::Object(address) = &mut schema.collections[0].fields.list[2].kind else {
+            unreachable!()
+        };
+
+        address.list.push(FieldDef {
+            id: 2,
+            name: "seen".into(),
+            kind: Kind::List(Box::new(Kind::Date)),
+            optional: false,
+            default: Some(Value::List(vec![Value::Date(-1)])),
+        });
+        address.next_id = 3;
+
+        assert_eq!(schema.needs(), 2);
+        assert_eq!(StoredSchema::decode(&schema.encode()), Ok(schema.clone()));
+
+        schema.format = 1;
+        assert!(matches!(
+            StoredSchema::decode(&schema.encode()),
+            Err(Some(_))
+        ));
     }
 }

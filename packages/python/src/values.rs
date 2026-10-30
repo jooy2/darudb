@@ -725,6 +725,13 @@ pub(crate) fn to_python<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'
             list.into_any()
         }
         Value::Object(object) => dict_of(py, object)?.into_any(),
+        _ => {
+            return Err(crate::failure(
+                py,
+                "INTERNAL",
+                format!("a value this package does not know: {value:?}"),
+            ));
+        }
     })
 }
 

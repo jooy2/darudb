@@ -12,3 +12,4 @@ pub(crate) mod schema;
 mod value;
 
 pub use value::{Object, Value};
+pub(crate) use value::{micros_of, time_of};

@@ -13,6 +13,7 @@
 //! - `aggregate`: sums, means, and the least and greatest values, worked out
 //!   exactly from the objects a query finds.
 //! - `change`: deleting or updating every object a query finds, in one call.
+//! - `date`: dates as the query language writes them.
 //! - `fold`: comparing strings ignoring case, by Unicode's simple case
 //!   folding, whose table `fold_table` is generated from Unicode's data.
 //! - `typed`: conditions, sorts and aggregates that name their fields
@@ -24,6 +25,7 @@
 mod aggregate;
 mod build;
 mod change;
+mod date;
 mod fold;
 mod fold_table;
 pub(crate) mod ir;

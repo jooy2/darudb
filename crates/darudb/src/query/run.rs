@@ -261,6 +261,7 @@ enum ValueRef<'a> {
     /// reads as they are.
     String(&'a [u8]),
     Bytes(&'a [u8]),
+    Date(i64),
 }
 
 impl ValueRef<'_> {
@@ -286,6 +287,7 @@ impl ValueRef<'_> {
             ValueRef::Float(value) => Value::Float(value),
             ValueRef::String(value) => Value::String(String::from_utf8_lossy(value).into_owned()),
             ValueRef::Bytes(value) => Value::Bytes(value.to_vec()),
+            ValueRef::Date(value) => Value::Date(value),
         }
     }
 
@@ -309,7 +311,8 @@ impl ValueRef<'_> {
             // A number compared with a number of its own type, as a sort or
             // a range on a numeric field compares every object it reads,
             // without a value made for it to go through `key::compare`.
-            (ValueRef::Int(value), Value::Int(other)) => value.cmp(other),
+            (ValueRef::Int(value), Value::Int(other))
+            | (ValueRef::Date(value), Value::Date(other)) => value.cmp(other),
             (ValueRef::Float(value), Value::Float(other)) => key::compare_floats(value, *other),
             (ValueRef::String(value), Value::String(other)) => value.cmp(other.as_bytes()),
             (ValueRef::Bytes(value), Value::Bytes(other)) => value.cmp(other.as_slice()),
@@ -321,6 +324,7 @@ impl ValueRef<'_> {
             (ValueRef::Bool(value), _) => key::compare(&Value::Bool(value), other),
             (ValueRef::Int(value), _) => key::compare(&Value::Int(value), other),
             (ValueRef::Float(value), _) => key::compare(&Value::Float(value), other),
+            (ValueRef::Date(value), _) => key::compare(&Value::Date(value), other),
         }
     }
 }
@@ -496,6 +500,7 @@ impl Fields for View<'_> {
             (Some(FieldRef::Bytes(value)), Kind::Bytes) => {
                 Current::Borrowed(ValueRef::Bytes(value))
             }
+            (Some(FieldRef::Date(value)), Kind::Date) => Current::Borrowed(ValueRef::Date(value)),
             (Some(FieldRef::Encoded(bytes)), kind) => {
                 Current::Owned(codec::value_of(bytes, kind).map_err(damaged)?)
             }
@@ -1729,7 +1734,7 @@ fn extreme_in_index(
                     source.corrupted(format!("an entry of index {}: {reason}", index.id))
                 })?;
 
-                found = Some(value);
+                found = Some(key::of_kind(value, &field.kind));
 
                 Ok(true)
             })?;

@@ -2,17 +2,18 @@
 //! and takes them.
 
 use std::fmt;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A value of a field.
 ///
 /// A link holds the linked object's primary key, so it is an [`Int`],
-/// [`String`] or [`Bytes`] here; the schema says it is a link. A date or a
-/// time is an [`Int`], in the unit the application chooses.
+/// [`String`] or [`Bytes`] here; the schema says it is a link.
 ///
 /// [`Int`]: Value::Int
 /// [`String`]: Value::String
 /// [`Bytes`]: Value::Bytes
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Value {
     /// No value: an optional field left out.
     Null,
@@ -30,6 +31,10 @@ pub enum Value {
     List(Vec<Value>),
     /// An embedded object.
     Object(Object),
+    /// An instant, in microseconds since the Unix epoch, 1970-01-01T00:00:00
+    /// UTC, negative before it. It has no time zone: a binding converts the
+    /// time of its language to UTC.
+    Date(i64),
 }
 
 impl Value {
@@ -68,6 +73,20 @@ impl Value {
             Value::String(value) => Some(value),
             _ => None,
         }
+    }
+
+    /// The microseconds since the Unix epoch, if the value is a date.
+    pub fn as_date(&self) -> Option<i64> {
+        match self {
+            Value::Date(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// The date as a [`SystemTime`], if the value is a date that the
+    /// platform's `SystemTime` can hold.
+    pub fn as_time(&self) -> Option<SystemTime> {
+        self.as_date().and_then(time_of)
     }
 
     /// The bytes, if the value holds bytes.
@@ -146,6 +165,51 @@ impl From<&[u8]> for Value {
 impl From<Vec<u8>> for Value {
     fn from(value: Vec<u8>) -> Self {
         Value::Bytes(value)
+    }
+}
+
+/// A date, rounded down to the microsecond.
+///
+/// It fails with [`Error::InvalidArgument`](crate::Error::InvalidArgument)
+/// for a time more than about 292,000 years from 1970, which a date cannot
+/// hold.
+impl TryFrom<SystemTime> for Value {
+    type Error = crate::Error;
+
+    fn try_from(time: SystemTime) -> crate::Result<Self> {
+        micros_of(time)
+            .map(Value::Date)
+            .ok_or_else(|| crate::Error::InvalidArgument {
+                message: format!("{time:?} is outside the range of a date"),
+            })
+    }
+}
+
+/// The microseconds from the Unix epoch to `time`, rounded down, so that a
+/// time before the epoch with a part of a microsecond goes to the
+/// microsecond before it; `None` outside an `i64`.
+pub(crate) fn micros_of(time: SystemTime) -> Option<i64> {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_micros()).ok(),
+        Err(before) => {
+            let before = before.duration();
+            let whole = i64::try_from(before.as_micros()).ok()?;
+            let part = i64::from(before.subsec_nanos() % 1_000 != 0);
+
+            whole.checked_add(part).map(|micros| -micros)
+        }
+    }
+}
+
+/// The time `micros` microseconds from the Unix epoch, if the platform's
+/// `SystemTime` holds it.
+pub(crate) fn time_of(micros: i64) -> Option<SystemTime> {
+    let distance = Duration::from_micros(micros.unsigned_abs());
+
+    if micros < 0 {
+        UNIX_EPOCH.checked_sub(distance)
+    } else {
+        UNIX_EPOCH.checked_add(distance)
     }
 }
 
@@ -403,5 +467,31 @@ mod tests {
         assert_eq!(built, read);
         assert_ne!(built, read.clone().with("c", 3));
         assert_eq!(format!("{built:?}"), r#"{"a": Int(1), "b": Int(2)}"#);
+    }
+
+    #[test]
+    fn times_are_microseconds_rounded_down() {
+        let after = |secs, nanos| UNIX_EPOCH + Duration::new(secs, nanos);
+        let before = |secs, nanos| UNIX_EPOCH - Duration::new(secs, nanos);
+
+        assert_eq!(micros_of(UNIX_EPOCH), Some(0));
+        assert_eq!(micros_of(after(0, 999)), Some(0));
+        assert_eq!(micros_of(after(0, 1_000)), Some(1));
+        assert_eq!(micros_of(after(1, 1)), Some(1_000_000));
+        assert_eq!(micros_of(before(0, 1)), Some(-1));
+        assert_eq!(micros_of(before(0, 1_000)), Some(-1));
+        assert_eq!(micros_of(before(0, 1_001)), Some(-2));
+        assert_eq!(micros_of(before(1, 0)), Some(-1_000_000));
+
+        for micros in [i64::MIN + 1, -1_000_001, -1, 0, 1, 1_793_361_600_000_000] {
+            let Some(time) = time_of(micros) else {
+                // A platform whose `SystemTime` does not reach that far.
+                continue;
+            };
+
+            assert_eq!(micros_of(time), Some(micros));
+        }
+
+        assert_eq!(micros_of(after(u64::MAX / 2, 0)), None);
     }
 }

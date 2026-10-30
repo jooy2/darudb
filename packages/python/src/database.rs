@@ -531,6 +531,13 @@ fn type_dict<'py>(py: Python<'py>, kind: &Type) -> PyResult<Bound<'py, PyDict>> 
             dict.set_item("fields", fields_list(py, embedded.fields())?)?;
             "object"
         }
+        _ => {
+            return Err(crate::failure(
+                py,
+                "INTERNAL",
+                format!("a field type this package does not know: {kind:?}"),
+            ));
+        }
     };
 
     dict.set_item("kind", name)?;

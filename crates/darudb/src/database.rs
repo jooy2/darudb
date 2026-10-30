@@ -293,13 +293,17 @@ impl Database {
             return Ok(Opening::Open(Self { shared, schema }));
         };
 
-        Ok(match schema::open(&shared, declared, migrations)? {
-            Opened::Ready(schema) => Opening::Open(Self {
-                shared,
-                schema: Some(schema),
-            }),
-            Opened::Migrating(pending) => Opening::Migrating(PendingMigration { shared, pending }),
-        })
+        Ok(
+            match schema::open(&shared, declared, migrations, options.upgrades_format())? {
+                Opened::Ready(schema) => Opening::Open(Self {
+                    shared,
+                    schema: Some(schema),
+                }),
+                Opened::Migrating(pending) => {
+                    Opening::Migrating(PendingMigration { shared, pending })
+                }
+            },
+        )
     }
 
     /// Opens a database whose file is `io`, bypassing the file system: the

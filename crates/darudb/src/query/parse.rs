@@ -3,6 +3,7 @@
 //!
 //! [`Query`]: super::Query
 
+use super::date;
 use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
 use crate::error::{Error, Result};
 use crate::format::object::Value;
@@ -647,6 +648,18 @@ impl Parser<'_> {
             Token::Word(word) if word.eq_ignore_ascii_case("true") => Value::Bool(true),
             Token::Word(word) if word.eq_ignore_ascii_case("false") => Value::Bool(false),
             Token::Word(word) if word.eq_ignore_ascii_case("null") => Value::Null,
+            // `DATE` is read so only before a string, so a field may be
+            // called `date`.
+            Token::Word(word) if word.eq_ignore_ascii_case("date") => {
+                let Some((Token::String(text), at)) = self.tokens.get(self.at + 1) else {
+                    return Err(self.expected("a value"));
+                };
+                let micros = date::parse(text).map_err(|reason| invalid(*at, reason))?;
+
+                self.advance();
+
+                Value::Date(micros)
+            }
             Token::Parameter(index) => match self.parameters {
                 None => {
                     let index = *index;

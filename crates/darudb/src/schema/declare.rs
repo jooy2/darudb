@@ -12,6 +12,7 @@ use super::typed::{CollectionType, EmbeddedType};
 
 /// The type of a field.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Type {
     /// `false` or `true`.
     Bool,
@@ -29,6 +30,10 @@ pub enum Type {
     List(Box<Type>),
     /// An embedded object with fields of its own.
     Object(Embedded),
+    /// An instant, in microseconds since the Unix epoch: [`Value::Date`].
+    /// A file with a date field is in object format 2, which builds before
+    /// it cannot open.
+    Date,
 }
 
 impl Type {
@@ -550,6 +555,7 @@ fn declared_type(kind: &Kind, stored: &StoredSchema) -> Result<Type> {
         Kind::Float => Type::Float,
         Kind::String => Type::String,
         Kind::Bytes => Type::Bytes,
+        Kind::Date => Type::Date,
         Kind::Link { collection } => Type::Link(
             stored
                 .collection_by_id(*collection)
@@ -583,7 +589,8 @@ fn default_fits(value: &Value, kind: &Type) -> bool {
         | (Type::Int, Value::Int(_))
         | (Type::Float, Value::Float(_))
         | (Type::String, Value::String(_))
-        | (Type::Bytes, Value::Bytes(_)) => true,
+        | (Type::Bytes, Value::Bytes(_))
+        | (Type::Date, Value::Date(_)) => true,
         (Type::List(element), Value::List(values)) => {
             values.iter().all(|value| default_fits(value, element))
         }

@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::format::object::key;
 use crate::format::object::names::{META, SCHEMA_KEY, counter, index_tree, records};
 use crate::format::object::schema::{
-    Fields, IndexDef, Kind, OBJECT_FORMAT, OpenSchema, StoredSchema,
+    Fields, IndexDef, Kind, OBJECT_FORMAT, OLDEST_OBJECT_FORMAT, OpenSchema, StoredSchema,
 };
 use crate::format::object::{Object, Value};
 use crate::instance::Shared;
@@ -61,10 +61,17 @@ pub(crate) enum Opened {
 
 /// Stores or checks the schema of the file behind `shared`, or begins a
 /// migration from an older one.
+///
+/// A schema that needs a higher object format than the file's is refused
+/// unless `upgrade` allows it, as [`OpenOptions::upgrade_format`] does the
+/// file format: builds before that object format could not open the file.
+///
+/// [`OpenOptions::upgrade_format`]: crate::OpenOptions::upgrade_format
 pub(crate) fn open(
     shared: &Arc<Shared>,
     declared: &Schema,
     migrations: &[Migration],
+    upgrade: bool,
 ) -> Result<Opened> {
     // Most opens find the declared schema stored, which a read transaction
     // shows without waiting for the writer lock.
@@ -89,7 +96,7 @@ pub(crate) fn open(
         .map(|encoded| decode(&shared.path, &txn, encoded))
         .transpose()?;
     let plan = match resolve(declared, stored.as_ref(), migrations)? {
-        Resolution::Change(plan) => plan,
+        Resolution::Change(plan) => *plan,
         Resolution::Unchanged => {
             let (Some(schema), Some(encoded)) = (stored, encoded) else {
                 return Err(internal("an unchanged schema that is not stored"));
@@ -98,6 +105,18 @@ pub(crate) fn open(
             return Ok(Opened::Ready(Arc::new(OpenSchema::new(schema, encoded))));
         }
     };
+    let format = stored
+        .as_ref()
+        .map_or(OLDEST_OBJECT_FORMAT, |stored| stored.format);
+
+    if plan.to.format > format && !upgrade {
+        return Err(Error::InvalidArgument {
+            message: format!(
+                "the schema needs object format {}, a date field for one, and the file is in object format {format}, which `upgrade_format(false)` keeps it in so that older builds still open it; open it with `upgrade_format(true)` to raise it",
+                plan.to.format
+            ),
+        });
+    }
     let encoded = plan.to.encode();
     let schema = Arc::new(OpenSchema::new(plan.to, encoded));
 
@@ -281,14 +300,20 @@ impl Pending {
 fn decode(path: &Path, source: &dyn Source, encoded: &[u8]) -> Result<StoredSchema> {
     StoredSchema::decode(encoded).map_err(|reason| match reason {
         Some(reason) => source.corrupted(format!("the stored schema: {reason}")),
-        None => Error::UnsupportedFormatVersion {
-            path: path.to_path_buf(),
-            found: StoredSchema::format_of(encoded)
-                .and_then(|format| u32::try_from(format).ok())
-                .unwrap_or(u32::MAX),
-            supported: u32::try_from(OBJECT_FORMAT).unwrap_or(u32::MAX),
-        },
+        None => unsupported_object_format(path, encoded),
     })
+}
+
+/// The error for the stored schema `encoded`, in an object format this
+/// build does not read.
+pub(crate) fn unsupported_object_format(path: &Path, encoded: &[u8]) -> Error {
+    Error::UnsupportedObjectFormat {
+        path: path.to_path_buf(),
+        found: StoredSchema::format_of(encoded)
+            .and_then(|format| u32::try_from(format).ok())
+            .unwrap_or(u32::MAX),
+        supported: u32::try_from(OBJECT_FORMAT).unwrap_or(u32::MAX),
+    }
 }
 
 /// Fills the empty tree of `index` from the objects of `collection`,

@@ -360,6 +360,7 @@ pub fn tagged(value: &Value) -> Vec<u8> {
         Value::Float(value) => Raw::Float(*value),
         Value::String(value) => Raw::String(value.clone()),
         Value::Bytes(value) => Raw::Bytes(value.clone()),
+        Value::Date(value) => Raw::Date(*value),
         // No aggregate gives a list or an object.
         Value::Null | Value::List(_) | Value::Object(_) => return vec![NULL_TAG],
     };

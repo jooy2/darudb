@@ -115,7 +115,7 @@ pub(crate) fn salvage(from: &Path, into: &Path, options: &OpenOptions) -> Result
     let ((), bytes) = write_new(into, "salvage", copy, |copy| {
         let names = salvager.copy(record.as_ref(), copy, &mut report)?;
 
-        repair(copy, &names, &mut report)?;
+        repair(from, copy, &names, &mut report)?;
         count(copy, &mut report)
     })?;
 
@@ -762,11 +762,27 @@ impl Output<'_> {
 /// be read go, every index is built again from the records, and every
 /// auto-increment counter lies past its keys. Without a stored schema,
 /// nothing could read the objects, so they go too.
-fn repair(copy: &Database, names: &[String], report: &mut SalvageReport) -> Result<()> {
+///
+/// A stored schema in an object format this build does not know fails the
+/// salvage, with nothing written: it is not damage, and repairing under it
+/// would drop every object a newer build wrote, which that build salvages.
+fn repair(
+    from: &Path,
+    copy: &Database,
+    names: &[String],
+    report: &mut SalvageReport,
+) -> Result<()> {
     let stored = copy.begin_read()?.get_in(META, SCHEMA_KEY)?;
-    let schema = stored
-        .as_deref()
-        .and_then(|stored| StoredSchema::decode(stored).ok());
+    let schema = match stored.as_deref().map(StoredSchema::decode) {
+        Some(Ok(schema)) => Some(schema),
+        Some(Err(None)) => {
+            return Err(crate::schema::unsupported_object_format(
+                from,
+                stored.as_deref().unwrap_or_default(),
+            ));
+        }
+        Some(Err(Some(_))) | None => None,
+    };
     let collections = schema
         .as_ref()
         .map_or(&[][..], |schema| schema.collections.as_slice());

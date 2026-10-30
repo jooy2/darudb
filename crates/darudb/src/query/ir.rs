@@ -537,6 +537,7 @@ fn value_raw(value: &Value) -> Result<Raw> {
         Value::Float(value) => Raw::Float(*value),
         Value::String(value) => Raw::String(value.clone()),
         Value::Bytes(value) => Raw::Bytes(value.clone()),
+        Value::Date(value) => Raw::Date(*value),
         Value::Null => return Err(invalid("null is only compared with `==` or `!=`")),
         Value::List(_) | Value::Object(_) => {
             return Err(invalid(
@@ -832,6 +833,7 @@ pub(crate) fn decode_parameters(bytes: &[u8]) -> Result<Vec<Value>> {
                     Raw::Float(value) => Value::Float(value),
                     Raw::String(value) => Value::String(value),
                     Raw::Bytes(value) => Value::Bytes(value),
+                    Raw::Date(value) => Value::Date(value),
                     _ => return Err(invalid("a parameter's value is not a single value")),
                 };
                 Ok(())
@@ -850,6 +852,7 @@ fn raw_value(raw: Raw) -> Result<Value> {
         Raw::Float(value) => Value::Float(value),
         Raw::String(value) => Value::String(value),
         Raw::Bytes(value) => Value::Bytes(value),
+        Raw::Date(value) => Value::Date(value),
         _ => return Err(invalid("the IR holds a value that is not a single value")),
     })
 }
