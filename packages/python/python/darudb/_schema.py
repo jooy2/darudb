@@ -2,9 +2,9 @@
 
 A class decorated with ``collection`` or ``embedded`` becomes a frozen,
 keyword-only dataclass, and its annotations become its fields' types:
-``bool``, ``int``, ``float``, ``str``, ``bytes``, ``datetime``, a ``list`` of
-those, a class decorated with ``embedded``, and any of them ``| None`` for an
-optional field. A ``datetime`` is a date: an instant, written from an aware
+``bool``, ``int``, ``float``, ``str``, ``bytes``, ``datetime``, a class
+decorated with ``embedded``, a ``list`` of any of those, and any of them
+``| None`` for an optional field. A ``datetime`` is a date: an instant, written from an aware
 ``datetime`` and read as one in UTC. ``field`` adds what an annotation cannot
 say: an index, a primary key, a link, or a stored name of its own.
 
@@ -399,8 +399,8 @@ def _type_of(annotation: Any, options: _Options, owner: type, attr: str) -> tupl
 
         kind, spec = _type_of(element, options, owner, attr)
 
-        if isinstance(spec, tuple) and spec[0] in ("list", "object"):
-            raise invalid(f"{where} is a list of lists or of objects, which the engine refuses")
+        if isinstance(spec, tuple) and spec[0] == "list":
+            raise invalid(f"{where} is a list of lists, which the engine refuses")
 
         return ("list", kind), ("list", spec)
 
@@ -423,7 +423,7 @@ def _type_of(annotation: Any, options: _Options, owner: type, attr: str) -> tupl
 
     raise invalid(
         f"{where} has the type {annotation!r}; a field holds a bool, an int, a float, a str, "
-        "bytes, a datetime, a list of those, or an @embedded class"
+        "bytes, a datetime, an @embedded class, or a list of those"
     )
 
 
@@ -520,6 +520,11 @@ def _resolve(cls: type) -> Resolved:
             link = spec[1][1] if spec[1][0] == "link" else None
 
         embedded_class = annotation if isinstance(kind, _native.Layout) else None
+
+        # A path through a list of embedded objects goes on to the element's
+        # fields, as one through an embedded object does.
+        if isinstance(kind, tuple) and kind[0] == "list" and isinstance(kind[1], _native.Layout):
+            (embedded_class,) = typing.get_args(annotation)
 
         fields.append(_Field(item.name, stored, kind, field_spec, link, embedded_class))
         layout.append((item.name, stored, kind))

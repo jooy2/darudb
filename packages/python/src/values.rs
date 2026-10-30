@@ -117,8 +117,13 @@ impl Layout {
             .iter()
             .map(|field| ShapeField {
                 name: field.stored.clone(),
+                // A list of embedded objects is read with its elements'.
                 fields: match &field.kind {
                     Kind::Object(layout) => Some(layout.get().shape.clone()),
+                    Kind::List(element) => match element.as_ref() {
+                        Kind::Object(layout) => Some(layout.get().shape.clone()),
+                        _ => None,
+                    },
                     _ => None,
                 },
             })
