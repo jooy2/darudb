@@ -27,6 +27,7 @@ const int _contains = 12;
 const int _startsWith = 13;
 const int _endsWith = 14;
 const int _isNull = 15;
+const int _linked = 16;
 
 /// How deeply a filter may nest, as the engine holds every query to.
 const int _maxFilterDepth = 24;
@@ -40,6 +41,7 @@ final class Condition {
     this._values,
     this._terms, [
     this._ignoreCase = false,
+    this._collection,
   ]);
 
   final int _op;
@@ -50,14 +52,22 @@ final class Condition {
   /// Whether the test compares strings ignoring case.
   final bool _ignoreCase;
 
+  /// The collection whose objects link, for a test of them.
+  final String? _collection;
+
   /// This condition, with every test in it of `equals`, `notEquals`,
   /// `isIn`, `contains`, `startsWith` and `endsWith` comparing strings
   /// ignoring case, by Unicode's simple case folding. Such a test of a field
   /// that holds no strings fails with `INVALID_QUERY` when the query runs.
   Condition ignoreCase() => switch (_op) {
-    _and || _or || _not => Condition._(_op, _path, _values, [
-      for (final term in _terms) term.ignoreCase(),
-    ]),
+    _and || _or || _not || _linked => Condition._(
+      _op,
+      _path,
+      _values,
+      [for (final term in _terms) term.ignoreCase()],
+      false,
+      _collection,
+    ),
     _equal ||
     _notEqual ||
     _in ||
@@ -383,6 +393,34 @@ abstract base class QueryBuilder<T> {
   int _offset = 0;
   int? _limit;
 
+  /// Holds for an object that some object of [schema]'s collection links
+  /// to through the link field [link] picks from that collection's query
+  /// builder, and that meets [where], a condition on that collection's
+  /// fields, if it is given. `~` of it finds the objects nothing links to.
+  ///
+  /// ```dart
+  /// users.find((q) => q.where(
+  ///   q.linkedFrom(postSchema, (p) => p.author, (p) => p.year.atLeast(2020)),
+  /// ));
+  /// ```
+  Condition linkedFrom<L, LQ extends QueryBuilder<L>>(
+    CollectionSchema<L, LQ, Object> schema,
+    Field Function(LQ q) link, [
+    Condition Function(LQ q)? where,
+  ]) {
+    final linking = schema.newQuery();
+    final term = where?.call(linking);
+
+    return Condition._(
+      _linked,
+      link(linking).path,
+      const [],
+      [?term],
+      false,
+      schema.name,
+    );
+  }
+
   /// Keeps the objects [condition] holds for. A second `where` keeps those
   /// both hold for.
   QueryBuilder<T> where(Condition condition) {
@@ -502,7 +540,31 @@ void _writeExpression(Writer writer, Condition node, int depth) {
 
   final mark = writer.open();
 
-  if (node._op == _and || node._op == _or || node._op == _not) {
+  if (node._op == _linked) {
+    final terms = node._terms;
+
+    writer
+      ..varint(terms.isEmpty ? 3 : 4)
+      ..varint(1)
+      ..byte(Tag.int64)
+      ..int64(_linked)
+      ..varint(2);
+    _writePath(writer, node._path);
+
+    if (terms.isNotEmpty) {
+      writer
+        ..varint(4)
+        ..byte(Tag.list)
+        ..varint(1);
+      _writeExpression(writer, terms.single, depth + 1);
+    }
+
+    // Field 6, last: the collection whose objects link.
+    writer
+      ..varint(6)
+      ..byte(Tag.string)
+      ..string(node._collection ?? '');
+  } else if (node._op == _and || node._op == _or || node._op == _not) {
     final terms = node._terms;
 
     writer

@@ -91,6 +91,46 @@ void main() {
     });
   });
 
+  test('linkedFrom tests what links to an object', () {
+    db.write((txn) {
+      txn.collection(userSchema).insertMany([
+        const User(name: 'Ada', age: 36),
+        const User(name: 'Grace', age: 85, friend: Link(1)),
+        const User(name: 'Alan', age: 41, friend: Link(1)),
+        const User(name: 'Edsger', age: 72, friend: Link(2)),
+      ]);
+    });
+
+    db.read((txn) {
+      final users = txn.collection(userSchema);
+      List<String> names(QueryBuilder<User> Function(UserQuery q) query) => [
+        for (final user in users.find(query)) user.name,
+      ];
+
+      expect(names((q) => q.where(q.linkedFrom(userSchema, (u) => u.friend))), [
+        'Ada',
+        'Grace',
+      ]);
+      expect(
+        names(
+          (q) => q.where(
+            q.linkedFrom(
+              userSchema,
+              (u) => u.friend,
+              (u) => u.age.greaterThan(80),
+            ),
+          ),
+        ),
+        ['Ada'],
+      );
+      expect(
+        names((q) => q.where(~q.linkedFrom(userSchema, (u) => u.friend))),
+        ['Alan', 'Edsger'],
+      );
+      expect(users.countText(r'ANY users.friend (age < $0)', [50]), 1);
+    });
+  });
+
   test('tests that ignore case', () {
     db.write((txn) {
       txn.collection(userSchema).insertMany(const [
