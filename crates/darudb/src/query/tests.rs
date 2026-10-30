@@ -2,13 +2,17 @@
 //! through the planner and as a walk of every record, return the same
 //! objects in the same order, and count the same.
 
+use std::ops::Bound;
+
 use super::aggregate::Aggregate;
 use super::build::{Filter, Query};
 use super::ir::{self, Ir};
 use super::{plan, run};
 use crate::format::object::codec::NameOrder;
+use crate::format::object::names::{index_tree, records};
+use crate::format::object::schema::StoredSchema;
 use crate::format::object::{Object, Value, key};
-use crate::schema::objects::Source;
+use crate::schema::objects::{Source, check_indexes};
 use crate::schema::{Collection, Embedded, Schema, Type};
 use crate::testing::Rng;
 use crate::{Database, OpenOptions};
@@ -703,6 +707,165 @@ fn find(db: &Database, query: Query) -> Vec<i64> {
     let read = db.begin_read().unwrap();
 
     ids(&read.collection("players").unwrap().query(&query).unwrap())
+}
+
+/// Every entry of the players' trees, their records and their indexes, to
+/// compare a transaction's trees before and after a change.
+fn trees(source: &dyn Source, schema: &StoredSchema) -> Vec<Vec<(Vec<u8>, Vec<u8>)>> {
+    let players = schema.collection("players").unwrap();
+    let mut names = vec![records(players.id)];
+
+    names.extend(players.indexes.iter().map(|index| index_tree(index.id)));
+    names
+        .iter()
+        .map(|tree| {
+            source
+                .range_in(tree, Bound::Unbounded, Bound::Unbounded, false)
+                .unwrap()
+                .collect::<crate::Result<Vec<_>>>()
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn changes_by_query_change_what_the_query_finds() {
+    for seed in 0..4 {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OpenOptions::new()
+            .schema(schema())
+            .open(dir.path().join("query.darudb"))
+            .unwrap();
+        let mut rng = Rng::new(100 + seed);
+        let mut txn = db.begin_write().unwrap();
+
+        txn.collection("teams")
+            .unwrap()
+            .insert(Object::new().with("name", "north").with("city", "Seoul"))
+            .unwrap();
+
+        for _ in 0..60 {
+            let mut players = txn.collection("players").unwrap();
+            let mut object = player(&mut rng);
+
+            if players.insert(object.clone()).is_err() {
+                object.remove("handle");
+                players.insert(object).unwrap();
+            }
+        }
+
+        txn.commit().unwrap();
+
+        let mut changed = 0;
+
+        for _ in 0..150 {
+            let query = query(&mut rng);
+            let mut txn = db.begin_write().unwrap();
+            let open = txn.schema().cloned().unwrap();
+            let mut players = txn.collection("players").unwrap();
+            let every = ids(&players.query(&Query::new()).unwrap());
+            let found = match players.query(&query) {
+                Ok(found) => ids(&found),
+                Err(error) => {
+                    assert_eq!(error.code(), "INVALID_QUERY");
+                    assert_eq!(
+                        players.delete_where(&query).unwrap_err().code(),
+                        "INVALID_QUERY"
+                    );
+
+                    continue;
+                }
+            };
+            let before: Vec<Object> = players.query(&Query::new()).unwrap();
+
+            if rng.below(2) == 0 {
+                assert_eq!(players.delete_where(&query).unwrap(), found.len() as u64);
+
+                let left = ids(&players.query(&Query::new()).unwrap());
+                let expected: Vec<i64> = every
+                    .iter()
+                    .copied()
+                    .filter(|id| !found.contains(id))
+                    .collect();
+
+                assert_eq!(left, expected, "{:?}", query.ir());
+            } else {
+                let score = int(&mut rng, 50);
+                let counted = players
+                    .update_where(&query, Object::new().with("score", score))
+                    .unwrap();
+
+                assert_eq!(counted, found.len() as u64);
+
+                for (object, id) in before.iter().zip(&every) {
+                    let now = players.get(*id).unwrap().unwrap();
+
+                    if found.contains(id) {
+                        assert_eq!(now.get("score"), Some(&Value::Int(score)));
+                    } else {
+                        assert_eq!(
+                            key::encoded(&now.get("score").cloned().unwrap()),
+                            key::encoded(&object.get("score").cloned().unwrap())
+                        );
+                    }
+                }
+            }
+
+            drop(players);
+            check_indexes(&txn, &open.schema).unwrap();
+            changed += usize::from(!found.is_empty());
+        }
+
+        assert!(
+            changed > 30,
+            "seed {seed}: only {changed} queries changed anything"
+        );
+    }
+}
+
+#[test]
+fn an_update_by_query_refused_part_way_leaves_every_tree_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let mut txn = db.begin_write().unwrap();
+    let open = txn.schema().cloned().unwrap();
+    let before = trees(&txn, &open.schema);
+    let mut players = txn.collection("players").unwrap();
+    // Players 2 and 4 have no handle: the first takes "dup" and a new
+    // score, and the second, refused for the same unique handle, undoes it.
+    let without = Query::new().filter(Filter::is_null("handle")).sort_by("id");
+    let refused = players
+        .update_where(
+            &without,
+            Object::new().with("handle", "dup").with("score", 7),
+        )
+        .unwrap_err();
+
+    assert_eq!(refused.code(), "DUPLICATE_KEY");
+
+    // The primary key is never set by a query's update.
+    let refused = players
+        .update_where(&Query::new(), Object::new().with("id", 9))
+        .unwrap_err();
+
+    assert_eq!(refused.code(), "INVALID_ARGUMENT");
+    drop(players);
+    assert_eq!(trees(&txn, &open.schema), before);
+
+    // The transaction is still whole, and a change that fits goes through.
+    let mut players = txn.collection("players").unwrap();
+
+    assert_eq!(
+        players
+            .update_where(&without, Object::new().with("score", 7))
+            .unwrap(),
+        2
+    );
+    assert_eq!(players.delete_where(&without.limit(1)).unwrap(), 1);
+    assert_eq!(players.count(&Query::new()).unwrap(), 3);
+    drop(players);
+    check_indexes(&txn, &open.schema).unwrap();
+    txn.commit().unwrap();
 }
 
 #[test]

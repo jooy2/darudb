@@ -12,12 +12,14 @@
 //!   the parts of a filter they answer alone.
 //! - `aggregate`: sums, means, and the least and greatest values, worked out
 //!   exactly from the objects a query finds.
+//! - `change`: deleting or updating every object a query finds, in one call.
 //!
 //! Whatever the plan, a query gives the objects a walk of every object would,
 //! in the same order; `tests` checks that on random data and random queries.
 
 mod aggregate;
 mod build;
+mod change;
 pub(crate) mod ir;
 mod keys;
 mod parse;
@@ -28,9 +30,10 @@ mod tests;
 
 pub use aggregate::{Aggregate, tagged};
 pub use build::{Filter, Query, QueryRequest};
+pub use change::ChangeWhere;
 
 use crate::error::Result;
-use crate::format::object::codec::NameOrder;
+use crate::format::object::codec::{self, NameOrder};
 use crate::format::object::schema::{CollectionDef, StoredSchema};
 use crate::format::object::{Object, Value};
 use crate::schema::objects::{Decoder, Source};
@@ -97,6 +100,39 @@ fn objects(
     }
 
     run::objects(source, &plan(schema, collection, query)?, order)
+}
+
+/// The primary keys of the objects `query` finds, in its order, gathered
+/// before any of them changes: a walk borrows the transaction, which a
+/// change of an object needs to itself.
+pub(crate) fn found_keys(
+    source: &dyn Source,
+    schema: &StoredSchema,
+    collection: &CollectionDef,
+    query: &Query,
+) -> Result<Vec<Value>> {
+    let kind = &collection
+        .key_field()
+        .ok_or_else(|| crate::Error::Internal {
+            message: format!("`{}` has no key field", collection.name),
+        })?
+        .kind;
+    let mut keys = Vec::new();
+
+    each_stored(source, schema, collection, query, &mut |record| {
+        let found = codec::find_field(record, collection.key)
+            .and_then(|found| found.ok_or("a record lacks its primary key"))
+            .and_then(|found| codec::field_value(found, kind))
+            .map_err(|reason| {
+                source.corrupted(format!("an object of `{}`: {reason}", collection.name))
+            })?;
+
+        keys.push(found);
+
+        Ok(())
+    })?;
+
+    Ok(keys)
 }
 
 /// `function` over the field at `path` of the objects `query` finds.

@@ -1608,6 +1608,28 @@ impl<'a> CollectionWriter<'a> {
         updated
     }
 
+    /// Puts the record `record` back as the object with primary key `key`,
+    /// with its entries in the indexes in place of those of the record
+    /// there now, which an update stored. No unique index is checked: the
+    /// record and its entries were there before the update.
+    pub(crate) fn restore(&mut self, key: &Value, record: &[u8]) -> Result<()> {
+        let schema = Arc::clone(&self.schema);
+        let collection = &schema.schema.collections[self.position];
+        let key = key_bytes(collection, key)?;
+        let tree = &schema.names(self.position).records;
+        let mut current = IndexKeys::default();
+        let mut previous = IndexKeys::default();
+        let mut damage = None;
+        let found = self.txn.get_in_with(tree, &key, &mut |stored| {
+            record_entries(&mut current, collection, stored, &key, &mut damage)
+        });
+
+        released(&*self.txn, collection, found, damage)?;
+        record_entries(&mut previous, collection, record, &key, &mut damage)?;
+        self.txn.insert_in(tree, &key, record)?;
+        self.replace_entries(collection, &key, &previous, &current)
+    }
+
     /// Writes the object whose record a binding sent. In a collection whose
     /// fields all hold scalars, the record is checked where it lies and
     /// completed into the record the file holds: reading it into an object

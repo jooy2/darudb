@@ -394,6 +394,68 @@ fn put_replaces_delete_removes_and_update_sets_fields() {
 }
 
 #[test]
+fn changes_by_query_name_their_fields_through_the_type() {
+    let dir = TestDir::new();
+    let db = open(&dir, schema());
+    let mut txn = db.begin_write().unwrap();
+    let mut people = txn.collection_of::<Person>().unwrap();
+    let ada_id = people.insert(&ada()).unwrap();
+    let grace_id = people.insert(&grace()).unwrap();
+    let young = Query::new().filter(Filter::lt("age", 50));
+
+    assert_eq!(
+        people
+            .change_where(&young)
+            .set(Person::ACTIVE, false)
+            .set(Person::AGE, 49)
+            .apply()
+            .unwrap(),
+        1
+    );
+    assert_eq!(people.get(ada_id).unwrap().unwrap().age, 49);
+    assert!(!people.get(ada_id).unwrap().unwrap().active);
+    assert_eq!(people.get(grace_id).unwrap().unwrap().age, 85);
+
+    // The second change of the email to one value is refused, and the first
+    // is undone with it.
+    assert_eq!(
+        code(
+            people
+                .change_where(&Query::new())
+                .set(Person::EMAIL, Some("same@example.com".to_owned()))
+                .apply()
+        ),
+        "DUPLICATE_KEY"
+    );
+    assert_eq!(
+        people.get(ada_id).unwrap().unwrap().email.as_deref(),
+        Some("ada@example.com")
+    );
+    assert_eq!(
+        people
+            .update_where(
+                &Query::new().filter(Filter::gt("age", 80)),
+                darudb::Object::new().with("score", 2.5)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(people.get(grace_id).unwrap().unwrap().score, 2.5);
+    assert_eq!(people.delete_where(&young).unwrap(), 1);
+    assert_eq!(people.count(&Query::new()).unwrap(), 1);
+    assert_eq!(people.get(ada_id).unwrap(), None);
+    assert_eq!(
+        code(
+            people
+                .change_where(&Query::new())
+                .set(Person::ID, Some(9))
+                .apply()
+        ),
+        "INVALID_ARGUMENT"
+    );
+}
+
+#[test]
 fn set_and_change_write_fields_named_through_the_type() {
     let dir = TestDir::new();
     let db = open(&dir, schema());

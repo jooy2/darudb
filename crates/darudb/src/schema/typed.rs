@@ -1694,7 +1694,9 @@ fn write_encoded(
 #[must_use = "the changes are written only by `apply`"]
 pub struct Change<'w, 'a, T> {
     writer: &'w mut TypedWriter<'a, T>,
-    key: Value,
+    /// The object's key; none for the changes of every object a query
+    /// finds, which [`into_changes`](Self::into_changes) hands over.
+    key: Option<Value>,
     /// Each field set, by its position in the layout, encoded as a record
     /// of changes holds it: its id, then its value or the tag of a null.
     fields: Vec<(usize, Vec<u8>)>,
@@ -1711,7 +1713,7 @@ impl<T> fmt::Debug for Change<'_, '_, T> {
     }
 }
 
-impl<T: CollectionType> Change<'_, '_, T> {
+impl<'w, 'a, T: CollectionType> Change<'w, 'a, T> {
     /// Sets `field` to `value`, in place of any value set for it before.
     pub fn set<V: FieldType>(mut self, field: FieldOf<T, V>, value: V) -> Self {
         if self.failed.is_none() {
@@ -1758,7 +1760,20 @@ impl<T: CollectionType> Change<'_, '_, T> {
     ///
     /// What [`set`](Self::set) met writing a value, or what
     /// [`TypedWriter::set`] returns.
-    pub fn apply(mut self) -> Result<bool> {
+    pub fn apply(self) -> Result<bool> {
+        let key = self.key.clone();
+        let (writer, changes) = self.into_changes()?;
+        let key = key.ok_or_else(|| Error::Internal {
+            message: "the changes of a query's objects were applied to one object".to_owned(),
+        })?;
+
+        writer.inner.update_record(key, &changes)
+    }
+
+    /// The writer, and the changes as a record of changes holds them
+    /// (`design/objects.md`, "Records"), or what [`set`](Self::set) met
+    /// writing a value.
+    pub(crate) fn into_changes(mut self) -> Result<(&'w mut TypedWriter<'a, T>, Vec<u8>)> {
         if let Some(error) = self.failed {
             return Err(error);
         }
@@ -1780,7 +1795,7 @@ impl<T: CollectionType> Change<'_, '_, T> {
             changes.extend_from_slice(bytes);
         }
 
-        self.writer.inner.update_record(self.key, &changes)
+        Ok((self.writer, changes))
     }
 }
 
@@ -1918,6 +1933,17 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
         self.change(key).set(field, value).apply()
     }
 
+    /// Changes without an object's key, which the changes of every object a
+    /// query finds start from.
+    pub(crate) fn unkeyed_change(&mut self) -> Change<'_, 'a, T> {
+        Change {
+            writer: self,
+            key: None,
+            fields: Vec::new(),
+            failed: None,
+        }
+    }
+
     /// The changes to the object whose primary key is `key`, which
     /// [`Change::set`] makes one field at a time and [`Change::apply`] writes
     /// together, as one update:
@@ -1925,7 +1951,7 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
     pub fn change(&mut self, key: impl Into<Value>) -> Change<'_, 'a, T> {
         Change {
             writer: self,
-            key: key.into(),
+            key: Some(key.into()),
             fields: Vec::new(),
             failed: None,
         }

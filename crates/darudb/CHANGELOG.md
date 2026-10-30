@@ -10,6 +10,7 @@
 
 ### Added
 
+- Changes by query: `CollectionWriter::delete_where` deletes every object a query finds, after its sort, offset and limit, and `update_where` sets the fields of an `Object` in each, with `update_records_where` taking the changes as a binding's record. Each returns how many objects the query found. An update by query is all or nothing: when one object refuses its change, by a unique value taken or an index entry too long, the objects changed before it get their records and index entries back. It cannot set the primary key. `TypedWriter` has `delete_where`, `update_where`, and `change_where`, whose `ChangeWhere` sets fields named through the type, as `change` does for one object.
 - Aggregates: `sum`, `min`, `max` and `avg` on `CollectionReader` and `CollectionWriter` work out one value from a field of the objects a query finds, after its sort, offset and limit, and `aggregate` takes the function as an `Aggregate` and the field's path as names, as a binding's IR carries it. The path goes through embedded objects and links. Nulls are left out; a sum of no values is zero and the rest are null. Sums are exact: ints add up without rounding and fail with `INVALID_ARGUMENT` outside an `i64`, and a sum or a mean of floats is the exact value rounded once, so every plan of a query gives the same answer. The least or greatest value of an indexed field, with nothing of the filter left to test, is read from the end of the index.
 
 ## v1.4.0 (2026-10-29)

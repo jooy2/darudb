@@ -187,6 +187,14 @@ Each writes the record and adds, changes or removes the index entries whose valu
 
 A refused put or update, like an insert whose key is taken, may leave the pages on the way to its key copied, which the commit writes. Several objects in one call cost one crossing of the language boundary: the bindings' batch calls take a sequence of records.
 
+### Changing the objects a query finds
+
+A write transaction also deletes, or updates, every object a query finds, after its sort, offset and limit, in one call, and returns how many objects the query found.
+
+- **The keys come first.** The query runs through its plan and gives the primary keys of its objects, and then each object is deleted or updated by its key, as the calls above do. A walk of a tree borrows the transaction, which changing an object needs for itself, so nothing changes while the query walks, and the query may test the very fields the change sets.
+- **An update by query is all or nothing.** An object can refuse its change only through an index on a field the change sets: a unique value another object holds, or an entry too long. When one does, the objects changed before it get back the records they had, byte for byte, and their index entries in place of the new ones, the last first, so that each step returns to a state that was there and no unique index is checked on the way. The transaction then holds what it held before the call, and can commit. The records are kept for this only when the change sets a field an index reads. An update by query cannot set the primary key.
+- **A delete by query** cannot be refused. A failure part-way, of the file or its reading, leaves the transaction to be aborted, as any such failure does.
+
 ## Queries
 
 A query names a collection and holds, all optional:
