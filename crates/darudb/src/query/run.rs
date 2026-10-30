@@ -12,7 +12,7 @@ use super::aggregate::{Aggregate, Exact, of_nothing};
 use super::fold;
 use super::ir::{Expr, Ir, Op, Operand};
 use super::keys::KeySet;
-use super::plan::{Access, Cond, Part, Plan, Range, Resolved, Step, Test, terms_of};
+use super::plan::{Access, Cond, Linked, Part, Plan, Range, Resolved, Step, Test, terms_of};
 use crate::btree::UNMARKED;
 use crate::error::{Error, Result};
 use crate::format::object::codec::{self, FieldRef, NameOrder};
@@ -216,6 +216,22 @@ impl Reader<'_> {
             Cond::Test { path, test } => self.any_in(fields, path, &mut |value| {
                 !value.is_null() && passes(test, value)
             }),
+            Cond::Linked(linked) => {
+                let key = match fields.field_of(linked.key)? {
+                    Current::Borrowed(value) => value.to_value(),
+                    Current::Owned(value) => value,
+                };
+                // A stored object's key has its collection's type, so
+                // another is damage.
+                let key = objects::key_bytes(linked.linked, &key).map_err(|_| {
+                    self.source.corrupted(format!(
+                        "an object of `{}` holds a key of another type",
+                        linked.linked.name
+                    ))
+                })?;
+
+                Ok(linked_keys(self.source, linked)?.contains(&key))
+            }
         }
     }
 
@@ -562,6 +578,59 @@ fn text_of<'v>(value: ValueRef<'v>) -> Option<&'v str> {
         ValueRef::Value(Value::String(text)) => Some(text),
         _ => None,
     }
+}
+
+/// The keys of the objects of `linked`'s collection that the objects of
+/// the linking collection its plan finds link to, gathered the first time
+/// they are asked for and kept for the rest of the run. A link's value is
+/// gathered whether or not its object is there; [`each_key`] gives only
+/// those that are.
+fn linked_keys<'l>(source: &dyn Source, linked: &'l Linked<'_>) -> Result<&'l KeySet> {
+    if let Some(keys) = linked.keys.get() {
+        return Ok(keys);
+    }
+
+    let plan = &linked.plan;
+    let strategy = strategy(source, plan, false)?;
+    let (route, skip, _) = strategy.route(plan);
+    let reader = Reader::skipping(source, plan, skip);
+    let mut keys = KeySet::default();
+
+    walk(source, plan, route, &mut |key, walked| {
+        with_record(&reader, plan, key, walked, &mut |lent| {
+            if !meets(&reader, plan, Some(lent), None)? {
+                return Ok(());
+            }
+
+            let view = View::new(&reader, plan, lent);
+            let mut wrong = false;
+
+            reader.any_in(&view, &linked.path, &mut |value| {
+                if !value.is_null() {
+                    match objects::key_bytes(linked.linked, &value.to_value()) {
+                        Ok(key) => keys.push(&key),
+                        Err(_) => wrong = true,
+                    }
+                }
+
+                // Every value, of every element of a list of links.
+                false
+            })?;
+
+            if wrong {
+                return Err(source.corrupted(format!(
+                    "a link to `{}` holds a key of another type",
+                    linked.linked.name
+                )));
+            }
+
+            Ok(())
+        })?;
+
+        Ok(false)
+    })?;
+
+    Ok(linked.keys.get_or_init(|| keys.seal()))
 }
 
 /// What a run walks to find a plan's objects.
@@ -2292,6 +2361,14 @@ fn weight(
 
             (size, cost.saturating_add(lookups).saturating_add(size))
         }
+        Part::Backlinked(linked) => {
+            // Gathering the linked keys reads the linking objects once,
+            // whatever the run does with them, so it costs the lookups that
+            // keep only the keys whose objects are there.
+            let size = linked_keys(source, linked)?.len() as u64;
+
+            (size, size.saturating_mul(SEEK))
+        }
         Part::And(parts) => {
             let mut size = u64::MAX;
             let mut cost = 0u64;
@@ -2413,6 +2490,20 @@ fn each_key(
             let tree = records(collection.id);
 
             for key in keys {
+                if source.get_in_with(&tree, key, &mut |_| Ok(()))? {
+                    give(key)?;
+                }
+            }
+        }
+        // A link may name an object that is not there, which a set of keys
+        // leaves out.
+        Part::Backlinked(linked) => {
+            let tree = records(collection.id);
+            let keys = linked_keys(source, linked)?;
+
+            for at in 0..keys.len() {
+                let key = keys.get(at);
+
                 if source.get_in_with(&tree, key, &mut |_| Ok(()))? {
                     give(key)?;
                 }

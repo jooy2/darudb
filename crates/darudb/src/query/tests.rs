@@ -238,9 +238,16 @@ fn filter(rng: &mut Rng, depth: u32) -> Filter {
         return test(rng);
     }
 
-    match rng.below(4) {
+    match rng.below(5) {
         0 => filter(rng, depth - 1).or(filter(rng, depth - 1)),
         1 => !filter(rng, depth - 1),
+        // The players whose friends lists name them, and meet a filter;
+        // now and then a link to another collection, which is refused.
+        2 => match rng.below(6) {
+            0 => Filter::linked("players", "friends"),
+            1 => Filter::linked_where("players", "team", test(rng)),
+            _ => Filter::linked_where("players", "friends", filter(rng, depth - 1)),
+        },
         _ => filter(rng, depth - 1).and(filter(rng, depth - 1)),
     }
 }
@@ -903,6 +910,207 @@ fn an_update_by_query_refused_part_way_leaves_every_tree_as_it_was() {
 }
 
 #[test]
+fn linked_filters_find_what_the_links_name() {
+    for seed in 0..4 {
+        let dir = tempfile::tempdir().unwrap();
+        let db = OpenOptions::new()
+            .schema(schema())
+            .open(dir.path().join("query.darudb"))
+            .unwrap();
+        let mut rng = Rng::new(200 + seed);
+        let mut txn = db.begin_write().unwrap();
+
+        for _ in 0..30 {
+            let mut players = txn.collection("players").unwrap();
+            let mut object = player(&mut rng);
+
+            if players.insert(object.clone()).is_err() {
+                object.remove("handle");
+                players.insert(object).unwrap();
+            }
+        }
+
+        txn.commit().unwrap();
+
+        let read = db.begin_read().unwrap();
+        let players = read.collection("players").unwrap();
+        let every = players.query(&Query::new()).unwrap();
+        let existing: Vec<i64> = ids(&every);
+
+        for _ in 0..200 {
+            // The players some player that meets `inner` names as a friend,
+            // worked out from the objects alone: friends may name players
+            // that are not there, and those are left out.
+            let inner = test(&mut rng);
+            let Ok(linking) = players.query(&Query::new().filter(inner.clone())) else {
+                continue;
+            };
+            let mut named: Vec<i64> = linking
+                .iter()
+                .filter_map(|object| object.get("friends").and_then(Value::as_list))
+                .flatten()
+                .filter_map(Value::as_int)
+                .filter(|id| existing.contains(id))
+                .collect();
+
+            named.sort_unstable();
+            named.dedup();
+
+            let linked = Query::new().filter(Filter::linked_where("players", "friends", inner));
+
+            assert_eq!(ids(&players.query(&linked).unwrap()), named);
+            assert_eq!(players.count(&linked).unwrap(), named.len() as u64);
+
+            let unlinked = Query::new().filter(!Filter::linked_where(
+                "players",
+                "friends",
+                Filter::is_null("nothing").or(Filter::ge("score", -99)),
+            ));
+            let anyone: Vec<i64> = every
+                .iter()
+                .filter_map(|object| object.get("friends").and_then(Value::as_list))
+                .flatten()
+                .filter_map(Value::as_int)
+                .collect();
+            let alone: Vec<i64> = existing
+                .iter()
+                .copied()
+                .filter(|id| !anyone.contains(id))
+                .collect();
+
+            // `nothing` is not a field, so that filter is refused.
+            assert_eq!(
+                players.query(&unlinked).unwrap_err().code(),
+                "INVALID_QUERY"
+            );
+            assert_eq!(
+                ids(&players
+                    .query(&Query::new().filter(!Filter::linked("players", "friends")))
+                    .unwrap()),
+                alone
+            );
+        }
+    }
+}
+
+#[test]
+fn linked_filters_follow_the_documented_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let found = |filter: Filter| find(&db, Query::new().filter(filter));
+
+    // Player 3 names players 1 and 9 as friends, and 9 is not there.
+    assert_eq!(found(Filter::linked("players", "friends")), [1]);
+    assert_eq!(found(!Filter::linked("players", "friends")), [2, 3, 4]);
+    assert_eq!(
+        found(Filter::linked_where(
+            "players",
+            "friends",
+            Filter::eq("handle", "a\0b")
+        )),
+        [1]
+    );
+    assert_eq!(
+        found(Filter::linked_where(
+            "players",
+            "friends",
+            Filter::eq("handle", "ace")
+        )),
+        Vec::<i64>::new()
+    );
+    // One linking object has to meet the whole filter.
+    assert_eq!(
+        found(Filter::linked_where(
+            "players",
+            "friends",
+            Filter::eq("score", 3).and(Filter::eq("handle", "ace"))
+        )),
+        Vec::<i64>::new()
+    );
+    assert_eq!(
+        found(Filter::linked("players", "friends").and(Filter::eq("handle", "ace"))),
+        [1]
+    );
+
+    // Teams: the teams a player links to, through the link `team`.
+    let read = db.begin_read().unwrap();
+    let teams = read.collection("teams").unwrap();
+    let names = |query: &Query| -> Vec<String> {
+        teams
+            .query(query)
+            .unwrap()
+            .iter()
+            .map(|team| team.get("name").and_then(Value::as_str).unwrap().to_owned())
+            .collect()
+    };
+
+    assert_eq!(
+        names(&Query::new().filter(Filter::linked("players", "team"))),
+        ["north"]
+    );
+    assert_eq!(
+        names(&Query::parse(r#"ANY players.team (score >= 3)"#, &[]).unwrap()),
+        ["north"]
+    );
+    assert_eq!(
+        names(&Query::parse(r#"NOT any players.team (score > $0)"#, &[5.into()]).unwrap()),
+        ["north"]
+    );
+
+    // A prepared query binds the parameters inside.
+    let prepared = Query::prepare("ANY players.team (score == $0)").unwrap();
+
+    assert_eq!(names(&prepared.bind(&[3.into()]).unwrap()), ["north"]);
+    assert_eq!(
+        names(&prepared.bind(&[2.into()]).unwrap()),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        teams.query(&prepared).unwrap_err().code(),
+        "INVALID_QUERY",
+        "a parameter without a value"
+    );
+
+    // Refused: a collection that is not there, a path that is not a link to
+    // this collection, and a filter on the wrong collection's fields.
+    for text in [
+        "ANY nobody.team",
+        "ANY players.score",
+        "ANY players.friends",
+        "ANY players.team (city == \"Seoul\")",
+    ] {
+        let error = teams.query(&Query::parse(text, &[]).unwrap()).unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY", "{text}");
+    }
+
+    // Nesting counts toward the limit, inside a linked filter too.
+    let mut deep = Filter::eq("score", 1);
+
+    for _ in 0..30 {
+        deep = !deep;
+    }
+
+    let error = teams
+        .query(&Query::new().filter(Filter::linked_where("players", "team", deep)))
+        .unwrap_err();
+
+    assert_eq!(error.code(), "INVALID_QUERY");
+
+    // `ANY` is read so only before a name: a field called `any` is a field.
+    let any = Query::parse("any == 1", &[]).unwrap();
+
+    assert_eq!(
+        any.ir().filter,
+        Some(ir::Expr::test(
+            ir::Op::Eq,
+            vec!["any".into()],
+            vec![Value::Int(1)]
+        ))
+    );
+}
+
+#[test]
 fn ignoring_case_follows_the_documented_rules() {
     let dir = tempfile::tempdir().unwrap();
     let db = database(&dir);
@@ -1375,6 +1583,18 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>, every: bool) -> String {
                 term => format!("NOT ({})", expr(term, parameters, every)),
             },
             ir::Expr::Prepared { .. } => unreachable!("a builder's query has no parameters"),
+            ir::Expr::Linked {
+                collection,
+                path: at,
+                filter,
+            } => {
+                let filter = filter
+                    .as_ref()
+                    .map(|filter| format!(" ({})", expr(filter, parameters, every)))
+                    .unwrap_or_default();
+
+                format!("any {}.{}{filter}", name(collection), path(at))
+            }
             ir::Expr::Test {
                 op,
                 path: at,

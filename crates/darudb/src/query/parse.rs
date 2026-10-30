@@ -431,6 +431,8 @@ impl Parser<'_> {
 
         let expr = if self.keyword("NOT") {
             Expr::Not(Box::new(self.not()?))
+        } else if self.at_linked() {
+            self.linked()?
         } else if self.symbol("(") {
             let expr = self.or()?;
 
@@ -558,6 +560,61 @@ impl Parser<'_> {
 
     fn ignoring_order(&self, operator: &str) -> Error {
         invalid(self.position(), ignoring_order_message(operator))
+    }
+
+    /// Whether `ANY` comes next followed by a name, which starts a test of
+    /// the objects that link to this one. `ANY` is read so only there, so a
+    /// field called `any` is a field everywhere else.
+    fn at_linked(&self) -> bool {
+        self.at_keyword("ANY")
+            && matches!(
+                self.tokens.get(self.at + 1),
+                Some((Token::Word(_) | Token::Quoted(_), _))
+            )
+    }
+
+    /// `ANY collection.link`, then a filter of that collection's objects in
+    /// parentheses, if one follows.
+    fn linked(&mut self) -> Result<Expr> {
+        self.advance();
+
+        let collection = match self.peek() {
+            Token::Word(name) | Token::Quoted(name) => name.clone(),
+            _ => return Err(self.expected("a collection's name")),
+        };
+
+        self.advance();
+        self.expect_symbol(".")?;
+
+        let mut path = Vec::new();
+
+        loop {
+            match self.peek() {
+                Token::Word(name) | Token::Quoted(name) => path.push(name.clone()),
+                _ => return Err(self.expected("the name of a link field")),
+            }
+
+            self.advance();
+
+            if !self.symbol(".") {
+                break;
+            }
+        }
+
+        let filter = if self.symbol("(") {
+            let filter = self.or()?;
+
+            self.expect_symbol(")")?;
+            Some(Box::new(filter))
+        } else {
+            None
+        };
+
+        Ok(Expr::Linked {
+            collection,
+            path,
+            filter,
+        })
     }
 
     fn path(&mut self) -> Result<Vec<String>> {

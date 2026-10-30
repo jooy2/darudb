@@ -141,6 +141,7 @@ impl Op {
 const AND: i64 = 1;
 const OR: i64 = 2;
 const NOT: i64 = 3;
+const LINKED: i64 = 16;
 
 /// An expression of a filter.
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +161,13 @@ pub(crate) enum Expr {
         op: Op,
         path: Vec<String>,
         values: Vec<Operand>,
+    },
+    /// Some object of `collection` whose link at `path` names this object
+    /// meets `filter`, or any such object without one.
+    Linked {
+        collection: String,
+        path: Vec<String>,
+        filter: Option<Box<Expr>>,
     },
 }
 
@@ -225,6 +233,18 @@ impl Expr {
                     .collect::<Result<Vec<_>>>()?,
             ),
             Expr::Not(term) => Expr::Not(Box::new(term.bind(parameters)?)),
+            Expr::Linked {
+                collection,
+                path,
+                filter,
+            } => Expr::Linked {
+                collection: collection.clone(),
+                path: path.clone(),
+                filter: filter
+                    .as_ref()
+                    .map(|filter| filter.bind(parameters).map(Box::new))
+                    .transpose()?,
+            },
             Expr::Test { .. } => self.clone(),
             Expr::Prepared { op, path, values } => Expr::test(
                 *op,
@@ -250,6 +270,9 @@ impl Expr {
                 .iter()
                 .try_for_each(|term| term.check_parameters(count)),
             Expr::Not(term) => term.check_parameters(count),
+            Expr::Linked { filter, .. } => filter
+                .as_ref()
+                .map_or(Ok(()), |filter| filter.check_parameters(count)),
             Expr::Test { .. } => Ok(()),
             Expr::Prepared { values, .. } => values.iter().try_for_each(|value| match value {
                 Operand::Param(index) if *index >= count => Err(missing(*index, count)),
@@ -263,6 +286,7 @@ impl Expr {
         match self {
             Expr::And(terms) | Expr::Or(terms) => terms.iter().find_map(Expr::first_param),
             Expr::Not(term) => term.first_param(),
+            Expr::Linked { filter, .. } => filter.as_ref().and_then(|filter| filter.first_param()),
             Expr::Test { .. } => None,
             Expr::Prepared { values, .. } => values.iter().find_map(|value| match value {
                 Operand::Param(index) => Some(*index),
@@ -439,6 +463,21 @@ fn encode_expr(expr: &Expr) -> Result<Raw> {
             return encode_test(*op, path, &values);
         }
         Expr::Prepared { op, path, values } => return encode_test(*op, path, values),
+        Expr::Linked {
+            collection,
+            path,
+            filter,
+        } => {
+            let mut fields = vec![(1, Raw::Int(LINKED)), (2, encode_path(path))];
+
+            if let Some(filter) = filter {
+                fields.push((4, Raw::List(vec![encode_expr(filter)?])));
+            }
+
+            fields.push((6, Raw::String(collection.clone())));
+
+            return Ok(Raw::Object(fields));
+        }
     };
     let mut fields = vec![(1, Raw::Int(code))];
 
@@ -636,6 +675,7 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
     let mut values = Vec::new();
     let mut terms = Vec::new();
     let mut ignore_case = false;
+    let mut linking = None;
 
     for (id, raw) in fields {
         match (id, raw) {
@@ -648,11 +688,33 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
                 terms = raw.into_iter().map(decode_expr).collect::<Result<_>>()?;
             }
             (5, Raw::Bool(value)) => ignore_case = value,
+            (6, Raw::String(name)) => linking = Some(name),
             _ => return Err(invalid("the IR holds an expression it cannot read")),
         }
     }
 
     let code = code.ok_or_else(|| invalid("the IR holds an expression without an operator"))?;
+
+    if code == LINKED {
+        return match (linking, path) {
+            (Some(collection), Some(path))
+                if values.is_empty() && !ignore_case && terms.len() <= 1 =>
+            {
+                Ok(Expr::Linked {
+                    collection,
+                    path,
+                    filter: terms.pop().map(Box::new),
+                })
+            }
+            _ => Err(invalid(
+                "the IR holds `ANY` without a collection and a link's path, or with values or more than one expression",
+            )),
+        };
+    }
+
+    if linking.is_some() {
+        return Err(invalid("the IR names a collection to link from in a test"));
+    }
 
     match code {
         AND | OR | NOT if path.is_some() || !values.is_empty() || ignore_case => Err(invalid(
@@ -850,6 +912,20 @@ mod tests {
                 Expr::test(Op::In, path("tags"), Vec::new()),
                 Expr::test(Op::ContainsFold, path("name"), vec![Value::from("KIM")]),
                 Expr::test(Op::InFold, path("tags"), vec![Value::from("A")]),
+                Expr::Linked {
+                    collection: "posts".into(),
+                    path: path("meta.author"),
+                    filter: Some(Box::new(Expr::test(
+                        Op::Ge,
+                        path("year"),
+                        vec![Value::Int(2020)],
+                    ))),
+                },
+                Expr::Not(Box::new(Expr::Linked {
+                    collection: "posts".into(),
+                    path: path("author"),
+                    filter: None,
+                })),
                 Expr::test(
                     Op::Between,
                     path("score"),
@@ -1006,6 +1082,34 @@ mod tests {
             ]),
             test(vec![(1, Raw::Int(15)), path.clone(), (5, Raw::Bool(true))]),
             test(vec![(1, Raw::Int(1)), (5, Raw::Bool(true))]),
+            // `ANY` without a collection or a path, with values, with two
+            // expressions; a collection on a test.
+            test(vec![(1, Raw::Int(16)), path.clone()]),
+            test(vec![(1, Raw::Int(16)), (6, Raw::String("p".into()))]),
+            test(vec![
+                (1, Raw::Int(16)),
+                path.clone(),
+                one.clone(),
+                (6, Raw::String("p".into())),
+            ]),
+            test(vec![
+                (1, Raw::Int(16)),
+                path.clone(),
+                (
+                    4,
+                    Raw::List(vec![
+                        Raw::Object(vec![(1, Raw::Int(15)), path.clone()]),
+                        Raw::Object(vec![(1, Raw::Int(15)), path.clone()]),
+                    ]),
+                ),
+                (6, Raw::String("p".into())),
+            ]),
+            test(vec![
+                (1, Raw::Int(4)),
+                path.clone(),
+                one.clone(),
+                (6, Raw::String("p".into())),
+            ]),
             codec::write(&[(4, Raw::Int(-1)), (1, Raw::String("c".into()))]),
             codec::write(&[(2, Raw::Object(vec![(1, Raw::Int(1))]))]),
             vec![0xFF],

@@ -32,6 +32,15 @@ fn ignoring_case(expr: Expr) -> Expr {
             path,
             values,
         },
+        Expr::Linked {
+            collection,
+            path,
+            filter,
+        } => Expr::Linked {
+            collection,
+            path,
+            filter: filter.map(|filter| Box::new(ignoring_case(*filter))),
+        },
     }
 }
 
@@ -134,6 +143,33 @@ impl Filter {
     #[must_use]
     pub fn or(self, other: Filter) -> Self {
         Filter(Expr::or([self.0, other.0]))
+    }
+
+    /// Holds for an object that some object of `collection` links to
+    /// through its link field `link`, a name or a path such as
+    /// `meta.author`: `Filter::linked("posts", "author")` finds the users
+    /// with a post. `!` of it finds those that nothing links to. The link
+    /// may be a list of links. The engine reads the objects of `collection`
+    /// once, through its own indexes, for each query.
+    pub fn linked(collection: &str, link: &str) -> Self {
+        Filter(Expr::Linked {
+            collection: collection.to_owned(),
+            path: path(link),
+            filter: None,
+        })
+    }
+
+    /// Holds for an object that some object of `collection` both links to
+    /// through `link` and meets `filter`, which names the fields of
+    /// `collection`: `Filter::linked_where("posts", "author",
+    /// Filter::ge("year", 2020).and(Filter::eq("draft", false)))` finds the
+    /// users with a post that is both recent and published.
+    pub fn linked_where(collection: &str, link: &str, filter: Filter) -> Self {
+        Filter(Expr::Linked {
+            collection: collection.to_owned(),
+            path: path(link),
+            filter: Some(Box::new(filter.0)),
+        })
     }
 
     /// This filter, with every test of [`eq`](Self::eq), [`ne`](Self::ne),

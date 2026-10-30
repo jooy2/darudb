@@ -16,11 +16,14 @@
 //! indexes hold, which only a run can count, so the run decides.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::ops::{Bound, Deref};
+use std::rc::Rc;
 
 use super::aggregate::Aggregate;
 use super::fold;
-use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
+use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand, SortKey};
+use super::keys::KeySet;
 use crate::error::{Error, Result};
 use crate::format::object::Value;
 use crate::format::object::key;
@@ -105,9 +108,9 @@ pub(crate) struct Resolved<'s> {
     pub(crate) list_leaf: bool,
     /// Whether the path reads more than one value: it passes a list.
     pub(crate) many: bool,
-    /// Whether the path ends at a link field, whose values are the keys of
-    /// the objects it links to.
-    pub(crate) link: bool,
+    /// The collection a link field the path ends at links to, whose keys are
+    /// the link's values.
+    pub(crate) link: Option<&'s CollectionDef>,
     /// The field, when the path is a field of the collection itself.
     pub(crate) direct: Option<&'s FieldDef>,
 }
@@ -150,7 +153,32 @@ pub(crate) enum Cond<'s> {
     And(Vec<Cond<'s>>),
     Or(Vec<Cond<'s>>),
     Not(Box<Cond<'s>>),
-    Test { path: Resolved<'s>, test: Test<'s> },
+    Test {
+        path: Resolved<'s>,
+        test: Test<'s>,
+    },
+    /// Some object of another collection links to this one and meets its
+    /// own filter. Shared with the part it is, which gathers the same keys.
+    Linked(Rc<Linked<'s>>),
+}
+
+/// A test of the objects that link to an object, `ANY` in the query
+/// language: the objects of `collection` its own `plan` finds, and the path
+/// of their link to the collection tested, whose values, gathered once into
+/// `keys` when the run first needs them, are the keys of the objects that
+/// hold.
+#[derive(Debug)]
+pub(crate) struct Linked<'s> {
+    /// The collection tested, whose objects are linked to.
+    pub(crate) linked: &'s CollectionDef,
+    /// Its primary key, which each object tested is looked for by.
+    pub(crate) key: &'s FieldDef,
+    /// The path of the link in the objects that link.
+    pub(crate) path: Resolved<'s>,
+    /// The objects of the linking collection that the filter finds.
+    pub(crate) plan: Plan<'s>,
+    /// The encoded keys their links name, once gathered.
+    pub(crate) keys: OnceCell<KeySet>,
 }
 
 /// A range of keys.
@@ -202,6 +230,9 @@ pub(crate) enum Part<'s> {
     },
     And(Vec<Part<'s>>),
     Or(Vec<Part<'s>>),
+    /// The objects the links of a test of the objects that link to them
+    /// name, those that are there.
+    Backlinked(Rc<Linked<'s>>),
 }
 
 /// A query, checked and planned.
@@ -245,6 +276,7 @@ fn marked<'s>(filter: Option<&Cond<'s>>, sort: &[(Resolved<'s>, bool)]) -> Optio
             Cond::And(terms) | Cond::Or(terms) => terms.first().and_then(first),
             Cond::Not(term) => first(term),
             Cond::Test { path, .. } => path.direct,
+            Cond::Linked(_) => None,
         }
     }
 
@@ -262,7 +294,35 @@ pub(crate) fn plan<'s>(
     ir: &'s Ir,
     parameters: &'s [Value],
 ) -> Result<Plan<'s>> {
-    let (filter, sort) = resolve(schema, collection, ir, parameters)?;
+    let query = Parts {
+        filter: ir.filter.as_ref(),
+        sort: &ir.sort,
+        offset: ir.offset,
+        limit: ir.limit,
+    };
+
+    plan_parts(schema, collection, query, parameters, 1)
+}
+
+/// The parts of a query to plan: those of an IR, or the filter alone of the
+/// objects that link to another, which a test of them plans.
+#[derive(Clone, Copy)]
+struct Parts<'s> {
+    filter: Option<&'s Expr>,
+    sort: &'s [SortKey],
+    offset: u64,
+    limit: Option<u64>,
+}
+
+/// [`plan`] of `query`, whose filter nests from `depth`.
+fn plan_parts<'s>(
+    schema: &'s StoredSchema,
+    collection: &'s CollectionDef,
+    query: Parts<'s>,
+    parameters: &'s [Value],
+    depth: usize,
+) -> Result<Plan<'s>> {
+    let (filter, sort) = resolve(schema, collection, query, parameters, depth)?;
     let (access, consumed, ordered) = choose(collection, filter.as_ref(), &sort);
     // The parts of the terms the access leaves, by their positions in what
     // is left of the filter.
@@ -313,8 +373,8 @@ pub(crate) fn plan<'s>(
         collection,
         filter,
         sort,
-        offset: ir.offset,
-        limit: ir.limit,
+        offset: query.offset,
+        limit: query.limit,
         access,
         ordered,
         exact,
@@ -365,6 +425,7 @@ fn part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>, depth: usize) -> Opt
             .collect::<Option<Vec<_>>>()
             .map(Part::Or),
         Cond::Not(_) => None,
+        Cond::Linked(linked) => Some(Part::Backlinked(Rc::clone(linked))),
     }
 }
 
@@ -467,7 +528,13 @@ pub(crate) fn scan<'s>(
     ir: &'s Ir,
     parameters: &'s [Value],
 ) -> Result<Plan<'s>> {
-    let (filter, sort) = resolve(schema, collection, ir, parameters)?;
+    let query = Parts {
+        filter: ir.filter.as_ref(),
+        sort: &ir.sort,
+        offset: ir.offset,
+        limit: ir.limit,
+    };
+    let (filter, sort) = resolve(schema, collection, query, parameters, 1)?;
 
     Ok(Plan {
         marked: marked(filter.as_ref(), &sort),
@@ -493,20 +560,20 @@ pub(crate) fn scan<'s>(
 fn resolve<'s>(
     schema: &'s StoredSchema,
     collection: &'s CollectionDef,
-    ir: &'s Ir,
+    query: Parts<'s>,
     parameters: &'s [Value],
+    depth: usize,
 ) -> Result<(Option<Cond<'s>>, Vec<(Resolved<'s>, bool)>)> {
     let resolver = Resolver {
         schema,
         collection,
         parameters,
     };
-    let filter = ir
+    let filter = query
         .filter
-        .as_ref()
-        .map(|expr| resolver.cond(expr, 1))
+        .map(|expr| resolver.cond(expr, depth))
         .transpose()?;
-    let sort = ir
+    let sort = query
         .sort
         .iter()
         .map(|(path, descending)| {
@@ -551,7 +618,7 @@ pub(crate) fn aggregated<'s>(
         )));
     }
 
-    if resolved.link {
+    if resolved.link.is_some() {
         return Err(invalid(format!(
             "`{}` is a link, and `{}` reads a field of the object it links to, such as `{}.name`",
             text(),
@@ -609,6 +676,16 @@ impl<'s> Resolver<'s> {
                     .collect::<Result<_>>()?,
             ),
             Expr::Not(term) => Cond::Not(Box::new(self.cond(term, depth + 1)?)),
+            Expr::Linked {
+                collection,
+                path,
+                filter,
+            } => Cond::Linked(Rc::new(self.linked(
+                collection,
+                path,
+                filter.as_deref(),
+                depth,
+            )?)),
             Expr::Prepared { .. } if self.parameters.is_empty() => {
                 return Err(invalid(format!(
                     "`${}` has no value: a prepared query runs with its parameters",
@@ -629,6 +706,56 @@ impl<'s> Resolver<'s> {
                 }
             }
             Expr::Test { op, path, values } => self.test(*op, path, Operands::Values(values))?,
+        })
+    }
+
+    /// The test of the objects of `collection` whose link at `path` names an
+    /// object of this collection and that meet `filter`.
+    fn linked(
+        &self,
+        collection: &'s str,
+        path: &'s [String],
+        filter: Option<&'s Expr>,
+        depth: usize,
+    ) -> Result<Linked<'s>> {
+        let text = || format!("ANY {collection}.{}", path.join("."));
+        let linking = self.schema.collection(collection).ok_or_else(|| {
+            invalid(format!(
+                "`{}` names `{collection}`, which is not a collection",
+                text()
+            ))
+        })?;
+        let resolved = Resolver {
+            collection: linking,
+            ..*self
+        }
+        .path(path)?;
+
+        if resolved.link.map(|target| target.id) != Some(self.collection.id) {
+            return Err(invalid(format!(
+                "`{}` is not a link of `{collection}` to `{}`",
+                text(),
+                self.collection.name
+            )));
+        }
+
+        let key = self
+            .collection
+            .key_field()
+            .ok_or_else(|| invalid(format!("`{}` has no primary key", self.collection.name)))?;
+        let query = Parts {
+            filter,
+            sort: &[],
+            offset: 0,
+            limit: None,
+        };
+
+        Ok(Linked {
+            linked: self.collection,
+            key,
+            path: resolved,
+            plan: plan_parts(self.schema, linking, query, self.parameters, depth + 1)?,
+            keys: OnceCell::new(),
         })
     }
 
@@ -711,7 +838,7 @@ impl<'s> Resolver<'s> {
                             leaf,
                             list_leaf: matches!(field.kind, Kind::List(_)),
                             many,
-                            link: true,
+                            link: Some(target),
                             direct,
                         });
                     }
@@ -725,7 +852,7 @@ impl<'s> Resolver<'s> {
                         leaf: scalar.clone(),
                         list_leaf: matches!(field.kind, Kind::List(_)),
                         many,
-                        link: false,
+                        link: None,
                         direct,
                     });
                 }
@@ -857,7 +984,7 @@ fn test<'s>(
     let value = |at: usize| operands.get(at);
 
     if op.folds() {
-        if path.leaf != Kind::String || path.link {
+        if path.leaf != Kind::String || path.link.is_some() {
             return Err(invalid(format!(
                 "`IGNORE CASE` compares strings, and `{}` holds {}",
                 text(),
