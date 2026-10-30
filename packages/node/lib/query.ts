@@ -13,7 +13,7 @@ import type { CodeError } from './codec.js';
  * and the values it compares with, or `and`, `or` or `not` of other nodes.
  */
 export type FilterNode =
-  | { kind: 'test'; op: number; path: string[]; values: unknown[] }
+  | { kind: 'test'; op: number; path: string[]; values: unknown[]; ignoreCase?: boolean }
   | { kind: 'and' | 'or'; terms: FilterNode[] }
   | { kind: 'not'; term: FilterNode };
 
@@ -46,6 +46,31 @@ const OPS = Object.freeze({
   endsWith: 14
 });
 const IS_NULL = 15;
+
+/** The operators whose tests can ignore case. */
+const FOLDING = new Set<number>([
+  OPS['=='],
+  OPS['!='],
+  OPS.in,
+  OPS.contains,
+  OPS.startsWith,
+  OPS.endsWith
+]);
+
+/**
+ * `node` with every test in it of `==`, `!=`, `in`, `contains`,
+ * `startsWith` and `endsWith` comparing strings ignoring case.
+ */
+function ignoringCase(node: FilterNode): FilterNode {
+  switch (node.kind) {
+    case 'test':
+      return FOLDING.has(node.op) ? { ...node, ignoreCase: true } : node;
+    case 'not':
+      return { kind: 'not', term: ignoringCase(node.term) };
+    default:
+      return { kind: node.kind, terms: node.terms.map(ignoringCase) };
+  }
+}
 
 function invalidQuery(message: string): CodeError {
   return codeError('INVALID_QUERY', message);
@@ -148,7 +173,13 @@ const conditions = Object.freeze({
     new Condition({ kind: 'not', term: test(IS_NULL, field, []).node }),
   and: (...terms: unknown[]) => flatten('and', terms),
   or: (...terms: unknown[]) => flatten('or', terms),
-  not: (condition: unknown) => new Condition({ kind: 'not', term: nodeOf(condition) })
+  not: (condition: unknown) => new Condition({ kind: 'not', term: nodeOf(condition) }),
+  /**
+   * `condition` with every test in it of `eq`, `ne`, `in`, `contains`,
+   * `startsWith` and `endsWith` comparing strings ignoring case, by
+   * Unicode's simple case folding.
+   */
+  ignoreCase: (condition: unknown) => new Condition(ignoringCase(nodeOf(condition)))
 });
 
 /** The condition `where` describes: a field, an operator and a value. */
@@ -191,7 +222,8 @@ class Query {
   where(
     field: string | readonly string[] | Condition | ((conditions: Conditions) => unknown),
     op?: unknown,
-    value?: unknown
+    value?: unknown,
+    options?: { ignoreCase?: boolean }
   ): this {
     let condition: unknown;
 
@@ -201,6 +233,10 @@ class Query {
       condition = field;
     } else {
       condition = conditionOf(field, op, value);
+
+      if (options?.ignoreCase === true) {
+        condition = conditions.ignoreCase(condition);
+      }
     }
 
     const node = nodeOf(condition);

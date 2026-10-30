@@ -2190,7 +2190,7 @@ function writeExpression(writer: Writer, node: FilterNode, depth = 1): void {
       break;
     }
     case 'test':
-      inner.varint(node.values.length === 0 ? 2 : 3);
+      inner.varint(2 + (node.values.length === 0 ? 0 : 1) + (node.ignoreCase === true ? 1 : 0));
       inner.varint(1);
       inner.byte(INT);
       inner.int(node.op);
@@ -2205,6 +2205,12 @@ function writeExpression(writer: Writer, node: FilterNode, depth = 1): void {
         for (const value of node.values) {
           writeQueryValue(inner, value);
         }
+      }
+
+      // Field 5, after the values: the test ignores case.
+      if (node.ignoreCase === true) {
+        inner.varint(5);
+        inner.byte(TRUE);
       }
 
       break;

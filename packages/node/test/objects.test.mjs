@@ -268,6 +268,49 @@ describe('objects', () => {
     });
   });
 
+  it('are found by tests that ignore case', (context) => {
+    const { db } = withData(context);
+
+    db.read((txn) => {
+      const users = txn.collection('users');
+      const names = (found) => found.map((user) => user.name);
+
+      assert.deepEqual(names(users.find((q) => q.where('name', '==', 'ALICE'))), []);
+      assert.deepEqual(
+        names(users.find((q) => q.where('name', '==', 'ALICE', { ignoreCase: true }))),
+        ['Alice']
+      );
+      assert.deepEqual(
+        names(users.find((q) => q.where('name', 'in', ['bob', 'CAROL'], { ignoreCase: true }))),
+        ['Bob', 'Carol']
+      );
+      assert.deepEqual(
+        names(
+          users.find((q) =>
+            q.where((c) => c.ignoreCase(c.or(c.startsWith('name', 'a'), c.contains('tags', 'RED'))))
+          )
+        ),
+        ['Alice']
+      );
+      assert.deepEqual(names(users.find('address.city == "SEOUL" IGNORE CASE')), ['Alice']);
+      assert.equal(users.count('name ENDSWITH $0 IGNORE CASE', ['OB']), 1);
+      assertCode(
+        () => users.find((q) => q.where('age', '==', 3, { ignoreCase: true })),
+        'INVALID_QUERY'
+      );
+      assertCode(() => users.find('name < "b" IGNORE CASE'), 'INVALID_QUERY');
+    });
+
+    const prepared = db.prepare('users', (q) =>
+      q.where((c) => c.ignoreCase(c.eq('email', param(0))))
+    );
+
+    assert.equal(
+      db.read((txn) => txn.collection('users').findOne(prepared, ['ALICE@EXAMPLE.COM'])).name,
+      'Alice'
+    );
+  });
+
   it('give aggregates of a field, through every form of query', (context) => {
     const { db } = withData(context);
     const older = db.prepare('users', (q) => q.where('age', '>', param(0)));

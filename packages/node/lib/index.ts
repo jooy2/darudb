@@ -83,6 +83,7 @@ export type {
   Typed,
   TypeBuilders,
   WriteCollection,
+  WhereOptions,
   WriteOptions,
   WriteTransaction
 } from './types.js';

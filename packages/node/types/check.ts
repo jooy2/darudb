@@ -108,6 +108,9 @@ db.read((txn) => {
 });
 
 new Query().where(conditions.not(conditions.eq('a', 1))).limit(3);
+new Query().where(conditions.ignoreCase(conditions.eq('a', 'x'))).where('b', '==', 'y', {
+  ignoreCase: true
+});
 
 // A prepared query finds the objects of the collection it was prepared on.
 const byEmail = db.prepare('users', (q) => q.where('email', '==', param(0)).sortBy('age'));

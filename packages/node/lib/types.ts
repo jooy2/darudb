@@ -233,6 +233,22 @@ export interface Conditions<O = Record<string, unknown>> {
   and(...conditions: Condition[]): Condition;
   or(...conditions: Condition[]): Condition;
   not(condition: Condition): Condition;
+  /**
+   * `condition` with every test in it of `eq`, `ne`, `in`, `contains`,
+   * `startsWith` and `endsWith` comparing strings ignoring case, by
+   * Unicode's simple case folding. Such a test of a field that holds no
+   * strings fails with `INVALID_QUERY` when the query runs.
+   */
+  ignoreCase(condition: Condition): Condition;
+}
+
+/** Options of a condition `Query.where` makes from a field, an operator and a value. */
+export interface WhereOptions {
+  /**
+   * Whether a test of `==`, `!=`, `in`, `contains`, `startsWith` or
+   * `endsWith` compares strings ignoring case.
+   */
+  ignoreCase?: boolean;
 }
 
 /**
@@ -244,12 +260,14 @@ export interface Query<O = Record<string, unknown>> {
   where<K extends FieldNames<O>>(
     field: K,
     op: '==' | '!=',
-    value: Operand<ElementOf<O[K]> | null>
+    value: Operand<ElementOf<O[K]> | null>,
+    options?: WhereOptions
   ): Query<O>;
   where<K extends FieldNames<O>>(
     field: K,
     op: Comparison,
-    value: Operand<ElementOf<O[K]>>
+    value: Operand<ElementOf<O[K]>>,
+    options?: WhereOptions
   ): Query<O>;
   where<K extends FieldNames<O>>(
     field: K,
@@ -259,24 +277,32 @@ export interface Query<O = Record<string, unknown>> {
   where<K extends FieldNames<O>>(
     field: K,
     op: 'in',
-    value: readonly Operand<ElementOf<O[K]>>[]
+    value: readonly Operand<ElementOf<O[K]>>[],
+    options?: WhereOptions
   ): Query<O>;
   where<K extends FieldNames<O>>(
     field: K,
     op: 'contains' | 'startsWith' | 'endsWith',
-    value: Operand<ElementOf<O[K]>>
+    value: Operand<ElementOf<O[K]>>,
+    options?: WhereOptions
   ): Query<O>;
   where(
     path: DottedPath,
     op: Comparison | 'contains' | 'startsWith' | 'endsWith',
-    value: Operand<QueryValue | null>
+    value: Operand<QueryValue | null>,
+    options?: WhereOptions
   ): Query<O>;
   where(
     path: DottedPath,
     op: 'between',
     value: readonly [Operand<QueryValue>, Operand<QueryValue>]
   ): Query<O>;
-  where(path: DottedPath, op: 'in', value: readonly Operand<QueryValue>[]): Query<O>;
+  where(
+    path: DottedPath,
+    op: 'in',
+    value: readonly Operand<QueryValue>[],
+    options?: WhereOptions
+  ): Query<O>;
   where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<O>;
   /** Sorts by a field, ascending unless told otherwise, after any sort before. */
   sortBy(field: FieldNames<O> | DottedPath, direction?: 'asc' | 'desc'): Query<O>;

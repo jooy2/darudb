@@ -203,8 +203,30 @@ function notices() {
     'mimalloc in too. Each is listed with the licence it is used under and the',
     'licence files it ships.',
     '',
+    unicodeData(),
+    '',
     ...sections,
     ''
+  ].join('\n');
+}
+
+/**
+ * The notice of the Unicode data compiled into the engine's own source: the
+ * table of case folding made from `CaseFolding.txt`, whose licence the
+ * engine keeps in `crates/darudb/LICENSE-UNICODE`.
+ */
+function unicodeData() {
+  const file = join(packageDir, '..', '..', 'crates', 'darudb', 'LICENSE-UNICODE');
+
+  return [
+    '='.repeat(80),
+    'Unicode Character Database, CaseFolding.txt',
+    "Used under: Unicode-3.0, in DaruDB's own source, for comparisons that ignore case",
+    'Source: https://www.unicode.org/Public/UCD/',
+    '',
+    '--- LICENSE-UNICODE ---',
+    '',
+    readFileSync(file, 'utf8').replace(/\r\n/g, '\n').trimEnd()
   ].join('\n');
 }
 
