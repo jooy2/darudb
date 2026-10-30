@@ -324,6 +324,51 @@ describe('objects', () => {
     });
   });
 
+  it('are deleted and updated by a query, an update all or nothing', (context) => {
+    const { db } = withData(context);
+    const older = db.prepare('users', (q) => q.where('age', '>', param(0)));
+
+    db.write((txn) => {
+      const users = txn.collection('users');
+
+      assert.equal(
+        users.updateWhere({ score: 9 }, (q) => q.where('age', '>', 18)),
+        2
+      );
+      assert.deepEqual(
+        users.find((q) => q.sortBy('age')).map((user) => user.score),
+        [null, 9, 9]
+      );
+      assert.equal(users.updateWhere({ tags: ['old'] }, 'age >= $0', [40]), 1);
+      assert.deepEqual(users.get(3).tags, ['old'], 'a list goes through objects');
+
+      // Two objects cannot take one unique email: the first is put back.
+      assertCode(
+        () => users.updateWhere({ email: 'same@example.com', age: 1 }, older, [0]),
+        'DUPLICATE_KEY'
+      );
+      assert.equal(users.get(1).email, 'alice@example.com');
+      assert.deepEqual(
+        users.find((q) => q.sortBy('id')).map((user) => user.age),
+        [31, 17, 40]
+      );
+      assertCode(() => users.updateWhere({ id: 9 }, (q) => q), 'INVALID_ARGUMENT');
+      assertCode(() => users.deleteWhere(), 'INVALID_ARGUMENT');
+      assertCode(() => users.updateWhere({ age: 1 }), 'INVALID_ARGUMENT');
+
+      assert.equal(users.deleteWhere(older, [30]), 2);
+      assert.deepEqual(
+        users.find().map((user) => user.name),
+        ['Bob']
+      );
+      assert.equal(
+        users.deleteWhere((q) => q),
+        1
+      );
+      assert.equal(users.count(), 0);
+    });
+  });
+
   it('are found by prepared queries, with values given each run', (context) => {
     const { db } = withData(context);
     const adults = db.prepare('users', (q) =>

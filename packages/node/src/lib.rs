@@ -1030,6 +1030,29 @@ impl Txn {
             .map_err(to_js_error)
     }
 
+    /// Deletes every object the query in `ir` finds, and returns how many.
+    fn delete_where(&mut self, ir: &[u8]) -> Result<f64> {
+        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+
+        self.writing()?
+            .collection(&request.collection)
+            .and_then(|mut collection| collection.delete_where(&request.query))
+            .map(u64_number)
+            .map_err(to_js_error)
+    }
+
+    /// Sets the fields the record `changes` holds in every object the query
+    /// in `ir` finds, all or nothing, and returns how many.
+    fn update_where(&mut self, ir: &[u8], changes: &[u8]) -> Result<f64> {
+        let request = darudb::QueryRequest::decode(ir).map_err(to_js_error)?;
+
+        self.writing()?
+            .collection(&request.collection)
+            .and_then(|mut collection| collection.update_records_where(&request.query, changes))
+            .map(u64_number)
+            .map_err(to_js_error)
+    }
+
     fn delete(&mut self, collection: &str, key: darudb::Value) -> Result<bool> {
         self.writing()?
             .collection(collection)
@@ -1255,6 +1278,8 @@ const OP_PREVIOUS_RECORD: u8 = 7;
 const OP_PREVIOUS_KEYS: u8 = 8;
 const OP_UPDATE: u8 = 9;
 const OP_AGGREGATE: u8 = 10;
+const OP_DELETE_WHERE: u8 = 11;
+const OP_UPDATE_WHERE: u8 = 12;
 
 /// One operation of a batch, with what it takes checked and copied, so that
 /// it can move to a pool thread.
@@ -1263,6 +1288,10 @@ enum Op {
     Find(Vec<u8>, bool),
     Count(Vec<u8>),
     Aggregate(Vec<u8>),
+    DeleteWhere(Vec<u8>),
+    /// The IR, then the changes: the payload holds the IR's length as a
+    /// varint, the IR, and the changes.
+    UpdateWhere(Vec<u8>),
     Write(String, Vec<u8>, bool),
     Delete(String, darudb::Value),
     Update(String, darudb::Value, Vec<u8>),
@@ -1288,6 +1317,8 @@ impl Op {
             OP_FIND | OP_FIND_FIRST => payload().map(|ir| Op::Find(ir, kind == OP_FIND_FIRST)),
             OP_COUNT => payload().map(Op::Count),
             OP_AGGREGATE => payload().map(Op::Aggregate),
+            OP_DELETE_WHERE => payload().map(Op::DeleteWhere),
+            OP_UPDATE_WHERE => payload().map(Op::UpdateWhere),
             OP_INSERT | OP_PUT => {
                 payload().map(|records| Op::Write(collection, records, kind == OP_PUT))
             }
@@ -1309,6 +1340,16 @@ impl Op {
             Op::Find(ir, first) => Outcome::Bytes(txn.find_ir(&ir, first)?),
             Op::Count(ir) => Outcome::Number(txn.count_ir(&ir)?),
             Op::Aggregate(ir) => Outcome::Bytes(txn.aggregate_ir(&ir)?),
+            Op::DeleteWhere(ir) => Outcome::Number(txn.delete_where(&ir)?),
+            Op::UpdateWhere(payload) => {
+                let (len, used) = varint(&payload)?;
+                let (ir, changes) = used
+                    .checked_add(len)
+                    .and_then(|end| Some((payload.get(used..end)?, payload.get(end..)?)))
+                    .ok_or_else(|| invalid("an update's IR ends past its payload"))?;
+
+                Outcome::Number(txn.update_where(ir, changes)?)
+            }
             Op::Write(collection, records, replace) => {
                 Outcome::Keys(txn.write_records(&collection, &records, replace)?.0)
             }
@@ -1626,6 +1667,30 @@ pub fn update_record(
     let changes = lent(&changes, length)?;
 
     with(txn, |txn| txn.update(collection, key, changes))
+}
+
+/// Deletes every object the query in `ir` finds, and returns how many.
+#[napi]
+pub fn delete_where(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    ir: BufferSlice<'_>,
+) -> Result<f64> {
+    with(txn, |txn| txn.delete_where(&ir))
+}
+
+/// Sets the fields the record in the first `length` bytes of `changes`
+/// holds, as `lendChanges` lends it, in every object the query in `ir`
+/// finds, all or nothing, and returns how many.
+#[napi]
+pub fn update_where(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+    ir: BufferSlice<'_>,
+    #[napi(ts_arg_type = "Uint8Array")] changes: BufferSlice<'_>,
+    length: u32,
+) -> Result<f64> {
+    let changes = lent(&changes, length)?;
+
+    with(txn, |txn| txn.update_where(&ir, changes))
 }
 
 /// The first `length` bytes of `bytes`, a buffer the JavaScript side lends

@@ -306,6 +306,20 @@ function kindAt(fields: Layout, path: readonly string[]): Kind | null {
   return null;
 }
 
+/**
+ * `query`, which a change of the objects a query finds requires: without
+ * one it would change every object.
+ */
+function required(query: QueryInput): QueryInput {
+  if (query === undefined || query === null) {
+    throw invalid(
+      'a change of the objects a query finds takes a query; `(q) => q` finds every object'
+    );
+  }
+
+  return query;
+}
+
 const PREPARE = Symbol('prepare');
 const NATIVE = Symbol('native');
 
@@ -591,6 +605,7 @@ export {
   parametersOf,
   lendParameters,
   irOf,
+  required,
   aggregationOf,
   SUM,
   MIN,

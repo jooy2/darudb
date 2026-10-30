@@ -321,6 +321,16 @@ export type QueryArguments<O> =
   | [text: string, parameters?: QueryParameters]
   | [prepared: Prepared<O>, parameters?: QueryParameters];
 
+/**
+ * A query in any of the forms `find` takes, as a change of the objects it
+ * finds takes it: required, so that changing every object is never an
+ * accident.
+ */
+export type RequiredQueryArguments<O> =
+  | [query: QueryInput<O>]
+  | [text: string, parameters?: QueryParameters]
+  | [prepared: Prepared<O>, parameters?: QueryParameters];
+
 /** The fields of `O` holding numbers, which a sum and a mean read. */
 export type NumberFields<O> = {
   [K in FieldNames<O>]-?: NonNullable<O[K]> extends number | bigint ? K : never;
@@ -401,6 +411,19 @@ export interface WriteCollection<O, I> extends ReadCollection<O> {
   update(key: Key, changes: Partial<I>): boolean;
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: Key): boolean;
+  /**
+   * Deletes every object a query finds, after its sort, offset and limit,
+   * and returns how many there were. The query is required: `(q) => q`
+   * finds every object.
+   */
+  deleteWhere(...query: RequiredQueryArguments<O>): number;
+  /**
+   * Sets the fields `changes` has in every object a query finds, as `update`
+   * sets them in one, and returns how many there were. All or nothing: when
+   * one object is refused, the ones changed before it are put back. It
+   * cannot set the primary key.
+   */
+  updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): number;
 }
 
 /** A read transaction: one commit, for as long as its function runs. */
@@ -477,6 +500,10 @@ export interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
   update(key: Key, changes: Partial<I>): Promise<boolean>;
   /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */
   delete(key: Key): Promise<boolean>;
+  /** Deletes every object a query finds; see `WriteCollection.deleteWhere`. */
+  deleteWhere(...query: RequiredQueryArguments<O>): Promise<number>;
+  /** Sets fields in every object a query finds; see `WriteCollection.updateWhere`. */
+  updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): Promise<number>;
 }
 
 /**

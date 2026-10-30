@@ -41,6 +41,7 @@ import {
   keyOf,
   lendParameters,
   irOf,
+  required,
   aggregationOf,
   SUM,
   MIN,
@@ -279,6 +280,29 @@ class WriteCollection extends ReadCollection {
   /** Deletes the object whose primary key is `key`, and says whether there was one. */
   delete(key: unknown): boolean {
     return native.deleteObject(this[TXN], nameOf(this[LAYOUT]), keyOf(key));
+  }
+
+  /**
+   * Deletes every object a query finds, after its sort, offset and limit,
+   * and returns how many there were. The query is required, so that
+   * deleting every object is never an accident.
+   */
+  deleteWhere(query: QueryInput, parameters?: unknown): number {
+    const layout = this[LAYOUT];
+
+    return native.deleteWhere(this[TXN], irOf(layout.name, required(query), parameters, false));
+  }
+
+  /**
+   * Sets the fields `changes` has in every object a query finds, all or
+   * nothing, and returns how many there were.
+   */
+  updateWhere(changes: unknown, query: QueryInput, parameters?: unknown): number {
+    const layout = this[LAYOUT];
+    const ir = irOf(layout.name, required(query), parameters, false, false, true);
+    const length = lendChanges(layout, changes);
+
+    return native.updateWhere(this[TXN], ir, recordBytes(), length);
   }
 
   #writeOne(object: unknown, replace: boolean) {

@@ -69,6 +69,7 @@ export type {
   QueryParameters,
   QueryValue,
   ReadCollection,
+  RequiredQueryArguments,
   ReadTransaction,
   SalvageOptions,
   SalvageReport,

@@ -87,6 +87,29 @@ describe('asynchronous transactions', () => {
       };
     });
 
+    const changed = await db.writeAsync(async (txn) => {
+      const users = txn.collection('users');
+      const updated = await users.updateWhere({ age: 18 }, (q) => q.where('age', '<', 18));
+
+      await assertRejects(
+        users.updateWhere({ email: 'same@example.com' }, (q) => q),
+        'DUPLICATE_KEY'
+      );
+
+      return {
+        updated,
+        email: (await users.get(1)).email,
+        deleted: await users.deleteWhere('age == $0', [18]),
+        left: await users.count()
+      };
+    });
+
+    assert.deepEqual(changed, {
+      updated: 1,
+      email: 'alice@example.com',
+      deleted: 1,
+      left: 2
+    });
     assert.equal(found.sum, 88);
     assert.equal(found.bigSum, 2n ** 60n);
     assert.equal(found.min, 'Alice');

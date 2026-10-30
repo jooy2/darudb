@@ -158,6 +158,23 @@ db.read((txn) => {
   return [total, visitsTotal, youngest, lastName, mean, zip, deepest];
 });
 
+// A change of the objects a query finds takes the query, in any form.
+db.write((txn) => {
+  const users = txn.collection('users');
+  const updated: number = users.updateWhere({ age: 18 }, (q) => q.where('age', '<', 18));
+  const deleted: number = users.deleteWhere('age > $0', [99]);
+
+  users.deleteWhere(byEmail, ['alice@example.com']);
+  // @ts-expect-error the query is required.
+  users.deleteWhere();
+  // @ts-expect-error `age` is an int.
+  users.updateWhere({ age: 'old' }, (q) => q);
+  // @ts-expect-error the collection has no such field.
+  users.updateWhere({ nickname: 'Al' }, (q) => q);
+
+  return updated + deleted;
+});
+
 const plain = Database.open('plain.darudb');
 const version: number | null = plain.schemaVersion;
 

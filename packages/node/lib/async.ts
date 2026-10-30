@@ -38,6 +38,7 @@ import {
   toBuffer,
   keyOf,
   irOf,
+  required,
   aggregationOf,
   SUM,
   MIN,
@@ -231,6 +232,8 @@ const PREVIOUS_RECORD = 7;
 const PREVIOUS_KEYS = 8;
 const UPDATE = 9;
 const AGGREGATE = 10;
+const DELETE_WHERE = 11;
+const UPDATE_WHERE = 12;
 
 // How `src/lib.rs` tags each result of a batch, and each key among them.
 const TAG_BYTES = 0;
@@ -473,6 +476,21 @@ function readKey(reader: Reader, results: Buffer): Key {
   }
 }
 
+/** The bytes of `value` as a varint. */
+function varintOf(value: number): number[] {
+  const bytes: number[] = [];
+  let left = value;
+
+  while (left >= 0x80) {
+    bytes.push((left % 0x80) | 0x80);
+    left = Math.floor(left / 0x80);
+  }
+
+  bytes.push(left);
+
+  return bytes;
+}
+
 /** Where a collection keeps its operations and its layout, out of sight. */
 const SERIAL = Symbol('serial');
 const LAYOUT = Symbol('layout');
@@ -601,6 +619,32 @@ class AsyncWriteCollection extends AsyncReadCollection {
 
     // An update resolves to whether there was an object.
     return this[SERIAL].call(UPDATE, this[LAYOUT].name, keyOf(key), bytes) as Promise<boolean>;
+  }
+
+  /**
+   * Deletes every object a query finds, and resolves to how many there
+   * were; see `WriteCollection.deleteWhere`.
+   */
+  async deleteWhere(query: QueryInput, parameters?: unknown): Promise<number> {
+    const ir = irOf(this[LAYOUT].name, required(query), parameters, false);
+
+    // A delete by query resolves to how many objects it deleted.
+    return this[SERIAL].call(DELETE_WHERE, '', null, ir) as Promise<number>;
+  }
+
+  /**
+   * Sets the fields `changes` has in every object a query finds, all or
+   * nothing, and resolves to how many there were.
+   */
+  async updateWhere(changes: unknown, query: QueryInput, parameters?: unknown): Promise<number> {
+    const ir = irOf(this[LAYOUT].name, required(query), parameters, false);
+    const bytes = encodeChanges(this[LAYOUT], changes);
+    // The IR after its length, then the changes, as the native layer reads
+    // them back apart.
+    const payload = Buffer.concat([Buffer.from(varintOf(ir.length)), ir, bytes]);
+
+    // An update by query resolves to how many objects it found.
+    return this[SERIAL].call(UPDATE_WHERE, '', null, payload) as Promise<number>;
   }
 
   /** Deletes the object whose primary key is `key`, and resolves to whether there was one. */
