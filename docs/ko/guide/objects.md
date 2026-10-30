@@ -352,6 +352,80 @@ with db.read() as txn:
 
 ::: lang rust
 
+## 쿼리가 찾은 객체 바꾸기
+
+쓰기 트랜잭션은 쿼리가 찾은 객체를 한 번의 호출로 모두 지우거나 고칩니다. 쿼리의 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상이며, 쿼리가 찾은 객체 수를 돌려줍니다. 실수로 모든 객체를 바꾸는 일이 없도록 쿼리는 언제나 줘야 합니다.
+
+::: lang rust
+
+```rust
+use darudb::{Database, Filter, Object, Query};
+
+fn tidy(db: &Database) -> Result<(), darudb::Error> {
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection("users")?;
+    let minors = Query::new().filter(Filter::lt("age", 18));
+
+    let updated = users.update_where(&minors, Object::new().with("active", false))?;
+    let deleted = users.delete_where(&Query::new().filter(Filter::eq("active", false)).limit(100))?;
+
+    println!("{updated} updated, {deleted} deleted");
+    txn.commit()
+}
+```
+
+타입이 있는 컬렉션은 필드를 타입으로 지정합니다. `people.change_where(&minors).set(Person::ACTIVE, false).apply()`처럼 씁니다.
+
+:::
+
+::: lang node
+
+```ts
+db.write((txn) => {
+  const users = txn.collection('users');
+
+  users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
+  users.deleteWhere('active == $0 LIMIT 100', [false]);
+});
+```
+
+`updateWhere`는 `update`처럼 변경을 먼저 받고, 그다음에 `find`가 받는 어떤 형태의 쿼리든 받습니다. `(q) => q`는 모든 객체를 찾습니다.
+
+:::
+
+::: lang dart
+
+```dart
+db.write((txn) {
+  final users = txn.collection(userSchema);
+
+  users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+  users.deleteWhereText(r'active == $0 LIMIT 100', [false]);
+});
+```
+
+`updateWhere`는 `update`처럼 변경을 받고 그다음에 쿼리를 받습니다. `deleteWhereText`와 `updateWhereText`는 쿼리 언어로 쓴 쿼리를, `Prepared`로 끝나는 메서드는 준비한 쿼리를 받습니다. `(q) => q`는 모든 객체를 찾습니다.
+
+:::
+
+::: lang python
+
+```python
+with db.write() as txn:
+    users = txn.collection(User)
+
+    users.update_where(F.age < 18, active=False)
+    users.delete_where("active == $0 LIMIT 100", False)
+```
+
+`update_where`는 쿼리와 그 뒤의 매개변수를 받고, `update`처럼 변경을 이름으로 받습니다. `Query()`는 모든 객체를 찾습니다.
+
+:::
+
+- **키를 먼저 모읍니다.** 엔진은 쿼리의 계획대로 객체를 찾은 뒤 키로 하나씩 바꾸므로, 쿼리가 바로 그 변경이 설정하는 필드를 검사해도 됩니다.
+- **쿼리로 고치는 일은 전부 되거나 전혀 안 됩니다.** 다른 객체가 가진 유니크 값이나 너무 긴 인덱스 항목 때문에 한 객체가 변경을 거부하면, 앞서 바뀐 객체는 원래 레코드와 인덱스 항목을 되찾고 호출은 그 객체의 오류로 실패합니다. 트랜잭션은 호출 전 상태 그대로이고 계속 쓸 수 있습니다. 쿼리로 고칠 때는 기본 키를 바꿀 수 없습니다.
+- **쿼리로 지우는 일**은 거부되지 않습니다.
+
 ## 객체를 Rust 타입으로
 
 크레이트의 `derive` 기능을 켜면 `#[derive(Object)]`로 구조체를 컬렉션의 객체로 만들 수 있습니다. 스키마는 구조체에서 컬렉션을 선언하고, `collection_of`는 레코드를 구조체로 바로 읽고 구조체를 레코드로 씁니다. 이름 붙은 값을 담는 `Object`를 거치지 않으므로, 레코드를 찾는 데 드는 만큼의 비용이 빠집니다.

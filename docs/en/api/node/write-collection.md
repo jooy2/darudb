@@ -92,6 +92,27 @@ delete(key: Key): boolean;
 
 Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A key that is not an int, a string or bytes fails with `INVALID_ARGUMENT`.
 
+### deleteWhere
+
+```ts
+deleteWhere(...query: RequiredQueryArguments<O>): number;
+```
+
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, in any form `find` takes, so that deleting every object is never an accident: `(q) => q` finds them all. Without one it fails with `INVALID_ARGUMENT`.
+
+### updateWhere
+
+```ts
+updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): number;
+```
+
+Sets the fields `changes` has in every object a query finds, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it are put back, and the call throws that error. The changes cannot set the primary key.
+
+```ts
+users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
+users.updateWhere({ active: true }, 'age >= $0', [18]);
+```
+
 ## AsyncWriteCollection
 
 ```ts
@@ -102,6 +123,8 @@ interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
   putMany(objects: readonly I[]): Promise<Key[]>;
   update(key: Key, changes: Partial<I>): Promise<boolean>;
   delete(key: Key): Promise<boolean>;
+  deleteWhere(...query: RequiredQueryArguments<O>): Promise<number>;
+  updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): Promise<number>;
 }
 ```
 

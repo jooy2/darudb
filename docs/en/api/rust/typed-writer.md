@@ -101,6 +101,34 @@ The changes to the object whose primary key is `key`, made one field at a time w
 users.change(id).set(User::NAME, "Alice Liddell".to_owned()).set(User::AGE, 32).apply()?;
 ```
 
+### delete_where
+
+```rust
+pub fn delete_where(&mut self, query: &Query) -> Result<u64>
+```
+
+Deletes every object `query` finds, and returns how many there were; see [`CollectionWriter::delete_where`](./collection-writer.md#delete-where).
+
+### update_where
+
+```rust
+pub fn update_where(&mut self, query: &Query, changes: Object) -> Result<u64>
+```
+
+Sets the fields `changes` has in every object `query` finds, all or nothing; see [`CollectionWriter::update_where`](./collection-writer.md#update-where).
+
+### change_where
+
+```rust
+pub fn change_where(&mut self, query: &Query) -> ChangeWhere<'_, 'a, T>
+```
+
+The changes to every object `query` finds, made one field at a time with [`ChangeWhere::set`](./change-where.md#set) and written together, all or nothing, by [`ChangeWhere::apply`](./change-where.md#apply).
+
+```rust
+users.change_where(&minors).set(User::ACTIVE, false).apply()?;
+```
+
 ### get
 
 ```rust

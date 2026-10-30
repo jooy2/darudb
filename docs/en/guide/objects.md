@@ -352,6 +352,80 @@ These hold in every language:
 
 ::: lang rust
 
+## Change the objects a query finds
+
+A write transaction deletes, or updates, every object a query finds in one call, after the query's sort, offset and limit, and returns how many objects the query found. The query is always given, so that changing every object is never an accident.
+
+::: lang rust
+
+```rust
+use darudb::{Database, Filter, Object, Query};
+
+fn tidy(db: &Database) -> Result<(), darudb::Error> {
+    let mut txn = db.begin_write()?;
+    let mut users = txn.collection("users")?;
+    let minors = Query::new().filter(Filter::lt("age", 18));
+
+    let updated = users.update_where(&minors, Object::new().with("active", false))?;
+    let deleted = users.delete_where(&Query::new().filter(Filter::eq("active", false)).limit(100))?;
+
+    println!("{updated} updated, {deleted} deleted");
+    txn.commit()
+}
+```
+
+A typed collection takes the fields through the type: `people.change_where(&minors).set(Person::ACTIVE, false).apply()`.
+
+:::
+
+::: lang node
+
+```ts
+db.write((txn) => {
+  const users = txn.collection('users');
+
+  users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
+  users.deleteWhere('active == $0 LIMIT 100', [false]);
+});
+```
+
+`updateWhere` takes the changes first, as `update` takes them, then the query in any form `find` takes. `(q) => q` finds every object.
+
+:::
+
+::: lang dart
+
+```dart
+db.write((txn) {
+  final users = txn.collection(userSchema);
+
+  users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+  users.deleteWhereText(r'active == $0 LIMIT 100', [false]);
+});
+```
+
+`updateWhere` takes the changes as `update` does, then the query; `deleteWhereText` and `updateWhereText` take one in the query language, and the `Prepared` forms a prepared one. `(q) => q` finds every object.
+
+:::
+
+::: lang python
+
+```python
+with db.write() as txn:
+    users = txn.collection(User)
+
+    users.update_where(F.age < 18, active=False)
+    users.delete_where("active == $0 LIMIT 100", False)
+```
+
+`update_where` takes the query, its parameters after it, and the changes by name, as `update` takes them. `Query()` finds every object.
+
+:::
+
+- **The keys come first.** The engine finds the objects through the query's plan, then changes each by its key, so a query can test the very fields the change sets.
+- **An update by query is all or nothing.** When one object refuses its change, a unique value another object holds or an index entry too long, the objects changed before it get their records and index entries back, and the call fails with the object's error. The transaction is as it was before the call and can go on. An update by query cannot set the primary key.
+- **A delete by query** cannot be refused.
+
 ## Objects as Rust types
 
 With the crate's `derive` feature, `#[derive(Object)]` makes a struct the objects of a collection. The schema declares the collection from the struct, and `collection_of` reads records straight into it and writes it as records, without the `Object` of named values in between, which costs about as much as finding the record.

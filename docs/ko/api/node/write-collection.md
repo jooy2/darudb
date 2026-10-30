@@ -92,6 +92,27 @@ delete(key: Key): boolean;
 
 기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. 정수, 문자열, 바이트가 아닌 키를 주면 `INVALID_ARGUMENT`로 실패합니다.
 
+### deleteWhere
+
+```ts
+deleteWhere(...query: RequiredQueryArguments<O>): number;
+```
+
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 됩니다. 모든 객체를 지우려면 `(q) => q`를 줍니다. 쿼리가 없으면 `INVALID_ARGUMENT`로 실패합니다.
+
+### updateWhere
+
+```ts
+updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): number;
+```
+
+쿼리가 찾은 모든 객체에 [`update`](#update)가 한 객체에 하듯 `changes`의 필드를 설정하고, 쿼리가 찾은 객체 수를 돌려줍니다. 전부 되거나 전혀 안 됩니다. 다른 객체가 가진 유니크 값 때문에 `DUPLICATE_KEY`로, 또는 너무 긴 인덱스 항목 때문에 `INVALID_ARGUMENT`로 한 객체가 거부되면, 앞서 바뀐 객체를 되돌리고 그 오류를 던집니다. 변경으로 기본 키를 설정할 수는 없습니다.
+
+```ts
+users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
+users.updateWhere({ active: true }, 'age >= $0', [18]);
+```
+
 ## AsyncWriteCollection
 
 ```ts
@@ -102,6 +123,8 @@ interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
   putMany(objects: readonly I[]): Promise<Key[]>;
   update(key: Key, changes: Partial<I>): Promise<boolean>;
   delete(key: Key): Promise<boolean>;
+  deleteWhere(...query: RequiredQueryArguments<O>): Promise<number>;
+  updateWhere(changes: Partial<I>, ...query: RequiredQueryArguments<O>): Promise<number>;
 }
 ```
 

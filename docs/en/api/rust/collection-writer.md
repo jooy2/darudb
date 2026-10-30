@@ -87,6 +87,30 @@ pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 
 Deletes the object whose primary key is `key` with its index entries, and returns whether there was one.
 
+### delete_where
+
+```rust
+pub fn delete_where(&mut self, query: &Query) -> Result<u64>
+```
+
+Deletes every object `query` finds, after its sort, offset and limit, and returns how many there were. The keys are gathered first, so the query may test the fields the objects are deleted by. It fails with `INVALID_QUERY` for a query that does not fit the schema.
+
+### update_where
+
+```rust
+pub fn update_where(&mut self, query: &Query, changes: Object) -> Result<u64>
+```
+
+Sets the fields `changes` has in every object `query` finds, after its sort, offset and limit, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it get their records and index entries back, and the call fails with that error. The changes cannot set the primary key.
+
+### update_records_where
+
+```rust
+pub fn update_records_where(&mut self, query: &Query, changes: &[u8]) -> Result<u64>
+```
+
+[`update_where`](#update-where) with the changes in a record, as a language binding sends them to [`update_record`](#update-record).
+
 ### get
 
 ```rust

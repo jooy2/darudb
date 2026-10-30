@@ -95,6 +95,27 @@ def delete(self, key: Key) -> bool: ...
 
 Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A key that is not an `int`, a `str` or bytes fails with `INVALID_ARGUMENT`.
 
+### delete_where
+
+```python
+def delete_where(self, query: QueryInput, /, *parameters: object) -> int: ...
+```
+
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, in any form `find` takes, with its parameters after it, so that deleting every object is never an accident: `Query()` finds them all. `None` fails with `INVALID_ARGUMENT`.
+
+### update_where
+
+```python
+def update_where(self, query: QueryInput, /, *parameters: object, **changes: object) -> int: ...
+```
+
+Sets the fields `changes` names in every object a query finds, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it are put back, and the call raises that error. The changes cannot set the primary key.
+
+```python
+users.update_where(F.age < 18, active=False)
+users.update_where("age >= $0", 18, active=True)
+```
+
 ## AsyncWriteCollection
 
 ```python
@@ -105,6 +126,8 @@ class AsyncWriteCollection(AsyncReadCollection[T]):
     async def put_many(self, objects: Iterable[T]) -> list[Key]: ...
     async def update(self, key: Key, /, **changes: object) -> bool: ...
     async def delete(self, key: Key) -> bool: ...
+    async def delete_where(self, query: QueryInput, /, *parameters: object) -> int: ...
+    async def update_where(self, query: QueryInput, /, *parameters: object, **changes: object) -> int: ...
 ```
 
 The collection of an asynchronous write transaction, with the reads of [AsyncReadCollection](./read-collection.md#asyncreadcollection). Its members do what the members above do as coroutines; every failure raises the same error where the operation is awaited, and a refused operation changes nothing. Operations run in the order they started, and one that fails does not stop the ones after it. Each operation is a trip to the package's thread pool and back, so a batch of objects belongs in one `insert_many` or `put_many`.

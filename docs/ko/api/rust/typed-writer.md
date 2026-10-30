@@ -101,6 +101,34 @@ pub fn change(&mut self, key: impl Into<Value>) -> Change<'_, 'a, T>
 users.change(id).set(User::NAME, "Alice Liddell".to_owned()).set(User::AGE, 32).apply()?;
 ```
 
+### delete_where
+
+```rust
+pub fn delete_where(&mut self, query: &Query) -> Result<u64>
+```
+
+`query`가 찾은 객체를 모두 지우고 지운 개수를 돌려줍니다. [`CollectionWriter::delete_where`](./collection-writer.md#delete-where)를 보세요.
+
+### update_where
+
+```rust
+pub fn update_where(&mut self, query: &Query, changes: Object) -> Result<u64>
+```
+
+`query`가 찾은 객체에 `changes`의 필드를 설정하며, 전부 되거나 전혀 안 됩니다. [`CollectionWriter::update_where`](./collection-writer.md#update-where)를 보세요.
+
+### change_where
+
+```rust
+pub fn change_where(&mut self, query: &Query) -> ChangeWhere<'_, 'a, T>
+```
+
+`query`가 찾은 모든 객체에 대한 변경입니다. [`ChangeWhere::set`](./change-where.md#set)으로 필드를 하나씩 정하고, [`ChangeWhere::apply`](./change-where.md#apply)로 한꺼번에, 전부 되거나 전혀 안 되게 씁니다.
+
+```rust
+users.change_where(&minors).set(User::ACTIVE, false).apply()?;
+```
+
 ### get
 
 ```rust

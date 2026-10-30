@@ -95,6 +95,27 @@ def delete(self, key: Key) -> bool: ...
 
 기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. `int`, `str`, 바이트가 아닌 키를 주면 `INVALID_ARGUMENT`로 실패합니다.
 
+### delete_where
+
+```python
+def delete_where(self, query: QueryInput, /, *parameters: object) -> int: ...
+```
+
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 주고 매개변수는 그 뒤에 이어 줍니다. 모든 객체를 지우려면 `Query()`를 줍니다. `None`은 `INVALID_ARGUMENT`로 실패합니다.
+
+### update_where
+
+```python
+def update_where(self, query: QueryInput, /, *parameters: object, **changes: object) -> int: ...
+```
+
+쿼리가 찾은 모든 객체에 [`update`](#update)가 한 객체에 하듯 `changes`가 이름으로 지정한 필드를 설정하고, 쿼리가 찾은 객체 수를 돌려줍니다. 전부 되거나 전혀 안 됩니다. 다른 객체가 가진 유니크 값 때문에 `DUPLICATE_KEY`로, 또는 너무 긴 인덱스 항목 때문에 `INVALID_ARGUMENT`로 한 객체가 거부되면, 앞서 바뀐 객체를 되돌리고 그 오류를 일으킵니다. 변경으로 기본 키를 설정할 수는 없습니다.
+
+```python
+users.update_where(F.age < 18, active=False)
+users.update_where("age >= $0", 18, active=True)
+```
+
 ## AsyncWriteCollection
 
 ```python
@@ -105,6 +126,8 @@ class AsyncWriteCollection(AsyncReadCollection[T]):
     async def put_many(self, objects: Iterable[T]) -> list[Key]: ...
     async def update(self, key: Key, /, **changes: object) -> bool: ...
     async def delete(self, key: Key) -> bool: ...
+    async def delete_where(self, query: QueryInput, /, *parameters: object) -> int: ...
+    async def update_where(self, query: QueryInput, /, *parameters: object, **changes: object) -> int: ...
 ```
 
 비동기 쓰기 트랜잭션의 컬렉션이며, [AsyncReadCollection](./read-collection.md#asyncreadcollection)의 읽기 메서드도 있습니다. 멤버가 하는 일은 위와 같되 코루틴입니다. 실패하면 작업을 await한 자리에서 같은 오류를 일으키고, 거부된 작업은 아무것도 바꾸지 않습니다. 작업은 시작한 순서대로 실행되고, 한 작업이 실패해도 그 뒤의 작업은 계속 실행됩니다. 작업마다 패키지의 스레드 풀을 한 번 오가므로, 객체 여러 개는 `insert_many`나 `put_many` 한 번에 넣으세요.

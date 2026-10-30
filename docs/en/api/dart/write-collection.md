@@ -96,6 +96,30 @@ bool delete(K key);
 
 Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one.
 
+### deleteWhere
+
+```dart
+int deleteWhere(QueryBuilder<T> Function(Q q) query);
+int deleteWhereText(String text, [List<Object?> parameters = const []]);
+int deleteWherePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, so that deleting every object is never an accident: `(q) => q` finds them all. The `Text` and `Prepared` forms take it in the query language or prepared.
+
+### updateWhere
+
+```dart
+int updateWhere(List<Change> Function(Q q) changes, QueryBuilder<T> Function(Q q) query);
+int updateWhereText(List<Change> Function(Q q) changes, String text, [List<Object?> parameters = const []]);
+int updateWherePrepared(List<Change> Function(Q q) changes, Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+Sets the fields `changes` gives in every object a query finds, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it are put back, and the call throws that error. The changes cannot set the primary key.
+
+```dart
+users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+```
+
 ## AsyncWriteCollection
 
 ```dart
@@ -107,6 +131,9 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
   Future<List<K>> putMany(Iterable<T> objects);
   Future<bool> update(K key, List<Change> Function(Q q) changes);
   Future<bool> delete(K key);
+  Future<int> deleteWhere(QueryBuilder<T> Function(Q q) query);
+  Future<int> updateWhere(List<Change> Function(Q q) changes, QueryBuilder<T> Function(Q q) query);
+  // And the `Text` and `Prepared` forms, as above.
 }
 ```
 

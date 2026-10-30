@@ -87,6 +87,30 @@ pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 
 기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다.
 
+### delete_where
+
+```rust
+pub fn delete_where(&mut self, query: &Query) -> Result<u64>
+```
+
+`query`가 찾은 객체를 정렬, 오프셋, 개수 제한을 거친 뒤 모두 지우고, 지운 개수를 돌려줍니다. 키를 먼저 모으므로, 쿼리가 지울 객체를 고르는 바로 그 필드를 검사해도 됩니다. 스키마와 맞지 않는 쿼리는 `INVALID_QUERY`로 실패합니다.
+
+### update_where
+
+```rust
+pub fn update_where(&mut self, query: &Query, changes: Object) -> Result<u64>
+```
+
+`query`가 찾은 객체에 [`update`](#update)가 한 객체에 하듯 `changes`의 필드를 설정하고, 쿼리가 찾은 객체 수를 돌려줍니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상입니다. 전부 되거나 전혀 안 됩니다. 다른 객체가 가진 유니크 값 때문에 `DUPLICATE_KEY`로, 또는 너무 긴 인덱스 항목 때문에 `INVALID_ARGUMENT`로 한 객체가 거부되면, 앞서 바뀐 객체는 원래 레코드와 인덱스 항목을 되찾고 호출은 그 오류로 실패합니다. 변경으로 기본 키를 설정할 수는 없습니다.
+
+### update_records_where
+
+```rust
+pub fn update_records_where(&mut self, query: &Query, changes: &[u8]) -> Result<u64>
+```
+
+언어 바인딩이 [`update_record`](#update-record)에 보내는 형태의 레코드로 변경을 받는 [`update_where`](#update-where)입니다.
+
 ### get
 
 ```rust

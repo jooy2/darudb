@@ -96,6 +96,30 @@ bool delete(K key);
 
 기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다.
 
+### deleteWhere
+
+```dart
+int deleteWhere(QueryBuilder<T> Function(Q q) query);
+int deleteWhereText(String text, [List<Object?> parameters = const []]);
+int deleteWherePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, 모든 객체를 지우려면 `(q) => q`를 줍니다. `Text`와 `Prepared`로 끝나는 메서드는 쿼리 언어로 쓴 쿼리나 준비한 쿼리를 받습니다.
+
+### updateWhere
+
+```dart
+int updateWhere(List<Change> Function(Q q) changes, QueryBuilder<T> Function(Q q) query);
+int updateWhereText(List<Change> Function(Q q) changes, String text, [List<Object?> parameters = const []]);
+int updateWherePrepared(List<Change> Function(Q q) changes, Prepared<T> prepared, [List<Object?> parameters = const []]);
+```
+
+쿼리가 찾은 모든 객체에 [`update`](#update)가 한 객체에 하듯 `changes`가 주는 필드를 설정하고, 쿼리가 찾은 객체 수를 돌려줍니다. 전부 되거나 전혀 안 됩니다. 다른 객체가 가진 유니크 값 때문에 `DUPLICATE_KEY`로, 또는 너무 긴 인덱스 항목 때문에 `INVALID_ARGUMENT`로 한 객체가 거부되면, 앞서 바뀐 객체를 되돌리고 그 오류를 던집니다. 변경으로 기본 키를 설정할 수는 없습니다.
+
+```dart
+users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+```
+
 ## AsyncWriteCollection
 
 ```dart
@@ -107,6 +131,9 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
   Future<List<K>> putMany(Iterable<T> objects);
   Future<bool> update(K key, List<Change> Function(Q q) changes);
   Future<bool> delete(K key);
+  Future<int> deleteWhere(QueryBuilder<T> Function(Q q) query);
+  Future<int> updateWhere(List<Change> Function(Q q) changes, QueryBuilder<T> Function(Q q) query);
+  // And the `Text` and `Prepared` forms, as above.
 }
 ```
 
