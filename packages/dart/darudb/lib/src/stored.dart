@@ -48,6 +48,9 @@ final class MapQuery extends QueryBuilder<Map<String, Object?>> {
   /// A `bytes` field.
   BytesField bytesField(String name) => BytesField(_path(name));
 
+  /// A `date` field.
+  DateField dateField(String name) => DateField(_path(name));
+
   /// A link, which holds the primary key of the object it points to.
   LinkField linkField(String name) => LinkField(_path(name));
 

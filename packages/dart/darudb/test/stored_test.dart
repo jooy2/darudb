@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:darudb/darudb.dart';
 import 'package:test/test.dart';
 
+import 'models.dart' show Event, eventSchema;
 import 'support/hand_written.dart';
 import 'support/versions.dart';
 
@@ -276,6 +277,48 @@ void main() {
             (await txn.collection(users).find()).map((user) => user['name']),
       ),
       ['Ada', 'Grace', 'Dave'],
+    );
+  });
+
+  test('a date reads as a DateTime in UTC, and dateField queries it', () {
+    final launch = DateTime.utc(2026, 10, 30, 12);
+    final typed = Database.open(path, schema: const Schema(1, [eventSchema]));
+
+    typed.write(
+      (txn) => txn.collection(eventSchema)
+        ..insert(Event(at: launch, seen: [launch]))
+        ..insert(Event(at: DateTime.utc(1969))),
+    );
+    typed.close();
+
+    final db = Database.open(path);
+
+    addTearDown(db.close);
+
+    final events = db.storedCollection('events');
+
+    db.read((txn) {
+      final all = txn.collection(events);
+
+      expect(all.get(1)!['at'], launch);
+      expect(all.get(1)!['seen'], [launch]);
+      expect(
+        all
+            .find(
+              (q) => q.where(q.dateField('at').lessThan(DateTime.utc(1970))),
+            )
+            .map((event) => event['id']),
+        [2],
+      );
+    });
+    db.write(
+      (txn) => txn.collection(events).insert({'at': DateTime.utc(2000)}),
+    );
+    expect(
+      () => db.write(
+        (txn) => txn.collection(events).insert({'at': '2000-01-01'}),
+      ),
+      failsWith('INVALID_ARGUMENT'),
     );
   });
 }
