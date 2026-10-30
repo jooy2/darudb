@@ -85,7 +85,10 @@ pub use error::{Error, Result};
 pub use format::FORMAT_VERSION;
 pub use format::object::{Object, Value};
 pub use options::OpenOptions;
-pub use query::{Aggregate, ChangeWhere, Filter, Query, QueryRequest};
+pub use query::{
+    Aggregate, ChangeWhere, ComparableType, Filter, IntoPath, LinkType, NestedType, NumberType,
+    OrderedType, PathOf, Query, QueryRequest, TextType,
+};
 /// What the code of `#[derive(Object)]` and `#[derive(Embedded)]` calls.
 #[doc(hidden)]
 pub use schema::typed::derive as __derive;

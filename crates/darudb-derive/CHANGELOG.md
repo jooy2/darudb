@@ -4,6 +4,14 @@
 
 ## vNext (2026--)
 
+### Breaking changes
+
+- `#[derive(Embedded)]` declares a constant for each field, as `#[derive(Object)]` does, such as `Address::CITY`, which a path through the embedded object goes on to. A constant of the same name declared by hand on the struct no longer compiles beside it.
+
+### Changed
+
+- The constants both derives declare hold the field's name in the collection, for the conditions their methods make, and pass it to `FieldOf::new`.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

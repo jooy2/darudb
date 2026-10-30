@@ -15,6 +15,8 @@
 //! - `change`: deleting or updating every object a query finds, in one call.
 //! - `fold`: comparing strings ignoring case, by Unicode's simple case
 //!   folding, whose table `fold_table` is generated from Unicode's data.
+//! - `typed`: conditions, sorts and aggregates that name their fields
+//!   through a type's field constants.
 //!
 //! Whatever the plan, a query gives the objects a walk of every object would,
 //! in the same order; `tests` checks that on random data and random queries.
@@ -31,10 +33,22 @@ mod plan;
 mod run;
 #[cfg(test)]
 mod tests;
+mod typed;
 
 pub use aggregate::{Aggregate, tagged};
-pub use build::{Filter, Query, QueryRequest};
+pub use build::{Filter, IntoPath, Query, QueryRequest};
 pub use change::ChangeWhere;
+pub use typed::{ComparableType, LinkType, NestedType, NumberType, OrderedType, PathOf, TextType};
+
+/// Traits the crate's public traits require, which only the crate
+/// implements, so that a type outside it cannot take part in them.
+mod sealed {
+    /// A field type the typed conditions know.
+    pub trait Typed {}
+
+    /// A field a query sorts by.
+    pub trait Path {}
+}
 
 use crate::error::Result;
 use crate::format::object::codec::{self, NameOrder};

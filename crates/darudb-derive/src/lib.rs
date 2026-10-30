@@ -86,8 +86,39 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 ///
 /// It also declares, for each field, an associated constant of the struct
 /// named after the field in capitals, a `darudb::FieldOf` with the field's
-/// visibility, which `TypedWriter::set` takes to set that one field:
-/// `Person::AGE` for the field `age` above.
+/// visibility and its name in the collection: `Person::AGE` for the field
+/// `age` above. `TypedWriter::set` takes it to set that one field, and its
+/// methods make the conditions of a query, which compare the field only
+/// with a value of its own type:
+///
+/// ```
+/// # use darudb::{Link, Object, Query};
+/// # #[derive(Object)]
+/// # #[darudb(collection = "people")]
+/// # struct Person {
+/// #     id: Option<i64>,
+/// #     name: String,
+/// #     age: i64,
+/// #     friend: Option<Link<Person>>,
+/// # }
+/// let query = Query::new()
+///     .filter(Person::AGE.ge(18).and(Person::FRIEND.then(Person::NAME).eq("Ada")))
+///     .sort_by(Person::NAME);
+/// # let _ = query;
+/// ```
+///
+/// ```compile_fail
+/// # use darudb::{Object, Query};
+/// # #[derive(Object)]
+/// # #[darudb(collection = "people")]
+/// # struct Person {
+/// #     id: Option<i64>,
+/// #     age: i64,
+/// # }
+/// // An int field compared with a string does not compile.
+/// let query = Query::new().filter(Person::AGE.ge("eighteen"));
+/// # let _ = query;
+/// ```
 #[proc_macro_derive(Object, attributes(darudb))]
 pub fn derive_object(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -120,7 +151,9 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
 ///
 /// Its fields take the attributes of `#[derive(Object)]` except `key`,
 /// `index` and `unique`: an embedded object has no key, and no index reaches
-/// inside one.
+/// inside one. It declares a constant for each field as `#[derive(Object)]`
+/// does, which a path from the field that holds the embedded object goes on
+/// to: `Shop::ADDRESS.then(Address::CITY).eq("Seoul")`.
 #[proc_macro_derive(Embedded, attributes(darudb))]
 pub fn derive_embedded(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -413,28 +446,13 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
         }
     });
     let methods = methods(&slots);
-    // A constant for each field, by its slot, for an update that names the
-    // field through the type.
-    let constants = slots.iter().enumerate().map(|(slot, field)| {
-        let vis = &field.vis;
-        let ty = &field.ty;
-        let constant = format_ident!("{}", field.ident.unraw().to_string().to_uppercase());
-        let doc = format!(
-            "The field `{}`, which `TypedWriter::set` takes to set it.",
-            field.name
-        );
-
-        quote! {
-            #[doc = #doc]
-            #vis const #constant: ::darudb::FieldOf<Self, #ty> = ::darudb::FieldOf::new(#slot);
-        }
-    });
+    let constants = constants(&slots);
 
     Ok(quote! {
         #id_check
 
         impl #ident {
-            #(#constants)*
+            #constants
         }
 
         impl ::darudb::CollectionType for #ident {
@@ -452,6 +470,28 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
             #methods
         }
     })
+}
+
+/// A constant for each field, by its slot and its name in the collection,
+/// for a condition, a sort or an update that names the field through the
+/// type.
+fn constants(slots: &[&Field]) -> Tokens {
+    let constants = slots.iter().enumerate().map(|(slot, field)| {
+        let vis = &field.vis;
+        let ty = &field.ty;
+        let name = &field.name;
+        let constant = format_ident!("{}", field.ident.unraw().to_string().to_uppercase());
+        let doc = format!(
+            "The field `{name}`, which names it in a condition, a sort or an update."
+        );
+
+        quote! {
+            #[doc = #doc]
+            #vis const #constant: ::darudb::FieldOf<Self, #ty> = ::darudb::FieldOf::new(#slot, #name);
+        }
+    });
+
+    quote! { #(#constants)* }
 }
 
 fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
@@ -480,8 +520,13 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
         }
     });
     let methods = methods(&slots);
+    let constants = constants(&slots);
 
     Ok(quote! {
+        impl #ident {
+            #constants
+        }
+
         impl ::darudb::EmbeddedType for #ident {
             fn embedded() -> ::darudb::Embedded {
                 let embedded = ::darudb::Embedded::new();

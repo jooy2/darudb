@@ -456,6 +456,219 @@ fn changes_by_query_name_their_fields_through_the_type() {
 }
 
 #[test]
+fn typed_conditions_are_the_filters_their_names_make() {
+    // Each condition names the field the collection stores, `photo` and
+    // `zip` for the renamed fields, and compares it with a value of its type.
+    let pairs = [
+        (Person::AGE.eq(36), Filter::eq("age", 36)),
+        (Person::AGE.ne(36), Filter::ne("age", 36)),
+        (Person::AGE.lt(40), Filter::lt("age", 40)),
+        (Person::AGE.le(40), Filter::le("age", 40)),
+        (Person::AGE.gt(40), Filter::gt("age", 40)),
+        (Person::AGE.ge(40), Filter::ge("age", 40)),
+        (Person::AGE.between(1, 9), Filter::between("age", 1, 9)),
+        (Person::AGE.is_in([1, 2]), Filter::is_in("age", [1, 2])),
+        (Person::SCORE.ge(1), Filter::ge("score", 1.0)),
+        (Person::ACTIVE.eq(true), Filter::eq("active", true)),
+        (Person::NAME.eq("Ada"), Filter::eq("name", "Ada")),
+        (Person::NAME.contains("d"), Filter::contains("name", "d")),
+        (
+            Person::NAME.starts_with("A"),
+            Filter::starts_with("name", "A"),
+        ),
+        (Person::NAME.ends_with("a"), Filter::ends_with("name", "a")),
+        (Person::EMAIL.eq("a@b"), Filter::eq("email", "a@b")),
+        (
+            Person::EMAIL.starts_with("a"),
+            Filter::starts_with("email", "a"),
+        ),
+        (Person::EMAIL.is_null(), Filter::is_null("email")),
+        (Person::EMAIL.is_not_null(), Filter::is_not_null("email")),
+        (
+            Person::TAGS.contains("math"),
+            Filter::contains("tags", "math"),
+        ),
+        (
+            Person::PICTURE.eq([0u8, 1]),
+            Filter::eq("photo", vec![0u8, 1]),
+        ),
+        (Person::FRIEND.eq(1), Filter::eq("friend", 1)),
+        (
+            Person::HOME.then(Address::POSTAL_CODE).eq("01"),
+            Filter::eq("home.zip", "01"),
+        ),
+        (
+            Person::HOME.then(Address::POINT).then(Point::X).gt(0),
+            Filter::gt("home.point.x", 0.0),
+        ),
+        (
+            Person::FRIEND.then(Person::NAME).eq("Ada"),
+            Filter::eq("friend.name", "Ada"),
+        ),
+        (
+            Post::AUTHOR
+                .then(Person::HOME)
+                .then(Address::CITY)
+                .is_null(),
+            Filter::is_null("author.home.city"),
+        ),
+        (Post::READERS.contains(2), Filter::contains("readers", 2)),
+        (Post::SCORES.contains(7), Filter::contains("scores", 7)),
+        (Post::AUTHOR.any(), Filter::linked("posts", "author")),
+        (
+            Post::READERS.any_where(Post::SLUG.starts_with("a")),
+            Filter::linked_where("posts", "readers", Filter::starts_with("slug", "a")),
+        ),
+        (
+            Person::NAME.eq("ada").ignore_case(),
+            Filter::eq("name", "ada").ignore_case(),
+        ),
+    ];
+
+    for (typed, named) in pairs {
+        assert_eq!(typed, named);
+    }
+
+    assert_eq!(
+        Query::new()
+            .sort_by(Person::AGE)
+            .sort_by_desc(Person::HOME.then(Address::CITY)),
+        Query::new().sort_by("age").sort_by_desc("home.city")
+    );
+    assert_eq!(
+        Person::HOME.then(Address::POSTAL_CODE).names(),
+        ["home", "zip"]
+    );
+    assert_eq!(Person::PICTURE.name(), "photo");
+    assert_eq!(Address::POSTAL_CODE.slot(), 1);
+}
+
+#[test]
+fn typed_queries_and_aggregates_find_what_named_ones_do() {
+    let dir = TestDir::new();
+    let db = open(&dir, schema());
+    let mut txn = db.begin_write().unwrap();
+    let mut people = txn.collection_of::<Person>().unwrap();
+    let ada_id = people.insert(&ada()).unwrap();
+
+    for n in 0..20_i32 {
+        people
+            .insert(&Person {
+                name: format!("person {n}"),
+                age: i64::from(n) * 3,
+                score: f64::from(n) / 4.0,
+                home: (n % 2 == 0).then(|| Address {
+                    city: if n % 4 == 0 { "Seoul" } else { "Busan" }.to_owned(),
+                    postal_code: None,
+                    point: Point { x: 0.0, y: 0.0 },
+                }),
+                friend: Some(Link::new(ada_id)),
+                ..grace()
+            })
+            .unwrap();
+    }
+
+    drop(people);
+
+    let mut posts = txn.collection_of::<Post>().unwrap();
+
+    for (slug, author, readers) in [
+        ("a", ada_id, vec![2, 3]),
+        ("b", 4, vec![]),
+        ("c", 4, vec![2]),
+    ] {
+        posts
+            .insert(&Post {
+                slug: slug.to_owned(),
+                author: Link::new(author),
+                readers: readers.into_iter().map(Link::new).collect(),
+                scores: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    drop(posts);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let typed = read.collection_of::<Person>().unwrap();
+    let untyped = read.collection("people").unwrap();
+    let ids = |found: Vec<Person>| {
+        found
+            .into_iter()
+            .map(|person| person.id)
+            .collect::<Vec<_>>()
+    };
+    let pairs = [
+        (
+            Query::new()
+                .filter(Person::HOME.then(Address::CITY).eq("Seoul"))
+                .sort_by_desc(Person::AGE),
+            Query::new()
+                .filter(Filter::eq("home.city", "Seoul"))
+                .sort_by_desc("age"),
+        ),
+        (
+            Query::new().filter(Person::FRIEND.then(Person::NAME).eq("Ada")),
+            Query::new().filter(Filter::eq("friend.name", "Ada")),
+        ),
+        (
+            Query::new().filter(Post::AUTHOR.any().and(!Post::READERS.any())),
+            Query::parse("ANY posts.author AND NOT ANY posts.readers", &[]).unwrap(),
+        ),
+    ];
+
+    for (built, named) in &pairs {
+        let found = ids(typed.query(built).unwrap());
+
+        assert!(!found.is_empty(), "{built:?}");
+        assert_eq!(found, ids(typed.query(named).unwrap()));
+    }
+
+    let adults = Query::new().filter(Person::AGE.ge(18));
+
+    assert_eq!(
+        typed.sum(&adults, Person::AGE).unwrap(),
+        untyped.sum(&adults, "age").unwrap().as_int().unwrap()
+    );
+    assert_eq!(
+        typed.sum(&adults, Person::SCORE).unwrap(),
+        untyped.sum(&adults, "score").unwrap().as_float().unwrap()
+    );
+    assert_eq!(
+        typed.avg(&adults, Person::AGE).unwrap(),
+        untyped.avg(&adults, "age").unwrap().as_float()
+    );
+    assert_eq!(typed.min(&adults, Person::AGE).unwrap(), Some(18));
+    assert_eq!(typed.max(&Query::new(), Person::AGE).unwrap(), Some(57));
+    assert_eq!(
+        typed
+            .min(&Query::new(), Person::HOME.then(Address::CITY))
+            .unwrap()
+            .as_deref(),
+        Some("Busan")
+    );
+    assert_eq!(
+        typed.max(&Query::new(), Person::EMAIL).unwrap().as_deref(),
+        Some("ada@example.com")
+    );
+
+    // An aggregate of nothing: a sum is zero, the others are none.
+    let nobody = Query::new().filter(Person::AGE.gt(1000));
+
+    assert_eq!(typed.sum(&nobody, Person::AGE).unwrap(), 0);
+    assert_eq!(typed.min(&nobody, Person::AGE).unwrap(), None);
+    assert_eq!(typed.avg(&nobody, Person::SCORE).unwrap(), None);
+
+    // A constant made by hand with the name of a field of another type
+    // fails when it runs, rather than giving a value of the wrong type.
+    let wrong = darudb::FieldOf::<Person, i64>::new(1, "name");
+
+    assert_eq!(code(typed.max(&Query::new(), wrong)), "INVALID_ARGUMENT");
+    assert_eq!(code(typed.sum(&Query::new(), wrong)), "INVALID_QUERY");
+}
+
+#[test]
 fn set_and_change_write_fields_named_through_the_type() {
     let dir = TestDir::new();
     let db = open(&dir, schema());

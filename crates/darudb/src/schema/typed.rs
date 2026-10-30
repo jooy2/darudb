@@ -132,25 +132,32 @@ pub trait FieldType: Sized {
 /// A type a list may hold: a scalar or a link.
 pub trait ElementType: FieldType {}
 
-/// A field of the collection type `T` whose values are of type `V`, which
-/// [`TypedWriter::set`] and [`Change::set`] take, so that an update names
-/// its field through the type rather than by a name.
+/// A field of the collection type `T`, or of the embedded object type `T`,
+/// whose values are of type `V`: [`TypedWriter::set`] and [`Change::set`]
+/// take it, and its methods make the conditions of a query, so that an
+/// update or a query names its field through the type rather than by a name
+/// in a string, and a value of another type than the field's does not
+/// compile.
 ///
-/// `#[derive(Object)]` declares one for each field, as an associated
-/// constant of the struct named after the field in capitals: `Person::AGE`
-/// for a field `age`.
+/// `#[derive(Object)]` and `#[derive(Embedded)]` declare one for each
+/// field, as an associated constant of the struct named after the field in
+/// capitals: `Person::AGE` for a field `age`.
 pub struct FieldOf<T, V> {
     slot: usize,
+    name: &'static str,
     types: PhantomData<fn(&T) -> V>,
 }
 
 impl<T, V> FieldOf<T, V> {
     /// The field numbered `slot` in `T`, as
-    /// [`CollectionType::write_field`] numbers its fields.
+    /// [`CollectionType::write_field`] and [`EmbeddedType::write_field`]
+    /// number their fields, and named `name` in the collection, which is the
+    /// name a condition on it gives the engine.
     #[must_use]
-    pub const fn new(slot: usize) -> Self {
+    pub const fn new(slot: usize, name: &'static str) -> Self {
         Self {
             slot,
+            name,
             types: PhantomData,
         }
     }
@@ -159,6 +166,12 @@ impl<T, V> FieldOf<T, V> {
     #[must_use]
     pub const fn slot(self) -> usize {
         self.slot
+    }
+
+    /// The field's name in the collection.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        self.name
     }
 }
 
@@ -172,7 +185,10 @@ impl<T, V> Copy for FieldOf<T, V> {}
 
 impl<T, V> fmt::Debug for FieldOf<T, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("FieldOf").field("slot", &self.slot).finish()
+        f.debug_struct("FieldOf")
+            .field("slot", &self.slot)
+            .field("name", &self.name)
+            .finish()
     }
 }
 

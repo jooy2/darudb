@@ -61,9 +61,45 @@ fn ignoring_case(expr: Expr) -> Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Filter(pub(crate) Expr);
 
+/// A field a query sorts by: its name, or names joined by `.` through
+/// embedded objects and links, as a `&str` or a `String`, or a
+/// [`FieldOf`](crate::FieldOf) or a [`PathOf`](crate::PathOf), which name it
+/// through a type: `sort_by("age")` or `sort_by(Person::AGE)`.
+pub trait IntoPath: super::sealed::Path {
+    #[doc(hidden)]
+    fn into_path(self) -> Vec<String>;
+}
+
+impl super::sealed::Path for &str {}
+impl super::sealed::Path for String {}
+impl super::sealed::Path for &String {}
+
+impl IntoPath for &str {
+    fn into_path(self) -> Vec<String> {
+        path(self)
+    }
+}
+
+impl IntoPath for String {
+    fn into_path(self) -> Vec<String> {
+        path(&self)
+    }
+}
+
+impl IntoPath for &String {
+    fn into_path(self) -> Vec<String> {
+        path(self)
+    }
+}
+
 impl Filter {
     fn test(op: Op, field: &str, values: Vec<Value>) -> Self {
-        Filter(Expr::test(op, path(field), values))
+        Self::at(op, path(field), values)
+    }
+
+    /// The test `op` of the field at `path`, one name for each step.
+    pub(crate) fn at(op: Op, path: Vec<String>, values: Vec<Value>) -> Self {
+        Filter(Expr::test(op, path, values))
     }
 
     /// The field equals `value`. Equal to null means [`is_null`](Self::is_null).
@@ -367,18 +403,19 @@ impl Query {
     }
 
     /// Sorts by `field` in ascending order, after any sort given before. Null
-    /// sorts first.
+    /// sorts first. The field is a name or a path as text, or a
+    /// [`FieldOf`](crate::FieldOf) or a [`PathOf`](crate::PathOf).
     #[must_use]
-    pub fn sort_by(mut self, field: &str) -> Self {
-        self.ir_mut().sort.push((path(field), false));
+    pub fn sort_by(mut self, field: impl IntoPath) -> Self {
+        self.ir_mut().sort.push((field.into_path(), false));
         self
     }
 
     /// Sorts by `field` in descending order, after any sort given before.
     /// Null sorts last.
     #[must_use]
-    pub fn sort_by_desc(mut self, field: &str) -> Self {
-        self.ir_mut().sort.push((path(field), true));
+    pub fn sort_by_desc(mut self, field: impl IntoPath) -> Self {
+        self.ir_mut().sort.push((field.into_path(), true));
         self
     }
 
