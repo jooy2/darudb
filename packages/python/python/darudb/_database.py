@@ -214,6 +214,21 @@ def native_query(
 
 _EVERY = Query()
 
+
+def required_query(
+    query: QueryInput, resolved: Resolved, schema: Schema | None
+) -> _native.NativeQuery:
+    """The engine's query for a change of the objects a query finds, which
+    takes one: without it, the change would reach every object."""
+    if query is None:
+        raise DaruError(
+            "INVALID_ARGUMENT",
+            "a change of the objects a query finds takes a query; Query() finds every object",
+        )
+
+    return native_query(query, resolved, schema)
+
+
 # The files that a write transaction of this thread holds, so that a second
 # one fails at once rather than wait for itself until the busy timeout.
 _writing = threading.local()
@@ -405,6 +420,33 @@ class WriteCollection(ReadCollection[T]):
     def delete(self, key: Key) -> bool:
         """Deletes the object whose primary key is ``key``, and says whether there was one."""
         return self._txn.delete(self._resolved.name, key)
+
+    def delete_where(self, query: QueryInput, /, *parameters: object) -> int:
+        """Deletes every object a query finds, after its sort, offset and limit,
+        and returns how many there were.
+
+        The query is required, so that deleting every object is never an
+        accident: ``Query()`` finds them all.
+        """
+        return self._txn.delete_where(
+            self._resolved.name, required_query(query, self._resolved, self._schema), parameters
+        )
+
+    def update_where(self, query: QueryInput, /, *parameters: object, **changes: object) -> int:
+        """Sets the fields ``changes`` names in every object a query finds, as
+        ``update`` sets them in one, and returns how many there were.
+
+        All or nothing: when one object is refused, by a unique value taken or
+        an index entry too long, the objects changed before it are put back.
+        It cannot set the primary key.
+        """
+        return self._txn.update_where(
+            self._resolved.name,
+            self._resolved.layout,
+            required_query(query, self._resolved, self._schema),
+            parameters,
+            changes,
+        )
 
 
 class ReadTransaction:

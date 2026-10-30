@@ -27,6 +27,9 @@ def test_open_read_and_write(path: Path) -> None:
             await users.put(User(id=first, name="Alice", age=32))
             assert await users.update(2, age=18)
             assert not await users.delete(99)
+            assert await users.update_where(F.age == 0, age=3) == 1
+            assert await users.delete_where("age == $0", 3) == 1
+            await users.insert(User(id=3, name="Carol"))
             await txn.collection(Post).put_many([Post(slug="a", author=first)])
 
         assert (first, rest) == (1, [2, 3])

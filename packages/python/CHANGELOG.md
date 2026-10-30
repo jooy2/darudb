@@ -6,6 +6,7 @@
 
 ### Added
 
+- `delete_where` and `update_where` on a write collection, and their `async` twins, delete or update every object a query finds, after its sort, offset and limit, and return how many there were: `users.update_where(F.age < 18, active=False)`. The query is required, in any form `find` takes, with its parameters after it; `Query()` finds every object. An update by query is all or nothing: when one object is refused, by a unique value taken or an index entry too long, the objects changed before it are put back. It cannot set the primary key.
 - Aggregates: `sum`, `min`, `max` and `avg` on a collection, and their `async` twins, work out one value from a field of the objects a query finds, after its sort, offset and limit, with the query in any form `find` takes: `users.sum("age", F.age > 18)`, `users.max(F.address.city, "age > $0", 18)`. The field is an attribute's name, a path through embedded objects and links, or an `F` path, and goes to the name the file stores. Nulls are left out; a sum of no values is 0 and the rest are `None`. A sum is exact, an `int` for an int field and a `float` for a float field, and a mean is a `float`.
 
 ## v1.4.0 (2026-10-29)

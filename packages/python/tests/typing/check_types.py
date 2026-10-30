@@ -67,6 +67,8 @@ def writes(db: darudb.Database) -> None:
         assert_type(users.insert_many([User(name="Carol")]), list[darudb.Key])
         assert_type(users.update(1, age=4), bool)
         assert_type(users.delete(1), bool)
+        assert_type(users.update_where(F.age > 3, age=4), int)
+        assert_type(users.delete_where("age > $0", 3), int)
         txn.collection(Post).put(Post(slug="hi", author=1))
 
 

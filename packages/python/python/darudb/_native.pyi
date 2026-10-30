@@ -61,6 +61,17 @@ class NativeTransaction:
         parameters: tuple[object, ...],
     ) -> Any: ...
     def count(self, collection: str, query: NativeQuery, parameters: tuple[object, ...]) -> int: ...
+    def delete_where(
+        self, collection: str, query: NativeQuery, parameters: tuple[object, ...]
+    ) -> int: ...
+    def update_where(
+        self,
+        collection: str,
+        layout: Layout | None,
+        query: NativeQuery,
+        parameters: tuple[object, ...],
+        changes: dict[str, object],
+    ) -> int: ...
     def aggregate(
         self,
         collection: str,

@@ -480,6 +480,41 @@ impl NativeTransaction {
         self.with(py, |txn| txn.writer(collection)?.update(key, changes))
     }
 
+    /// Deletes every object `query` finds, and returns how many there were.
+    fn delete_where(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        query: &NativeQuery,
+        parameters: &Bound<'_, PyTuple>,
+    ) -> PyResult<u64> {
+        let query = query.bound(py, &parameters_of(parameters)?, false)?;
+
+        self.with(py, |txn| txn.writer(collection)?.delete_where(&query))
+    }
+
+    /// Sets the fields `changes` names in every object `query` finds, all or
+    /// nothing, and returns how many there were.
+    fn update_where(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        layout: Option<&Bound<'_, Layout>>,
+        query: &NativeQuery,
+        parameters: &Bound<'_, PyTuple>,
+        changes: &Bound<'_, PyDict>,
+    ) -> PyResult<u64> {
+        let query = query.bound(py, &parameters_of(parameters)?, false)?;
+        let changes = match layout {
+            Some(layout) => layout.get().to_changes(changes)?,
+            None => object_of(changes, self.fields_of(collection))?,
+        };
+
+        self.with(py, |txn| {
+            txn.writer(collection)?.update_where(&query, changes)
+        })
+    }
+
     /// Deletes the object whose primary key is `key`, and says whether there
     /// was one.
     fn delete(

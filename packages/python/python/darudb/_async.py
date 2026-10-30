@@ -50,6 +50,7 @@ from ._database import (
     check_options,
     file_key_of,
     native_query,
+    required_query,
 )
 from ._errors import invalid
 from ._query import AVG, MAX, MIN, SUM, FieldRef, aggregate_path
@@ -347,6 +348,31 @@ class AsyncWriteCollection(AsyncReadCollection[T]):
     async def delete(self, key: Key) -> bool:
         """Deletes the object whose primary key is ``key``, and says whether there was one."""
         return await self._order.call(self._txn.delete, self._resolved.name, key)
+
+    async def delete_where(self, query: QueryInput, /, *parameters: object) -> int:
+        """Deletes every object a query finds; see ``WriteCollection.delete_where``."""
+        native = required_query(query, self._resolved, self._schema)
+        deleted: int = await self._order.call(
+            self._txn.delete_where, self._resolved.name, native, parameters
+        )
+
+        return deleted
+
+    async def update_where(
+        self, query: QueryInput, /, *parameters: object, **changes: object
+    ) -> int:
+        """Sets fields in every object a query finds; see ``WriteCollection.update_where``."""
+        native = required_query(query, self._resolved, self._schema)
+        updated: int = await self._order.call(
+            self._txn.update_where,
+            self._resolved.name,
+            self._resolved.layout,
+            native,
+            parameters,
+            changes,
+        )
+
+        return updated
 
 
 class AsyncReadTransaction:

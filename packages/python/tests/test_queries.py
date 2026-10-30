@@ -226,6 +226,40 @@ def test_aggregates_of_a_field(db: darudb.Database) -> None:
         assert users.min("age") == 6
 
 
+def test_changes_by_query(db: darudb.Database) -> None:
+    older = db.prepare(User, where(F.age > param(0)))
+
+    with db.write() as txn:
+        users = txn.collection(User)
+
+        assert users.update_where(F.age > 30, rating=5.0) == 3
+        assert [user.rating for user in users.find(Query().sort_by(F.age))] == [0.0, 5.0, 5.0, 5.0]
+        assert users.update_where("age < $0", 20, tags=["young"]) == 1
+        assert users.get(2) is not None and users.get(2).tags == ["young"]  # type: ignore[union-attr]
+
+        # One unique email cannot go to two objects: the first is put back.
+        with pytest.raises(DaruError) as error:
+            users.update_where(F.age == 31, email="same@example.com", age=1)
+
+        assert error.value.code == "DUPLICATE_KEY"
+        assert users.get(1) is not None and users.get(1).age == 31  # type: ignore[union-attr]
+        assert users.get(1).email is None  # type: ignore[union-attr]
+
+        for refused in [
+            lambda: users.update_where(Query(), id=9),
+            lambda: users.delete_where(None),
+        ]:
+            with pytest.raises(DaruError) as error:
+                refused()
+
+            assert error.value.code == "INVALID_ARGUMENT"
+
+        assert users.delete_where(older, 40) == 1
+        assert users.delete_where(F.active == False) == 1  # noqa: E712
+        assert users.delete_where(Query()) == 2
+        assert users.count() == 0
+
+
 def test_a_query_the_engine_refuses_is_invalid_query(db: darudb.Database) -> None:
     with db.read() as txn:
         users = txn.collection(User)
