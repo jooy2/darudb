@@ -240,6 +240,18 @@ export interface Conditions<O = Record<string, unknown>> {
    * strings fails with `INVALID_QUERY` when the query runs.
    */
   ignoreCase(condition: Condition): Condition;
+  /**
+   * Holds for an object that some object of `collection` links to through
+   * its link field `link`, a name or a dotted path, and that meets
+   * `condition` on `collection`'s fields, a condition or a function that
+   * makes one, if it is given. `not` of it finds the objects nothing links
+   * to. The engine checks the collection, the link and the condition.
+   */
+  linked(
+    collection: string,
+    link: string,
+    condition?: Condition | ((conditions: Conditions) => Condition)
+  ): Condition;
 }
 
 /** Options of a condition `Query.where` makes from a field, an operator and a value. */

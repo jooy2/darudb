@@ -15,7 +15,8 @@ import type { CodeError } from './codec.js';
 export type FilterNode =
   | { kind: 'test'; op: number; path: string[]; values: unknown[]; ignoreCase?: boolean }
   | { kind: 'and' | 'or'; terms: FilterNode[] }
-  | { kind: 'not'; term: FilterNode };
+  | { kind: 'not'; term: FilterNode }
+  | { kind: 'linked'; collection: string; path: string[]; term: FilterNode | null };
 
 /**
  * A query as `Query.parts` gives it and `codec.encodeQuery` takes it: its
@@ -67,6 +68,8 @@ function ignoringCase(node: FilterNode): FilterNode {
       return FOLDING.has(node.op) ? { ...node, ignoreCase: true } : node;
     case 'not':
       return { kind: 'not', term: ignoringCase(node.term) };
+    case 'linked':
+      return { ...node, term: node.term === null ? null : ignoringCase(node.term) };
     default:
       return { kind: node.kind, terms: node.terms.map(ignoringCase) };
   }
@@ -174,6 +177,25 @@ const conditions = Object.freeze({
   and: (...terms: unknown[]) => flatten('and', terms),
   or: (...terms: unknown[]) => flatten('or', terms),
   not: (condition: unknown) => new Condition({ kind: 'not', term: nodeOf(condition) }),
+  /**
+   * Holds for an object that some object of `collection` links to through
+   * its link field `link`, and that meets `condition`, a condition on
+   * `collection`'s fields or a function that makes one, if it is given.
+   */
+  linked: (collection: unknown, link: unknown, condition?: unknown): Condition => {
+    if (typeof collection !== 'string' || collection === '') {
+      throw invalidQuery('`linked` names the collection whose objects link');
+    }
+
+    const inner = typeof condition === 'function' ? condition(conditions) : condition;
+
+    return new Condition({
+      kind: 'linked',
+      collection,
+      path: pathOf(link),
+      term: inner === undefined ? null : nodeOf(inner)
+    });
+  },
   /**
    * `condition` with every test in it of `eq`, `ne`, `in`, `contains`,
    * `startsWith` and `endsWith` comparing strings ignoring case, by

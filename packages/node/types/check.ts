@@ -108,6 +108,8 @@ db.read((txn) => {
 });
 
 new Query().where(conditions.not(conditions.eq('a', 1))).limit(3);
+new Query().where(conditions.linked('posts', 'author', (c) => c.ge('year', 2020)));
+new Query().where(conditions.not(conditions.linked('posts', 'author')));
 new Query().where(conditions.ignoreCase(conditions.eq('a', 'x'))).where('b', '==', 'y', {
   ignoreCase: true
 });

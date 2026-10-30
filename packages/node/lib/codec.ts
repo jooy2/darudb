@@ -2144,6 +2144,8 @@ function writeQueryValue(writer: Writer, value: unknown): void {
 const AND = 1;
 const OR = 2;
 const NOT = 3;
+/** The operator of a test of the objects that link to an object. */
+const LINKED = 16;
 
 function writePath(writer: Writer, path: readonly string[]): void {
   writer.byte(LIST);
@@ -2212,6 +2214,27 @@ function writeExpression(writer: Writer, node: FilterNode, depth = 1): void {
         inner.varint(5);
         inner.byte(TRUE);
       }
+
+      break;
+    case 'linked':
+      inner.varint(node.term === null ? 3 : 4);
+      inner.varint(1);
+      inner.byte(INT);
+      inner.int(LINKED);
+      inner.varint(2);
+      writePath(inner, node.path);
+
+      if (node.term !== null) {
+        inner.varint(4);
+        inner.byte(LIST);
+        inner.varint(1);
+        writeExpression(inner, node.term, depth + 1);
+      }
+
+      // Field 6, last: the collection whose objects link.
+      inner.varint(6);
+      inner.byte(STRING);
+      inner.string(node.collection);
 
       break;
     default:

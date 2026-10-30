@@ -268,6 +268,46 @@ describe('objects', () => {
     });
   });
 
+  it('are found by what links to them', (context) => {
+    const { db } = withData(context);
+
+    db.write((txn) => txn.collection('teams').insert({ name: 'east' }));
+    db.read((txn) => {
+      const teams = txn.collection('teams');
+      const names = (found) => found.map((team) => team.name);
+
+      // Alice, 31, is on north, and Bob, 17, on south.
+      assert.deepEqual(names(teams.find((q) => q.where((c) => c.linked('users', 'team')))), [
+        'north',
+        'south'
+      ]);
+      assert.deepEqual(
+        names(teams.find((q) => q.where((c) => c.linked('users', 'team', c.ge('age', 18))))),
+        ['north']
+      );
+      assert.deepEqual(
+        names(
+          teams.find((q) =>
+            q.where((c) =>
+              c.linked('users', 'team', (u) => u.and(u.lt('age', 18), u.isNull('email')))
+            )
+          )
+        ),
+        ['south']
+      );
+      assert.deepEqual(names(teams.find((q) => q.where((c) => c.not(c.linked('users', 'team'))))), [
+        'east'
+      ]);
+      assert.deepEqual(names(teams.find('ANY users.team (age < $0)', [18])), ['south']);
+      assert.equal(teams.count('NOT ANY users.team'), 1);
+      assertCode(
+        () => teams.find((q) => q.where((c) => c.linked('users', 'name'))),
+        'INVALID_QUERY'
+      );
+      assertCode(() => teams.find((q) => q.where((c) => c.linked('', 'team'))), 'INVALID_QUERY');
+    });
+  });
+
   it('are found by tests that ignore case', (context) => {
     const { db } = withData(context);
 
