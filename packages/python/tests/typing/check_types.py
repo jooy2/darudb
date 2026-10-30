@@ -41,6 +41,13 @@ class Event:
     seen: list[datetime] = field(default_factory=list)
 
 
+@darudb.collection("people", indexes=[darudb.index("last", "first", unique=True)])
+class Person:
+    id: int | None = None
+    last: str
+    first: str
+
+
 schema = darudb.Schema(1, [User, Post])
 
 
@@ -126,6 +133,7 @@ def the_file_s_own_schema() -> None:
             assert_type(collection, darudb.StoredCollection)
             assert_type(collection.fields[0].type, darudb.StoredType)
             assert_type(collection.indexes, tuple[darudb.StoredIndex, ...])
+            assert_type(collection.indexes[0].fields, tuple[str, ...])
 
         with db.read() as txn:
             assert_type(txn.collection("users").get(1), Any | None)

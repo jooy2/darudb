@@ -32,14 +32,20 @@ type FieldSpec<'py> = (
     bool,
 );
 
+/// One collection as Python declares it: its name, its fields, and its
+/// indexes on several fields or on paths.
+type CollectionSpec<'py> = (String, Vec<FieldSpec<'py>>, Vec<(Vec<String>, bool)>);
+
 #[pymethods]
 impl NativeSchema {
-    /// A schema at `version` with `collections`, each a name and its fields.
+    /// A schema at `version` with `collections`, each a name, its fields,
+    /// and its indexes on several fields or on paths: their paths by the
+    /// names the file stores, and whether each is unique.
     #[new]
-    fn new(version: u64, collections: Vec<(String, Vec<FieldSpec<'_>>)>) -> PyResult<Self> {
+    fn new(version: u64, collections: Vec<CollectionSpec<'_>>) -> PyResult<Self> {
         let mut schema = Schema::new(version);
 
-        for (name, fields) in collections {
+        for (name, fields, indexes) in collections {
             let mut collection = Collection::new(name);
 
             for (stored, kind, mode, default, index, unique) in fields {
@@ -61,6 +67,14 @@ impl NativeSchema {
                 } else if index {
                     collection = collection.index(stored);
                 }
+            }
+
+            for (paths, unique) in indexes {
+                collection = if unique {
+                    collection.unique_on(paths)
+                } else {
+                    collection.index_on(paths)
+                };
             }
 
             schema = schema.collection(collection);

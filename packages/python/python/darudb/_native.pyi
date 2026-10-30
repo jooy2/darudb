@@ -18,7 +18,9 @@ class NativeSchema:
     def __init__(
         self,
         version: int,
-        collections: list[tuple[str, list[tuple[str, Any, str, Any, bool, bool]]]],
+        collections: list[
+            tuple[str, list[tuple[str, Any, str, Any, bool, bool]], list[tuple[list[str], bool]]]
+        ],
     ) -> None: ...
 
 @final

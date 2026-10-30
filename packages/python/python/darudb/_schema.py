@@ -39,11 +39,47 @@ _OPTIONS: Final = "darudb"
 
 
 @dataclasses.dataclass(frozen=True)
+class Index:
+    """An index on several fields, or on a field inside an embedded object,
+    which ``collection(indexes=...)`` declares and ``index`` makes: its
+    fields, each an attribute's name, a path such as ``"home.city"`` or an
+    ``F`` path, and whether it is unique."""
+
+    fields: tuple[Any, ...]
+    unique: bool = False
+
+
+def index(*fields: Any, unique: bool = False) -> Index:
+    """An index on ``fields``, in order, for ``collection(indexes=[...])``:
+    ``index("last", "first", unique=True)``, or ``index(F.home.city)`` for a
+    field inside an embedded object. Its entries sort by the first field,
+    then the next, so that a query testing the first fields for equality and
+    the next one for a range reads it. A unique one refuses two objects with
+    the same values in all its fields, though any number may hold a ``None``
+    in one. There are 1 to 8 fields; a path through a list is allowed in an
+    index of one field."""
+    from ._query import FieldRef
+
+    if not fields:
+        raise invalid("an index is on one field at least")
+
+    for item in fields:
+        if not (isinstance(item, FieldRef) or (isinstance(item, str) and item)):
+            raise invalid(f"an index names a field by an attribute or a path, not {item!r}")
+
+    if type(unique) is not bool:
+        raise invalid(f"an index's unique is a bool, not {unique!r}")
+
+    return Index(tuple(fields), unique)
+
+
+@dataclasses.dataclass(frozen=True)
 class _Info:
     """What the decorator records on a class."""
 
     kind: Literal["collection", "embedded"]
     name: str
+    indexes: tuple[Index, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,13 +176,16 @@ def collection(cls: type[T], /) -> type[T]: ...
 
 
 @overload
-def collection(name: str | None = None, /) -> Callable[[type[T]], type[T]]: ...
+def collection(
+    name: str | None = None, /, *, indexes: Sequence[Index] = ()
+) -> Callable[[type[T]], type[T]]: ...
 
 
 @dataclass_transform(kw_only_default=True, frozen_default=True, field_specifiers=(field,))
-def collection(arg: Any = None, /) -> Any:
+def collection(arg: Any = None, /, *, indexes: Sequence[Index] = ()) -> Any:
     """Makes a class the objects of a collection, named ``name`` or after the
-    class.
+    class, with ``indexes`` on several of its fields or on fields inside its
+    embedded objects, which ``index`` makes.
 
     Without a field that is the primary key, the collection is keyed by an
     auto-increment, and the class needs a field ``id: int | None = None``:
@@ -159,10 +198,17 @@ def collection(arg: Any = None, /) -> Any:
     if arg is not None and not isinstance(arg, str):
         raise invalid(f"@collection takes a collection's name, not {arg!r}")
 
+    declared = tuple(indexes)
+
+    if not all(isinstance(item, Index) for item in declared):
+        raise invalid("@collection's indexes are made by darudb.index(...)")
+
     def decorate(cls: type[T]) -> type[T]:
         _check_class(cls, "collection")
 
-        return _decorate(cls, _Info("collection", arg if arg is not None else cls.__name__))
+        return _decorate(
+            cls, _Info("collection", arg if arg is not None else cls.__name__, declared)
+        )
 
     return decorate
 
@@ -281,10 +327,18 @@ class StoredField:
 
 @dataclasses.dataclass(frozen=True)
 class StoredIndex:
-    """An index of a collection: the field it is on, and whether it is unique."""
+    """An index of a collection: the fields it is on, each a name or a path
+    the file stores, and whether it is unique."""
 
     field: str
+    """The first field, the only one of most indexes."""
     unique: bool
+    fields: tuple[str, ...] = ()
+    """Every field, in order: ``(field,)`` when left out."""
+
+    def __post_init__(self) -> None:
+        if not self.fields:
+            object.__setattr__(self, "fields", (self.field,))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -346,7 +400,14 @@ def stored_schema_of(raw: dict[str, Any] | None) -> StoredSchema | None:
                 key=collection["key"],
                 auto_increment=collection["auto_increment"],
                 fields=_stored_fields(collection["fields"]),
-                indexes=tuple(StoredIndex(**index) for index in collection["indexes"]),
+                indexes=tuple(
+                    StoredIndex(
+                        field=index["field"],
+                        unique=index["unique"],
+                        fields=tuple(index["fields"]),
+                    )
+                    for index in collection["indexes"]
+                ),
             )
             for collection in raw["collections"]
         ),
@@ -425,6 +486,28 @@ def _type_of(annotation: Any, options: _Options, owner: type, attr: str) -> tupl
         f"{where} has the type {annotation!r}; a field holds a bool, an int, a float, a str, "
         "bytes, a datetime, an @embedded class, or a list of those"
     )
+
+
+def _stored_indexes(resolved: Resolved) -> list[tuple[list[str], bool]]:
+    """The indexes ``resolved``'s class declares, each with the paths of its
+    fields by the names the file stores, through embedded classes: the
+    attributes ``F`` and the strings name."""
+    from ._query import FieldRef, _Translator
+
+    info = info_of(resolved.cls)
+    translate = _Translator(resolved, None)
+    stored: list[tuple[list[str], bool]] = []
+
+    for declared in info.indexes if info is not None else ():
+        paths = [
+            ".".join(
+                translate.path(item._path if isinstance(item, FieldRef) else tuple(item.split(".")))
+            )
+            for item in declared.fields
+        ]
+        stored.append((paths, declared.unique))
+
+    return stored
 
 
 def resolve(cls: type) -> Resolved:
@@ -583,7 +666,7 @@ class Schema:
         self._native = _native.NativeSchema(
             version,
             [
-                (item.name, [field.spec for field in item.fields])
+                (item.name, [field.spec for field in item.fields], _stored_indexes(item))
                 for item in self._by_class.values()
             ],
         )

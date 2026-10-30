@@ -54,6 +54,7 @@ from ._database import (
 from ._errors import DaruError
 from ._query import Condition, F, FieldRef, Param, Prepared, Query, linked, param, where
 from ._schema import (
+    Index,
     Migration,
     Schema,
     StoredCollection,
@@ -64,6 +65,7 @@ from ._schema import (
     collection,
     embedded,
     field,
+    index,
 )
 
 __all__ = [
@@ -84,6 +86,7 @@ __all__ = [
     "Durability",
     "F",
     "FieldRef",
+    "Index",
     "Key",
     "Migrating",
     "Migration",
@@ -107,6 +110,7 @@ __all__ = [
     "collection",
     "embedded",
     "field",
+    "index",
     "linked",
     "param",
     "where",
