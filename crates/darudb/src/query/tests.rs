@@ -53,7 +53,18 @@ fn schema() -> Schema {
         )
 }
 
-const HANDLES: [&str; 8] = ["ace", "bee", "bean", "cat", "", "a\0b", "a", "é"];
+const HANDLES: [&str; 10] = [
+    "ace",
+    "bee",
+    "bean",
+    "cat",
+    "",
+    "a\0b",
+    "a",
+    "é",
+    "Ace\u{212A}",
+    "BÉAN",
+];
 const TAGS: [&str; 4] = ["red", "blue", "green", "re"];
 const TEAMS: [&str; 3] = ["north", "south", "gone"];
 const CITIES: [&str; 3] = ["Seoul", "Busan", "Seo"];
@@ -134,7 +145,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
         "id" | "friends" => (int(rng, 32) - 1).into(),
         "score" | "friends.score" => (int(rng, 9) - 4).into(),
         "rating" => pick(rng, &[-1.0, -0.0, 0.5, 1.0, f64::INFINITY, f64::NAN]).into(),
-        "handle" => pick(rng, &["ace", "bea", "be", "", "a", "a\0", "z"]).into(),
+        "handle" => pick(rng, &["ace", "bea", "be", "", "a", "a\0", "z", "acek", "É"]).into(),
         "tags" => pick(rng, &TAGS).into(),
         "team" => pick(rng, &TEAMS).into(),
         "team.city" | "address.city" => pick(rng, &["Seoul", "Busan", "Seo", "S", "x"]).into(),
@@ -173,6 +184,29 @@ fn is_string(path: &str) -> bool {
 
 fn test(rng: &mut Rng) -> Filter {
     let path = pick(rng, &PATHS);
+
+    // A test of strings ignores case a third of the time, with its values in
+    // capitals or not, so that some find what only ignoring case finds.
+    if is_string(path) && rng.below(3) == 0 {
+        let cased = |rng: &mut Rng| match value(rng, path) {
+            Value::String(text) if rng.below(2) == 0 => Value::String(text.to_uppercase()),
+            value => value,
+        };
+
+        return match rng.below(6) {
+            0 => Filter::eq(path, cased(rng)),
+            1 => Filter::ne(path, cased(rng)),
+            2 => {
+                let values: Vec<Value> = (0..rng.below(4)).map(|_| cased(rng)).collect();
+
+                Filter::is_in(path, values)
+            }
+            3 => Filter::contains(path, cased(rng)),
+            4 => Filter::starts_with(path, cased(rng)),
+            _ => Filter::ends_with(path, cased(rng)),
+        }
+        .ignore_case();
+    }
 
     match rng.below(12) {
         0 => Filter::eq(path, value(rng, path)),
@@ -869,6 +903,107 @@ fn an_update_by_query_refused_part_way_leaves_every_tree_as_it_was() {
 }
 
 #[test]
+fn ignoring_case_follows_the_documented_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let found = |filter: Filter| find(&db, Query::new().filter(filter));
+    let parsed = |text: &str| {
+        let read = db.begin_read().unwrap();
+        let players = read.collection("players").unwrap();
+
+        players
+            .query(&Query::parse(text, &[]).unwrap())
+            .map(|objects| ids(&objects))
+    };
+
+    assert_eq!(found(Filter::eq("handle", "ACE")), Vec::<i64>::new());
+    assert_eq!(found(Filter::eq("handle", "ACE").ignore_case()), [1]);
+    assert_eq!(found(Filter::ne("handle", "Ace").ignore_case()), [3]);
+    assert_eq!(
+        found(Filter::is_in("handle", ["X", "aCe"]).ignore_case()),
+        [1]
+    );
+    assert_eq!(found(Filter::contains("handle", "C").ignore_case()), [1]);
+    assert_eq!(
+        found(Filter::starts_with("handle", "A").ignore_case()),
+        [1, 3]
+    );
+    assert_eq!(found(Filter::ends_with("handle", "CE").ignore_case()), [1]);
+    // A list of strings: an element equal, or one that starts so.
+    assert_eq!(found(Filter::contains("tags", "BLUE").ignore_case()), [1]);
+    assert_eq!(found(Filter::starts_with("tags", "Bl").ignore_case()), [1]);
+    // Through a link and an embedded object.
+    assert_eq!(found(Filter::eq("team.city", "seoul").ignore_case()), [1]);
+    assert_eq!(
+        found(Filter::eq("address.city", "BUSAN").ignore_case()),
+        [2]
+    );
+    // Every test inside, and only the ones that compare strings so.
+    assert_eq!(
+        found(
+            Filter::eq("handle", "ACE")
+                .or(Filter::eq("address.city", "busan"))
+                .and(Filter::ge("score", 1))
+                .ignore_case()
+        ),
+        [1, 2]
+    );
+    assert_eq!(found(!Filter::eq("handle", "ACE").ignore_case()), [2, 3, 4]);
+    assert_eq!(
+        found(Filter::eq("handle", Value::Null).ignore_case()),
+        [2, 4]
+    );
+
+    assert_eq!(parsed(r#"handle == "ACE" IGNORE CASE"#).unwrap(), [1]);
+    assert_eq!(
+        parsed(r#"handle in ["x", "AcE"] ignore case"#).unwrap(),
+        [1]
+    );
+    assert_eq!(
+        parsed(r#"tags CONTAINS "RED" IGNORE CASE AND score > 0"#).unwrap(),
+        [1]
+    );
+
+    // A comparison that orders, or a field that holds no strings, refuses it.
+    for text in [
+        r#"handle < "B" IGNORE CASE"#,
+        r#"handle BETWEEN "a" AND "b" IGNORE CASE"#,
+        "handle IS NULL IGNORE CASE",
+    ] {
+        let error = Query::parse(text, &[]).unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY", "{text}");
+        assert!(error.to_string().contains("IGNORE CASE"), "{error}");
+    }
+
+    for refused in [
+        Filter::eq("score", 1).ignore_case(),
+        Filter::eq("team", "north").ignore_case(),
+        Filter::contains("note", vec![1u8]).ignore_case(),
+    ] {
+        let read = db.begin_read().unwrap();
+        let error = read
+            .collection("players")
+            .unwrap()
+            .query(&Query::new().filter(refused))
+            .unwrap_err();
+
+        assert_eq!(error.code(), "INVALID_QUERY");
+    }
+
+    // The two words are reserved nowhere: they name fields too.
+    let words = Query::parse(r#"ignore == 1 AND case == "x" ignore CASE"#, &[]).unwrap();
+
+    assert_eq!(
+        words.ir().filter,
+        Some(ir::Expr::and([
+            ir::Expr::test(ir::Op::Eq, vec!["ignore".into()], vec![Value::Int(1)]),
+            ir::Expr::test(ir::Op::EqFold, vec!["case".into()], vec!["x".into()]),
+        ]))
+    );
+}
+
+#[test]
 fn aggregates_follow_the_documented_rules() {
     let dir = tempfile::tempdir().unwrap();
     let db = database(&dir);
@@ -1260,15 +1395,22 @@ fn text(ir: &Ir, parameters: &mut Vec<Value>, every: bool) -> String {
 
                         format!("{at} BETWEEN {low} AND {high}")
                     }
-                    (ir::Op::In, values) => {
+                    (ir::Op::In | ir::Op::InFold, values) => {
                         let values: Vec<String> = values
                             .iter()
                             .map(|each| value(each, parameters, every))
                             .collect();
+                        // Either case of the words, as the language allows.
+                        let fold = if op.folds() { " ignore Case" } else { "" };
 
-                        format!("{at} in [{}]", values.join(", "))
+                        format!("{at} in [{}]{fold}", values.join(", "))
                     }
-                    (op, [one]) => format!("{at} {} {}", op.text(), value(one, parameters, every)),
+                    (op, [one]) => format!(
+                        "{at} {} {}{}",
+                        op.text(),
+                        value(one, parameters, every),
+                        if op.folds() { " IGNORE CASE" } else { "" }
+                    ),
                     _ => unreachable!("a builder's test has its values"),
                 }
             }

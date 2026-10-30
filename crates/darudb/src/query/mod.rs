@@ -13,6 +13,8 @@
 //! - `aggregate`: sums, means, and the least and greatest values, worked out
 //!   exactly from the objects a query finds.
 //! - `change`: deleting or updating every object a query finds, in one call.
+//! - `fold`: comparing strings ignoring case, by Unicode's simple case
+//!   folding, whose table `fold_table` is generated from Unicode's data.
 //!
 //! Whatever the plan, a query gives the objects a walk of every object would,
 //! in the same order; `tests` checks that on random data and random queries.
@@ -20,6 +22,8 @@
 mod aggregate;
 mod build;
 mod change;
+mod fold;
+mod fold_table;
 pub(crate) mod ir;
 mod keys;
 mod parse;

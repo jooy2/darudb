@@ -30,7 +30,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 | `object(E)` | An embedded object: fields of its own, stored inside the owning object       |
 
 - **Optional fields.** A field is required unless it is declared optional. An optional field may be null, which is also what it holds when it is left out. A required field may have a **default**, which it holds when it is left out: the object is written with the default, so that changing the default later changes no object already written.
-- **Strings compare by bytes.** Their order is the order of their UTF-8 bytes, which is the order of their code points. There is no collation and no case folding in v1.
+- **Strings compare by bytes.** Their order is the order of their UTF-8 bytes, which is the order of their code points. There is no collation in v1. A test of equality or of text can ignore case ([The filter](#the-filter)), an order cannot.
 - **Floats.** `-0.0` equals `0.0`, and every NaN equals every other and sorts after positive infinity, so that a float field has a total order an index can keep.
 - **Links** hold the target's primary key and nothing else. A link to an object that does not exist, or no longer does, is allowed and reads as the key it holds; the engine does not cascade deletes in v1.
 - **Backlinks** are not stored. The objects that link to an object are the answer to a query on the link field, which an index on that field makes cheap.
@@ -217,6 +217,8 @@ A query returns the objects, counts them, or works out an [aggregate](#aggregate
 | `path IS NULL`, `IS NOT NULL`           | The field is null, or is not                                          |
 | `a AND b`, `a OR b`, `NOT a`            | As in logic                                                           |
 
+- **Ignoring case.** A test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` may ignore case. It then compares strings by Unicode's simple case folding: each character folds as `CaseFolding.txt`, statuses C and S, of the Unicode version the build's table was made from (18.0.0) says, and two strings match when they fold alike. A character folds to one character, so `ß` stays `ß` and `ẞ` folds to it, but neither matches `ss`, and the Turkic `İ` folds to itself. Such a test holds of a string field or a list of strings, through links and embedded objects as any test does; on another field it is `INVALID_QUERY`. No index answers it, so the objects it tests are read; a string that is not UTF-8, which only damage makes, meets none.
+
 - **A path** names a field, and follows embedded objects and links with `.`: `address.city`, `author.name`. A path through a to-one link reads the linked object, and holds as null if there is none. A path has at most 32 names, since one through a link back into its own collection could otherwise go on without end.
 - **A path to a list**, or through a to-many link, holds when it holds for any element: `tags == "red"` for an object with a red tag. An empty list has no element, so nothing holds for it but `IS NOT NULL`: `IS NULL` holds when the list itself is null. `CONTAINS` on a list compares elements for equality, and `STARTSWITH` and `ENDSWITH` on a list of strings hold when an element does.
 - **A null field** makes every condition on it false except `IS NULL`, and `IS NOT NULL` true only for a field that is not null. `path == null` means `path IS NULL`, and `path != null` means `path IS NOT NULL`; `null` anywhere else is `INVALID_QUERY`.
@@ -237,7 +239,7 @@ A query is a tree that every binding builds and the engine executes. It crosses 
 | 6     | count      | `bool`: count the objects rather than return them                  |
 | 7     | aggregate  | `object`: work out an aggregate rather than return them, below     |
 
-An expression is an object: field 1 is its operator, field 2 the path it tests as a `list(string)`, field 3 its values as a list of the field's type, and field 4 its sub-expressions as a `list(object)`. A value may instead be a **parameter**: an `object` whose field 1 is the parameter's number as an `int`, which no value a query compares with is. A query with parameters is a **prepared** one: it is kept, and given values each time it runs, without being built, sent or parsed again. Giving it values makes the tests they complete what the same values in the text would, `== null` becoming `IS NULL` among them; running it with a parameter that has no value is `INVALID_QUERY`. A language binding sends the values in one record: field 0 is how many there are, as an `int`, and field `n + 1` the value of parameter `n`, a null one left out, since a record holds no null. It holds at most 65536.
+An expression is an object: field 1 is its operator, field 2 the path it tests as a `list(string)`, field 3 its values as a list of the field's type, field 4 its sub-expressions as a `list(object)`, and field 5, a `bool`, true when a test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` ignores case; any other expression with it true is `INVALID_QUERY`. A value may instead be a **parameter**: an `object` whose field 1 is the parameter's number as an `int`, which no value a query compares with is. A query with parameters is a **prepared** one: it is kept, and given values each time it runs, without being built, sent or parsed again. Giving it values makes the tests they complete what the same values in the text would, `== null` becoming `IS NULL` among them; running it with a parameter that has no value is `INVALID_QUERY`. A language binding sends the values in one record: field 0 is how many there are, as an `int`, and field `n + 1` the value of parameter `n`, a null one left out, since a record holds no null. It holds at most 65536.
 
 | Operator | Code | Uses               | Operator     | Code | Uses             |
 | -------- | ---- | ------------------ | ------------ | ---- | ---------------- |
@@ -264,16 +266,18 @@ sort        = path [ "ASC" | "DESC" ]
 expr        = and { "OR" and }
 and         = not { "AND" not }
 not         = "NOT" not | "(" expr ")" | condition
-condition   = path compare value
+condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
-            | path "IN" "[" [ value { "," value } ] "]"
-            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value
+            | path "IN" "[" [ value { "," value } ] "]" [ case ]
+            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
             | path "IS" [ "NOT" ] "NULL"
+case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
 value       = int | float | string | "true" | "false" | "null" | "$" digits
 ```
 
+- **`IGNORE CASE`** after a test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` makes it ignore case; after any other condition it is `INVALID_QUERY`. The two words are read so only there, so they are not keywords, and a field may be called `ignore` or `case` without backticks.
 - **Keywords** are case-insensitive: `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`.
 - **A name** is letters, digits and `_`, not starting with a digit, or any text in backticks. Where a path starts, a keyword is a keyword, so a field with a keyword's name goes in backticks there; after a `.`, every word is a name.
 - **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent, and either may start with `-`.
@@ -401,4 +405,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Composite indexes, indexes inside embedded objects, collation and case-insensitive comparison, full-text search, joins beyond following links, a date and time type, and cascading deletes.
+Composite indexes, indexes inside embedded objects, collation and ordering that ignores case, full-text search, joins beyond following links, a date and time type, and cascading deletes.

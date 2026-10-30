@@ -13,6 +13,10 @@ use crate::format::object::codec::{self, Raw};
 pub(crate) const MAX_DEPTH: usize = 24;
 
 /// An operator of an expression, with its code in the IR.
+///
+/// The operators that end in `Fold` compare strings ignoring case: the IR
+/// writes them with their plain operator's code and field 5 of the
+/// expression true (`design/objects.md`, "The IR").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Op {
     Eq,
@@ -27,11 +31,17 @@ pub(crate) enum Op {
     StartsWith,
     EndsWith,
     IsNull,
+    EqFold,
+    NeFold,
+    InFold,
+    ContainsFold,
+    StartsWithFold,
+    EndsWithFold,
 }
 
 impl Op {
     fn code(self) -> i64 {
-        match self {
+        match self.plain() {
             Op::Eq => 4,
             Op::Ne => 5,
             Op::Lt => 6,
@@ -43,7 +53,7 @@ impl Op {
             Op::Contains => 12,
             Op::StartsWith => 13,
             Op::EndsWith => 14,
-            Op::IsNull => 15,
+            _ => 15,
         }
     }
 
@@ -65,9 +75,43 @@ impl Op {
         })
     }
 
+    /// The operator that compares as this one does, ignoring case: one of
+    /// `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` and `ENDSWITH`, or one that
+    /// ignores case already. `None` for an operator that orders or tests
+    /// for null, which case has no meaning for.
+    pub(crate) fn ignoring_case(self) -> Option<Self> {
+        Some(match self {
+            Op::Eq | Op::EqFold => Op::EqFold,
+            Op::Ne | Op::NeFold => Op::NeFold,
+            Op::In | Op::InFold => Op::InFold,
+            Op::Contains | Op::ContainsFold => Op::ContainsFold,
+            Op::StartsWith | Op::StartsWithFold => Op::StartsWithFold,
+            Op::EndsWith | Op::EndsWithFold => Op::EndsWithFold,
+            _ => return None,
+        })
+    }
+
+    /// The operator without ignoring case.
+    pub(crate) fn plain(self) -> Self {
+        match self {
+            Op::EqFold => Op::Eq,
+            Op::NeFold => Op::Ne,
+            Op::InFold => Op::In,
+            Op::ContainsFold => Op::Contains,
+            Op::StartsWithFold => Op::StartsWith,
+            Op::EndsWithFold => Op::EndsWith,
+            op => op,
+        }
+    }
+
+    /// Whether the operator ignores case.
+    pub(crate) fn folds(self) -> bool {
+        self.plain() != self
+    }
+
     /// How many values the operator takes, `None` for any number.
     fn arity(self) -> Option<usize> {
-        match self {
+        match self.plain() {
             Op::IsNull => Some(0),
             Op::Between => Some(2),
             Op::In => None,
@@ -75,9 +119,9 @@ impl Op {
         }
     }
 
-    /// The operator as the query language writes it.
+    /// The operator as the query language writes it, without `IGNORE CASE`.
     pub(crate) fn text(self) -> &'static str {
-        match self {
+        match self.plain() {
             Op::Eq => "==",
             Op::Ne => "!=",
             Op::Lt => "<",
@@ -89,7 +133,7 @@ impl Op {
             Op::Contains => "CONTAINS",
             Op::StartsWith => "STARTSWITH",
             Op::EndsWith => "ENDSWITH",
-            Op::IsNull => "IS NULL",
+            _ => "IS NULL",
         }
     }
 }
@@ -229,7 +273,7 @@ impl Expr {
 
     /// A test, with `== null` and `!= null` made the null tests they mean.
     pub(crate) fn test(op: Op, path: Vec<String>, values: Vec<Value>) -> Expr {
-        match (op, values.as_slice()) {
+        match (op.plain(), values.as_slice()) {
             (Op::Eq, [Value::Null]) => Expr::Test {
                 op: Op::IsNull,
                 path,
@@ -439,6 +483,10 @@ fn encode_test(op: Op, path: &[String], values: &[Operand]) -> Result<Raw> {
         ));
     }
 
+    if op.folds() {
+        fields.push((5, Raw::Bool(true)));
+    }
+
     Ok(Raw::Object(fields))
 }
 
@@ -587,6 +635,7 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
     let mut path = None;
     let mut values = Vec::new();
     let mut terms = Vec::new();
+    let mut ignore_case = false;
 
     for (id, raw) in fields {
         match (id, raw) {
@@ -598,6 +647,7 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
             (4, Raw::List(raw)) => {
                 terms = raw.into_iter().map(decode_expr).collect::<Result<_>>()?;
             }
+            (5, Raw::Bool(value)) => ignore_case = value,
             _ => return Err(invalid("the IR holds an expression it cannot read")),
         }
     }
@@ -605,8 +655,8 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
     let code = code.ok_or_else(|| invalid("the IR holds an expression without an operator"))?;
 
     match code {
-        AND | OR | NOT if path.is_some() || !values.is_empty() => Err(invalid(
-            "the IR holds `AND`, `OR` or `NOT` with a path or values",
+        AND | OR | NOT if path.is_some() || !values.is_empty() || ignore_case => Err(invalid(
+            "the IR holds `AND`, `OR` or `NOT` with a path, values or a case to ignore",
         )),
         AND => Ok(Expr::and(terms)),
         OR => Ok(Expr::or(terms)),
@@ -617,6 +667,16 @@ fn decode_expr(raw: Raw) -> Result<Expr> {
         code => {
             let op = Op::from_code(code)
                 .ok_or_else(|| invalid(format!("the IR holds the unknown operator {code}")))?;
+            let op = match (ignore_case, op.ignoring_case()) {
+                (false, _) => op,
+                (true, Some(folding)) => folding,
+                (true, None) => {
+                    return Err(invalid(format!(
+                        "the IR ignores case with `{}`, which compares no strings for equality or text",
+                        op.text()
+                    )));
+                }
+            };
             let path = path
                 .ok_or_else(|| invalid(format!("the IR holds `{}` without a path", op.text())))?;
 
@@ -788,6 +848,8 @@ mod tests {
                 ))),
                 Expr::test(Op::Eq, path("email"), vec![Value::Null]),
                 Expr::test(Op::In, path("tags"), Vec::new()),
+                Expr::test(Op::ContainsFold, path("name"), vec![Value::from("KIM")]),
+                Expr::test(Op::InFold, path("tags"), vec![Value::from("A")]),
                 Expr::test(
                     Op::Between,
                     path("score"),
@@ -935,6 +997,15 @@ mod tests {
                 path.clone(),
                 (3, Raw::List(vec![Raw::List(Vec::new())])),
             ]),
+            // Ignoring case with an operator that orders, or with `AND`.
+            test(vec![
+                (1, Raw::Int(6)),
+                path.clone(),
+                one.clone(),
+                (5, Raw::Bool(true)),
+            ]),
+            test(vec![(1, Raw::Int(15)), path.clone(), (5, Raw::Bool(true))]),
+            test(vec![(1, Raw::Int(1)), (5, Raw::Bool(true))]),
             codec::write(&[(4, Raw::Int(-1)), (1, Raw::String("c".into()))]),
             codec::write(&[(2, Raw::Object(vec![(1, Raw::Int(1))]))]),
             vec![0xFF],

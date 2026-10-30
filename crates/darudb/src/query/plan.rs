@@ -19,6 +19,7 @@ use std::borrow::Cow;
 use std::ops::{Bound, Deref};
 
 use super::aggregate::Aggregate;
+use super::fold;
 use super::ir::{Expr, Ir, MAX_DEPTH, Op, Operand};
 use crate::error::{Error, Result};
 use crate::format::object::Value;
@@ -128,6 +129,19 @@ pub(crate) enum Test<'s> {
     StartsWith(&'s str),
     EndsWith(&'s str),
     IsNull,
+    /// `==` ignoring case, or `CONTAINS` on a list of strings: the value,
+    /// folded.
+    EqFold(String),
+    /// `!=` ignoring case.
+    NeFold(String),
+    /// `IN` ignoring case: the values, folded.
+    InFold(Vec<String>),
+    /// `CONTAINS` on a string, ignoring case.
+    SubstringFold(Box<fold::Search>),
+    /// `STARTSWITH` ignoring case: the text, folded.
+    StartsWithFold(String),
+    /// `ENDSWITH` ignoring case.
+    EndsWithFold(String),
 }
 
 /// A filter, resolved against the schema.
@@ -606,7 +620,7 @@ impl<'s> Resolver<'s> {
 
                 // What `Expr::test` makes of a test with null, when a
                 // parameter's value is the null.
-                match (op, operands.single()?) {
+                match (op.plain(), operands.single()?) {
                     (Op::Eq, Some(Value::Null)) => self.test(Op::IsNull, path, Operands::None)?,
                     (Op::Ne, Some(Value::Null)) => {
                         Cond::Not(Box::new(self.test(Op::IsNull, path, Operands::None)?))
@@ -841,6 +855,44 @@ fn test<'s>(
     };
 
     let value = |at: usize| operands.get(at);
+
+    if op.folds() {
+        if path.leaf != Kind::String || path.link {
+            return Err(invalid(format!(
+                "`IGNORE CASE` compares strings, and `{}` holds {}",
+                text(),
+                path.leaf.describe()
+            )));
+        }
+
+        let folded = |at: usize| value(at).and_then(&string).map(fold::folded);
+
+        return Ok(match (op, operands.len()) {
+            (Op::EqFold, 1) => Test::EqFold(folded(0)?),
+            (Op::ContainsFold, 1) if path.list_leaf => Test::EqFold(folded(0)?),
+            (Op::NeFold, 1) => Test::NeFold(folded(0)?),
+            (Op::InFold, len) => {
+                let mut values = (0..len).map(folded).collect::<Result<Vec<_>>>()?;
+
+                values.sort_unstable();
+                values.dedup();
+
+                Test::InFold(values)
+            }
+            (Op::ContainsFold, 1) => {
+                Test::SubstringFold(Box::new(fold::Search::new(string(value(0)?)?)))
+            }
+            (Op::StartsWithFold, 1) => Test::StartsWithFold(folded(0)?),
+            (Op::EndsWithFold, 1) => Test::EndsWithFold(folded(0)?),
+            _ => {
+                return Err(invalid(format!(
+                    "`{}` on `{}` has the wrong number of values",
+                    op.text(),
+                    text()
+                )));
+            }
+        });
+    }
 
     Ok(match (op, operands.len()) {
         (Op::IsNull, 0) => Test::IsNull,

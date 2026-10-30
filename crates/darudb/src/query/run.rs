@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Bound;
 
 use super::aggregate::{Aggregate, Exact, of_nothing};
+use super::fold;
 use super::ir::{Expr, Ir, Op, Operand};
 use super::keys::KeySet;
 use super::plan::{Access, Cond, Part, Plan, Range, Resolved, Step, Test, terms_of};
@@ -538,6 +539,28 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
             .string_bytes()
             .is_some_and(|value| value.ends_with(text.as_bytes())),
         Test::IsNull => value.is_null(),
+        // A string compared ignoring case is read as text: one that is not
+        // UTF-8 is damage, and meets no such test.
+        Test::EqFold(folded) => text_of(value).is_some_and(|text| fold::equals(text, folded)),
+        Test::NeFold(folded) => text_of(value).is_some_and(|text| !fold::equals(text, folded)),
+        Test::InFold(values) => text_of(value)
+            .is_some_and(|text| values.iter().any(|folded| fold::equals(text, folded))),
+        Test::SubstringFold(search) => text_of(value).is_some_and(|text| search.found_in(text)),
+        Test::StartsWithFold(folded) => {
+            text_of(value).is_some_and(|text| fold::starts_with(text, folded))
+        }
+        Test::EndsWithFold(folded) => {
+            text_of(value).is_some_and(|text| fold::ends_with(text, folded))
+        }
+    }
+}
+
+/// The text of a string value, if it is one and is UTF-8.
+fn text_of<'v>(value: ValueRef<'v>) -> Option<&'v str> {
+    match value {
+        ValueRef::String(bytes) => std::str::from_utf8(bytes).ok(),
+        ValueRef::Value(Value::String(text)) => Some(text),
+        _ => None,
     }
 }
 

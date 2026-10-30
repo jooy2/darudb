@@ -15,6 +15,26 @@ fn path(text: &str) -> Vec<String> {
     text.split('.').map(str::to_owned).collect()
 }
 
+/// `expr` with every test that compares strings for equality or text
+/// ignoring case.
+fn ignoring_case(expr: Expr) -> Expr {
+    match expr {
+        Expr::And(terms) => Expr::And(terms.into_iter().map(ignoring_case).collect()),
+        Expr::Or(terms) => Expr::Or(terms.into_iter().map(ignoring_case).collect()),
+        Expr::Not(term) => Expr::Not(Box::new(ignoring_case(*term))),
+        Expr::Test { op, path, values } => Expr::Test {
+            op: op.ignoring_case().unwrap_or(op),
+            path,
+            values,
+        },
+        Expr::Prepared { op, path, values } => Expr::Prepared {
+            op: op.ignoring_case().unwrap_or(op),
+            path,
+            values,
+        },
+    }
+}
+
 /// A condition that objects have to meet, for [`Query::filter`].
 ///
 /// A condition on a list holds when it holds for any element, and one on a
@@ -114,6 +134,20 @@ impl Filter {
     #[must_use]
     pub fn or(self, other: Filter) -> Self {
         Filter(Expr::or([self.0, other.0]))
+    }
+
+    /// This filter, with every test of [`eq`](Self::eq), [`ne`](Self::ne),
+    /// [`is_in`](Self::is_in), [`contains`](Self::contains),
+    /// [`starts_with`](Self::starts_with) and [`ends_with`](Self::ends_with)
+    /// in it comparing strings ignoring case, by Unicode's simple case
+    /// folding: `Filter::eq("name", "kim").ignore_case()` finds `Kim` and
+    /// `KIM`. A test of another kind is left as it is. Such a test of a field
+    /// that holds no strings fails with
+    /// [`Error::InvalidQuery`](crate::Error::InvalidQuery) when the query
+    /// runs. No index answers it, so the objects it tests are read.
+    #[must_use]
+    pub fn ignore_case(self) -> Self {
+        Filter(ignoring_case(self.0))
     }
 }
 

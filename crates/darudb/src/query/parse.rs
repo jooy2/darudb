@@ -464,6 +464,8 @@ impl Parser<'_> {
 
                     let high = self.value()?;
 
+                    self.refuse_ignore_case("BETWEEN")?;
+
                     return Ok(Expr::operands(Op::Between, path, vec![low, high]));
                 }
                 "IN" => {
@@ -484,7 +486,13 @@ impl Parser<'_> {
                         }
                     }
 
-                    return Ok(Expr::operands(Op::In, path, values));
+                    let op = if self.ignore_case() {
+                        Op::InFold
+                    } else {
+                        Op::In
+                    };
+
+                    return Ok(Expr::operands(op, path, values));
                 }
                 "IS" => {
                     self.advance();
@@ -492,6 +500,7 @@ impl Parser<'_> {
                     let not = self.keyword("NOT");
 
                     self.expect_keyword("NULL")?;
+                    self.refuse_ignore_case("IS NULL")?;
 
                     let test = Expr::test(Op::IsNull, path, Vec::new());
 
@@ -508,8 +517,47 @@ impl Parser<'_> {
         self.advance();
 
         let value = self.value()?;
+        let op = if !self.ignore_case() {
+            op
+        } else {
+            match op.ignoring_case() {
+                Some(folding) => folding,
+                None => return Err(self.ignoring_order(op.text())),
+            }
+        };
 
         Ok(Expr::operands(op, path, vec![value]))
+    }
+
+    /// Takes `IGNORE CASE` if it comes next. The two words are read as such
+    /// only after a condition, and are reserved nowhere, so no field needs
+    /// backticks for them.
+    fn ignore_case(&mut self) -> bool {
+        let next = |at: usize, word: &str| matches!(self.tokens.get(at), Some((Token::Word(found), _)) if found.eq_ignore_ascii_case(word));
+        let found = next(self.at, "IGNORE") && next(self.at + 1, "CASE");
+
+        if found {
+            self.advance();
+            self.advance();
+        }
+
+        found
+    }
+
+    /// Refuses `IGNORE CASE` after a condition of `operator`, which does
+    /// not compare strings for equality or text.
+    fn refuse_ignore_case(&mut self, operator: &str) -> Result<()> {
+        let at = self.position();
+
+        if self.ignore_case() {
+            return Err(invalid(at, ignoring_order_message(operator)));
+        }
+
+        Ok(())
+    }
+
+    fn ignoring_order(&self, operator: &str) -> Error {
+        invalid(self.position(), ignoring_order_message(operator))
     }
 
     fn path(&mut self) -> Result<Vec<String>> {
@@ -567,6 +615,13 @@ impl Parser<'_> {
 
         Ok(Operand::Value(value))
     }
+}
+
+/// The error for `IGNORE CASE` after a condition of `operator`.
+fn ignoring_order_message(operator: &str) -> String {
+    format!(
+        "`IGNORE CASE` follows `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH`, not `{operator}`"
+    )
 }
 
 /// Parses `text` into a query, with `parameters` for `$0`, `$1` and on, or
