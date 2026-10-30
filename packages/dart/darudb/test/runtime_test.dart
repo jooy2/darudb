@@ -155,6 +155,54 @@ void main() {
     });
   });
 
+  test('deleteWhere and updateWhere change what a query finds', () {
+    db.write((txn) {
+      txn.collection(userSchema).insertMany([
+        for (var n = 0; n < 6; n++)
+          User(name: 'person $n', age: n, email: 'p$n@example.com'),
+      ]);
+    });
+
+    db.write((txn) {
+      final users = txn.collection(userSchema);
+
+      expect(
+        users.updateWhere(
+          (q) => [q.score.set(9.5)],
+          (q) => q.where(q.age.atLeast(4)),
+        ),
+        2,
+      );
+      expect(users.get(5)!.score, 9.5);
+      expect(users.get(1)!.score, 0.5);
+      expect(
+        users.updateWhereText((q) => [q.age.set(10)], r'age < $0', [1]),
+        1,
+      );
+      expect(users.get(1)!.age, 10);
+
+      // A unique email cannot go to two objects: the first is put back.
+      expect(
+        () => users.updateWhere(
+          (q) => [q.email.set('same@example.com'), q.age.set(0)],
+          (q) => q,
+        ),
+        throwsA(
+          isA<DaruException>().having((e) => e.code, 'code', 'DUPLICATE_KEY'),
+        ),
+      );
+      expect(users.get(1)!.email, 'p0@example.com');
+      expect(users.get(1)!.age, 10);
+
+      final older = db.prepare(userSchema, r'age > $0');
+
+      expect(users.deleteWherePrepared(older, [3]), 3);
+      expect(users.deleteWhereText('age == 2'), 1);
+      expect(users.deleteWhere((q) => q.where(q.age.lessThan(2))), 1);
+      expect(users.count(), 1);
+    });
+  });
+
   test('put replaces, update sets fields and delete removes', () {
     final id = db.write(
       (txn) => txn.collection(userSchema).insert(const User(name: 'Ada')),

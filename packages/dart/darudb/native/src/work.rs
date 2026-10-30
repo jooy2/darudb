@@ -546,6 +546,88 @@ pub unsafe extern "C" fn darudb_aggregate_async(
     }
 }
 
+/// [`crate::darudb_delete_where`] on a thread of the library: how many.
+///
+/// # Safety
+///
+/// As [`crate::darudb_delete_where`], without `count`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_delete_where_async(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    let arguments = || {
+        // SAFETY: the caller's promise for `ir`.
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+
+        // SAFETY: the caller's promises for `prepared` and `parameters`.
+        unsafe { crate::queried(prepared, parameters, parameters_len, &request) }
+    };
+
+    match caught(arguments) {
+        // SAFETY: the caller's promise for `txn`.
+        Ok((name, query)) => unsafe {
+            on_txn(txn, id, callback, move |held, out| {
+                out.extend_from_slice(&ops::delete_where(held, &name, &query)?.to_le_bytes());
+
+                Ok(0)
+            });
+        },
+        Err(failure) => refuse(id, callback, failure),
+    }
+}
+
+/// [`crate::darudb_update_where`] on a thread of the library: how many.
+///
+/// # Safety
+///
+/// As [`crate::darudb_update_where`], without `count`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_update_where_async(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    changes: *const u8,
+    changes_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    let arguments = || {
+        // SAFETY: the caller's promise for `ir`.
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+        // SAFETY: the caller's promises for `prepared` and `parameters`.
+        let (name, query) =
+            unsafe { crate::queried(prepared, parameters, parameters_len, &request) }?;
+        // SAFETY: the caller's promise for `changes`.
+        let changes = unsafe { bytes(changes, changes_len) }.to_vec();
+
+        Ok((name, query, changes))
+    };
+
+    match caught(arguments) {
+        // SAFETY: the caller's promise for `txn`.
+        Ok((name, query, changes)) => unsafe {
+            on_txn(txn, id, callback, move |held, out| {
+                let updated = ops::update_where(held, &name, &query, &changes)?;
+
+                out.extend_from_slice(&updated.to_le_bytes());
+
+                Ok(0)
+            });
+        },
+        Err(failure) => refuse(id, callback, failure),
+    }
+}
+
 /// The prepared query a handle points to, bound to the values at
 /// `parameters`, with the collection it is on.
 ///

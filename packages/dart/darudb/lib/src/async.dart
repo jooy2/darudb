@@ -767,6 +767,101 @@ final class AsyncWriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
       return reply.status == 1;
     });
   }
+
+  Future<int> _deleteWhere({
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) => _run((txn) async {
+    final loaded = _writer._loadWhere(query, prepared, parameters, null);
+    final reply = await _call(
+      (id, callback) => darudb_delete_where_async(
+        txn,
+        prepared?._handle ?? nullptr,
+        loaded.at,
+        loaded.split,
+        loaded.at + loaded.split,
+        loaded.end - loaded.split,
+        id,
+        callback,
+      ),
+    );
+
+    return reply.count;
+  });
+
+  Future<int> _updateWhere(
+    List<Change> Function(Q q) changes, {
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) => _run((txn) async {
+    final loaded = _writer._loadWhere(query, prepared, parameters, changes);
+    final reply = await _call(
+      (id, callback) => darudb_update_where_async(
+        txn,
+        prepared?._handle ?? nullptr,
+        loaded.at,
+        loaded.split,
+        loaded.at + loaded.split,
+        loaded.end - loaded.split,
+        loaded.at + loaded.end,
+        loaded.changes,
+        id,
+        callback,
+      ),
+    );
+
+    return reply.count;
+  });
+
+  /// Deletes every object the query finds; see [WriteCollection.deleteWhere].
+  Future<int> deleteWhere(QueryBuilder<T> Function(Q q) query) =>
+      _deleteWhere(query: query);
+
+  /// [deleteWhere] with a query in the query language.
+  Future<int> deleteWhereText(
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async => _deleteWhere(prepared: _sync._kept(text), parameters: parameters);
+
+  /// [deleteWhere] with a prepared query.
+  Future<int> deleteWherePrepared(
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async => _deleteWhere(
+    prepared: _sync._preparedOf(prepared),
+    parameters: parameters,
+  );
+
+  /// Sets fields in every object the query finds; see
+  /// [WriteCollection.updateWhere].
+  Future<int> updateWhere(
+    List<Change> Function(Q q) changes,
+    QueryBuilder<T> Function(Q q) query,
+  ) => _updateWhere(changes, query: query);
+
+  /// [updateWhere] with a query in the query language.
+  Future<int> updateWhereText(
+    List<Change> Function(Q q) changes,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) async => _updateWhere(
+    changes,
+    prepared: _sync._kept(text),
+    parameters: parameters,
+  );
+
+  /// [updateWhere] with a prepared query.
+  Future<int> updateWherePrepared(
+    List<Change> Function(Q q) changes,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) async => _updateWhere(
+    changes,
+    prepared: _sync._preparedOf(prepared),
+    parameters: parameters,
+  );
 }
 
 /// [Database.readAsync].

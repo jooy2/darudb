@@ -620,6 +620,28 @@ pub(crate) fn update(held: &Held, name: &str, key: darudb::Value, changes: &[u8]
     })
 }
 
+/// Deletes every object `query` finds on collection `name`, and returns how
+/// many there were.
+pub(crate) fn delete_where(held: &Held, name: &str, query: &darudb::Query) -> Result<u64> {
+    held.with(|txn| Ok(txn.writing()?.collection(name)?.delete_where(query)?))
+}
+
+/// Sets the fields the record `changes` holds in every object `query` finds
+/// on collection `name`, all or nothing, and returns how many there were.
+pub(crate) fn update_where(
+    held: &Held,
+    name: &str,
+    query: &darudb::Query,
+    changes: &[u8],
+) -> Result<u64> {
+    held.with(|txn| {
+        Ok(txn
+            .writing()?
+            .collection(name)?
+            .update_records_where(query, changes)?)
+    })
+}
+
 pub(crate) fn delete(held: &Held, name: &str, key: darudb::Value) -> Result<i32> {
     held.with(|txn| {
         let found = txn.writing()?.collection(name)?.delete(key)?;

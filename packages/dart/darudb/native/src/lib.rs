@@ -762,11 +762,27 @@ unsafe fn aggregated(
 ) -> Result<(String, darudb::Query, ops::Aggregation)> {
     // SAFETY: the caller's promise for `ir`.
     let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+    // SAFETY: the caller's promises for `prepared` and `parameters`.
+    let (name, query) = unsafe { queried(prepared, parameters, parameters_len, &request) }?;
 
+    Ok((name, query, ops::aggregation(request)?))
+}
+
+/// The collection and the query of `request`, or, with `prepared`, of that
+/// prepared query bound to the parameters' values at `parameters`.
+///
+/// # Safety
+///
+/// `prepared` is null or came from this library and has not been freed;
+/// `parameters` points to `parameters_len` readable bytes.
+pub(crate) unsafe fn queried(
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    request: &darudb::QueryRequest,
+) -> Result<(String, darudb::Query)> {
     if prepared.is_null() {
-        let (name, query) = (request.collection.clone(), request.query.clone());
-
-        return Ok((name, query, ops::aggregation(request)?));
+        return Ok((request.collection.clone(), request.query.clone()));
     }
 
     // SAFETY: the caller's promise for `prepared`.
@@ -774,11 +790,81 @@ unsafe fn aggregated(
     // SAFETY: the caller's promise for `parameters`.
     let query = prepared.bound(unsafe { bytes(parameters, parameters_len) }, false)?;
 
-    Ok((
-        prepared.collection.clone(),
-        query,
-        ops::aggregation(request)?,
-    ))
+    Ok((prepared.collection.clone(), query))
+}
+
+/// Deletes every object a query finds, into `count` how many there were:
+/// the query whose IR is at `ir`, or with `prepared`, that prepared query
+/// bound to the parameters at `parameters`, the IR then naming only the
+/// collection.
+///
+/// # Safety
+///
+/// `txn` came from this library and has not been freed; `count` points to
+/// a `u64` the caller can write; the rest as [`queried`] says, with `ir`
+/// pointing to `ir_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_delete_where(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    count: *mut u64,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `txn`.
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promise for `ir`.
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+        // SAFETY: the caller's promises for `prepared` and `parameters`.
+        let (name, query) = unsafe { queried(prepared, parameters, parameters_len, &request) }?;
+        let deleted = ops::delete_where(held, &name, &query)?;
+
+        // SAFETY: the caller's promise for `count`.
+        unsafe { put(count, deleted) };
+
+        Ok(0)
+    })
+}
+
+/// Sets the fields the record at `changes` holds in every object a query
+/// finds, as [`darudb_delete_where`] reads the query, all or nothing, into
+/// `count` how many there were.
+///
+/// # Safety
+///
+/// As [`darudb_delete_where`], with `changes` pointing to `changes_len`
+/// readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_update_where(
+    txn: *const Held,
+    prepared: *const Prepared,
+    parameters: *const u8,
+    parameters_len: usize,
+    ir: *const u8,
+    ir_len: usize,
+    changes: *const u8,
+    changes_len: usize,
+    count: *mut u64,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `txn`.
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promise for `ir`.
+        let request = ops::request(unsafe { bytes(ir, ir_len) }, false)?;
+        // SAFETY: the caller's promises for `prepared` and `parameters`.
+        let (name, query) = unsafe { queried(prepared, parameters, parameters_len, &request) }?;
+        // SAFETY: the caller's promise for `changes`.
+        let changes = unsafe { bytes(changes, changes_len) };
+        let updated = ops::update_where(held, &name, &query, changes)?;
+
+        // SAFETY: the caller's promise for `count`.
+        unsafe { put(count, updated) };
+
+        Ok(0)
+    })
 }
 
 /// The aggregate a query asks for, as one tagged value, null as the tag

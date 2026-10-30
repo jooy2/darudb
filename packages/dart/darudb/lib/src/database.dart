@@ -1976,6 +1976,145 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
         ) ==
         1;
   }
+
+  /// The query, its parameters and the changes of a change by query, in
+  /// one native buffer: the parameters, the IR, and the changes, one after
+  /// another. With a prepared query the IR names only the collection.
+  ({Pointer<Uint8> at, int split, int end, int changes}) _loadWhere(
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters,
+    List<Change> Function(Q q)? changes,
+  ) {
+    final writer = _io.writer..reset();
+
+    if (prepared != null) {
+      encodeParameters(writer, parameters);
+    }
+
+    final split = writer.at;
+
+    encodeQuery(writer, _schema.name, prepared == null ? _built(query) : null);
+
+    final changed = Writer(64);
+
+    if (changes != null) {
+      encodeChanges(
+        changed,
+        changes(_schema.newQuery()),
+        _known.layout,
+        _known.names,
+      );
+    }
+
+    return (
+      at: _io.load(writer.written, changed.written),
+      split: split,
+      end: writer.at,
+      changes: changed.at,
+    );
+  }
+
+  int _deleteWhere({
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) {
+    final handle = _txn._live();
+    final loaded = _loadWhere(query, prepared, parameters, null);
+
+    _check(
+      darudb_delete_where(
+        handle,
+        prepared?._handle ?? nullptr,
+        loaded.at,
+        loaded.split,
+        loaded.at + loaded.split,
+        loaded.end - loaded.split,
+        _io.number,
+      ),
+    );
+
+    return _io.number.value;
+  }
+
+  int _updateWhere(
+    List<Change> Function(Q q) changes, {
+    QueryBuilder<T> Function(Q q)? query,
+    Prepared<Object?>? prepared,
+    List<Object?> parameters = const [],
+  }) {
+    final handle = _txn._live();
+    final loaded = _loadWhere(query, prepared, parameters, changes);
+
+    _check(
+      darudb_update_where(
+        handle,
+        prepared?._handle ?? nullptr,
+        loaded.at,
+        loaded.split,
+        loaded.at + loaded.split,
+        loaded.end - loaded.split,
+        loaded.at + loaded.end,
+        loaded.changes,
+        _io.number,
+      ),
+    );
+
+    return _io.number.value;
+  }
+
+  /// Deletes every object the query finds, after its sort, offset and
+  /// limit, and returns how many there were. The query is required, so that
+  /// deleting every object is never an accident: `(q) => q` finds them all.
+  ///
+  /// ```dart
+  /// users.deleteWhere((q) => q.where(q.age.lessThan(18)));
+  /// ```
+  int deleteWhere(QueryBuilder<T> Function(Q q) query) =>
+      _deleteWhere(query: query);
+
+  /// [deleteWhere] with a query in the query language.
+  int deleteWhereText(String text, [List<Object?> parameters = const []]) =>
+      _deleteWhere(prepared: _kept(text), parameters: parameters);
+
+  /// [deleteWhere] with a prepared query.
+  int deleteWherePrepared(
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) => _deleteWhere(prepared: _preparedOf(prepared), parameters: parameters);
+
+  /// Sets the fields [changes] gives in every object the query finds, as
+  /// [update] sets them in one, and returns how many there were. All or
+  /// nothing: when one object is refused, by a unique value taken or an
+  /// index entry too long, the ones changed before it are put back. It
+  /// cannot set the primary key.
+  ///
+  /// ```dart
+  /// users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+  /// ```
+  int updateWhere(
+    List<Change> Function(Q q) changes,
+    QueryBuilder<T> Function(Q q) query,
+  ) => _updateWhere(changes, query: query);
+
+  /// [updateWhere] with a query in the query language.
+  int updateWhereText(
+    List<Change> Function(Q q) changes,
+    String text, [
+    List<Object?> parameters = const [],
+  ]) => _updateWhere(changes, prepared: _kept(text), parameters: parameters);
+
+  /// [updateWhere] with a prepared query.
+  int updateWherePrepared(
+    List<Change> Function(Q q) changes,
+    Prepared<T> prepared, [
+    List<Object?> parameters = const [],
+  ]) => _updateWhere(
+    changes,
+    prepared: _preparedOf(prepared),
+    parameters: parameters,
+  );
 }
 
 /// The version of the DaruDB engine inside this package.

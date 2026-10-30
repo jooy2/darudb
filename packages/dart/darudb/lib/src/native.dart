@@ -249,6 +249,52 @@ external int darudb_find_prepared(
     Size,
     Pointer<Uint8>,
     Size,
+    Pointer<Uint64>,
+  )
+>()
+external int darudb_delete_where(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
+  Pointer<Uint64> count,
+);
+
+@Native<
+  Int32 Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint64>,
+  )
+>()
+external int darudb_update_where(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
+  Pointer<Uint8> changes,
+  int changesLength,
+  Pointer<Uint64> count,
+);
+
+@Native<
+  Int32 Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
     Pointer<Buf>,
   )
 >()
@@ -586,6 +632,56 @@ external void darudb_find_prepared_async(
   Pointer<Uint8> parameters,
   int parametersLength,
   int first,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_delete_where_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativePrepared>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_update_where_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativePrepared> prepared,
+  Pointer<Uint8> parameters,
+  int parametersLength,
+  Pointer<Uint8> ir,
+  int irLength,
+  Pointer<Uint8> changes,
+  int changesLength,
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,
 );

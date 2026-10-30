@@ -139,6 +139,17 @@ void main() {
       expect(await users.update(1, (q) => [q.age.set(40)]), isTrue);
       expect(await users.delete(2), isTrue);
       expect(await users.delete(2), isFalse);
+      expect(
+        await users.updateWhere(
+          (q) => [q.age.set(7)],
+          (q) => q.where(q.age.equals(3)),
+        ),
+        5,
+      );
+      expect(await users.updateWhereText((q) => [q.age.set(8)], 'age == 7'), 5);
+      expect(await users.deleteWhereText(r'age == $0', [8]), 5);
+      // Ages 0 and 1, four of each once the second object is gone.
+      expect(await users.deleteWhere((q) => q.where(q.age.atMost(1))), 8);
     });
 
     expect(db.read((txn) => txn.collection(userSchema).get(1))!.age, 40);
