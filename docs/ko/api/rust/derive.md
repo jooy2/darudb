@@ -89,7 +89,7 @@ fn main() -> Result<(), darudb::Error> {
 - **컬렉션 이름**은 구조체 이름을 그대로 씁니다. 구조체에 `#[darudb(collection = "name")]`을 붙이면 그 이름을 씁니다.
 - **기본 키**는 `#[darudb(key)]`를 붙인 필드이고, 타입은 `i64`, `String`, `Vec<u8>` 가운데 하나입니다. 키 필드가 없으면 자동 증가 키를 쓰므로 구조체에 `id: Option<i64>` 필드가 있어야 합니다. 이 필드는 객체를 넣기 전까지 `None`이고, 넣을 때 다음 번호를 받습니다.
 - **필드**는 구조체에 적힌 순서대로 선언되고, 타입은 Rust 타입에서 정해집니다. [`FieldType`](../../types/rust/field-type.md)을 보세요. `Option`이면 선택 필드이고, 나머지는 모두 필수 필드입니다.
-- **필드마다 상수**를 하나씩 구조체에 선언합니다. 이름은 필드 이름을 대문자로 쓴 것이고, 공개 범위는 필드와 같습니다. `age` 필드라면 `User::AGE`이며, [`TypedWriter::set`](./typed-writer.md#set)이 그 필드 하나를 바꿀 때 받는 [`FieldOf`](../../types/rust/field-of.md)입니다. 같은 이름의 상수를 구조체에 직접 선언하면 함께 컴파일되지 않습니다.
+- **필드마다 상수**를 하나씩 구조체에 선언합니다. 이름은 필드 이름을 대문자로 쓴 것이고, 공개 범위는 필드와 같습니다. `age` 필드라면 `User::AGE`이며, 컬렉션에서의 필드 이름을 담은 [`FieldOf`](../../types/rust/field-of.md)입니다. [`TypedWriter::set`](./typed-writer.md#set)이 그 필드 하나를 바꿀 때 받고, 그 메서드로 `User::AGE.ge(18)` 같은 쿼리 조건을 만듭니다. 같은 이름의 상수를 구조체에 직접 선언하면 함께 컴파일되지 않습니다.
 
 ## Embedded
 
@@ -97,7 +97,7 @@ fn main() -> Result<(), darudb::Error> {
 #[proc_macro_derive(Embedded, attributes(darudb))]
 ```
 
-이름 있는 필드를 가진 구조체에 [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype)과 [`FieldType`](../../types/rust/field-type.md)을 구현해, 객체나 다른 내장 객체의 필드가 그 구조체를 담을 수 있게 합니다. 필드는 [`Embedded::of`](./embedded.md#of)로 선언합니다. 내장 객체에는 키가 없으므로 필드에 `key`도 인덱스도 붙일 수 없습니다.
+이름 있는 필드를 가진 구조체에 [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype)과 [`FieldType`](../../types/rust/field-type.md)을 구현해, 객체나 다른 내장 객체의 필드가 그 구조체를 담을 수 있게 합니다. 필드는 [`Embedded::of`](./embedded.md#of)로 선언합니다. 내장 객체에는 키가 없으므로 필드에 `key`도 인덱스도 붙일 수 없습니다. `Object`처럼 필드마다 상수를 선언하며, 내장 객체를 담은 필드에서 `User::HOME.then(Address::CITY)`처럼 경로를 이어 갈 때 씁니다.
 
 ## 필드 속성
 

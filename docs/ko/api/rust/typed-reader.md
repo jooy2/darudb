@@ -67,6 +67,38 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 `query`가 찾는 객체 수를 오프셋을 건너뛰고 한도 안에서 셉니다. [`CollectionReader::count`](./collection-reader.md#count)와 같은 방식으로 셉니다.
 
+### sum
+
+```rust
+pub fn sum<V: NumberType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<V::Sum>
+```
+
+`query`가 찾는 객체에서 `field`의 합입니다. `field`는 상수로 가리킨 `T`의 숫자 필드나 거기서 이어진 경로이며, [`CollectionReader::sum`](./collection-reader.md#sum)과 같은 방식으로 계산합니다. 정수 필드는 정확한 `i64`, 실수 필드는 `f64`이고, 값이 없으면 0입니다.
+
+### min
+
+```rust
+pub fn min<V: OrderedType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<V::Compared>>
+```
+
+`query`가 찾는 객체에서 `field`의 가장 작은 값을 필드 자신의 타입으로 돌려주고, 값이 없으면 `None`입니다. `users.min(&query, User::AGE)`는 `Option<i64>`입니다.
+
+### max
+
+```rust
+pub fn max<V: OrderedType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<V::Compared>>
+```
+
+`min`이 가장 작은 값을 주듯 가장 큰 값을 줍니다.
+
+### avg
+
+```rust
+pub fn avg<V: NumberType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<f64>>
+```
+
+`query`가 찾는 객체에서 `field`의 평균이고, 값이 없으면 `None`입니다.
+
 ### iter
 
 ```rust

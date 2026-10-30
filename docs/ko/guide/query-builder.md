@@ -115,6 +115,41 @@ with db.read() as txn:
 
 `Filter::eq(field, Value::Null)`은 `is_null`이고, `Filter::ne(field, Value::Null)`은 `is_not_null`입니다.
 
+[`#[derive(Object)]`](../api/rust/derive.md)를 붙인 타입은 필드를 상수로 가리킬 수도 있습니다. `User::AGE` 같은 [`FieldOf`](../types/rust/field-of.md) 값이며, 그 메서드가 같은 필터를 만듭니다. 상수는 컬렉션에 저장된 이름으로 필드를 가리키므로 구조체에서 이름을 바꿔도 따라가고, 필드의 타입과 같은 값만 받습니다. `User::AGE.ge("18")`은 컴파일되지 않습니다. `then`으로 내장 객체나 링크를 지나 이어 가고, 쿼리는 이름처럼 상수나 경로로도 정렬합니다.
+
+```rust
+use darudb::{Embedded, Link, Object, Query};
+
+#[derive(Embedded)]
+struct Address {
+    city: String,
+}
+
+#[derive(Object)]
+#[darudb(collection = "users")]
+struct User {
+    id: Option<i64>,
+    name: String,
+    age: i64,
+    home: Option<Address>,
+    manager: Option<Link<User>>,
+}
+
+fn main() {
+    let query = Query::new()
+        .filter(
+            User::AGE
+                .ge(18)
+                .and(User::HOME.then(Address::CITY).eq("Seoul"))
+                .and(User::MANAGER.then(User::NAME).starts_with("J")),
+        )
+        .sort_by(User::NAME);
+    let _ = query;
+}
+```
+
+쿼리 자체는 타입에 묶이지 않으므로, 엔진은 쿼리를 실행할 때 여전히 모든 필드를 검사합니다.
+
 :::
 
 ::: lang node

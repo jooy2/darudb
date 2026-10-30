@@ -115,6 +115,41 @@ Each associated function of `Filter` tests one field, named by a path, against v
 
 `Filter::eq(field, Value::Null)` is `is_null`, and `Filter::ne(field, Value::Null)` is `is_not_null`.
 
+A type with [`#[derive(Object)]`](../api/rust/derive.md) names its fields through constants instead, [`FieldOf`](../types/rust/field-of.md) values such as `User::AGE`, whose methods make the same filters. A constant names the field as the collection stores it, so a rename in the struct carries over, and it takes only a value of the field's type: `User::AGE.ge("18")` does not compile. `then` goes on through an embedded object or a link, and a query sorts by a constant or a path as it sorts by a name.
+
+```rust
+use darudb::{Embedded, Link, Object, Query};
+
+#[derive(Embedded)]
+struct Address {
+    city: String,
+}
+
+#[derive(Object)]
+#[darudb(collection = "users")]
+struct User {
+    id: Option<i64>,
+    name: String,
+    age: i64,
+    home: Option<Address>,
+    manager: Option<Link<User>>,
+}
+
+fn main() {
+    let query = Query::new()
+        .filter(
+            User::AGE
+                .ge(18)
+                .and(User::HOME.then(Address::CITY).eq("Seoul"))
+                .and(User::MANAGER.then(User::NAME).starts_with("J")),
+        )
+        .sort_by(User::NAME);
+    let _ = query;
+}
+```
+
+The query is not tied to the type, so the engine still checks every field when the query runs.
+
 :::
 
 ::: lang node

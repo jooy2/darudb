@@ -67,6 +67,38 @@ pub fn count(&self, query: &Query) -> Result<u64>
 
 How many objects `query` finds, after its offset and within its limit, as [`CollectionReader::count`](./collection-reader.md#count) counts them.
 
+### sum
+
+```rust
+pub fn sum<V: NumberType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<V::Sum>
+```
+
+The sum of `field`, a number field of `T` named by its constant or a path from one, over the objects `query` finds, as [`CollectionReader::sum`](./collection-reader.md#sum) works it out: an `i64` for an int field, exact, and an `f64` for a float field. A sum of no values is zero.
+
+### min
+
+```rust
+pub fn min<V: OrderedType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<V::Compared>>
+```
+
+The least value of `field` over the objects `query` finds, in the field's own type, or `None` when there is none: `users.min(&query, User::AGE)` is an `Option<i64>`.
+
+### max
+
+```rust
+pub fn max<V: OrderedType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<V::Compared>>
+```
+
+The greatest value, as `min` gives the least.
+
+### avg
+
+```rust
+pub fn avg<V: NumberType>(&self, query: &Query, field: impl Into<PathOf<T, V>>) -> Result<Option<f64>>
+```
+
+The mean of `field` over the objects `query` finds, or `None` when there are no values.
+
 ### iter
 
 ```rust

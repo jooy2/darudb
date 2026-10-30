@@ -89,7 +89,7 @@ Implements [`CollectionType`](../../types/rust/collection-type.md) for a struct 
 - **The collection** is named after the struct, as written, unless `#[darudb(collection = "name")]` on the struct names it.
 - **The primary key** is the field marked `#[darudb(key)]`, of type `i64`, `String` or `Vec<u8>`. Without one, the collection is keyed by an auto-increment, and the struct needs a field `id: Option<i64>`: `None` until the object is inserted, which assigns the next number.
 - **The fields** are declared in the struct's order, each with the type its Rust type gives: see [`FieldType`](../../types/rust/field-type.md). An `Option` is an optional field, and anything else is required.
-- **A constant for each field** is declared on the struct, named after the field in capitals and with the field's visibility: `User::AGE` for a field `age`, a [`FieldOf`](../../types/rust/field-of.md) that [`TypedWriter::set`](./typed-writer.md#set) takes to set that one field. A constant of the same name declared by hand on the struct does not compile beside it.
+- **A constant for each field** is declared on the struct, named after the field in capitals and with the field's visibility: `User::AGE` for a field `age`, a [`FieldOf`](../../types/rust/field-of.md) with the field's name in the collection. [`TypedWriter::set`](./typed-writer.md#set) takes it to set that one field, and its methods make the conditions of a query, such as `User::AGE.ge(18)`. A constant of the same name declared by hand on the struct does not compile beside it.
 
 ## Embedded
 
@@ -97,7 +97,7 @@ Implements [`CollectionType`](../../types/rust/collection-type.md) for a struct 
 #[proc_macro_derive(Embedded, attributes(darudb))]
 ```
 
-Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype) and [`FieldType`](../../types/rust/field-type.md) for a struct with named fields, so that a field of an object, or of another embedded object, can hold it. [`Embedded::of`](./embedded.md#of) declares its fields. An embedded object has no key, so its fields take neither `key` nor an index.
+Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype) and [`FieldType`](../../types/rust/field-type.md) for a struct with named fields, so that a field of an object, or of another embedded object, can hold it. [`Embedded::of`](./embedded.md#of) declares its fields. An embedded object has no key, so its fields take neither `key` nor an index. It declares a constant for each field as `Object` does, which a path from the field holding the embedded object goes on to: `User::HOME.then(Address::CITY)`.
 
 ## Field attributes
 

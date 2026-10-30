@@ -121,15 +121,15 @@ pub fn filter(mut self, filter: Filter) -> Self
 ### sort_by
 
 ```rust
-pub fn sort_by(mut self, field: &str) -> Self
+pub fn sort_by(mut self, field: impl IntoPath) -> Self
 ```
 
-`field`로 오름차순 정렬합니다. `field`는 이름이나 경로이고, 앞서 준 정렬이 있으면 그 뒤에 붙습니다. null은 맨 앞에 오고, 문자열은 바이트 순서로 비교합니다. 목록처럼 값을 여러 개 가진 필드로는 정렬할 수 없으며, 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다.
+`field`로 오름차순 정렬합니다. `field`는 이름이나 경로이고, 앞서 준 정렬이 있으면 그 뒤에 붙습니다. `sort_by(User::AGE)`처럼 [`FieldOf`](../../types/rust/field-of.md) 상수나 `PathOf`로 타입을 거쳐 가리켜도 됩니다. null은 맨 앞에 오고, 문자열은 바이트 순서로 비교합니다. 목록처럼 값을 여러 개 가진 필드로는 정렬할 수 없으며, 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다.
 
 ### sort_by_desc
 
 ```rust
-pub fn sort_by_desc(mut self, field: &str) -> Self
+pub fn sort_by_desc(mut self, field: impl IntoPath) -> Self
 ```
 
 `field`로 내림차순 정렬하고, 앞서 준 정렬이 있으면 그 뒤에 붙습니다. null은 맨 뒤에 옵니다.

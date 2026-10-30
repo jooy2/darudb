@@ -121,15 +121,15 @@ Keeps only the objects that meet `filter`, and those of any filter given before:
 ### sort_by
 
 ```rust
-pub fn sort_by(mut self, field: &str) -> Self
+pub fn sort_by(mut self, field: impl IntoPath) -> Self
 ```
 
-Sorts by `field`, a name or a path, in ascending order, after any sort given before. Null sorts first, and strings compare by their bytes. A field that holds several values, such as a list, cannot be sorted by: the query fails with `INVALID_QUERY` when it runs.
+Sorts by `field`, a name or a path, in ascending order, after any sort given before. A [`FieldOf`](../../types/rust/field-of.md) constant or a `PathOf` names it through a type: `sort_by(User::AGE)`. Null sorts first, and strings compare by their bytes. A field that holds several values, such as a list, cannot be sorted by: the query fails with `INVALID_QUERY` when it runs.
 
 ### sort_by_desc
 
 ```rust
-pub fn sort_by_desc(mut self, field: &str) -> Self
+pub fn sort_by_desc(mut self, field: impl IntoPath) -> Self
 ```
 
 Sorts by `field` in descending order, after any sort given before. Null sorts last.
