@@ -34,12 +34,38 @@ const int _maxFilterDepth = 24;
 /// A condition of a query's filter. Combine conditions with `&` (both hold),
 /// `|` (either holds) and `~` (it does not hold).
 final class Condition {
-  const Condition._(this._op, this._path, this._values, this._terms);
+  const Condition._(
+    this._op,
+    this._path,
+    this._values,
+    this._terms, [
+    this._ignoreCase = false,
+  ]);
 
   final int _op;
   final List<String> _path;
   final List<Object?> _values;
   final List<Condition> _terms;
+
+  /// Whether the test compares strings ignoring case.
+  final bool _ignoreCase;
+
+  /// This condition, with every test in it of `equals`, `notEquals`,
+  /// `isIn`, `contains`, `startsWith` and `endsWith` comparing strings
+  /// ignoring case, by Unicode's simple case folding. Such a test of a field
+  /// that holds no strings fails with `INVALID_QUERY` when the query runs.
+  Condition ignoreCase() => switch (_op) {
+    _and || _or || _not => Condition._(_op, _path, _values, [
+      for (final term in _terms) term.ignoreCase(),
+    ]),
+    _equal ||
+    _notEqual ||
+    _in ||
+    _contains ||
+    _startsWith ||
+    _endsWith => Condition._(_op, _path, _values, _terms, true),
+    _ => this,
+  };
 
   /// Holds when both hold.
   Condition operator &(Condition other) =>
@@ -59,8 +85,12 @@ final class Condition {
   Condition operator ~() => Condition._(_not, const [], const [], [this]);
 }
 
-Condition _test(int op, List<String> path, [List<Object?> values = const []]) =>
-    Condition._(op, path, values, const []);
+Condition _test(
+  int op,
+  List<String> path, [
+  List<Object?> values = const [],
+  bool ignoreCase = false,
+]) => Condition._(op, path, values, const [], ignoreCase);
 
 /// A change of one field, for `update`, which [ValueField.set] and the
 /// `set` of other fields make.
@@ -169,7 +199,8 @@ final class FloatField extends OrderedField<double> {
     ..float(value);
 }
 
-/// A `String` field. Strings compare by their UTF-8 bytes.
+/// A `String` field. Strings compare by their UTF-8 bytes, or, with
+/// `ignoreCase`, by Unicode's simple case folding.
 final class StringField extends OrderedField<String> {
   const StringField(super.path);
 
@@ -178,14 +209,32 @@ final class StringField extends OrderedField<String> {
     ..byte(Tag.string)
     ..string(value);
 
+  /// Holds when the field equals [value], ignoring case with [ignoreCase].
+  @override
+  Condition equals(String value, {bool ignoreCase = false}) =>
+      _test(_equal, path, [value], ignoreCase);
+
+  /// Holds when the field is not null and does not equal [value].
+  @override
+  Condition notEquals(String value, {bool ignoreCase = false}) =>
+      _test(_notEqual, path, [value], ignoreCase);
+
+  /// Holds when the field equals one of [values].
+  @override
+  Condition isIn(List<String> values, {bool ignoreCase = false}) =>
+      _test(_in, path, values, ignoreCase);
+
   /// Holds when the field contains [text].
-  Condition contains(String text) => _test(_contains, path, [text]);
+  Condition contains(String text, {bool ignoreCase = false}) =>
+      _test(_contains, path, [text], ignoreCase);
 
   /// Holds when the field starts with [text].
-  Condition startsWith(String text) => _test(_startsWith, path, [text]);
+  Condition startsWith(String text, {bool ignoreCase = false}) =>
+      _test(_startsWith, path, [text], ignoreCase);
 
   /// Holds when the field ends with [text].
-  Condition endsWith(String text) => _test(_endsWith, path, [text]);
+  Condition endsWith(String text, {bool ignoreCase = false}) =>
+      _test(_endsWith, path, [text], ignoreCase);
 }
 
 /// A `Uint8List` field.
@@ -234,15 +283,27 @@ base class ListField<E extends Object> extends Field {
 }
 
 /// A list of strings, whose elements can also be tested for how they start
-/// and end.
+/// and end, and compared ignoring case.
 final class StringListField extends ListField<String> {
   const StringListField(super.path);
 
+  /// Holds when the list has an element equal to [value].
+  @override
+  Condition contains(String value, {bool ignoreCase = false}) =>
+      _test(_contains, path, [value], ignoreCase);
+
+  /// Holds when an element equals one of [values].
+  @override
+  Condition containsAny(List<String> values, {bool ignoreCase = false}) =>
+      _test(_in, path, values, ignoreCase);
+
   /// Holds when an element starts with [text].
-  Condition anyStartsWith(String text) => _test(_startsWith, path, [text]);
+  Condition anyStartsWith(String text, {bool ignoreCase = false}) =>
+      _test(_startsWith, path, [text], ignoreCase);
 
   /// Holds when an element ends with [text].
-  Condition anyEndsWith(String text) => _test(_endsWith, path, [text]);
+  Condition anyEndsWith(String text, {bool ignoreCase = false}) =>
+      _test(_endsWith, path, [text], ignoreCase);
 }
 
 /// A link field: the key of the object linked to, compared as such. The
@@ -464,7 +525,7 @@ void _writeExpression(Writer writer, Condition node, int depth) {
     final values = node._values;
 
     writer
-      ..varint(values.isEmpty ? 2 : 3)
+      ..varint(2 + (values.isEmpty ? 0 : 1) + (node._ignoreCase ? 1 : 0))
       ..varint(1)
       ..byte(Tag.int64)
       ..int64(node._op)
@@ -480,6 +541,13 @@ void _writeExpression(Writer writer, Condition node, int depth) {
       for (final value in values) {
         writeQueryValue(writer, value);
       }
+    }
+
+    // Field 5, after the values: the test ignores case.
+    if (node._ignoreCase) {
+      writer
+        ..varint(5)
+        ..byte(Tag.trueValue);
     }
   }
 

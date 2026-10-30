@@ -91,6 +91,60 @@ void main() {
     });
   });
 
+  test('tests that ignore case', () {
+    db.write((txn) {
+      txn.collection(userSchema).insertMany(const [
+        User(name: 'Ada', email: 'ada@example.com', tags: ['Math']),
+        User(name: 'GRACE', tags: ['navy']),
+        User(
+          name: 'σοφία',
+          address: Address(city: 'ATHENS'),
+        ),
+      ]);
+    });
+
+    db.read((txn) {
+      final users = txn.collection(userSchema);
+      List<String> names(QueryBuilder<User> Function(UserQuery q) query) => [
+        for (final user in users.find(query)) user.name,
+      ];
+
+      expect(names((q) => q.where(q.name.equals('ada'))), isEmpty);
+      expect(names((q) => q.where(q.name.equals('ada', ignoreCase: true))), [
+        'Ada',
+      ]);
+      expect(
+        names((q) => q.where(q.name.isIn(['grace', 'X'], ignoreCase: true))),
+        ['GRACE'],
+      );
+      expect(
+        names((q) => q.where(q.name.startsWith('ΣΟΦ', ignoreCase: true))),
+        ['σοφία'],
+      );
+      expect(names((q) => q.where(q.tags.contains('MATH', ignoreCase: true))), [
+        'Ada',
+      ]);
+      expect(
+        names(
+          (q) => q.where(
+            (q.name.endsWith('CE') | q.address.city.equals('athens'))
+                .ignoreCase(),
+          ),
+        ),
+        ['GRACE', 'σοφία'],
+      );
+      expect(users.countText('email == "ADA@EXAMPLE.COM" IGNORE CASE'), 1);
+      expect(
+        () => users.find(
+          (q) => q.where((q.age.equals(3) & q.name.equals('x')).ignoreCase()),
+        ),
+        throwsA(
+          isA<DaruException>().having((e) => e.code, 'code', 'INVALID_QUERY'),
+        ),
+      );
+    });
+  });
+
   test('aggregates work out one value from a field', () {
     db.write((txn) {
       txn.collection(userSchema).insertMany([
