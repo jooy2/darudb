@@ -171,7 +171,12 @@ function checkedParameters(parameters: unknown): readonly unknown[] {
   }
 
   for (const parameter of parameters) {
-    if (parameter !== null && parameter !== undefined && !isScalar(parameter)) {
+    if (
+      parameter !== null &&
+      parameter !== undefined &&
+      !isScalar(parameter) &&
+      !(parameter instanceof Date)
+    ) {
       throw codeError(
         'INVALID_QUERY',
         `a query's parameter is a single value, not ${typeof parameter}`

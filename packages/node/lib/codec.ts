@@ -26,6 +26,15 @@ const BYTES = 0x07;
 const LIST = 0x08;
 const OBJECT = 0x09;
 const LINK = 0x0a;
+/** A date: microseconds since the Unix epoch, as an int's payload. */
+const DATE = 0x0b;
+
+/**
+ * The object format a declared schema is written in: the newest, which reads
+ * every declaration. The engine stores the file's schema in the lowest
+ * format that holds it, whatever this says.
+ */
+const OBJECT_FORMAT = 2;
 
 /** How deeply a record read from the engine may nest, as the engine allows. */
 const MAX_DEPTH = 64;
@@ -47,7 +56,8 @@ const KIND_CODES = {
   bytes: 5,
   link: 6,
   list: 7,
-  object: 8
+  object: 8,
+  date: 9
 };
 // `Object.entries` types the names as strings and `fromEntries` the keys;
 // these are the names of `KIND_CODES` by their codes.
@@ -72,7 +82,8 @@ export type Kind =
   | { type: 'bytes' }
   | LinkKind
   | { type: 'list'; element: Kind }
-  | { type: 'object'; fields: Layout };
+  | { type: 'object'; fields: Layout }
+  | { type: 'date' };
 
 /**
  * An int kind. `big` marks a field declared with `t.bigint()`, which reads a
@@ -172,7 +183,8 @@ export type Tagged =
   | { tag: 'bytes'; value: Uint8Array }
   | { tag: 'list'; value: Tagged[] }
   | { tag: 'object'; value: AnyRecord }
-  | { tag: 'link'; value: Tagged };
+  | { tag: 'link'; value: Tagged }
+  | { tag: 'date'; value: Date };
 
 /** A record read with `readAny`: its values by field id. */
 export type AnyRecord = Map<number | bigint, Tagged>;
@@ -213,6 +225,44 @@ function describe(value: unknown): string {
   }
 
   return typeof value === 'object' ? 'an object' : `${typeof value} ${String(value)}`;
+}
+
+/** The most milliseconds from 1970 a `Date` holds, either way. */
+const MAX_DATE_MS = 8.64e15;
+
+/**
+ * The microseconds from 1970 of `date`, a `Date` that holds a time: a number
+ * while it is exact, and a `bigint` beyond. `where` names the value in an
+ * error.
+ */
+function microsOf(date: Date, where: string): number | bigint {
+  const ms = date.getTime();
+
+  if (Number.isNaN(ms)) {
+    throw invalid(`\`${where}\` holds an invalid \`Date\``);
+  }
+
+  const micros = ms * 1000;
+
+  return Number.isSafeInteger(micros) ? micros : BigInt(ms) * 1000n;
+}
+
+/**
+ * The `Date` of a date read from the engine, `micros` from 1970, rounded down
+ * to the millisecond, which is what a `Date` holds. A date beyond what a
+ * `Date` holds is refused.
+ */
+function dateOf(micros: number | bigint): Date {
+  const ms =
+    typeof micros === 'number'
+      ? Math.floor(micros / 1000)
+      : Number(micros / 1000n - (micros % 1000n < 0n ? 1n : 0n));
+
+  if (!(Math.abs(ms) <= MAX_DATE_MS)) {
+    throw invalid(`a date ${micros} microseconds from 1970 is beyond what a \`Date\` holds`);
+  }
+
+  return new Date(ms);
 }
 
 /** A growing buffer that records and IR are written into. */
@@ -660,6 +710,15 @@ function writeValue(writer: Writer, kind: Kind, value: unknown, where: string): 
       writer.bytesOf(value);
 
       return;
+    case 'date':
+      if (!(value instanceof Date)) {
+        throw invalid(`\`${where}\` holds a date, not ${describe(value)}`);
+      }
+
+      writer.byte(DATE);
+      writer.int(microsOf(value, where));
+
+      return;
     case 'link':
       writer.byte(LINK);
       writeValue(writer, kind.target.key.kind, value, where);
@@ -1095,6 +1154,7 @@ function skipValue(reader: Reader, depth: number): void {
     case TRUE:
       return;
     case INT:
+    case DATE:
       reader.varint();
 
       return;
@@ -1182,6 +1242,12 @@ function readValue(reader: Reader, kind: Kind, depth: number): unknown {
       }
 
       break;
+    case 'date':
+      if (tag === DATE) {
+        return dateOf(reader.int());
+      }
+
+      break;
     case 'link':
       if (tag === LINK) {
         // A link holds a key, which may be a `bigint`.
@@ -1236,6 +1302,10 @@ function defaultOf(field: FieldLayout): unknown {
 
   if (Array.isArray(value)) {
     return value.slice();
+  }
+
+  if (value instanceof Date) {
+    return new Date(value.getTime());
   }
 
   return value instanceof Uint8Array ? value.slice() : value;
@@ -1595,6 +1665,8 @@ function readAny(reader: Reader, depth: number): Tagged {
       return { tag: 'string', value: reader.string() };
     case BYTES:
       return { tag: 'bytes', value: reader.bytesValue() };
+    case DATE:
+      return { tag: 'date', value: dateOf(reader.int()) };
     case LIST: {
       const count = reader.count();
       const values: Tagged[] = [];
@@ -2014,7 +2086,7 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
   writeEntries(
     writer,
     [
-      [1, 'int', 1],
+      [1, 'int', OBJECT_FORMAT],
       [2, 'int', declared.version],
       [
         3,
@@ -2136,6 +2208,13 @@ function writeQueryValue(writer: Writer, value: unknown): void {
   } else if (value instanceof Uint8Array) {
     writer.byte(BYTES);
     writer.bytesOf(value);
+  } else if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      throw codeError('INVALID_QUERY', 'a query compares with an invalid `Date`');
+    }
+
+    writer.byte(DATE);
+    writer.int(microsOf(value, 'a date'));
   } else {
     throw codeError('INVALID_QUERY', `a query compares with single values, not ${describe(value)}`);
   }

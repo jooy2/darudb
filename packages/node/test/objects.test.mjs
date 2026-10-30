@@ -1242,3 +1242,71 @@ describe('what a review found', () => {
     db.write(() => {});
   });
 });
+
+describe('dates', () => {
+  const events = collection({
+    name: t.string(),
+    at: t.date().index(),
+    seen: t.list(t.date()).default([]),
+    due: t.date().default(new Date(0))
+  });
+  const dated = schema(1, { events });
+
+  it('are written and read as `Date`s, and queried in their order', (context) => {
+    const db = Database.open(tempPath(context), { schema: dated });
+
+    context.after(() => db.close());
+
+    const launch = new Date('2026-10-30T12:00:00.123Z');
+    const before = new Date(-1);
+    const ancient = new Date('0001-01-01T00:00:00Z');
+
+    db.write((txn) => {
+      const all = txn.collection('events');
+
+      all.insertMany([
+        { name: 'launch', at: launch, seen: [launch, before] },
+        { name: 'before', at: before },
+        { name: 'ancient', at: ancient }
+      ]);
+
+      assertCode(() => all.insert({ name: 'number', at: 0 }), 'INVALID_ARGUMENT');
+      assertCode(
+        () => all.insert({ name: 'invalid', at: new Date(Number.NaN) }),
+        'INVALID_ARGUMENT'
+      );
+    });
+
+    db.read((txn) => {
+      const all = txn.collection('events');
+      const names = (found) => found.map((event) => event.name);
+      const first = all.get(1);
+
+      assert.ok(first.at instanceof Date);
+      assert.equal(first.at.getTime(), launch.getTime());
+      assert.deepEqual(
+        first.seen.map((date) => date.getTime()),
+        [launch.getTime(), -1]
+      );
+      assert.equal(all.get(2).due.getTime(), 0);
+      assert.notEqual(all.get(2).due, all.get(3).due, 'each object gets a default of its own');
+      assert.deepEqual(names(all.find((q) => q.sortBy('at'))), ['ancient', 'before', 'launch']);
+      assert.deepEqual(names(all.find((q) => q.where('at', '<', new Date(0)))), [
+        'before',
+        'ancient'
+      ]);
+      assert.deepEqual(names(all.find('at >= DATE "2026-10-30T21:00:00+09:00"')), ['launch']);
+      assert.deepEqual(names(all.find('at < $0', [new Date(0)])), ['before', 'ancient']);
+      assert.deepEqual(names(all.find((q) => q.where('seen', 'contains', before))), ['launch']);
+      assert.equal(all.min('at').getTime(), ancient.getTime());
+      assert.equal(all.max('at', 'at < $0', [launch]).getTime(), -1);
+      assertCode(() => all.find((q) => q.where('at', '>', 0)), 'INVALID_QUERY');
+      assertCode(() => all.sum('at'), 'INVALID_QUERY');
+    });
+
+    assert.deepEqual(
+      db.storedSchema.collections.find((each) => each.name === 'events').fields[1].type,
+      { kind: 'date' }
+    );
+  });
+});

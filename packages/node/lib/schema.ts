@@ -20,6 +20,7 @@ export type Spec = (
   | { type: 'link'; target: string }
   | { type: 'list'; element: Spec }
   | { type: 'object'; fields: DeclaredFields }
+  | { type: 'date' }
 ) & {
   optional?: boolean;
   default?: unknown;
@@ -127,6 +128,8 @@ const t = Object.freeze({
   float: () => new FieldType({ type: 'float' }),
   string: () => new FieldType({ type: 'string' }),
   bytes: () => new FieldType({ type: 'bytes' }),
+  /** An instant, read and written as a `Date`, kept to the microsecond. */
+  date: () => new FieldType({ type: 'date' }),
   /** The primary key of an object of collection `collection`. */
   link: (collection: string) => new FieldType({ type: 'link', target: collection }),
   /** A list of values of `element`, a scalar type or a link. */

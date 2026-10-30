@@ -139,6 +139,11 @@ export interface TypeBuilders {
   float(): FieldType<number>;
   string(): KeyableType<string>;
   bytes(): KeyableType<Uint8Array>;
+  /**
+   * An instant, written as a `Date` and read as one in UTC. The file keeps it
+   * to the microsecond, and a `Date` holds milliseconds.
+   */
+  date(): FieldType<Date>;
   /** The primary key of an object of collection `collection`. */
   link(collection: string): LinkType;
   /** A list of values of `element`, a type without modifiers. */
@@ -168,7 +173,7 @@ type FieldsOf<S, N extends NameOf<S>> =
   CollectionsOf<S>[N] extends Collection<infer F> ? F : Fields;
 
 /** A value a query compares with. */
-export type QueryValue = boolean | number | bigint | string | Uint8Array;
+export type QueryValue = boolean | number | bigint | string | Uint8Array | Date;
 
 /**
  * A parameter in place of a value, in a query that `Database.prepare`
@@ -376,7 +381,7 @@ export type NumberFields<O> = {
 
 /** The fields of `O` holding values a least or a greatest value reads. */
 export type OrderedFields<O> = {
-  [K in FieldNames<O>]-?: NonNullable<O[K]> extends number | bigint | string | Uint8Array
+  [K in FieldNames<O>]-?: NonNullable<O[K]> extends number | bigint | string | Uint8Array | Date
     ? K
     : never;
 }[FieldNames<O>];
@@ -850,7 +855,7 @@ export interface Database<S extends Schema<any> = Schema> {
 
 /** A field's type, as `StoredField` gives it. */
 export type StoredType =
-  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' }
+  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' | 'date' }
   /** A link to an object of `collection`: its primary key. */
   | { readonly kind: 'link'; readonly collection: string }
   /** A list of values of `element`, a scalar type or a link. */

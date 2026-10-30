@@ -18,7 +18,8 @@ const app = schema(1, {
     friends: t.list(t.link('users')).optional(),
     address: t.object({ city: t.string(), zip: t.int().optional() }).optional(),
     visits: t.bigint().default(0n)
-  })
+  }),
+  events: collection({ at: t.date().index(), ends: t.date().optional() })
 });
 
 // What the engine refuses in a declaration is refused here too.
@@ -161,6 +162,26 @@ db.read((txn) => {
   users.sum('age', (q) => q, [1]);
 
   return [total, visitsTotal, youngest, lastName, mean, zip, deepest];
+});
+
+// A date field reads and writes a `Date`, and a query compares it with one.
+db.write((txn) => {
+  const events = txn.collection('events');
+
+  events.insert({ at: new Date(), ends: null });
+
+  const found = events.find((q) => q.where('at', '>=', new Date(0)).sortBy('at'));
+  const at: Date = found[0].at;
+  const ends: Date | null = found[0].ends;
+  const first: Date | null = events.min('at');
+  const last: Date | null = events.max('ends', 'at < $0', [new Date()]);
+
+  // @ts-expect-error a date field takes a `Date`, not a number.
+  events.insert({ at: 0 });
+  // @ts-expect-error a sum reads numbers.
+  events.sum('at');
+
+  return [at, ends, first, last];
 });
 
 // A change of the objects a query finds takes the query, in any form.
