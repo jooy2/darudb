@@ -170,3 +170,11 @@ fn not(self) -> Filter
 ```
 
 조건이 맞지 않습니다. `Not` 연산자의 구현이므로 `!filter`로 씁니다.
+
+### ignore_case
+
+```rust
+pub fn ignore_case(self) -> Self
+```
+
+필터 안의 `eq`, `ne`, `is_in`, `contains`, `starts_with`, `ends_with` 조건이 모두 Unicode의 단순 대소문자 접기로 대소문자를 무시하고 문자열을 비교하게 바꾼 필터를 돌려줍니다. 다른 조건은 그대로 둡니다. `Filter::eq("name", "ada").ignore_case()`는 `Ada`와 `ADA`를 찾습니다. 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#대소문자-무시하기)의 `IGNORE CASE`와 같으며, 인덱스는 이 조건에 답하지 않습니다.

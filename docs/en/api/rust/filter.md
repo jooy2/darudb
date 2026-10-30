@@ -170,3 +170,11 @@ fn not(self) -> Filter
 ```
 
 The condition does not hold. It is the `Not` operator, so it is written `!filter`.
+
+### ignore_case
+
+```rust
+pub fn ignore_case(self) -> Self
+```
+
+This filter with every test of `eq`, `ne`, `is_in`, `contains`, `starts_with` and `ends_with` in it comparing strings ignoring case, by Unicode's simple case folding; the other tests stay as they are. `Filter::eq("name", "ada").ignore_case()` finds `Ada` and `ADA`. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.

@@ -196,6 +196,65 @@ A comparison of `F.field` with a value is a condition, and so are its methods.
 
 :::
 
+## Ignore case
+
+A test of equality or of text can compare strings without regard to case, by Unicode's simple case folding, as `IGNORE CASE` does in the [query language](./query-language.md#ignore-case): `==`, `!=`, `in`, `contains`, `startsWith` and `endsWith`, on a string field or a list of strings.
+
+::: lang rust
+
+`ignore_case` makes every such test in a filter ignore case, and leaves the others as they are.
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let named = Filter::eq("name", "ada").ignore_case();
+    let either = Filter::starts_with("name", "A")
+        .or(Filter::contains("tags", "ADMIN"))
+        .ignore_case();
+    let _ = (named, either);
+}
+```
+
+:::
+
+::: lang node
+
+`where` takes `{ ignoreCase: true }` after the value, and `conditions.ignoreCase` makes every such test in a condition ignore case.
+
+```ts
+users.find((q) => q.where('name', '==', 'ada', { ignoreCase: true }));
+users.find((q) =>
+  q.where((c) => c.ignoreCase(c.or(c.startsWith('name', 'A'), c.contains('tags', 'ADMIN'))))
+);
+```
+
+:::
+
+::: lang dart
+
+A string field's `equals`, `notEquals`, `isIn`, `contains`, `startsWith` and `endsWith`, and a list of strings' `contains`, `containsAny`, `anyStartsWith` and `anyEndsWith`, take `ignoreCase: true`. `Condition.ignoreCase()` makes every such test in a condition ignore case.
+
+```dart
+users.find((q) => q.where(q.name.equals('ada', ignoreCase: true)));
+users.find((q) => q.where((q.name.startsWith('A') | q.tags.contains('ADMIN')).ignoreCase()));
+```
+
+:::
+
+::: lang python
+
+`ignore_case()` makes every such test in a condition ignore case.
+
+```python
+users.find((F.name == "ada").ignore_case())
+users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
+```
+
+:::
+
+`ß` matches `ẞ` but not `ss`, since folding keeps one character for one. A test that ignores case on a field holding no strings fails with `INVALID_QUERY`. No index answers it, so the objects it tests are read.
+
 ## Combine conditions
 
 ::: lang rust

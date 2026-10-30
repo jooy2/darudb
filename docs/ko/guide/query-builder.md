@@ -196,6 +196,65 @@ with db.read() as txn:
 
 :::
 
+## 대소문자 무시하기
+
+같음이나 텍스트를 검사하는 조건은 [쿼리 언어](./query-language.md#대소문자-무시하기)의 `IGNORE CASE`처럼 Unicode의 단순 대소문자 접기로 대소문자와 상관없이 문자열을 비교할 수 있습니다. 문자열 필드나 문자열 목록에 쓰는 `==`, `!=`, `in`, `contains`, `startsWith`, `endsWith`가 대상입니다.
+
+::: lang rust
+
+`ignore_case`는 필터 안의 그런 조건을 모두 대소문자를 무시하게 바꾸고, 나머지는 그대로 둡니다.
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let named = Filter::eq("name", "ada").ignore_case();
+    let either = Filter::starts_with("name", "A")
+        .or(Filter::contains("tags", "ADMIN"))
+        .ignore_case();
+    let _ = (named, either);
+}
+```
+
+:::
+
+::: lang node
+
+`where`는 값 뒤에 `{ ignoreCase: true }`를 받고, `conditions.ignoreCase`는 조건 안의 그런 검사를 모두 대소문자를 무시하게 바꿉니다.
+
+```ts
+users.find((q) => q.where('name', '==', 'ada', { ignoreCase: true }));
+users.find((q) =>
+  q.where((c) => c.ignoreCase(c.or(c.startsWith('name', 'A'), c.contains('tags', 'ADMIN'))))
+);
+```
+
+:::
+
+::: lang dart
+
+문자열 필드의 `equals`, `notEquals`, `isIn`, `contains`, `startsWith`, `endsWith`와, 문자열 목록의 `contains`, `containsAny`, `anyStartsWith`, `anyEndsWith`는 `ignoreCase: true`를 받습니다. `Condition.ignoreCase()`는 조건 안의 그런 검사를 모두 대소문자를 무시하게 바꿉니다.
+
+```dart
+users.find((q) => q.where(q.name.equals('ada', ignoreCase: true)));
+users.find((q) => q.where((q.name.startsWith('A') | q.tags.contains('ADMIN')).ignoreCase()));
+```
+
+:::
+
+::: lang python
+
+`ignore_case()`는 조건 안의 그런 검사를 모두 대소문자를 무시하게 바꿉니다.
+
+```python
+users.find((F.name == "ada").ignore_case())
+users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
+```
+
+:::
+
+접기는 한 글자를 한 글자로 바꾸므로 `ß`는 `ẞ`와 맞지만 `ss`와는 맞지 않습니다. 문자열을 담지 않은 필드에서 대소문자를 무시하면 `INVALID_QUERY`로 실패합니다. 인덱스는 이런 조건에 답하지 않으므로, 검사할 객체를 읽습니다.
+
 ## 조건 묶기
 
 ::: lang rust

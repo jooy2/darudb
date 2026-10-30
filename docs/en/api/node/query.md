@@ -78,6 +78,7 @@ Keeps the objects that meet a condition, and every condition given to `where` be
 - **A field, an operator and a value.** The operators are the [Comparison](../../types/node/query-input.md) operators `==`, `!=`, `<`, `<=`, `>` and `>=`, then `between` with a pair `[low, high]`, `in` with an array, and `contains`, `startsWith` and `endsWith`. `== null` tests that the field is null, and `!= null` that it is not.
 - **A dotted path** in place of the field, through an embedded object or a link, such as `address.city` or `team.city`. TypeScript does not check it; the engine does.
 - **A condition** from [conditions](./conditions.md), or a function that receives the conditions typed for the collection and returns one. This is the form for `or`, `not`, `isNull` and nested groups.
+- **Options** after the value: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.
 
 An operator that is not one of these, or a `between` without a pair, fails with `INVALID_QUERY`.
 

@@ -140,7 +140,7 @@ TinyDB 쿼리(여기서는 `User = Query()`, `Post = Query()`)는 쓰던 모양 
 | `table.get(doc_id=7)`                 | `get(7)`                  |                         |
 | `table.count(q)`                      | `count(q)`                | 같은 쿼리로 `count`     |
 
-- `matches`와 `search`는 정규식을 받는데, 정규식에는 대응하는 것이 없습니다. 흔한 경우는 `STARTSWITH`, `ENDSWITH`, `CONTAINS`로 됩니다. 대소문자를 가리지 않고 찾으려면 필드를 소문자로 바꾼 사본을 두고 그것으로 쿼리하세요.
+- `matches`와 `search`는 정규식을 받는데, 정규식에는 대응하는 것이 없습니다. 흔한 경우는 `STARTSWITH`, `ENDSWITH`, `CONTAINS`로 됩니다. 대소문자를 가리지 않으려면 `F.name.contains("li").ignore_case()`처럼 `ignore_case()`를 붙이며, `==`에도 됩니다.
 - TinyDB에서는 `search`가 돌려준 목록을 애플리케이션이 정렬했지만, DaruDB에서는 `where(F.age >= 18).sort_by(F.age, descending=True).limit(10)`처럼 엔진이 정렬하고 개수를 자릅니다.
 - 링크를 거치는 조건은 링크된 객체를 읽습니다. `posts`에서 `F.author.name == "Alice"`처럼 씁니다.
 

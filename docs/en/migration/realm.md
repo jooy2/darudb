@@ -463,7 +463,7 @@ The query language is close to the Realm Query Language that `filtered` takes:
 | `author.name == 'Alice'`                 | `author.name == "Alice"`                  |
 | `TRUEPREDICATE SORT(age DESC) LIMIT(10)` | `SORT BY age DESC LIMIT 10`               |
 
-- There is no case-insensitive comparison, the `[c]` of `CONTAINS[c]`: keep a lowercased copy of the field and query that. `LIKE` with wildcards has no counterpart either.
+- The `[c]` of `CONTAINS[c]` is `IGNORE CASE` after the condition: `name CONTAINS "li" IGNORE CASE`. `LIKE` with wildcards has no counterpart.
 - The aggregates `@sum`, `@min`, `@max` and `@avg` of a field become `sum`, `min`, `max` and `avg` on the collection, with the query, and `@count` becomes `count`. An aggregate inside a filter, such as `items.@sum.price > 10`, has no counterpart.
 - A backlink becomes a query on the link field: the posts of a user are `author == $0` on `posts`, with the user's key.
 

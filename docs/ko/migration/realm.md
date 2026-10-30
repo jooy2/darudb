@@ -463,7 +463,7 @@ final db = await Database.openAsync(path, schema: app);
 | `author.name == 'Alice'`                 | `author.name == "Alice"`                    |
 | `TRUEPREDICATE SORT(age DESC) LIMIT(10)` | `SORT BY age DESC LIMIT 10`                 |
 
-- `CONTAINS[c]`의 `[c]`처럼 대소문자를 가리지 않는 비교는 없습니다. 필드를 소문자로 바꾼 사본을 두고 그 필드로 찾으세요. 와일드카드를 쓰는 `LIKE`에도 대응하는 것이 없습니다.
+- `CONTAINS[c]`의 `[c]`는 조건 뒤의 `IGNORE CASE`가 됩니다. `name CONTAINS "li" IGNORE CASE`처럼 씁니다. 와일드카드를 쓰는 `LIKE`에는 대응하는 것이 없습니다.
 - 필드의 집계 `@sum`, `@min`, `@max`, `@avg`는 쿼리와 함께 컬렉션의 `sum`, `min`, `max`, `avg`가 되고, `@count`는 `count`가 됩니다. `items.@sum.price > 10`처럼 필터 안에서 쓰는 집계에는 대응하는 것이 없습니다.
 - 백링크는 링크 필드로 하는 쿼리가 됩니다. 사용자의 글은 `posts`에서 사용자의 키로 `author == $0`을 찾으면 됩니다.
 

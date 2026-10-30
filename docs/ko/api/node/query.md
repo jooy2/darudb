@@ -78,6 +78,7 @@ where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<
 - **필드, 연산자, 값.** 연산자는 [Comparison](../../types/node/query-input.md)에 있는 `==`, `!=`, `<`, `<=`, `>`, `>=`와, 쌍 `[low, high]`를 받는 `between`, 배열을 받는 `in`, 그리고 `contains`, `startsWith`, `endsWith`입니다. `== null`은 필드가 null인지, `!= null`은 null이 아닌지 검사합니다.
 - **점으로 이은 경로.** 필드 대신 `address.city`나 `team.city`처럼 내장 객체나 링크를 지나는 경로를 씁니다. TypeScript는 경로를 검사하지 않고 엔진이 검사합니다.
 - **조건.** [conditions](./conditions.md)로 만든 조건이나, 컬렉션에 맞게 타입이 정해진 조건을 받아 조건 하나를 돌려주는 함수입니다. `or`, `not`, `isNull`, 중첩된 묶음은 이 형태로 씁니다.
+- **옵션**은 값 뒤에 줍니다. `{ ignoreCase: true }`를 주면 `==`, `!=`, `in`, `contains`, `startsWith`, `endsWith` 검사가 [`conditions.ignoreCase`](./conditions.md#ignorecase)처럼 대소문자를 무시하고 문자열을 비교합니다.
 
 이 밖의 연산자나 쌍이 아닌 `between` 값은 `INVALID_QUERY`로 실패합니다.
 

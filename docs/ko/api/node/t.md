@@ -69,7 +69,7 @@ float(): FieldType<number>;
 string(): KeyableType<string>;
 ```
 
-UTF-8로 저장하는 텍스트입니다. 짝이 없는 서로게이트가 든 문자열처럼 UTF-8로 담을 수 없는 문자열은 `INVALID_ARGUMENT`로 거부합니다. 문자열은 UTF-8 바이트 순서로 비교하고 정렬하며, 언어별 정렬 규칙이나 대소문자 무시는 없습니다.
+UTF-8로 저장하는 텍스트입니다. 짝이 없는 서로게이트가 든 문자열처럼 UTF-8로 담을 수 없는 문자열은 `INVALID_ARGUMENT`로 거부합니다. 문자열은 UTF-8 바이트 순서로 비교하고 정렬하며, 언어별 정렬 규칙은 없습니다. 같음이나 텍스트를 검사하는 조건은 [대소문자를 무시](../../guide/query-builder.md#대소문자-무시하기)할 수 있습니다.
 
 ### bytes
 

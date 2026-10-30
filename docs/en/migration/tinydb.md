@@ -140,7 +140,7 @@ A TinyDB query, here with `User = Query()` and `Post = Query()`, becomes a query
 | `table.get(doc_id=7)`                 | `get(7)`                  |                              |
 | `table.count(q)`                      | `count(q)`                | `count`, with the same query |
 
-- `matches` and `search` take regular expressions, which have no counterpart: `STARTSWITH`, `ENDSWITH` and `CONTAINS` cover the common ones, and a case-insensitive search keeps a lowercased copy of the field and queries that.
+- `matches` and `search` take regular expressions, which have no counterpart: `STARTSWITH`, `ENDSWITH` and `CONTAINS` cover the common ones, and `ignore_case()` makes them, or `==`, ignore case: `F.name.contains("li").ignore_case()`.
 - A query sorts and limits in the engine, `where(F.age >= 18).sort_by(F.age, descending=True).limit(10)`, where with TinyDB the application sorted the list `search` returned.
 - A test through a link reads the linked object: `F.author.name == "Alice"` on `posts`.
 

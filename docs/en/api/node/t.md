@@ -69,7 +69,7 @@ A 64-bit floating-point number. `-0` equals `0`, and every NaN equals every othe
 string(): KeyableType<string>;
 ```
 
-Text, stored as UTF-8. A string that UTF-8 cannot hold, such as one with a lone surrogate, is refused with `INVALID_ARGUMENT`. Strings compare and sort by their UTF-8 bytes, with no collation and no case folding.
+Text, stored as UTF-8. A string that UTF-8 cannot hold, such as one with a lone surrogate, is refused with `INVALID_ARGUMENT`. Strings compare and sort by their UTF-8 bytes, with no collation; a test of equality or of text can [ignore case](../../guide/query-builder.md#ignore-case).
 
 ### bytes
 

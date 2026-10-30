@@ -136,7 +136,7 @@ A query crosses as IR, in one buffer: a record of a fixed shape.
 | Field | Name | Value |
 | --- | --- | --- |
 | 1 | collection | `string` |
-| 2 | filter | An expression: an embedded object whose field 1 is the operator, field 2 the path as a list of strings, field 3 the values, and field 4 the sub-expressions |
+| 2 | filter | An expression: an embedded object whose field 1 is the operator, field 2 the path as a list of strings, field 3 the values, field 4 the sub-expressions, and field 5, `true` when a test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` ignores case |
 | 3 | sort | A list of objects, each a path and whether it is descending |
 | 4 | offset | `int` |
 | 5 | limit | `int` |

@@ -183,3 +183,11 @@ not(condition: Condition): Condition;
 ```
 
 `condition` does not hold.
+
+### ignoreCase
+
+```ts
+ignoreCase(condition: Condition): Condition;
+```
+
+`condition` with every test in it of `eq`, `ne`, `in`, `contains`, `startsWith` and `endsWith` comparing strings ignoring case, by Unicode's simple case folding; the other tests stay as they are. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.

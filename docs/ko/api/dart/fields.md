@@ -45,12 +45,15 @@ final class Condition {
   Condition operator &(Condition other);
   Condition operator |(Condition other);
   Condition operator ~();
+  Condition ignoreCase();
 }
 ```
 
 필드 객체의 메서드가 만드는 필터 조건입니다. `a & b`는 둘 다 참일 때, `a | b`는 둘 중 하나가 참일 때, `~a`는 `a`가 거짓일 때 참입니다. Dart에서는 `~`가 가장 강하게 묶이고 `&`가 `|`보다 강하게 묶이므로, `a | b & ~c`는 `a | (b & (~c))`입니다. 다르게 묶으려면 괄호를 씁니다. 조건은 값이므로 여러 쿼리에 함께 넣어도 됩니다.
 
 필터는 24단계까지만 중첩할 수 있고, 넘으면 쿼리가 `INVALID_QUERY`로 실패합니다. `&`가 이어진 것이나 `|`가 이어진 것은 한 단계로 치므로, `~`와 번갈아 묶은 것만 단계를 늘립니다.
+
+`ignoreCase()`는 조건 안의 `equals`, `notEquals`, `isIn`, `contains`, `startsWith`, `endsWith` 검사가 모두 Unicode의 단순 대소문자 접기로 대소문자를 무시하고 문자열을 비교하게 바꾼 조건을 돌려주고, 다른 검사는 그대로 둡니다. 문자열 필드의 같은 이름 메서드와, 문자열 목록의 `contains`, `containsAny`, `anyStartsWith`, `anyEndsWith`도 자기 검사에 `ignoreCase: true`를 받습니다. 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#대소문자-무시하기)의 `IGNORE CASE`와 같으며, 인덱스는 이 검사에 답하지 않습니다.
 
 ## Change
 
@@ -163,7 +166,7 @@ Condition between(V low, V high);
 ### contains
 
 ```dart
-Condition contains(String text);
+Condition contains(String text, {bool ignoreCase = false});
 ```
 
 필드에 `text`가 들어 있을 때 참입니다.
@@ -171,7 +174,7 @@ Condition contains(String text);
 ### startsWith
 
 ```dart
-Condition startsWith(String text);
+Condition startsWith(String text, {bool ignoreCase = false});
 ```
 
 필드가 `text`로 시작할 때 참입니다.
@@ -179,7 +182,7 @@ Condition startsWith(String text);
 ### endsWith
 
 ```dart
-Condition endsWith(String text);
+Condition endsWith(String text, {bool ignoreCase = false});
 ```
 
 필드가 `text`로 끝날 때 참입니다.

@@ -45,12 +45,15 @@ final class Condition {
   Condition operator &(Condition other);
   Condition operator |(Condition other);
   Condition operator ~();
+  Condition ignoreCase();
 }
 ```
 
 A condition of a query's filter, which a field object's method makes. `a & b` holds when both hold, `a | b` when either holds, and `~a` when `a` does not. Dart gives `~` the tightest binding and `&` a tighter one than `|`, so `a | b & ~c` is `a | (b & (~c))`; parentheses make any other grouping. A condition is a value and can go into any number of queries.
 
 A filter nests at most 24 levels deep, or the query fails with `INVALID_QUERY`. A run of `&`, or a run of `|`, is one level, so only `~` and alternating groups count.
+
+`ignoreCase()` returns the condition with every test in it of `equals`, `notEquals`, `isIn`, `contains`, `startsWith` and `endsWith` comparing strings ignoring case, by Unicode's simple case folding, and the other tests as they are. A string field's methods of those names, and a list of strings' `contains`, `containsAny`, `anyStartsWith` and `anyEndsWith`, also take `ignoreCase: true` for their own test. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
 
 ## Change
 
@@ -163,7 +166,7 @@ Holds when the field is from `low` to `high`, both included.
 ### contains
 
 ```dart
-Condition contains(String text);
+Condition contains(String text, {bool ignoreCase = false});
 ```
 
 Holds when the field contains `text`.
@@ -171,7 +174,7 @@ Holds when the field contains `text`.
 ### startsWith
 
 ```dart
-Condition startsWith(String text);
+Condition startsWith(String text, {bool ignoreCase = false});
 ```
 
 Holds when the field starts with `text`.
@@ -179,7 +182,7 @@ Holds when the field starts with `text`.
 ### endsWith
 
 ```dart
-Condition endsWith(String text);
+Condition endsWith(String text, {bool ignoreCase = false});
 ```
 
 Holds when the field ends with `text`.

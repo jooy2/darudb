@@ -113,9 +113,23 @@ with db.read() as txn:
 | `IS NOT NULL` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 | `== null`, `!= null` | `email == null` | `IS NULL`, `IS NOT NULL`과 같습니다 |
 
-- **문자열**은 바이트로 비교하므로 `"Z"`가 `"a"`보다 앞에 옵니다. `STARTSWITH`와 `ENDSWITH`, `CONTAINS`도 대소문자까지 정확히 맞아야 합니다. `STARTSWITH`와 `ENDSWITH`를 문자열도 문자열 목록도 아닌 필드에 쓰면 `INVALID_QUERY`로 실패하고, `CONTAINS`를 문자열도 목록도 아닌 필드에 써도 마찬가지입니다.
+- **문자열**은 바이트로 비교하므로 `"Z"`가 `"a"`보다 앞에 옵니다. `STARTSWITH`와 `ENDSWITH`, `CONTAINS`도 조건이 [대소문자를 무시](#대소문자-무시하기)하지 않는 한 대소문자까지 정확히 맞아야 합니다. `STARTSWITH`와 `ENDSWITH`를 문자열도 문자열 목록도 아닌 필드에 쓰면 `INVALID_QUERY`로 실패하고, `CONTAINS`를 문자열도 목록도 아닌 필드에 써도 마찬가지입니다.
 - **목록**에 대한 조건은 원소 하나라도 성립하면 성립합니다. `tags == "admin"`과 `tags CONTAINS "admin"`은 모두 그 원소를 가진 객체를 찾고, `tags STARTSWITH "ad"`는 그렇게 시작하는 원소를 가진 객체를 찾습니다. 빈 목록은 null이 아니며 원소가 없습니다.
 - **값은 필드의 타입을 따릅니다.** 정수 필드는 정수하고만 비교하고 실수와는 비교하지 않습니다. 실수 필드는 실수나 -2^53부터 2^53까지의 정수와, 링크는 링크한 컬렉션의 키와 비교합니다. 이와 다른 값을 쓰거나 `null`에 `==`과 `!=` 말고 다른 연산자를 쓰면 `INVALID_QUERY`로 실패합니다.
+
+## 대소문자 무시하기
+
+`==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH` 조건 뒤에 `IGNORE CASE`를 붙이면 문자열을 대소문자와 상관없이 비교합니다. `name == "ada" IGNORE CASE`는 `Ada`, `ADA`, `ada`를 모두 찾습니다.
+
+```text
+email == $0 IGNORE CASE
+tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
+```
+
+- **Unicode의 단순 대소문자 접기.** 각 글자를 Unicode의 `CaseFolding.txt`대로 한 글자로 접고, 접은 결과가 같으면 같은 문자열로 봅니다. 그리스 문자와 키릴 문자처럼 대소문자가 있는 다른 문자도 라틴 문자와 똑같이 접으며, `ς`는 `Σ`와 맞습니다. 접으면 여러 글자가 되는 글자는 그대로 둡니다. 그래서 `ß`와 `ẞ`는 서로 맞지만 `ss`와는 맞지 않고, 튀르키예어의 `İ`는 자기 자신과만 맞습니다.
+- **문자열에만 씁니다.** 문자열 필드나 문자열 목록에 쓰며, 다른 조건처럼 내장 객체와 링크를 거칠 수 있습니다. 다른 필드에 쓰거나 `<`, `BETWEEN`, `IS NULL` 뒤에 쓰면 `INVALID_QUERY`로 실패합니다. 대소문자를 무시한 순서 비교는 없습니다.
+- **인덱스는 쓰지 않습니다.** 인덱스는 바이트를 그대로 담으므로, 대소문자를 무시하는 조건은 읽은 객체마다 검사합니다. 인덱스가 답하는 다른 조건이 `AND`로 붙어 있으면 그 객체만 읽습니다.
+- **키워드가 아닙니다.** `IGNORE`와 `CASE`는 조건 바로 뒤에서만 그렇게 읽으므로, `ignore`나 `case`라는 필드도 백틱 없이 쓸 수 있습니다.
 
 ## 조건 묶기
 
@@ -197,7 +211,7 @@ with db.read() as txn:
 
 ## 키워드
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다. `IGNORE CASE`는 조건 바로 뒤에서만 읽으므로 이 목록에 들지 않습니다.
 
 ## 오류
 
@@ -220,11 +234,12 @@ sort        = path [ "ASC" | "DESC" ]
 filter      = and { "OR" and }
 and         = not { "AND" not }
 not         = "NOT" not | "(" filter ")" | condition
-condition   = path compare value
+condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
-            | path "IN" "[" [ value { "," value } ] "]"
-            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value
+            | path "IN" "[" [ value { "," value } ] "]" [ case ]
+            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
             | path "IS" [ "NOT" ] "NULL"
+case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
 value       = int | float | string | "true" | "false" | "null" | "$" digits
@@ -244,6 +259,7 @@ value       = int | float | string | "true" | "false" | "null" | "$" digits
 | `name STARTSWITH "Ma" SORT BY name` | 이름이 `Ma`로 시작하는 사용자를 이름순으로 |
 | `email ENDSWITH "@example.com"` | 그 도메인의 주소를 가진 사용자 |
 | `tags CONTAINS "admin"` | 태그 `admin`이 있는 사용자 |
+| `name == "ada" IGNORE CASE` | 이름이 Ada, ADA, ada인 사용자 |
 | `tags STARTSWITH "team-"` | `team-`으로 시작하는 태그가 있는 사용자 |
 | `email IS NULL` | 이메일이 없는 사용자 |
 | `city != "Seoul"` | 서울이 아닌 도시에 사는 사용자 |

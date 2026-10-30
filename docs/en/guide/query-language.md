@@ -113,9 +113,23 @@ A condition tests one field, given by its name or by a [path](#fields-and-paths)
 | `IS NOT NULL` | `email IS NOT NULL` | holds a value |
 | `== null`, `!= null` | `email == null` | is null, or is not null: the same as `IS NULL` and `IS NOT NULL` |
 
-- **Strings** compare by their bytes, so `"Z"` sorts before `"a"`, and `STARTSWITH`, `ENDSWITH` and `CONTAINS` match exactly, case included. `STARTSWITH` and `ENDSWITH` on a field that is neither a string nor a list of strings fail with `INVALID_QUERY`, and so does `CONTAINS` on one that is neither a string nor a list.
+- **Strings** compare by their bytes, so `"Z"` sorts before `"a"`, and `STARTSWITH`, `ENDSWITH` and `CONTAINS` match exactly, case included, unless the condition [ignores case](#ignore-case). `STARTSWITH` and `ENDSWITH` on a field that is neither a string nor a list of strings fail with `INVALID_QUERY`, and so does `CONTAINS` on one that is neither a string nor a list.
 - **Lists.** A condition on a list holds when it holds for any element: `tags == "admin"` and `tags CONTAINS "admin"` both find objects with that element, and `tags STARTSWITH "ad"` finds those with an element that starts so. An empty list is not null, and holds no element.
 - **Values have the field's type.** An integer field compares with an integer and never a float, a float field with a float or with an integer from -2^53 to 2^53, and a link with the linked collection's key. Any other value fails with `INVALID_QUERY`, as does an operator other than `==` and `!=` with `null`.
+
+## Ignore case
+
+`IGNORE CASE` after a condition of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` makes it compare strings without regard to case: `name == "ada" IGNORE CASE` finds `Ada`, `ADA` and `ada`.
+
+```text
+email == $0 IGNORE CASE
+tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
+```
+
+- **Unicode's simple case folding.** Each character folds to one character, as Unicode's `CaseFolding.txt` says, and two strings match when they fold alike. Greek, Cyrillic and other scripts with case fold as Latin does, and `ς` matches `Σ`. A character whose folding would be several characters keeps itself: `ß` and `ẞ` match each other but not `ss`, and the Turkic `İ` matches only itself.
+- **Strings only.** It applies to a string field or a list of strings, through embedded objects and links as any condition does. On another field, or after `<`, `BETWEEN` or `IS NULL`, the query fails with `INVALID_QUERY`: order ignoring case is not supported.
+- **No index.** An index keeps the exact bytes, so a condition that ignores case is tested on each object read. A query that also has a condition an index answers, joined with `AND`, still reads only those objects.
+- **Not keywords.** `IGNORE` and `CASE` are read as such only after a condition, so a field may be called `ignore` or `case` without backticks.
 
 ## Combine conditions
 
@@ -197,7 +211,7 @@ An integer has to fit in 64 bits. `true`, `false` and `null` are case-insensitiv
 
 ## Keywords
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts. `IGNORE CASE` is read only after a condition, so its words are not among them.
 
 ## Errors
 
@@ -220,11 +234,12 @@ sort        = path [ "ASC" | "DESC" ]
 filter      = and { "OR" and }
 and         = not { "AND" not }
 not         = "NOT" not | "(" filter ")" | condition
-condition   = path compare value
+condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
-            | path "IN" "[" [ value { "," value } ] "]"
-            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value
+            | path "IN" "[" [ value { "," value } ] "]" [ case ]
+            | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
             | path "IS" [ "NOT" ] "NULL"
+case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
 path        = name { "." name }
 value       = int | float | string | "true" | "false" | "null" | "$" digits
@@ -244,6 +259,7 @@ The examples below run against a collection of users with these fields: `name` a
 | `name STARTSWITH "Ma" SORT BY name` | Users whose name starts with `Ma`, by name |
 | `email ENDSWITH "@example.com"` | Users with an address at that domain |
 | `tags CONTAINS "admin"` | Users with the tag `admin` |
+| `name == "ada" IGNORE CASE` | Users named Ada, ADA or ada |
 | `tags STARTSWITH "team-"` | Users with a tag that starts with `team-` |
 | `email IS NULL` | Users without an email |
 | `city != "Seoul"` | Users with a city other than Seoul |

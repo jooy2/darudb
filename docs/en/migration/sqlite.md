@@ -568,7 +568,7 @@ The query language reads much like a `WHERE` clause:
 | `JOIN users ON users.id = posts.author_id WHERE users.name = 'Alice'` | `author.name == "Alice"`, on `posts` |
 | `JOIN post_tags ... WHERE tag = 'news'` | `tags CONTAINS "news"`, on `posts` |
 
-- `LIKE` ignores the case of ASCII letters, and `STARTSWITH` and `CONTAINS` compare bytes, so they do not. A case-insensitive search keeps a lowercased copy of the field and queries that.
+- `LIKE` ignores the case of ASCII letters, and `STARTSWITH` and `CONTAINS` compare bytes, so they do not, unless `IGNORE CASE` follows them: `name STARTSWITH "a" IGNORE CASE`, which folds the case of every script, not only ASCII.
 - A join becomes a path through a link, which reads the linked object. There is no counterpart for `GROUP BY`, for subqueries, or for a join on anything but a link.
 - Values from outside the program go in parameters, `$0` and on, as they would in a prepared statement. [Queries](../guide/queries.md) has the whole language, and the builder.
 
