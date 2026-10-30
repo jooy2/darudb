@@ -45,6 +45,14 @@ fn schema() -> Schema {
                 .optional("note", Type::Bytes)
                 .optional("born", Type::Date)
                 .optional("seen", Type::list(Type::Date))
+                .optional(
+                    "visits",
+                    Type::list(Type::object(
+                        Embedded::new()
+                            .field("city", Type::String)
+                            .optional("n", Type::Int),
+                    )),
+                )
                 .index("score")
                 .index("rating")
                 .unique("handle")
@@ -152,6 +160,22 @@ fn player(rng: &mut Rng) -> Object {
         object.set("seen", seen);
     }
 
+    if rng.below(2) == 0 {
+        let visits: Vec<Value> = (0..rng.below(4))
+            .map(|_| {
+                let mut visit = Object::new().with("city", pick(rng, &CITIES));
+
+                if rng.below(2) == 0 {
+                    visit.set("n", int(rng, 4));
+                }
+
+                Value::Object(visit)
+            })
+            .collect();
+
+        object.set("visits", visits);
+    }
+
     object
 }
 
@@ -168,6 +192,8 @@ fn value(rng: &mut Rng, path: &str) -> Value {
         "team.city" | "address.city" => pick(rng, &["Seoul", "Busan", "Seo", "S", "x"]).into(),
         "active" => (rng.below(2) == 1).into(),
         "address.zip" => (int(rng, 5) - 1).into(),
+        "visits.city" => pick(rng, &["Seoul", "Busan", "Seo", "S", "x"]).into(),
+        "visits.n" => (int(rng, 5) - 1).into(),
         "born" | "seen" => Value::Date(pick(rng, &[-86_400_000_001, -2, -1, 0, 1, 5, i64::MAX])),
         _ => {
             let len = rng.index(3);
@@ -177,7 +203,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
     }
 }
 
-const PATHS: [&str; 15] = [
+const PATHS: [&str; 17] = [
     "id",
     "score",
     "rating",
@@ -193,12 +219,14 @@ const PATHS: [&str; 15] = [
     "note",
     "born",
     "seen",
+    "visits.city",
+    "visits.n",
 ];
 
 fn is_string(path: &str) -> bool {
     matches!(
         path,
-        "handle" | "tags" | "team" | "team.city" | "address.city"
+        "handle" | "tags" | "team" | "team.city" | "address.city" | "visits.city"
     )
 }
 
@@ -493,7 +521,7 @@ thread_local! {
 
 /// The paths [`agree`] works out aggregates of, the ones no aggregate reads
 /// among them.
-const AGGREGATED: [&str; 13] = [
+const AGGREGATED: [&str; 14] = [
     "id",
     "score",
     "rating",
@@ -507,6 +535,7 @@ const AGGREGATED: [&str; 13] = [
     "active",
     "born",
     "seen",
+    "visits.n",
 ];
 
 /// `function` of the values at `path` of `objects`, worked out from the

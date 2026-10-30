@@ -10,7 +10,8 @@ use super::names::CollectionNames;
 use super::value::Value;
 
 /// The newest object layer's format this build reads and writes, field 1 of
-/// the stored schema. Format 2 adds the date type.
+/// the stored schema. Format 2 adds the date type and lists of embedded
+/// objects.
 pub(crate) const OBJECT_FORMAT: i64 = 2;
 
 /// The oldest object format this build reads: the one every release before
@@ -30,7 +31,8 @@ pub(crate) enum Kind {
     Link {
         collection: u64,
     },
-    /// Values of the element kind, a scalar or a link.
+    /// Values of the element kind: a scalar, a link, or in object format 2
+    /// an embedded object.
     List(Box<Kind>),
     /// An embedded object with these fields.
     Object(Fields),
@@ -282,11 +284,12 @@ impl StoredSchema {
     }
 
     /// The lowest object format that holds what the schema declares: 2 for
-    /// a date anywhere in it, and 1 otherwise.
+    /// a date or a list of embedded objects anywhere in it, and 1 otherwise.
     pub(crate) fn needs(&self) -> i64 {
         fn needs_kind(kind: &Kind) -> i64 {
             match kind {
                 Kind::Date => 2,
+                Kind::List(element) if matches!(**element, Kind::Object(_)) => 2,
                 Kind::List(element) => needs_kind(element),
                 Kind::Object(fields) => needs_fields(fields),
                 _ => OLDEST_OBJECT_FORMAT,
@@ -456,7 +459,7 @@ fn check_kind(kind: &Kind, schema: &StoredSchema) -> Result<(), &'static str> {
         Kind::Link { collection } if schema.collection_by_id(*collection).is_none() => {
             Err("a link points at no collection")
         }
-        Kind::List(element) if !element.is_scalar() => Err("a list holds lists or objects"),
+        Kind::List(element) if matches!(**element, Kind::List(_)) => Err("a list holds lists"),
         Kind::List(element) => check_kind(element, schema),
         Kind::Object(fields) => check_fields(fields, schema),
         _ => Ok(()),

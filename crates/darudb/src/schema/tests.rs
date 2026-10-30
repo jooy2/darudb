@@ -5,10 +5,10 @@ use std::ops::Bound;
 
 use super::objects::{Source, check_indexes};
 use super::typed::{CollectionType, FieldReader, ValueWriter};
-use super::{Collection, Schema, Type};
+use super::{Collection, Embedded, Schema, Type};
 use crate::format::object::codec::Raw;
 use crate::format::object::names::{index_tree, records};
-use crate::format::object::schema::{Kind, OBJECT_FORMAT};
+use crate::format::object::schema::{Kind, OBJECT_FORMAT, StoredSchema};
 use crate::format::object::{Object, Value};
 use crate::testing::Rng;
 use crate::{Database, OpenOptions};
@@ -1777,4 +1777,167 @@ fn an_object_format_this_build_does_not_read_is_refused_and_not_salvaged() {
         Some("UNSUPPORTED_FORMAT_VERSION")
     );
     assert!(!into.exists());
+}
+
+/// Trips with a list of stops, each an embedded object, at `version`, the
+/// stops gaining a zip code in version 2.
+fn trips(version: u64) -> Schema {
+    let stop = Embedded::new().field("city", Type::String);
+    let stop = if version >= 2 {
+        stop.optional("zip", Type::String)
+    } else {
+        stop
+    };
+
+    Schema::new(version).collection(
+        Collection::new("trips")
+            .field("name", Type::String)
+            .with_default(
+                "stops",
+                Type::list(Type::object(stop)),
+                Value::List(Vec::new()),
+            ),
+    )
+}
+
+/// A list of embedded objects is object format 2, its elements' fields keep
+/// their ids from version to version as a collection's do, and a record
+/// written before an element gained a field reads it as null.
+#[test]
+fn a_list_of_embedded_objects_keeps_its_elements_fields_by_name() {
+    use crate::format::object::codec;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let stop = |city: &str| Value::Object(Object::new().with("city", city));
+    let element_ids = |db: &Database| {
+        let schema = StoredSchema::decode(db.schema_record().unwrap()).unwrap();
+        let stops = schema.collections[0].fields.by_name("stops").unwrap();
+        let Kind::List(element) = &stops.kind else {
+            panic!("{stops:?}")
+        };
+        let Kind::Object(fields) = element.as_ref() else {
+            panic!("{element:?}")
+        };
+
+        fields
+            .list
+            .iter()
+            .map(|field| (field.name.clone(), field.id))
+            .collect::<Vec<_>>()
+    };
+
+    {
+        let db = OpenOptions::new().schema(trips(1)).open(&path).unwrap();
+        let mut txn = db.begin_write().unwrap();
+
+        assert_eq!(object_format(&db), 2);
+        txn.collection("trips")
+            .unwrap()
+            .insert(
+                Object::new()
+                    .with("name", "coast")
+                    .with("stops", vec![stop("Busan"), stop("Ulsan")]),
+            )
+            .unwrap();
+        txn.commit().unwrap();
+        assert_eq!(element_ids(&db), [("city".to_owned(), 1)]);
+    }
+
+    let db = OpenOptions::new().schema(trips(2)).open(&path).unwrap();
+
+    assert_eq!(
+        element_ids(&db),
+        [("city".to_owned(), 1), ("zip".to_owned(), 2)]
+    );
+
+    let mut txn = db.begin_write().unwrap();
+    let mut trips_of = txn.collection("trips").unwrap();
+    let first = trips_of.get(1).unwrap().unwrap();
+
+    assert_eq!(
+        first.get("stops"),
+        Some(&Value::List(vec![
+            Value::Object(Object::new().with("city", "Busan").with("zip", Value::Null)),
+            Value::Object(Object::new().with("city", "Ulsan").with("zip", Value::Null)),
+        ]))
+    );
+    trips_of
+        .insert(Object::new().with("name", "empty"))
+        .unwrap();
+    assert_eq!(
+        trips_of.get(2).unwrap().unwrap().get("stops"),
+        Some(&Value::List(Vec::new()))
+    );
+    assert_eq!(
+        trips_of
+            .count(&crate::Query::new().filter(crate::Filter::eq("stops.city", "Ulsan")))
+            .unwrap(),
+        1
+    );
+    // A stop holds an object, and nothing else.
+    assert_eq!(
+        trips_of
+            .insert(
+                Object::new()
+                    .with("name", "x")
+                    .with("stops", vec![Value::from("Busan")])
+            )
+            .err()
+            .map(|error| error.code()),
+        Some("INVALID_ARGUMENT")
+    );
+    drop(trips_of);
+    txn.commit().unwrap();
+
+    // The element record holds the city under its id, as any record does.
+    let raw = codec::read(
+        &db.begin_read()
+            .unwrap()
+            .collection("trips")
+            .unwrap()
+            .get_record(1)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(
+        raw.iter()
+            .any(|(_, value)| matches!(value, Raw::List(stops) if stops.len() == 2))
+    );
+    assert!(db.check().unwrap().is_ok());
+}
+
+/// A default of a list of embedded objects is the empty list or nothing, and
+/// a list of lists is no type at all.
+#[test]
+fn a_list_of_embedded_objects_takes_only_the_empty_list_as_a_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = || Type::object(Embedded::new().field("city", Type::String));
+    let declared = |kind: Type, default: Value| {
+        Schema::new(1).collection(Collection::new("trips").with_default("stops", kind, default))
+    };
+    let code = |schema: Schema| {
+        OpenOptions::new()
+            .schema(schema)
+            .open(dir.path().join("refused.darudb"))
+            .err()
+            .map(|error| error.code())
+    };
+
+    assert_eq!(
+        code(declared(
+            Type::list(stop()),
+            Value::List(vec![Value::Object(Object::new().with("city", "Busan"))])
+        )),
+        Some("INVALID_ARGUMENT")
+    );
+    assert_eq!(
+        code(declared(
+            Type::list(Type::list(Type::Int)),
+            Value::List(Vec::new())
+        )),
+        Some("INVALID_ARGUMENT")
+    );
 }

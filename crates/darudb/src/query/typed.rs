@@ -130,8 +130,8 @@ pub trait NumberType: OrderedType {
 pub trait TextType: ComparableType<Compared = String> {}
 
 /// A field type a path goes on through, with [`then`](FieldOf::then): an
-/// embedded object type, a [`Link<T>`], which goes on to the fields of `T`,
-/// the linked object, and `Option` of either.
+/// embedded object type, a list of them, a [`Link<T>`], which goes on to the
+/// fields of `T`, the linked object, and `Option` of any of them.
 pub trait NestedType: sealed::Typed {
     /// The type whose field constants name the next step of the path.
     type Fields;
@@ -300,6 +300,12 @@ impl<U: CollectionType> LinkType for Vec<Link<U>> {
 }
 
 impl<E: EmbeddedType> sealed::Typed for E {}
+
+/// A path through a list of embedded objects goes on to each element's
+/// fields, and a condition at its end holds when it holds for any element.
+impl<E: EmbeddedType + ElementType> NestedType for Vec<E> {
+    type Fields = E;
+}
 
 impl<E: EmbeddedType> NestedType for E {
     type Fields = E;

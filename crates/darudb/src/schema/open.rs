@@ -407,8 +407,14 @@ fn lenient(schema: &StoredSchema) -> StoredSchema {
         for field in &mut fields.list {
             field.optional = true;
 
-            if let Kind::Object(embedded) = &mut field.kind {
-                loosen(embedded);
+            match &mut field.kind {
+                Kind::Object(embedded) => loosen(embedded),
+                Kind::List(element) => {
+                    if let Kind::Object(embedded) = element.as_mut() {
+                        loosen(embedded);
+                    }
+                }
+                _ => {}
             }
         }
     }

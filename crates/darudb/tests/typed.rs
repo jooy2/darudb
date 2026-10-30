@@ -1208,3 +1208,106 @@ fn a_system_time_is_a_date_rounded_down_to_the_microsecond() {
     assert_eq!(found(&Query::new().filter(Event::AT.lt(far))), [1, 2, 3]);
     assert_eq!(code(Value::try_from(far)), "INVALID_ARGUMENT");
 }
+
+#[derive(darudb_derive::Embedded, Debug, Clone, PartialEq)]
+struct Stop {
+    city: String,
+    #[darudb(rename = "mins")]
+    minutes: Option<i64>,
+}
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "trips")]
+struct Trip {
+    id: Option<i64>,
+    name: String,
+    stops: Vec<Stop>,
+}
+
+#[test]
+fn a_list_of_embedded_objects_reads_into_a_vec_of_its_type() {
+    let dir = TestDir::new();
+    let db = open(&dir, Schema::new(1).collection(Collection::of::<Trip>()));
+    let stop = |city: &str, minutes: Option<i64>| Stop {
+        city: city.to_owned(),
+        minutes,
+    };
+    let coast = Trip {
+        id: None,
+        name: "coast".to_owned(),
+        stops: vec![stop("Busan", Some(30)), stop("Ulsan", None)],
+    };
+    let mut txn = db.begin_write().unwrap();
+    let mut trips = txn.collection_of::<Trip>().unwrap();
+
+    trips.insert(&coast).unwrap();
+    trips
+        .insert(&Trip {
+            id: None,
+            name: "none".to_owned(),
+            stops: Vec::new(),
+        })
+        .unwrap();
+    drop(trips);
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let typed = read.collection_of::<Trip>().unwrap();
+    let untyped = read.collection("trips").unwrap();
+
+    assert_eq!(
+        typed.get(1).unwrap().unwrap(),
+        Trip {
+            id: Some(1),
+            ..coast.clone()
+        }
+    );
+    // Untyped, each stop is an object by the names the file stores.
+    assert_eq!(
+        untyped.get(1).unwrap().unwrap().get("stops"),
+        Some(&Value::List(vec![
+            Value::Object(Object::new().with("city", "Busan").with("mins", 30)),
+            Value::Object(
+                Object::new()
+                    .with("city", "Ulsan")
+                    .with("mins", Value::Null)
+            ),
+        ]))
+    );
+
+    let ids = |query: &Query| {
+        typed
+            .query(query)
+            .unwrap()
+            .into_iter()
+            .map(|trip| trip.id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        Trip::STOPS.then(Stop::MINUTES).gt(10),
+        Filter::gt("stops.mins", 10)
+    );
+    assert_eq!(
+        ids(&Query::new().filter(Trip::STOPS.then(Stop::CITY).eq("Ulsan"))),
+        [1]
+    );
+    assert_eq!(
+        ids(&Query::new().filter(Trip::STOPS.then(Stop::MINUTES).is_null())),
+        [1]
+    );
+    // No stop of an empty list is null, as no element of it is anything.
+    assert_eq!(
+        ids(&Query::new().filter(Trip::STOPS.then(Stop::CITY).is_not_null())),
+        [1, 2]
+    );
+    // A list is not sorted by, nor aggregated over.
+    assert_eq!(
+        code(typed.query(&Query::new().sort_by(Trip::STOPS.then(Stop::CITY)))),
+        "INVALID_QUERY"
+    );
+    assert_eq!(
+        code(typed.max(&Query::new(), Trip::STOPS.then(Stop::MINUTES))),
+        "INVALID_QUERY"
+    );
+}

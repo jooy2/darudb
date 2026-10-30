@@ -131,7 +131,9 @@ pub trait FieldType: Sized {
     fn read(value: ValueReader<'_>) -> Result<Self>;
 }
 
-/// A type a list may hold: a scalar or a link.
+/// A type a list may hold: a scalar, a link, or an embedded object, which
+/// `#[derive(Embedded)]` makes one. A file with a list of embedded objects is
+/// in object format 2.
 pub trait ElementType: FieldType {}
 
 /// A field of the collection type `T`, or of the embedded object type `T`,
@@ -310,11 +312,13 @@ impl<'a> ValueWriter<'a> {
         }
     }
 
-    fn element(out: &'a mut Vec<u8>) -> Self {
+    /// An element of a list, or a link's key, with the layout of each
+    /// element of a list of embedded objects.
+    fn element(out: &'a mut Vec<u8>, layout: Option<&'a Layout>) -> Self {
         Self {
             out,
             place: Place::Element,
-            layout: None,
+            layout,
         }
     }
 
@@ -430,8 +434,12 @@ impl<'a> ValueWriter<'a> {
         self.out.push(LIST);
         codec::write_varint(values.len() as u64, self.out);
 
+        // A list of embedded objects writes each with the layout its field
+        // holds.
+        let layout = self.layout;
+
         for value in values {
-            value.write(ValueWriter::element(self.out))?;
+            value.write(ValueWriter::element(self.out, layout))?;
         }
 
         Ok(())
@@ -478,7 +486,7 @@ impl<'a> ValueWriter<'a> {
     pub fn link<K: KeyType>(mut self, key: &K) -> Result<()> {
         self.begin();
         self.out.push(LINK);
-        key.write(ValueWriter::element(self.out))
+        key.write(ValueWriter::element(self.out, None))
     }
 }
 
@@ -843,7 +851,7 @@ impl<'a> ValueReader<'a> {
 
             values.push(T::read(ValueReader {
                 bytes: &rest[at..end],
-                layout: None,
+                layout: self.layout,
                 damaged: self.damaged,
             })?);
             at = end;
@@ -927,7 +935,7 @@ impl<'a> ValueReader<'a> {
 
             elements.push(ValueReader {
                 bytes: &rest[at..end],
-                layout: None,
+                layout: self.layout,
                 damaged: self.damaged,
             });
             at = end;
@@ -1252,10 +1260,18 @@ fn layout_of(
             ));
         }
 
+        // A list of embedded objects keeps the layout of its elements.
         let nested = match (&declared.kind, &field.kind) {
             (Type::Object(embedded), Kind::Object(inner)) => {
                 Some(Box::new(layout_of(&embedded.fields, inner, schema, &path)?))
             }
+            (Type::List(element), Kind::List(inner)) => match (element.as_ref(), inner.as_ref()) {
+                (Type::Object(embedded), Kind::Object(inner)) => {
+                    Some(Box::new(layout_of(&embedded.fields, inner, schema, &path)?))
+                }
+                (element, inner) if same_kind(element, inner, schema) => None,
+                _ => return Err(format!("`{path}` has another type in each")),
+            },
             (kind, stored) if same_kind(kind, stored, schema) => None,
             _ => return Err(format!("`{path}` has another type in each")),
         };
@@ -1502,7 +1518,12 @@ fn shape_layout(
                 )
             })?;
         let path = format!("{owner}.{}", field.name);
-        let nested = match (&declared[slot].fields, &field.kind) {
+        let element = match &field.kind {
+            Kind::List(element) => element.as_ref(),
+            kind => kind,
+        };
+        // A list of embedded objects keeps the layout of its elements.
+        let nested = match (&declared[slot].fields, element) {
             (Some(inner), Kind::Object(stored)) => {
                 Some(Box::new(shape_layout(inner, stored, schema, &path)?))
             }

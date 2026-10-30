@@ -526,8 +526,8 @@ impl Schema {
             Type::Link(target) if self.find(target).is_none() => invalid(format!(
                 "`{owner}.{name}` links to `{target}`, which is not a collection"
             )),
-            Type::List(element) if !scalar(element) => invalid(format!(
-                "`{owner}.{name}` is a list of lists or objects, which v1 does not have"
+            Type::List(element) if matches!(**element, Type::List(_)) => invalid(format!(
+                "`{owner}.{name}` is a list of lists, which a schema does not have; a list of embedded objects holding lists does"
             )),
             Type::List(element) => self.validate_type(owner, name, element),
             Type::Object(embedded) => {

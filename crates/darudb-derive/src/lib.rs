@@ -128,8 +128,9 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Makes a struct an embedded object: implements `darudb::EmbeddedType` and
-/// `darudb::FieldType`, so that a field of an object can hold it.
+/// Makes a struct an embedded object: implements `darudb::EmbeddedType`,
+/// `darudb::FieldType` and `darudb::ElementType`, so that a field of an
+/// object can hold it, or a list of it.
 ///
 /// ```
 /// use darudb::{Embedded, Object};
@@ -536,6 +537,9 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
 
             #methods
         }
+
+        // A list may hold embedded objects.
+        impl ::darudb::ElementType for #ident {}
 
         impl ::darudb::FieldType for #ident {
             fn kind() -> ::darudb::Type {

@@ -424,8 +424,15 @@ fn merge_fields(
             .filter(|kept| !replaced.contains(&kept.id));
         let (id, kind) = match kept {
             Some(kept) => {
+                // The fields of an embedded object, or of each element of a
+                // list of them, keep their ids by name, as the collection's
+                // do: a record holds them by id.
                 let embedded = match &kept.kind {
                     Kind::Object(fields) => Some(fields),
+                    Kind::List(element) => match element.as_ref() {
+                        Kind::Object(fields) => Some(fields),
+                        _ => None,
+                    },
                     _ => None,
                 };
                 let kind = to_kind(&path, &field.kind, embedded, ids)?;
@@ -502,7 +509,7 @@ fn to_kind(
                 ))
             })?,
         },
-        Type::List(element) => Kind::List(Box::new(to_kind(path, element, None, ids)?)),
+        Type::List(element) => Kind::List(Box::new(to_kind(path, element, existing, ids)?)),
         Type::Object(embedded) => {
             Kind::Object(merge_fields(path, &embedded.fields, existing, &[], ids)?)
         }

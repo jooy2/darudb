@@ -18,17 +18,17 @@ The decisions this document builds on are recorded in `CLAUDE.md`, under "API an
 
 A database holds **collections**. A collection holds **objects** of one shape, each identified by its **primary key**. An object is a set of **fields**, each with a name and a value of the field's type.
 
-| Type        | Values                                                                       |
-| ----------- | ---------------------------------------------------------------------------- |
-| `bool`      | `false`, `true`                                                              |
-| `int`       | Signed 64-bit integers                                                       |
-| `float`     | 64-bit IEEE 754 numbers                                                      |
-| `string`    | UTF-8 text                                                                   |
-| `bytes`     | Any bytes                                                                    |
-| `date`      | An instant: signed 64-bit microseconds since 1970-01-01T00:00:00 UTC         |
-| `link(C)`   | The primary key of an object in collection `C`: a to-one link                |
-| `list(T)`   | A list of values of a scalar type or of `link(C)`: a to-many link, or a list |
-| `object(E)` | An embedded object: fields of its own, stored inside the owning object       |
+| Type        | Values                                                                             |
+| ----------- | ---------------------------------------------------------------------------------- |
+| `bool`      | `false`, `true`                                                                    |
+| `int`       | Signed 64-bit integers                                                             |
+| `float`     | 64-bit IEEE 754 numbers                                                            |
+| `string`    | UTF-8 text                                                                         |
+| `bytes`     | Any bytes                                                                          |
+| `date`      | An instant: signed 64-bit microseconds since 1970-01-01T00:00:00 UTC               |
+| `link(C)`   | The primary key of an object in collection `C`: a to-one link                      |
+| `list(T)`   | A list of values of a scalar type, of `link(C)`, a to-many link, or of `object(E)` |
+| `object(E)` | An embedded object: fields of its own, stored inside the owning object             |
 
 - **Optional fields.** A field is required unless it is declared optional. An optional field may be null, which is also what it holds when it is left out. A required field may have a **default**, which it holds when it is left out: the object is written with the default, so that changing the default later changes no object already written.
 - **Strings compare by bytes.** Their order is the order of their UTF-8 bytes, which is the order of their code points. There is no collation in v1. A test of equality or of text can ignore case ([The filter](#the-filter)), an order cannot.
@@ -36,7 +36,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 - **Links** hold the target's primary key and nothing else. A link to an object that does not exist, or no longer does, is allowed and reads as the key it holds; the engine does not cascade deletes in v1.
 - **Backlinks** are not stored. The objects that link to an object are the answer to a query on the link field, which an index on that field makes cheap, and a filter can test them with `ANY` ([The filter](#the-filter)).
 - **Embedded objects** have no primary key and no collection of their own. They are read and written with the object that holds them, and their fields can be queried through it.
-- **Lists** hold values of one type and no nulls. Most comparisons on a list field hold when they hold for any element ([Queries](#queries)).
+- **Lists** hold values of one type and no nulls, and no lists. Most comparisons on a list field hold when they hold for any element ([Queries](#queries)), and a path through a list of embedded objects, such as `stops.city`, tests the field of each element. A list of embedded objects has no index and no sort, and its default is the empty list. It makes the stored schema need [object format 2](#object-formats).
 
 - **Dates** are instants with no time zone: a binding converts its language's time to UTC, and reads a date back as a time in UTC. A time is rounded down to the microsecond, before 1970 as after it. A date is a scalar: it can be a list's element, a default, an index's field and a sort's, and `min` and `max` read it, but it compares only with a date, never an `int`. A date field makes the stored schema need [object format 2](#object-formats).
 
