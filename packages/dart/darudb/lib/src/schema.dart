@@ -104,7 +104,6 @@ final class ObjectKind extends Kind {
   int get code => 8;
 }
 
-/// A field as a schema declares it.
 /// An index on several fields, or on a field inside an embedded object, as
 /// a [CollectionSchema] declares it: each field's path by the names the
 /// collection stores, joined by `.`, and whether it is unique.
@@ -115,6 +114,7 @@ final class IndexSpec {
   final bool unique;
 }
 
+/// A field as a schema declares it.
 final class FieldSpec {
   const FieldSpec(
     this.name,
