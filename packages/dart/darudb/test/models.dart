@@ -119,3 +119,31 @@ class Trip {
   final String name;
   final List<Stop> stops;
 }
+
+@Embedded()
+class Hometown {
+  const Hometown({this.city});
+
+  @Name('town')
+  final String? city;
+}
+
+@Collection('residents')
+@IndexOn(['last', 'first'], unique: true)
+@IndexOn(['home.city', 'age'])
+class Resident {
+  const Resident({
+    this.id,
+    required this.last,
+    this.first,
+    this.age = 0,
+    this.home,
+  });
+
+  final int? id;
+  final String last;
+  @Name('given')
+  final String? first;
+  final int age;
+  final Hometown? home;
+}

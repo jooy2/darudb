@@ -30,6 +30,7 @@ const _primaryKey = TypeChecker.typeNamedLiterally(
 const _index = TypeChecker.typeNamedLiterally('Index', inPackage: 'darudb');
 const _unique = TypeChecker.typeNamedLiterally('Unique', inPackage: 'darudb');
 const _name = TypeChecker.typeNamedLiterally('Name', inPackage: 'darudb');
+const _indexOn = TypeChecker.typeNamedLiterally('IndexOn', inPackage: 'darudb');
 const _link = TypeChecker.typeNamedLiterally('Link', inPackage: 'darudb');
 
 /// The generator `build_runner` runs on each library.
@@ -562,6 +563,79 @@ extension ${className}CopyWith on $className {
 ''';
 }
 
+/// The `indexes:` of a collection's schema constant, from the `@IndexOn`
+/// annotations of [element], whose fields are [fields]: each path of Dart
+/// names turned into the names the collection stores, through embedded
+/// classes. Empty without any.
+String _indexes(ClassElement element, List<_Field> fields) {
+  final specs = <String>[];
+
+  for (final annotation in _indexOn.annotationsOfExact(element)) {
+    final paths =
+        annotation
+            .getField('fields')
+            ?.toListValue()
+            ?.map((value) => value.toStringValue())
+            .toList() ??
+        const [];
+    final unique = annotation.getField('unique')?.toBoolValue() ?? false;
+
+    if (paths.isEmpty || paths.any((path) => path == null || path.isEmpty)) {
+      throw InvalidGenerationSourceError(
+        'An `@IndexOn` names one field at least, each by a non-empty path.',
+        element: element,
+      );
+    }
+
+    final stored = [
+      for (final path in paths) _string(_storedPath(element, fields, path!)),
+    ];
+
+    specs.add(
+      'IndexSpec([${stored.join(', ')}]${unique ? ', unique: true' : ''})',
+    );
+  }
+
+  return specs.isEmpty
+      ? ''
+      : '\n  indexes: [\n${specs.map((spec) => '    $spec,').join('\n')}\n  ],';
+}
+
+/// [path], Dart field names joined by `.`, as the names the collection
+/// stores, through embedded classes and lists of them.
+String _storedPath(ClassElement owner, List<_Field> fields, String path) {
+  final names = <String>[];
+  var at = fields;
+
+  for (final name in path.split('.')) {
+    final field = at.where((field) => field.name == name).firstOrNull;
+
+    if (field == null) {
+      throw InvalidGenerationSourceError(
+        '`@IndexOn` on `${owner.name}` names `$path`, which the class does '
+        'not have.',
+        element: owner,
+      );
+    }
+
+    names.add(field.slotName);
+
+    var type = field.dartType;
+
+    if (type is InterfaceType && type.isDartCoreList) {
+      type = type.typeArguments.single;
+    }
+
+    final target = type.element;
+
+    at = target is ClassElement && _embedded.hasAnnotationOfExact(target)
+        ? _fieldsOf(target, embedded: true)
+        : const [];
+  }
+
+  return names.join('.');
+}
+
 final class _Collection {
   _Collection(this.element, this.collection);
 
@@ -642,7 +716,7 @@ const $schema = CollectionSchema<$className, ${className}Query, $keyType>(
   autoKey: ${key == null},
   fields: [
 ${specs.map((spec) => '    $spec,').join('\n')}
-  ],
+  ],${_indexes(element, fields)}
   writeField: _\$write$className,
   read: _\$read$className,
   query: ${className}Query.new,

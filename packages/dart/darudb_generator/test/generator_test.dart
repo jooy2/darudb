@@ -183,6 +183,55 @@ class Trip {
     );
   });
 
+  test(
+    '@IndexOn declares an index by the names the collection stores',
+    () async {
+      final (written, errors) = await generate('''
+@Embedded()
+class Home {
+  const Home({this.city});
+
+  @Name('town')
+  final String? city;
+}
+
+@Collection('people')
+@IndexOn(['last', 'first'], unique: true)
+@IndexOn(['home.city'])
+class Person {
+  const Person({this.id, required this.last, this.first, this.home});
+
+  final int? id;
+  final String last;
+  @Name('given')
+  final String? first;
+  final Home? home;
+}
+''');
+
+      expect(errors, isEmpty);
+      expect(
+        written,
+        contains(
+          "  indexes: [\n    IndexSpec(['last', 'given'], unique: true),\n"
+          "    IndexSpec(['home.town']),\n  ],",
+        ),
+      );
+    },
+  );
+
+  test('@IndexOn on a field the class lacks is refused', () async {
+    await refused('''
+@Collection()
+@IndexOn(['nope'])
+class Note {
+  const Note({this.id});
+
+  final int? id;
+}
+''', 'names `nope`, which the class does not have');
+  });
+
   test('a DateTime field is a date, alone or in a list', () async {
     final (written, errors) = await generate('''
 @Collection('events')

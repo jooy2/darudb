@@ -354,4 +354,69 @@ void main() {
       ['Jeju'],
     );
   });
+
+  test('@IndexOn keeps an index on several fields, and on embedded ones', () {
+    final residents = Database.open(
+      '${directory.path}/residents.darudb',
+      schema: const Schema(1, [residentSchema]),
+    );
+
+    addTearDown(residents.close);
+
+    residents.write((txn) {
+      final all = txn.collection(residentSchema)
+        ..insert(
+          const Resident(
+            last: 'Kim',
+            first: 'Ada',
+            age: 36,
+            home: Hometown(city: 'Seoul'),
+          ),
+        )
+        ..insert(
+          const Resident(
+            last: 'Kim',
+            first: 'Bo',
+            age: 20,
+            home: Hometown(city: 'Seoul'),
+          ),
+        )
+        ..insert(const Resident(last: 'Kim', age: 50))
+        ..insert(const Resident(last: 'Kim', age: 51));
+
+      expect(
+        () => all.insert(const Resident(last: 'Kim', first: 'Ada')),
+        throwsA(
+          isA<DaruException>().having((e) => e.code, 'code', 'DUPLICATE_KEY'),
+        ),
+      );
+    });
+    residents.read((txn) {
+      final all = txn.collection(residentSchema);
+
+      expect(
+        [
+          for (final resident in all.find(
+            (q) => q.where(q.home.city.equals('Seoul')).sortBy(q.age),
+          ))
+            resident.first,
+        ],
+        ['Bo', 'Ada'],
+      );
+      expect(
+        all.count((q) => q.where(q.last.equals('Kim') & q.first.isNull())),
+        2,
+      );
+    });
+
+    final stored = residents.storedSchema!.collections.single;
+
+    expect(
+      [
+        for (final index in stored.indexes)
+          '${index.fields.join(',')} ${index.unique}',
+      ],
+      ['last,given true', 'home.town,age false'],
+    );
+  });
 }

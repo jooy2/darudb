@@ -89,6 +89,7 @@ export 'src/schema.dart'
         FieldSource,
         FieldSpec,
         FloatKind,
+        IndexSpec,
         IntKind,
         Kind,
         Link,

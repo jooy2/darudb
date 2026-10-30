@@ -108,13 +108,32 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
   final name = raw[2] as String;
   final key = raw[5] as int;
   final auto = raw[6] == true;
-  final unique = <int, bool>{
-    for (final index in raw[7] as List)
-      (index as Map<int, Object?>)[2] as int: index[3] == true,
-  };
+  final storedFields = _storedFields(raw[3]);
+  // An index on one field of the collection is that field's, by its id in
+  // field 2; any other lists its components' paths of ids in field 4.
+  final unique = <int, bool>{};
+  final indexes = <IndexSpec>[];
+
+  for (final index in (raw[7] as List).cast<Map<int, Object?>>()) {
+    final field = index[2];
+
+    if (field is int) {
+      unique[field] = index[3] == true;
+
+      continue;
+    }
+
+    indexes.add(
+      IndexSpec([
+        for (final component in (index[4] as List).cast<Map<int, Object?>>())
+          _pathOf(storedFields, (component[1] as List).cast<int>()),
+      ], unique: index[3] == true),
+    );
+  }
+
   final fields = <FieldSpec>[];
 
-  for (final field in _storedFields(raw[3])) {
+  for (final field in storedFields) {
     final id = field[1] as int;
     final spec = FieldSpec(
       field[2] as String,
@@ -138,10 +157,38 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
     name: name,
     fields: fields,
     autoKey: auto,
+    indexes: indexes,
     writeField: (object, slot, sink) => _write(fields, object, slot, sink),
     read: (source) => _read(fields, source),
     query: () => MapQuery._(fields),
   );
+}
+
+/// The names along [ids], a path of field ids from [fields] down through
+/// embedded objects and lists of them, joined by `.`.
+String _pathOf(List<Map<int, Object?>> fields, List<int> ids) {
+  final names = <String>[];
+  var at = fields;
+
+  for (final id in ids) {
+    final field = at.where((each) => each[1] == id).firstOrNull;
+
+    if (field == null) {
+      throw corrupted('the stored schema indexes a field it lacks');
+    }
+
+    names.add(field[2] as String);
+
+    var type = field[3] as Map<int, Object?>;
+
+    if (type[1] == 7) {
+      type = type[3] as Map<int, Object?>;
+    }
+
+    at = type[1] == 8 ? _storedFields(type[4]) : const [];
+  }
+
+  return names.join('.');
 }
 
 Kind _kind(Map<int, Object?> type, Map<int, String> names) => switch (type[1]) {

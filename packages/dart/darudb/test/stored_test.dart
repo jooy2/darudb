@@ -7,7 +7,8 @@ import 'dart:typed_data';
 import 'package:darudb/darudb.dart';
 import 'package:test/test.dart';
 
-import 'models.dart' show Event, Stop, Trip, eventSchema, tripSchema;
+import 'models.dart'
+    show Event, Resident, Stop, Trip, eventSchema, residentSchema, tripSchema;
 import 'support/hand_written.dart';
 import 'support/versions.dart';
 
@@ -371,6 +372,37 @@ void main() {
         }),
       ),
       failsWith('INVALID_ARGUMENT'),
+    );
+  });
+
+  test('an index on several fields reads back by the paths it stores', () {
+    Database.open(path, schema: const Schema(1, [residentSchema]))
+      ..write(
+        (txn) => txn
+            .collection(residentSchema)
+            .insert(const Resident(last: 'Kim', first: 'Ada')),
+      )
+      ..close();
+
+    final db = Database.open(path);
+
+    addTearDown(db.close);
+
+    final residents = db.storedCollection('residents');
+
+    expect(
+      [
+        for (final index in residents.indexes)
+          '${index.fields.join(',')} ${index.unique}',
+      ],
+      ['last,given true', 'home.town,age false'],
+    );
+    expect(
+      () => db.write(
+        (txn) =>
+            txn.collection(residents).insert({'last': 'Kim', 'given': 'Ada'}),
+      ),
+      failsWith('DUPLICATE_KEY'),
     );
   });
 }

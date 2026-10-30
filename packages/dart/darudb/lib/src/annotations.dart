@@ -40,6 +40,23 @@ final class Unique {
   const Unique();
 }
 
+/// Keeps an index on several [fields] of the collection, in order, or on a
+/// field inside an embedded object, annotating the class beside
+/// [Collection]: `@IndexOn(['last', 'first'], unique: true)`. Each is a
+/// field's Dart name, or names joined by `.` through embedded objects, as
+/// `'home.city'`. Its entries sort by the first field, then the next, so a
+/// query testing the first fields for equality and the next for a range
+/// reads it. A unique one refuses two objects with the same values in every
+/// field, though any number may hold null in one. There are 1 to 8 fields,
+/// and a path through a list is allowed in an index of one field. A file
+/// with such an index is in object format 2.
+final class IndexOn {
+  const IndexOn(this.fields, {this.unique = false});
+
+  final List<String> fields;
+  final bool unique;
+}
+
 /// Names the field [name] in the collection, rather than as the Dart field
 /// is named.
 final class Name {

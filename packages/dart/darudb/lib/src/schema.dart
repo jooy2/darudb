@@ -105,6 +105,16 @@ final class ObjectKind extends Kind {
 }
 
 /// A field as a schema declares it.
+/// An index on several fields, or on a field inside an embedded object, as
+/// a [CollectionSchema] declares it: each field's path by the names the
+/// collection stores, joined by `.`, and whether it is unique.
+final class IndexSpec {
+  const IndexSpec(this.fields, {this.unique = false});
+
+  final List<String> fields;
+  final bool unique;
+}
+
 final class FieldSpec {
   const FieldSpec(
     this.name,
@@ -206,6 +216,7 @@ final class CollectionSchema<T, Q extends QueryBuilder<T>, K extends Object> {
     required this.name,
     required this.fields,
     required this.autoKey,
+    this.indexes = const [],
     required void Function(T object, int slot, FieldSink sink) writeField,
     required T Function(FieldSource source) read,
     required Q Function() query,
@@ -222,6 +233,10 @@ final class CollectionSchema<T, Q extends QueryBuilder<T>, K extends Object> {
 
   /// Whether the engine assigns the primary key, an `int` field `id`.
   final bool autoKey;
+
+  /// The indexes on several fields or inside embedded objects. An index on
+  /// one field is the field's [FieldSpec.index] or [FieldSpec.unique].
+  final List<IndexSpec> indexes;
 
   final void Function(T object, int slot, FieldSink sink) _writeField;
   final T Function(FieldSource source) _read;
@@ -1115,9 +1130,27 @@ final class _SchemaEncoder {
     final key = collection.autoKey
         ? 1
         : fields.firstWhere((entry) => entry.$2.primaryKey).$1;
-    final indexes = [
+    final indexes = <(int, List<List<int>>, bool)>[
       for (final (id, spec) in fields)
-        if (spec.index || spec.unique) (nextIndex++, id, spec.unique),
+        if (spec.index || spec.unique)
+          (
+            nextIndex++,
+            [
+              [id],
+            ],
+            spec.unique,
+          ),
+      // The fields' ids along each path: a field's place among its
+      // collection's or its embedded object's fields.
+      for (final index in collection.indexes)
+        (
+          nextIndex++,
+          [
+            for (final path in index.fields)
+              _ids(fields, path, collection.name),
+          ],
+          index.unique,
+        ),
     ];
     final mark = writer.open();
 
@@ -1144,23 +1177,92 @@ final class _SchemaEncoder {
       ..byte(Tag.list)
       ..varint(indexes.length);
 
-    for (final (id, field, unique) in indexes) {
+    for (final (id, components, unique) in indexes) {
       final index = writer.open();
 
       writer
         ..varint(3)
         ..varint(1)
         ..byte(Tag.int64)
-        ..int64(id)
-        ..varint(2)
-        ..byte(Tag.int64)
-        ..int64(field)
-        ..varint(3)
-        ..byte(unique ? Tag.trueValue : Tag.falseValue);
+        ..int64(id);
+
+      // An index on one field of the collection keeps format 1's field 2;
+      // any other lists its components' paths in field 4.
+      if (components.length == 1 && components.single.length == 1) {
+        writer
+          ..varint(2)
+          ..byte(Tag.int64)
+          ..int64(components.single.single)
+          ..varint(3)
+          ..byte(unique ? Tag.trueValue : Tag.falseValue);
+      } else {
+        writer
+          ..varint(3)
+          ..byte(unique ? Tag.trueValue : Tag.falseValue)
+          ..varint(4)
+          ..byte(Tag.list)
+          ..varint(components.length);
+
+        for (final path in components) {
+          final component = writer.open();
+
+          writer
+            ..varint(1)
+            ..varint(1)
+            ..byte(Tag.list)
+            ..varint(path.length);
+
+          for (final step in path) {
+            writer
+              ..byte(Tag.int64)
+              ..int64(step);
+          }
+
+          writer.close(component);
+        }
+      }
+
       writer.close(index);
     }
 
     writer.close(mark);
+  }
+
+  /// The ids of the fields along [path], names joined by `.`, from
+  /// [fields] down through embedded objects and lists of them.
+  static List<int> _ids(
+    List<(int, FieldSpec)> fields,
+    String path,
+    String where,
+  ) {
+    final ids = <int>[];
+    var at = fields;
+
+    for (final name in path.split('.')) {
+      final found = at.where((entry) => entry.$2.name == name).firstOrNull;
+
+      if (found == null) {
+        throw invalidArgument(
+          '`$where` indexes `$path`, which it does not have',
+        );
+      }
+
+      ids.add(found.$1);
+
+      final kind = switch (found.$2.kind) {
+        ListKind(:final element) => element,
+        final kind => kind,
+      };
+
+      at = kind is ObjectKind
+          ? [
+              for (final (index, field) in kind.embedded.fields.indexed)
+                (index + 1, field),
+            ]
+          : const [];
+    }
+
+    return ids;
   }
 
   void fieldList(
