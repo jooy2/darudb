@@ -15,6 +15,10 @@
 - `deleteWhere` and `updateWhere` on a write collection, and on one of the `Future` API, delete or update every object a query finds, after its sort, offset and limit, and return how many there were: `users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)))`. The query is required; `(q) => q` finds every object. `deleteWhereText`, `updateWhereText` and the `Prepared` forms take the query as text or prepared. An update by query is all or nothing: when one object is refused, by a unique value taken or an index entry too long, the objects changed before it are put back. It cannot set the primary key.
 - Aggregates: `sum`, `min`, `max` and `avg` on a collection, and on one of the `Future` API, work out one value from a field of the objects a query finds, after its sort, offset and limit: `users.sum((q) => q.age, (q) => q.where(q.age.atLeast(18)))`. The field is picked from the query builder, so it may be a field of an embedded object or of a linked object, and the result has its type: `sum` of an `IntField` is an `int`, of a `FloatField` a `double`, and `min` and `max` are of the field's type or `null`. `avg` is a `double` or `null`. Nulls are left out, and a sum of no values is 0. `sumText`, `sumPrepared` and the like take the query in the query language or prepared.
 
+### Changed
+
+- The native library is built with its functions aligned to 64 bytes as well as its loops, so that where a hot function lands no longer depends on the rest of the build: in the engine's benchmark on an Apple M1 Max, a count through an index had run 12% slower after changes that left its code as it was, and it no longer does. It is about 3% larger for it.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added

@@ -263,9 +263,9 @@ jobs:
           fi
 
           # napi sets RUSTFLAGS for a musl target, which replaces the flags of
-          # `.cargo/config.toml`, so the loop alignment goes in it too.
+          # `.cargo/config.toml`, so the code alignment goes in it too.
           case "$TARGET" in
-            *-musl) export RUSTFLAGS='-C llvm-args=-align-loops=64' ;;
+            *-musl) export RUSTFLAGS='-C llvm-args=-align-loops=64 -C llvm-args=-align-all-functions=6' ;;
           esac
 
           npx napi build --platform --release --target ${{ matrix.target }} ${{ matrix.flags }} --js native.js --dts native.d.ts

@@ -1,19 +1,22 @@
-# Every loop is placed at a 64-byte boundary, in the builds of this
-# workspace: the Node.js addon, the Dart package's library, the Python
-# module, and the tests and benchmarks. Without it, where a hot loop lands
-# depends on everything else linked beside it, so a change that did not touch
-# a loop can move it, and time with it: the page hash's loop, at another
-# offset in one build, made one-object deferred commits 15% slower. The cost
-# is the padding before each loop.
+# Every loop and every function is placed at a 64-byte boundary, in the builds
+# of this workspace: the Node.js addon, the Dart package's library, the Python
+# module, and the tests and benchmarks. Without it, where a hot loop or
+# function lands depends on everything else linked beside it, so a change that
+# did not touch it can move it, and time with it: the page hash's loop, at
+# another offset in one build, made one-object deferred commits 15% slower, and
+# with loops alone aligned, a count through an index ran 12% slower after
+# changes that left its code as it was. The cost is the padding: functions add
+# about 3% to the size of the addon, on top of the loops' 7%.
 #
 # Every target but 64-bit Arm Windows, whose unwind information records each
 # function's length in a field LLVM fills in as it assembles the function: a
 # loop's padding leaves that length unknown there, and the build fails with
-# "Failed to evaluate function length in SEH unwind info".
+# "Failed to evaluate function length in SEH unwind info". Aligning functions
+# alone compiles there, and has not been measured there, so it stays out too.
 #
 # Rust flags a target gets from the environment, such as
 # `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, join these, but `RUSTFLAGS` replaces
-# them, so a build that sets it passes this flag as well (`release.yml`). A
+# them, so a build that sets it passes these flags as well (`release.yml`). A
 # consumer of the `darudb` crate builds with its own flags.
 [target.'cfg(not(all(windows, target_arch = "aarch64")))']
-rustflags = ["-C", "llvm-args=-align-loops=64"]
+rustflags = ["-C", "llvm-args=-align-loops=64", "-C", "llvm-args=-align-all-functions=6"]

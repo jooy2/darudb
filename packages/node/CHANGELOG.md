@@ -15,6 +15,10 @@
 - `deleteWhere` and `updateWhere` on a write collection, and on an asynchronous one, delete or update every object a query finds, after its sort, offset and limit, and return how many there were: `users.updateWhere({ active: false }, (q) => q.where('age', '<', 18))`. The query is required, in any form `find` takes; `(q) => q` finds every object. An update by query is all or nothing: when one object is refused, by a unique value taken or an index entry too long, the objects changed before it are put back. It cannot set the primary key.
 - Aggregates: `sum`, `min`, `max` and `avg` on a collection, and on an asynchronous one, work out one value from a field of the objects a query finds, after its sort, offset and limit, with the query in any form `find` takes: `users.sum('age', (q) => q.where('age', '>', 18))`, `users.max('age', 'team == $0', ['north'])`. The field may be a path through embedded objects and links. Nulls are left out; a sum of no values is 0 and the rest are `null`. A sum is exact, and a `t.bigint()` field sums to a `bigint`; a mean is a number. TypeScript allows `sum` and `avg` only on number fields, and types the result by the field.
 
+### Changed
+
+- The native addon is built with its functions aligned to 64 bytes as well as its loops, so that where a hot function lands no longer depends on the rest of the build: in the engine's benchmark on an Apple M1 Max, a count through an index had run 12% slower after changes that left its code as it was, and it no longer does. It is about 3% larger for it.
+
 ## v1.4.0 (2026-10-29)
 
 ### Added
