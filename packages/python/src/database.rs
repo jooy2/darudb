@@ -503,6 +503,7 @@ fn fields_list<'py>(py: Python<'py>, fields: &[Field]) -> PyResult<Bound<'py, Py
         dict.set_item("name", field.name())?;
         dict.set_item("type", type_dict(py, field.kind())?)?;
         dict.set_item("optional", field.is_optional())?;
+        dict.set_item("cascade", field.is_cascade())?;
 
         if let Some(default) = field.default() {
             dict.set_item("default", to_python(py, default)?)?;

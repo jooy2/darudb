@@ -22,12 +22,13 @@ pub(crate) struct NativeSchema {
 
 /// One field as Python declares it: the name the file stores, its type, how
 /// it holds its value (`"key"`, `"required"`, `"optional"` or `"default"`),
-/// its default, and whether it is indexed and unique.
+/// its default, whether it is indexed and unique, and whether it cascades.
 type FieldSpec<'py> = (
     String,
     Bound<'py, PyAny>,
     String,
     Bound<'py, PyAny>,
+    bool,
     bool,
     bool,
 );
@@ -48,7 +49,7 @@ impl NativeSchema {
         for (name, fields, indexes) in collections {
             let mut collection = Collection::new(name);
 
-            for (stored, kind, mode, default, index, unique) in fields {
+            for (stored, kind, mode, default, index, unique, cascade) in fields {
                 let kind = type_of(&kind)?;
 
                 collection = match mode.as_str() {
@@ -61,6 +62,10 @@ impl NativeSchema {
                         collection.with_default(stored.clone(), kind, value)
                     }
                 };
+
+                if cascade {
+                    collection = collection.cascade(stored.clone());
+                }
 
                 if unique {
                     collection = collection.unique(stored);
@@ -110,7 +115,7 @@ fn type_of(kind: &Bound<'_, PyAny>) -> PyResult<Type> {
         "object" => {
             let mut embedded = Embedded::new();
 
-            for (stored, kind, mode, default, _, _) in inner.extract::<Vec<FieldSpec<'_>>>()? {
+            for (stored, kind, mode, default, _, _, _) in inner.extract::<Vec<FieldSpec<'_>>>()? {
                 let kind = type_of(&kind)?;
 
                 embedded = match mode.as_str() {

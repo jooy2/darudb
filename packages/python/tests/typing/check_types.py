@@ -34,6 +34,13 @@ class Post:
     author: int = field(link=User)
 
 
+@darudb.collection("comments")
+class Comment:
+    id: int | None = None
+    post: str = field(link=Post, cascade=True, index=True)
+    parent: int | None = field(default=None, link="comments", cascade=True)
+
+
 @darudb.collection("events")
 class Event:
     id: int | None = None

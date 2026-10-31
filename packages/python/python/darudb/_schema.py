@@ -91,6 +91,7 @@ class _Options:
     unique: bool = False
     link: type | str | None = None
     name: str | None = None
+    cascade: bool = False
 
 
 @overload
@@ -102,6 +103,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> T: ...
 
 
@@ -114,6 +116,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> T: ...
 
 
@@ -125,6 +128,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any: ...
 
 
@@ -137,6 +141,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any:
     """A field of a collection or an embedded object, with what its annotation
     cannot say.
@@ -152,8 +157,13 @@ def field(
       collection, given as its class or its name.
     - ``name``: the name the file stores the field under, when it is not the
       attribute's.
+    - ``cascade``: with ``link``, deleting the object the link names deletes
+      the object that holds it, in the same transaction, and so on down the
+      chain. Only a link to one object of the collection itself cascades. An
+      index on the field is how a delete finds the objects that link to one:
+      without it, each delete reads the whole collection.
     """
-    options = _Options(primary_key, index, unique, link, name)
+    options = _Options(primary_key, index, unique, link, name, cascade)
 
     return dataclasses.field(
         default=default,
@@ -254,7 +264,7 @@ class _Field:
     attr: str
     stored: str
     kind: Any
-    spec: tuple[str, Any, str, Any, bool, bool]
+    spec: tuple[str, Any, str, Any, bool, bool, bool]
     link: str | None
     """The collection a link or a list of links names."""
     embedded: type | None
@@ -323,6 +333,8 @@ class StoredField:
     default: object = None
     """The value an object that leaves the field out holds, for a required
     field that has one; None otherwise."""
+    cascade: bool = False
+    """Whether deleting the object the link names deletes the object holding it."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -382,6 +394,7 @@ def _stored_fields(raw: Sequence[dict[str, Any]]) -> tuple[StoredField, ...]:
             type=_stored_type(field["type"]),
             optional=field["optional"],
             default=field.get("default"),
+            cascade=field["cascade"],
         )
         for field in raw
     )
@@ -557,6 +570,9 @@ def _resolve(cls: type) -> Resolved:
         if info.kind == "embedded" and (options.primary_key or options.index or options.unique):
             raise invalid(f"{where} is a field of an embedded object, which has no key or index")
 
+        if options.cascade and (info.kind == "embedded" or options.link is None):
+            raise invalid(f"{where} cascades, which only a link of a collection itself does")
+
         if (
             info.kind == "collection"
             and not declares_key
@@ -571,6 +587,9 @@ def _resolve(cls: type) -> Resolved:
             continue
 
         kind, spec = _type_of(annotation, options, cls, item.name)
+
+        if options.cascade and not (isinstance(spec, tuple) and spec[0] == "link"):
+            raise invalid(f"{where} cascades, which a list of links does not")
 
         if options.primary_key:
             if optional or has_default:
@@ -596,7 +615,7 @@ def _resolve(cls: type) -> Resolved:
         else:
             mode, default = "required", None
 
-        field_spec = (stored, spec, mode, default, options.index, options.unique)
+        field_spec = (stored, spec, mode, default, options.index, options.unique, options.cascade)
         link = spec[1] if isinstance(spec, tuple) and spec[0] == "link" else None
 
         if isinstance(spec, tuple) and spec[0] == "list" and isinstance(spec[1], tuple):
