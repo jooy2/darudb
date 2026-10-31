@@ -493,8 +493,8 @@ export const SECTIONS: Section[] = [
       }),
       row('builder', 'Typed query builder', '타입이 있는 쿼리 빌더', {
         darudb: partly(
-          'Typed in Node.js and Dart; Rust and Python name fields by string or attribute',
-          'Node.js와 Dart는 타입 검사, Rust와 Python은 필드를 문자열이나 속성으로 지정'
+          'Typed in Node.js, in Dart and through derived types in Rust; Python names fields by attribute',
+          'Node.js, Dart, 파생 타입을 쓰는 Rust는 타입 검사, Python은 필드를 속성으로 지정'
         ),
         sqlite: partly(
           'drift for Dart; other bindings take SQL',
