@@ -1202,11 +1202,12 @@ fn a_system_time_is_a_date_rounded_down_to_the_microsecond() {
         Some(first.at)
     );
 
-    // A time past what a date holds compares as the last date there is.
-    let far = UNIX_EPOCH + Duration::from_secs(u64::MAX / 4);
-
-    assert_eq!(found(&Query::new().filter(Event::AT.lt(far))), [1, 2, 3]);
-    assert_eq!(code(Value::try_from(far)), "INVALID_ARGUMENT");
+    // A time past what a date holds compares as the last date there is, on
+    // a platform whose `SystemTime` reaches that far, which Windows does not.
+    if let Some(far) = UNIX_EPOCH.checked_add(Duration::from_secs(u64::MAX / 4)) {
+        assert_eq!(found(&Query::new().filter(Event::AT.lt(far))), [1, 2, 3]);
+        assert_eq!(code(Value::try_from(far)), "INVALID_ARGUMENT");
+    }
 }
 
 #[derive(darudb_derive::Embedded, Debug, Clone, PartialEq)]

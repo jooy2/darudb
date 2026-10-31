@@ -1922,7 +1922,8 @@ fn dates_are_instants_kept_to_the_microsecond_and_queried_in_order() {
         "OK"
     );
 
-    let time = std::time::UNIX_EPOCH - std::time::Duration::from_nanos(1);
+    // A hundred nanoseconds, the finest a `SystemTime` holds on Windows.
+    let time = std::time::UNIX_EPOCH - std::time::Duration::from_nanos(100);
 
     assert_eq!(Value::try_from(time).unwrap(), Value::Date(-1));
     assert_eq!(
