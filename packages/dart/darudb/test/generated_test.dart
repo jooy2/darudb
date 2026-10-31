@@ -419,4 +419,191 @@ void main() {
       ['last,given true', 'home.town,age false'],
     );
   });
+  group('cascading links', () {
+    late Database library;
+
+    setUp(() {
+      library = Database.open(
+        '${directory.path}/library.darudb',
+        schema: const Schema(1, [
+          authorSchema,
+          bookSchema,
+          reviewSchema,
+          noteSchema,
+        ]),
+      );
+
+      library.write((txn) {
+        for (final name in ['Ada', 'Bo']) {
+          final author = txn
+              .collection(authorSchema)
+              .insert(Author(name: name));
+          final book = txn
+              .collection(bookSchema)
+              .insert(Book(author: Link<Author>(author)));
+
+          txn.collection(reviewSchema).insert(Review(book: Link<Book>(book)));
+          txn.collection(noteSchema).insert(Note(book: Link<Book>(book)));
+        }
+      });
+    });
+
+    tearDown(() => library.close());
+
+    List<int> counts() => library.read(
+      (txn) => [
+        txn.collection(authorSchema).count(),
+        txn.collection(bookSchema).count(),
+        txn.collection(reviewSchema).count(),
+        txn.collection(noteSchema).count(),
+      ],
+    );
+
+    test('take what links to a deleted object, and stop at a plain link', () {
+      library.write((txn) {
+        expect(txn.collection(authorSchema).delete(1), isTrue);
+        expect(txn.collection(authorSchema).delete(1), isFalse);
+      });
+
+      expect(counts(), [1, 1, 1, 2]);
+      expect(library.check().ok, isTrue);
+    });
+
+    test('leave the count of a delete by query to what it found', () {
+      library.write((txn) {
+        final authors = txn.collection(authorSchema);
+
+        expect(authors.deleteWhere((q) => q.where(q.name.equals('Ada'))), 1);
+      });
+
+      expect(counts(), [1, 1, 1, 2]);
+    });
+
+    test('end at a cycle', () {
+      library.write((txn) {
+        final reviews = txn.collection(reviewSchema);
+        final first = reviews.insert(Review(sequel: Link<Review>(4)));
+
+        expect(first, 3);
+        reviews.insert(Review(sequel: Link<Review>(first)));
+        expect(reviews.delete(first), isTrue);
+        expect(reviews.get(4), isNull);
+      });
+    });
+
+    test('work through the Future API', () async {
+      await library.writeAsync((txn) async {
+        expect(await txn.collection(authorSchema).delete(1), isTrue);
+      });
+
+      expect(counts(), [1, 1, 1, 2]);
+    });
+
+    test('are read back from the stored schema', () {
+      FieldSpec field(String collection, String name) => library
+          .storedSchema!
+          .collections
+          .singleWhere((each) => each.name == collection)
+          .fields
+          .singleWhere((each) => each.name == name);
+
+      expect(field('books', 'author').cascade, isTrue);
+      expect(field('reviews', 'book').cascade, isTrue);
+      expect(field('notes', 'book').cascade, isFalse);
+    });
+
+    test('are refused inside an embedded object when declared by hand', () {
+      const embedded = EmbeddedSchema<Object?>(
+        fields: [FieldSpec('author', LinkKind('authors'), cascade: true)],
+        writeField: _nothing,
+        read: _none,
+      );
+      final held = CollectionSchema<Object?, QueryBuilder<Object?>, Object>(
+        name: 'held',
+        fields: const [
+          FieldSpec('id', IntKind(), primaryKey: true),
+          FieldSpec('place', ObjectKind(embedded)),
+        ],
+        autoKey: false,
+        writeField: _nothing,
+        read: _none,
+        query: () => throw UnsupportedError('no query here'),
+      );
+
+      expect(
+        () => Database.open(
+          '${directory.path}/held.darudb',
+          schema: Schema(1, [held]),
+        ),
+        throwsA(
+          isA<DaruException>().having(
+            (error) => error.message,
+            'message',
+            contains('no link cascades'),
+          ),
+        ),
+      );
+    });
+  });
+
+  test('a migration adds a cascade and deletes through it', () {
+    final path = '${directory.path}/posts.darudb';
+    final first = Database.open(
+      path,
+      schema: const Schema(1, [authorSchema, plainPostSchema]),
+    );
+
+    first.write((txn) {
+      for (final name in ['Ada', 'Bo']) {
+        final author = txn.collection(authorSchema).insert(Author(name: name));
+
+        txn
+            .collection(plainPostSchema)
+            .insert(PlainPost(author: Link<Author>(author)));
+      }
+    });
+    first.close();
+
+    const cascading = Schema(2, [authorSchema, cascadingPostSchema]);
+
+    expect(
+      () => Database.open(path, schema: cascading, upgradeFormat: false),
+      throwsA(
+        isA<DaruException>().having(
+          (error) => error.code,
+          'code',
+          'INVALID_ARGUMENT',
+        ),
+      ),
+    );
+
+    final migrated = Database.open(
+      path,
+      schema: cascading,
+      migrations: [
+        Migration(
+          2,
+          run: (context) {
+            context.collection(authorSchema).delete(1);
+          },
+        ),
+      ],
+    );
+
+    addTearDown(migrated.close);
+
+    expect(
+      migrated.read(
+        (txn) => [
+          for (final post in txn.collection(cascadingPostSchema).find())
+            post.author.key,
+        ],
+      ),
+      [2],
+    );
+  });
 }
+
+void _nothing(Object? object, int slot, FieldSink sink) {}
+
+Object? _none(FieldSource source) => null;

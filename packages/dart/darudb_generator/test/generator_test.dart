@@ -296,6 +296,85 @@ class Place {
 ''', 'no index reaches inside one');
   });
 
+  test('@Cascade on a link is declared, nullable or not', () async {
+    final (written, errors) = await generate('''
+@Collection()
+class Owner {
+  const Owner({this.id});
+
+  final int? id;
+}
+
+@Collection()
+class Pet {
+  const Pet({this.id, required this.owner, this.keeper});
+
+  final int? id;
+  @Cascade()
+  final Link<Owner> owner;
+  @Cascade()
+  final Link<Owner>? keeper;
+}
+''');
+
+    expect(errors, isEmpty);
+    expect(
+      written,
+      contains("FieldSpec('owner', LinkKind('Owner'), cascade: true)"),
+    );
+    expect(
+      written,
+      contains(
+        "FieldSpec('keeper', LinkKind('Owner'), optional: true, cascade: true)",
+      ),
+    );
+  });
+
+  test('@Cascade on anything but a link is refused', () async {
+    await refused('''
+@Collection()
+class Owner {
+  const Owner({this.id, required this.name});
+
+  final int? id;
+  @Cascade()
+  final String name;
+}
+''', 'only a `Link`');
+  });
+
+  test('@Cascade on a list of links is refused', () async {
+    await refused('''
+@Collection()
+class Owner {
+  const Owner({this.id, this.others = const []});
+
+  final int? id;
+  @Cascade()
+  final List<Link<Owner>> others;
+}
+''', 'only a `Link`');
+  });
+
+  test('@Cascade inside an embedded object is refused', () async {
+    await refused('''
+@Collection()
+class Owner {
+  const Owner({this.id});
+
+  final int? id;
+}
+
+@Embedded()
+class Place {
+  const Place({required this.owner});
+
+  @Cascade()
+  final Link<Owner> owner;
+}
+''', 'only a `Link`');
+  });
+
   test('a field the constructor does not take is refused', () async {
     await refused('''
 @Collection()

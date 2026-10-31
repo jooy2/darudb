@@ -40,6 +40,17 @@ final class Unique {
   const Unique();
 }
 
+/// Makes deleting the object the [Link] field names delete the object that
+/// holds it, in the same transaction, and so on down the chain. Only a
+/// `Link`, nullable or not, of the collection itself cascades, not one in a
+/// `List` or an embedded object. Annotate it [Index] too: an index is how a
+/// delete finds the objects that link to one, and without it each delete
+/// reads the whole collection. A file with a cascading link is in object
+/// format 2.
+final class Cascade {
+  const Cascade();
+}
+
 /// Keeps an index on several [fields] of the collection, in order, or on a
 /// field inside an embedded object, annotating the class beside
 /// [Collection]: `@IndexOn(['last', 'first'], unique: true)`. Each is a

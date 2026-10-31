@@ -143,6 +143,7 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
       index: unique[id] == false,
       unique: unique[id] == true,
       primaryKey: !auto && id == key,
+      cascade: field[6] == true,
     );
 
     // A generated schema puts the auto-increment `id` first, in slot 0.

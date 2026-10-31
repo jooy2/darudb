@@ -6,6 +6,7 @@
 
 ### Added
 
+- `@Cascade()` on a `Link` field writes `cascade: true` in its `FieldSpec`. The generator refuses it on any other type, a `List` of links included, and inside an embedded class.
 - `@IndexOn` on a collection's class declares an index on several fields or on a field inside an embedded class: the generator turns each path of Dart names into the names the collection stores and writes the `indexes` of the schema constant, and refuses a path the class does not have. It needs `darudb` with `IndexOn`, the version released with this one.
 - A `List` of an `@Embedded()` class is a list of embedded objects: the generator declares it with `ListKind(ObjectKind(...))`, writes and reads it with `FieldSink.objectList` and `FieldSource.objectList`, and gives the query builder the `ListFields` class it now writes beside the `Fields` of every embedded class, such as `StopListFields`.
 - A `DateTime` field, or a `List<DateTime>`, is a date: the generator declares it with `DateKind`, writes and reads it with `FieldSink.date` and `FieldSource.date`, and gives the query builder a `DateField` for it. It needs `darudb` with date support, the version released with this one. A `DateTime` has no constant, so a date field has no default.

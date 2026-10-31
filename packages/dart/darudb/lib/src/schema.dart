@@ -124,6 +124,7 @@ final class FieldSpec {
     this.index = false,
     this.unique = false,
     this.primaryKey = false,
+    this.cascade = false,
   });
 
   final String name;
@@ -144,6 +145,10 @@ final class FieldSpec {
 
   /// Whether the field is the collection's primary key.
   final bool primaryKey;
+
+  /// Whether deleting the object the link names deletes the object that
+  /// holds it, in a link to one object of the collection itself.
+  final bool cascade;
 }
 
 /// A link to an object of collection [T]: the object's primary key.
@@ -1284,11 +1289,17 @@ final class _SchemaEncoder {
         );
       }
 
+      if (embedded && spec.cascade) {
+        throw invalidArgument(
+          '`$path` is inside an embedded object, where no link cascades',
+        );
+      }
+
       final mark = writer.open();
       final hasDefault = spec.defaultValue != null;
 
       writer
-        ..varint(hasDefault ? 5 : 4)
+        ..varint(4 + (hasDefault ? 1 : 0) + (spec.cascade ? 1 : 0))
         ..varint(1)
         ..byte(Tag.int64)
         ..int64(id)
@@ -1304,6 +1315,13 @@ final class _SchemaEncoder {
       if (hasDefault) {
         writer.varint(5);
         writeDefault(writer, spec.kind, spec.defaultValue, path);
+      }
+
+      // Only when set, so that a schema without one keeps its bytes.
+      if (spec.cascade) {
+        writer
+          ..varint(6)
+          ..byte(Tag.trueValue);
       }
 
       writer.close(mark);

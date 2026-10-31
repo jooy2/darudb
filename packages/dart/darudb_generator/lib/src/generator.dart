@@ -29,6 +29,7 @@ const _primaryKey = TypeChecker.typeNamedLiterally(
 );
 const _index = TypeChecker.typeNamedLiterally('Index', inPackage: 'darudb');
 const _unique = TypeChecker.typeNamedLiterally('Unique', inPackage: 'darudb');
+const _cascade = TypeChecker.typeNamedLiterally('Cascade', inPackage: 'darudb');
 const _name = TypeChecker.typeNamedLiterally('Name', inPackage: 'darudb');
 const _indexOn = TypeChecker.typeNamedLiterally('IndexOn', inPackage: 'darudb');
 const _link = TypeChecker.typeNamedLiterally('Link', inPackage: 'darudb');
@@ -126,6 +127,7 @@ final class _Field {
   bool primaryKey = false;
   bool index = false;
   bool unique = false;
+  bool cascade = false;
   String? defaultCode;
 
   String get name => element.name!;
@@ -183,12 +185,22 @@ List<_Field> _fieldsOf(ClassElement element, {required bool embedded}) {
           )
           ..primaryKey = _primaryKey.hasAnnotationOfExact(field)
           ..index = _index.hasAnnotationOfExact(field)
-          ..unique = _unique.hasAnnotationOfExact(field);
+          ..unique = _unique.hasAnnotationOfExact(field)
+          ..cascade = _cascade.hasAnnotationOfExact(field);
 
     if (embedded && (parsed.primaryKey || parsed.index || parsed.unique)) {
       throw InvalidGenerationSourceError(
         '`${element.name}.${field.name}` is in an embedded object, which has '
         'no key, and no index reaches inside one.',
+        element: field,
+      );
+    }
+
+    if (parsed.cascade && (embedded || !_link.isExactlyType(field.type))) {
+      throw InvalidGenerationSourceError(
+        '`${element.name}.${field.name}` is annotated `@Cascade()`, which '
+        'only a `Link` of a collection itself takes, not a `List` of them or '
+        'a field of an embedded object.',
         element: field,
       );
     }
@@ -441,6 +453,7 @@ String _spec(_Field field) {
     if (field.index && !field.unique) 'index: true',
     if (field.unique) 'unique: true',
     if (field.primaryKey) 'primaryKey: true',
+    if (field.cascade) 'cascade: true',
   ];
 
   return 'FieldSpec(${[_string(field.slotName), field.type.kind, ...named].join(', ')})';

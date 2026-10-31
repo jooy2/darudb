@@ -147,3 +147,57 @@ class Resident {
   final int age;
   final Hometown? home;
 }
+
+@Collection('authors')
+class Author {
+  const Author({this.id, required this.name});
+
+  final int? id;
+  final String name;
+}
+
+@Collection('books')
+class Book {
+  const Book({this.id, required this.author});
+
+  final int? id;
+  @Index()
+  @Cascade()
+  final Link<Author> author;
+}
+
+@Collection('reviews')
+class Review {
+  const Review({this.id, this.book, this.sequel});
+
+  final int? id;
+  @Cascade()
+  final Link<Book>? book;
+  @Cascade()
+  final Link<Review>? sequel;
+}
+
+@Collection('notes')
+class Note {
+  const Note({this.id, required this.book});
+
+  final int? id;
+  final Link<Book> book;
+}
+
+@Collection('posts')
+class PlainPost {
+  const PlainPost({this.id, required this.author});
+
+  final int? id;
+  final Link<Author> author;
+}
+
+@Collection('posts')
+class CascadingPost {
+  const CascadingPost({this.id, required this.author});
+
+  final int? id;
+  @Cascade()
+  final Link<Author> author;
+}
