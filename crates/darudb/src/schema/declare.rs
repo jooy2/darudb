@@ -65,6 +65,7 @@ pub struct Field {
     pub(crate) kind: Type,
     pub(crate) optional: bool,
     pub(crate) default: Option<Value>,
+    pub(crate) cascade: bool,
 }
 
 impl Field {
@@ -88,6 +89,12 @@ impl Field {
     /// field that has one.
     pub fn default(&self) -> Option<&Value> {
         self.default.as_ref()
+    }
+
+    /// Whether deleting the object the link names deletes the object that
+    /// holds it, as [`Collection::cascade`] declares.
+    pub fn is_cascade(&self) -> bool {
+        self.cascade
     }
 }
 
@@ -148,6 +155,7 @@ fn field(name: impl Into<String>, kind: Type, optional: bool, default: Option<Va
         kind,
         optional,
         default,
+        cascade: false,
     }
 }
 
@@ -204,6 +212,9 @@ pub struct Collection {
     /// The name of the primary key's field, or `None` for the auto-increment.
     pub(crate) key: Option<String>,
     pub(crate) indexes: Vec<Index>,
+    /// Names [`cascade`](Self::cascade) was given that no field had, which
+    /// [`Schema::validate`] refuses.
+    pub(crate) unknown_cascades: Vec<String>,
 }
 
 impl Collection {
@@ -220,6 +231,7 @@ impl Collection {
             fields: Vec::new(),
             key: None,
             indexes: Vec::new(),
+            unknown_cascades: Vec::new(),
         }
     }
 
@@ -309,6 +321,30 @@ impl Collection {
             components: components(paths),
             unique: true,
         });
+        self
+    }
+
+    /// Makes the link field `name`, declared before this call, cascade:
+    /// deleting the object it names deletes the object that holds the link,
+    /// and so on down the chain, through cycles too. The field is a link to
+    /// one object, of the collection itself rather than in a list or an
+    /// embedded object, which opening the database checks.
+    ///
+    /// A delete finds the objects that link to one through an index that
+    /// begins with the field, so give the field one unless the collection
+    /// stays small: without one, every delete of an object the link can name
+    /// walks the whole of this collection, and a delete by query walks it
+    /// once for all its objects. A file with a cascading link is in object
+    /// format 2.
+    #[must_use]
+    pub fn cascade(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+
+        match self.fields.iter_mut().find(|field| field.name == name) {
+            Some(field) => field.cascade = true,
+            None => self.unknown_cascades.push(name),
+        }
+
         self
     }
 
@@ -496,6 +532,7 @@ impl Schema {
                 fields,
                 key: (!definition.auto).then(|| key.name.clone()),
                 indexes,
+                unknown_cascades: Vec::new(),
             });
         }
 
@@ -536,6 +573,23 @@ impl Schema {
             {
                 return invalid(format!(
                     "`{name}` has a field called `{AUTO_KEY}` but no primary key: name it with `primary_key`, since `{AUTO_KEY}` is the auto-increment's"
+                ));
+            }
+
+            if let Some(unknown) = collection.unknown_cascades.first() {
+                return invalid(format!(
+                    "`{name}` cascades through `{unknown}`, which it has not declared by then"
+                ));
+            }
+
+            if let Some(field) = collection
+                .fields
+                .iter()
+                .find(|field| field.cascade && !matches!(field.kind, Type::Link(_)))
+            {
+                return invalid(format!(
+                    "`{name}` cascades through `{}`, which is not a link to one object",
+                    field.name
                 ));
             }
 
@@ -687,6 +741,7 @@ fn declared_field(field: &FieldDef, stored: &StoredSchema) -> Result<Field> {
         kind: declared_type(&field.kind, stored)?,
         optional: field.optional,
         default: field.default.clone(),
+        cascade: field.cascade,
     })
 }
 

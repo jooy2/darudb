@@ -1389,3 +1389,93 @@ fn a_derived_type_declares_indexes_on_several_fields_and_on_paths() {
         2
     );
 }
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "clubs")]
+struct Club {
+    id: Option<i64>,
+    name: String,
+}
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "joined")]
+struct Joined {
+    id: Option<i64>,
+    #[darudb(index, cascade)]
+    club: Link<Club>,
+    #[darudb(cascade)]
+    sponsor: Option<Link<Joined>>,
+}
+
+/// `#[darudb(cascade)]` on a link and on an optional link, with the typed
+/// deletes going through them.
+#[test]
+fn a_derived_link_cascades() {
+    let dir = TestDir::new();
+    let path = dir.path("objects.darudb");
+    let declared = Collection::of::<Joined>();
+
+    assert!(
+        declared
+            .fields()
+            .iter()
+            .all(|field| field.is_cascade() == (field.name() != "id"))
+    );
+
+    let db = OpenOptions::new()
+        .schema(
+            Schema::new(1)
+                .collection(Collection::of::<Club>())
+                .collection(declared),
+        )
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut clubs = txn.collection_of::<Club>().unwrap();
+
+    for name in ["chess", "go"] {
+        clubs
+            .insert(&Club {
+                id: None,
+                name: name.to_owned(),
+            })
+            .unwrap();
+    }
+
+    drop(clubs);
+
+    let mut joined = txn.collection_of::<Joined>().unwrap();
+    let member = |club, sponsor: Option<i64>| Joined {
+        id: None,
+        club: Link::new(club),
+        sponsor: sponsor.map(Link::new),
+    };
+
+    // 2 goes with 1, its sponsor, though its club stays.
+    joined.insert(&member(1, None)).unwrap();
+    joined.insert(&member(2, Some(1))).unwrap();
+    joined.insert(&member(2, None)).unwrap();
+    drop(joined);
+
+    assert!(txn.collection_of::<Club>().unwrap().delete(1).unwrap());
+    assert_eq!(
+        txn.collection_of::<Joined>()
+            .unwrap()
+            .query(&Query::new())
+            .unwrap()
+            .into_iter()
+            .map(|member| member.id)
+            .collect::<Vec<_>>(),
+        [Some(3)]
+    );
+
+    let found = txn
+        .collection_of::<Club>()
+        .unwrap()
+        .delete_where(&Query::new())
+        .unwrap();
+
+    assert_eq!(found, 1);
+    assert_eq!(txn.collection_of::<Joined>().unwrap().len().unwrap(), 0);
+    txn.commit().unwrap();
+}

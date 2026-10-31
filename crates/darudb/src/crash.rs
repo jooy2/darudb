@@ -1331,15 +1331,23 @@ fn object_schema(version: u64) -> crate::Schema {
         .index("tags")
         .index_on(["rank", "name"])
         .index_on(["place.city", "rank"]);
+    // Objects that go with the item they link to, so that a delete changes
+    // several trees of two collections in one commit.
+    let parts = Collection::new("parts")
+        .field("item", Type::link("items"))
+        .cascade("item")
+        .index("item");
 
     match version {
-        1 => Schema::new(1).collection(items),
-        _ => Schema::new(2).collection(
-            items
-                .optional("double", Type::Int)
-                .optional("label", Type::String)
-                .unique("label"),
-        ),
+        1 => Schema::new(1).collection(items).collection(parts),
+        _ => Schema::new(2)
+            .collection(
+                items
+                    .optional("double", Type::Int)
+                    .optional("label", Type::String)
+                    .unique("label"),
+            )
+            .collection(parts),
     }
 }
 
@@ -1397,13 +1405,32 @@ fn objects(db: &Database) -> Objects {
         .collect()
 }
 
+/// Checks that every part links to an item that is there: a part is only
+/// made for an item that is, and a cascade takes it with its item.
+fn check_parts(read: &crate::ReadTransaction) -> crate::Result<Result<(), String>> {
+    let items = read.collection("items")?;
+
+    for part in read.collection("parts")?.iter()? {
+        let part = part?;
+        let item = part.get("item").and_then(crate::Value::as_int);
+
+        if items.get(item.unwrap_or(0))?.is_none() {
+            return Ok(Err(format!("{part:?} links to an item that is gone")));
+        }
+    }
+
+    Ok(Ok(()))
+}
+
 /// Checks that the indexes of the database's schema hold exactly what its
-/// objects give them.
+/// objects give them, and that no cascading link names an object that is
+/// gone.
 fn check_objects(db: &Database) -> Result<(), String> {
     let read = db.begin_read().map_err(|error| error.to_string())?;
     let schema = read.schema().cloned().ok_or("the database has no schema")?;
     let indexes = crate::schema::objects::check_indexes(&read, &schema.schema);
 
+    check_parts(&read).map_err(|error| error.to_string())??;
     drop(read);
     check_integrity(db)?;
 
@@ -1472,6 +1499,21 @@ fn random_object_transaction(
     };
 
     for _ in 0..1 + rng.index(12) {
+        if !next.is_empty() && rng.below(4) == 0 {
+            let item = next.keys().nth(rng.index(next.len())).copied();
+            let mut part = crate::Object::new();
+
+            part.set("item", item.unwrap_or(0));
+
+            match txn
+                .collection("parts")
+                .and_then(|mut parts| parts.insert(part))
+            {
+                Ok(_) => continue,
+                Err(error) => return (Err(error), model.clone(), false),
+            }
+        }
+
         let mut items = match txn.collection("items") {
             Ok(items) => items,
             Err(error) => return (Err(error), model.clone(), false),

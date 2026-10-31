@@ -2561,44 +2561,7 @@ fn each_key(
         } => {
             let targets = gather(source, target, inner)?;
 
-            if targets.is_empty() {
-                return Ok(());
-            }
-
-            let tree = index_tree(index.id);
-
-            // An entry of a link's index starts with the linked object's key,
-            // encoded as the linked collection's records are keyed.
-            if (targets.len() as u64).saturating_mul(SEEK) > source.len_in(&tree)? {
-                // Fewer entries in the whole index than lookups of each: the
-                // index is walked once, and the entries of the set's keys
-                // kept.
-                source
-                    .range_in(&tree, Bound::Unbounded, Bound::Unbounded, false)?
-                    .for_each(&mut |entry, stored| {
-                        let (value, key) = entry_parts(source, index, entry, stored)?;
-
-                        if targets.contains(value) {
-                            give(key)?;
-                        }
-
-                        Ok(false)
-                    })?;
-            } else {
-                for at in 0..targets.len() {
-                    let value = targets.get(at);
-                    let range = (
-                        Bound::Included(value.to_vec()),
-                        key::after_prefix(value).map_or(Bound::Unbounded, Bound::Excluded),
-                    );
-
-                    walk_entries(source, index, &tree, &range, &mut |key| {
-                        give(key)?;
-
-                        Ok(false)
-                    })?;
-                }
-            }
+            each_entry_of(source, index, &targets, give)?;
         }
         Part::And(_) => {
             let set = gather(source, collection, part)?;
@@ -2611,6 +2574,61 @@ fn each_key(
             for part in parts {
                 each_key(source, collection, part, give)?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Gives the primary keys of the entries of `index` whose first component
+/// holds one of `targets`.
+///
+/// An entry of a link's index starts with the linked object's key, encoded
+/// as the linked collection's records are keyed.
+pub(super) fn each_entry_of(
+    source: &dyn Source,
+    index: &IndexDef,
+    targets: &KeySet,
+    give: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let tree = index_tree(index.id);
+
+    if (targets.len() as u64).saturating_mul(SEEK) > source.len_in(&tree)? {
+        // Fewer entries in the whole index than lookups of each: the index
+        // is walked once, and the entries of the set's keys kept.
+        source
+            .range_in(&tree, Bound::Unbounded, Bound::Unbounded, false)?
+            .for_each(&mut |entry, stored| {
+                let (value, key) = entry_parts(source, index, entry, stored)?;
+                // The components after the first are not the set's to name.
+                let first = match index.components.len() {
+                    1 => value,
+                    _ => key::length(value).map_or(value, |used| &value[..used]),
+                };
+
+                if targets.contains(first) {
+                    give(key)?;
+                }
+
+                Ok(false)
+            })?;
+    } else {
+        for at in 0..targets.len() {
+            let value = targets.get(at);
+            let range = (
+                Bound::Included(value.to_vec()),
+                key::after_prefix(value).map_or(Bound::Unbounded, Bound::Excluded),
+            );
+
+            walk_entries(source, index, &tree, &range, &mut |key| {
+                give(key)?;
+
+                Ok(false)
+            })?;
         }
     }
 

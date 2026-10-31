@@ -476,6 +476,7 @@ fn merge_fields(
             kind,
             optional: field.optional,
             default: field.default.as_ref().map(canonical),
+            cascade: field.cascade,
         });
     }
 

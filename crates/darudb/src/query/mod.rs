@@ -12,7 +12,9 @@
 //!   the parts of a filter they answer alone.
 //! - `aggregate`: sums, means, and the least and greatest values, worked out
 //!   exactly from the objects a query finds.
-//! - `change`: deleting or updating every object a query finds, in one call.
+//! - `change`: updating every object a query finds, in one call.
+//! - `cascade`: deleting an object or every object a query finds, with the
+//!   objects that cascading links take with them.
 //! - `date`: dates as the query language writes them.
 //! - `fold`: comparing strings ignoring case, by Unicode's simple case
 //!   folding, whose table `fold_table` is generated from Unicode's data.
@@ -24,6 +26,7 @@
 
 mod aggregate;
 mod build;
+mod cascade;
 mod change;
 mod date;
 mod fold;

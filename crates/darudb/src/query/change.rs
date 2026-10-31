@@ -1,6 +1,6 @@
-//! Changing the objects a query finds: deleting them, or setting fields in
-//! each, in one call (`design/objects.md`, "Changing the objects a query
-//! finds").
+//! Setting fields in the objects a query finds, in one call
+//! (`design/objects.md`, "Changing the objects a query finds"); `cascade` has
+//! deleting them.
 //!
 //! The keys come first, gathered through the query's plan, and the objects
 //! are changed one after another by key, since a walk borrows the
@@ -18,29 +18,6 @@ use crate::format::object::{Object, Value};
 use crate::schema::{Change, CollectionType, CollectionWriter, FieldOf, FieldType, TypedWriter};
 
 impl CollectionWriter<'_> {
-    /// Deletes every object `query` finds, after its sort, offset and limit,
-    /// and returns how many there were.
-    ///
-    /// The keys are gathered first and the objects deleted one after
-    /// another, so a query may test the fields it deletes by. Nothing can
-    /// refuse a delete; a failure part-way, of the file or its reading,
-    /// leaves the transaction to be aborted, as any such failure does.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidQuery`] for a query that does not fit the schema, and
-    /// what reading or writing the file meets.
-    pub fn delete_where(&mut self, query: &Query) -> Result<u64> {
-        let (source, schema, collection) = self.parts();
-        let keys = found_keys(source, schema, collection, query)?;
-
-        for key in &keys {
-            self.delete(key.clone())?;
-        }
-
-        Ok(keys.len() as u64)
-    }
-
     /// Sets the fields `changes` has in every object `query` finds, after its
     /// sort, offset and limit, as [`update`](Self::update) sets them in one,
     /// and returns how many objects the query found.
@@ -152,16 +129,6 @@ impl CollectionWriter<'_> {
 }
 
 impl<'a, T: CollectionType> TypedWriter<'a, T> {
-    /// Deletes every object `query` finds, and returns how many there were;
-    /// see [`CollectionWriter::delete_where`].
-    ///
-    /// # Errors
-    ///
-    /// As [`CollectionWriter::delete_where`] fails.
-    pub fn delete_where(&mut self, query: &Query) -> Result<u64> {
-        self.untyped().delete_where(query)
-    }
-
     /// Sets the fields `changes` has in every object `query` finds, and
     /// returns how many there were; see [`CollectionWriter::update_where`].
     /// [`change_where`](Self::change_where) names the fields through `T`

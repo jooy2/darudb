@@ -2112,8 +2112,21 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
 /// calls, and nothing else should: it may change in any release.
 #[doc(hidden)]
 pub mod derive {
-    use super::{Collection, Embedded, FieldType};
+    use super::{Collection, CollectionType, Embedded, FieldType, Link};
     use crate::format::object::Value;
+
+    /// A field type a cascade can go through, a link to one object: what
+    /// `#[darudb(cascade)]` is refused on at compile time without.
+    pub trait ToOneLink {}
+
+    impl<T: CollectionType> ToOneLink for Link<T> {}
+
+    impl<T: CollectionType> ToOneLink for Option<Link<T>> {}
+
+    /// `collection` with its field `name`, a link of type `T`, cascading.
+    pub fn cascade<T: ToOneLink>(collection: Collection, name: &str) -> Collection {
+        collection.cascade(name)
+    }
 
     /// `collection` with field `name` of type `T` added, optional if `T` is,
     /// with `default` if it has one.

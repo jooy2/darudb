@@ -84,6 +84,11 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 ///   auto-increment, which needs a field `id: Option<i64>`.
 /// - `#[darudb(index)]`, `#[darudb(unique)]`: an index on the field, unique
 ///   or not.
+/// - `#[darudb(cascade)]`, on a `Link<T>` or an `Option<Link<T>>` of the
+///   struct itself: deleting the object the link names deletes this object
+///   too, as `Collection::cascade` declares. Any other field type does not
+///   compile. Give the field an index as well, which is how a delete finds
+///   the objects that link to one.
 /// - `#[darudb(rename = "name")]`: the field's name in the collection, the
 ///   Rust field's name otherwise.
 /// - `#[darudb(default = value)]`: the value a record that leaves the field
@@ -124,6 +129,21 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 /// let query = Query::new().filter(Person::AGE.ge("eighteen"));
 /// # let _ = query;
 /// ```
+///
+/// ```compile_fail
+/// # use darudb::{Link, Object};
+/// # #[derive(Object)]
+/// # struct Person {
+/// #     id: Option<i64>,
+/// # }
+/// #[derive(Object)]
+/// struct Team {
+///     id: Option<i64>,
+///     // A list of links does not cascade.
+///     #[darudb(cascade)]
+///     members: Vec<Link<Person>>,
+/// }
+/// ```
 #[proc_macro_derive(Object, attributes(darudb))]
 pub fn derive_object(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -156,11 +176,12 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// Its fields take the attributes of `#[derive(Object)]` except `key`,
-/// `index` and `unique`: an embedded object has no key, and the collection
-/// that holds it indexes its fields by their paths, as
-/// `#[darudb(index("address.city"))]` on the collection's struct does. It declares a constant for each field as `#[derive(Object)]`
-/// does, which a path from the field that holds the embedded object goes on
-/// to: `Shop::ADDRESS.then(Address::CITY).eq("Seoul")`.
+/// `index`, `unique` and `cascade`: an embedded object has no key, and the
+/// collection that holds it indexes its fields by their paths, as
+/// `#[darudb(index("address.city"))]` on the collection's struct does. It
+/// declares a constant for each field as `#[derive(Object)]` does, which a
+/// path from the field that holds the embedded object goes on to:
+/// `Shop::ADDRESS.then(Address::CITY).eq("Seoul")`.
 #[proc_macro_derive(Embedded, attributes(darudb))]
 pub fn derive_embedded(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -180,6 +201,7 @@ struct Field {
     key: bool,
     index: bool,
     unique: bool,
+    cascade: bool,
     default: Option<Expr>,
 }
 
@@ -287,6 +309,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
             key: false,
             index: false,
             unique: false,
+            cascade: false,
             default: None,
         };
 
@@ -302,13 +325,15 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                     parsed.index = true;
                 } else if meta.path.is_ident("unique") {
                     parsed.unique = true;
+                } else if meta.path.is_ident("cascade") {
+                    parsed.cascade = true;
                 } else if meta.path.is_ident("rename") {
                     parsed.name = meta.value()?.parse::<LitStr>()?.value();
                 } else if meta.path.is_ident("default") {
                     parsed.default = Some(meta.value()?.parse::<Expr>()?);
                 } else {
                     return Err(meta.error(
-                        "unknown attribute; a field takes `key`, `index`, `unique`, `rename = \"name\"` and `default = value`",
+                        "unknown attribute; a field takes `key`, `index`, `unique`, `cascade`, `rename = \"name\"` and `default = value`",
                     ));
                 }
 
@@ -451,7 +476,8 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
         ),
     };
 
-    if let Some(id) = auto.filter(|id| id.index || id.unique || id.default.is_some()) {
+    if let Some(id) = auto.filter(|id| id.index || id.unique || id.cascade || id.default.is_some())
+    {
         return Err(syn::Error::new_spanned(
             &id.ident,
             "the auto-increment `id` takes no attribute",
@@ -499,6 +525,12 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
             quote! { let collection = collection.index_on([#(#paths),*]); }
         }
     });
+    let cascades = declared.iter().filter(|field| field.cascade).map(|field| {
+        let ty = &field.ty;
+        let name = &field.name;
+
+        quote! { let collection = ::darudb::__derive::cascade::<#ty>(collection, #name); }
+    });
     let key_type = match key {
         Some(key) => {
             let ty = &key.ty;
@@ -541,6 +573,7 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
                 #(#declarations)*
                 #(#indexes)*
                 #(#composites)*
+                #(#cascades)*
                 collection
             }
 
@@ -590,6 +623,13 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
         return Err(syn::Error::new_spanned(
             &field.ident,
             "an embedded object has no key, and no index of its own; the collection holding it indexes its fields by their paths",
+        ));
+    }
+
+    if let Some(field) = shape.fields.iter().find(|field| field.cascade) {
+        return Err(syn::Error::new_spanned(
+            &field.ident,
+            "a link inside an embedded object cannot cascade; only a collection's own link can",
         ));
     }
 

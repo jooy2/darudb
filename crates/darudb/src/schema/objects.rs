@@ -1478,39 +1478,53 @@ impl<'a> CollectionWriter<'a> {
     }
 
     /// Deletes the object whose primary key is `key`, and returns whether
-    /// there was one.
-    pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool> {
-        let schema = Arc::clone(&self.schema);
-        let collection = &schema.schema.collections[self.position];
+    /// there was one. Nothing that links to it goes with it: the public
+    /// `delete` in [`crate::query`] follows the cascading links.
+    pub(crate) fn remove(&mut self, key: &Value) -> Result<bool> {
+        let collection = &self.schema.schema.collections[self.position];
         let spare = self.txn.spare();
         let mut bytes = std::mem::take(&mut spare.key);
-        let mut entries = IndexKeys::lent(&mut spare.old, 0);
 
-        key_bytes_into(collection, &key.into(), &mut bytes)?;
+        key_bytes_into(collection, key, &mut bytes)?;
 
-        let key = bytes.as_slice();
+        let found = self.remove_encoded(&bytes)?;
+
+        self.txn.spare().key = kept(bytes);
+
+        Ok(found)
+    }
+
+    /// [`remove`](Self::remove) of the object whose key encodes as `key`.
+    pub(crate) fn remove_encoded(&mut self, key: &[u8]) -> Result<bool> {
+        let collection = &self.schema.schema.collections[self.position];
+        let names = self.schema.names(self.position);
+        let mut entries = IndexKeys::lent(&mut self.txn.spare().old, 0);
         let mut damage = None;
         // The object goes first, read on its way out for its entries.
-        let found =
-            self.txn
-                .remove_in_with(&schema.names(self.position).records, key, &mut |stored| {
-                    record_entries(&mut entries, collection, stored, key, &mut damage)
-                });
+        let found = self.txn.remove_in_with(&names.records, key, &mut |stored| {
+            record_entries(&mut entries, collection, stored, key, &mut damage)
+        });
         let found = released(&*self.txn, collection, found, damage)?;
 
         // Its entries, which it has just been read for.
         for (position, entry) in entries.iter() {
-            let tree = &schema.names(self.position).indexes[position];
-
-            self.txn.remove_present_in(tree, entry)?;
+            self.txn
+                .remove_present_in(&names.indexes[position], entry)?;
         }
 
-        let spare = self.txn.spare();
-
-        spare.key = kept(bytes);
-        entries.give_back(&mut spare.old);
+        entries.give_back(&mut self.txn.spare().old);
 
         Ok(found)
+    }
+
+    /// A writer of the collection at `position` in the same schema, for a
+    /// cascade to delete what links to this collection's objects.
+    pub(crate) fn beside(&mut self, position: usize) -> CollectionWriter<'_> {
+        CollectionWriter {
+            txn: &mut *self.txn,
+            schema: Arc::clone(&self.schema),
+            position,
+        }
     }
 
     /// The object whose primary key is `key`, if there is one.

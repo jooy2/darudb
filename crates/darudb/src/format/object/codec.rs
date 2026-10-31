@@ -1657,6 +1657,7 @@ mod tests {
             kind,
             optional,
             default: None,
+            cascade: false,
         }
     }
 

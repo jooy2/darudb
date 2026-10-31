@@ -33,7 +33,7 @@ A database holds **collections**. A collection holds **objects** of one shape, e
 - **Optional fields.** A field is required unless it is declared optional. An optional field may be null, which is also what it holds when it is left out. A required field may have a **default**, which it holds when it is left out: the object is written with the default, so that changing the default later changes no object already written.
 - **Strings compare by bytes.** Their order is the order of their UTF-8 bytes, which is the order of their code points. There is no collation in v1. A test of equality or of text can ignore case ([The filter](#the-filter)), an order cannot.
 - **Floats.** `-0.0` equals `0.0`, and every NaN equals every other and sorts after positive infinity, so that a float field has a total order an index can keep.
-- **Links** hold the target's primary key and nothing else. A link to an object that does not exist, or no longer does, is allowed and reads as the key it holds; the engine does not cascade deletes in v1.
+- **Links** hold the target's primary key and nothing else. A link to an object that does not exist, or no longer does, is allowed and reads as the key it holds, unless the link [cascades](#cascading-links), when deleting the object takes the object that holds the link with it.
 - **Backlinks** are not stored. The objects that link to an object are the answer to a query on the link field, which an index on that field makes cheap, and a filter can test them with `ANY` ([The filter](#the-filter)).
 - **Embedded objects** have no primary key and no collection of their own. They are read and written with the object that holds them, and their fields can be queried through it.
 - **Lists** hold values of one type and no nulls, and no lists. Most comparisons on a list field hold when they hold for any element ([Queries](#queries)), and a path through a list of embedded objects, such as `stops.city`, tests the field of each element. A list of embedded objects has no index and no sort, and its default is the empty list. It makes the stored schema need [object format 2](#object-formats).
@@ -150,6 +150,7 @@ The stored schema is a record too, of this shape, where every `object` is itself
 |  | 3 | `object`: its type |
 |  | 4 | `bool`: whether it is optional |
 |  | 5 | Its default, a value of its type, if it has one |
+|  | 6 | `bool`: true for a [cascading link](#cascading-links), and absent otherwise |
 | Type | 1 | `int`: the kind: 1 `bool`, 2 `int`, 3 `float`, 4 `string`, 5 `bytes`, 6 `link`, 7 `list`, 8 `object`, 9 `date` |
 |  | 2 | `int`: a link's target collection id |
 |  | 3 | `object`: a list's element type |
@@ -166,10 +167,10 @@ A stored schema that does not decode, or whose ids repeat or point nowhere, is `
 
 A build that knows an object format reads every one before it. A build that does not refuses the file, since an older build would ignore a field of the stored schema it does not know, and write objects without what that field asks of it, and could not step over a record's value with a tag it does not know.
 
-| Format | Adds                        |
-| ------ | --------------------------- |
-| 1      | The first released format   |
-| 2      | The `date` type, tag `0x0B` |
+| Format | Adds                                                                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1      | The first released format                                                                                                                        |
+| 2      | The `date` type, tag `0x0B`; lists of embedded objects; indexes that are not on one field of the collection; [cascading links](#cascading-links) |
 
 - **A schema is stored in the lowest format that holds what it declares**, so a schema that declares nothing of format 2 stays in format 1, byte for byte, and every release still opens the file. A record of format 1 that declares a date is `CORRUPTED`.
 - **The format is never lowered.** A later version of the schema that no longer declares a date keeps format 2, since records still hold dates, which a build of format 1 could not step over.
@@ -196,7 +197,7 @@ A write transaction offers these for a collection:
 - **Insert** an object: fails with `DUPLICATE_KEY` if its key is taken.
 - **Put** an object: inserts it, or replaces the object with its key.
 - **Update** the object with a key: sets the fields it is given and keeps the rest, and returns whether there was an object. The object becomes what a put of the stored object with those fields set would write: null makes an optional field null and a required one its default, and an embedded object or a list is replaced whole. An update refuses a change of the primary key with `INVALID_ARGUMENT`, and inserts nothing when there is no object.
-- **Delete** the object with a key: returns whether there was one.
+- **Delete** the object with a key: returns whether there was one. A [cascading link](#cascading-links) takes the objects that name it too.
 
 Each writes the record and adds, changes or removes the index entries whose values changed, checking unique indexes first. Every check that can refuse a write, the object against the schema, its key, the unique indexes and the length of every key it adds, happens before any index changes, so a refused write leaves the transaction holding what it held and able to commit. The record is where the order differs:
 
@@ -214,6 +215,19 @@ A write transaction also deletes, or updates, every object a query finds, after 
 - **The keys come first.** The query runs through its plan and gives the primary keys of its objects, and then each object is deleted or updated by its key, as the calls above do. A walk of a tree borrows the transaction, which changing an object needs for itself, so nothing changes while the query walks, and the query may test the very fields the change sets.
 - **An update by query is all or nothing.** An object can refuse its change only through an index on a field the change sets: a unique value another object holds, or an entry too long. When one does, the objects changed before it get back the records they had, byte for byte, and their index entries in place of the new ones, the last first, so that each step returns to a state that was there and no unique index is checked on the way. The transaction then holds what it held before the call, and can commit. The records are kept for this only when the change sets a field an index reads. An update by query cannot set the primary key.
 - **A delete by query** cannot be refused. A failure part-way, of the file or its reading, leaves the transaction to be aborted, as any such failure does.
+
+### Cascading links
+
+A link field of a collection may cascade: deleting the object it names deletes the object that holds the link, in the same transaction, and whatever cascades from that object in turn.
+
+- **Which links.** A link to one object, in a field of the collection itself. A list of links does not, since one of the objects it names going says nothing of the others, and neither does a link inside an embedded object. Field 6 of the field's record says so, and a stored schema that sets it on anything else is `CORRUPTED`. It is written only when true, so a schema without a cascade keeps its bytes, and it needs [object format 2](#object-formats), since a build without cascades would leave the objects it should delete. Adding or removing it in a migration writes no record. At the same version, it is a different schema, `SCHEMA_MISMATCH`.
+- **Worked out once.** Opening a schema lists, for each collection, the cascading links into it. A delete asks whether that list is empty and goes no further when it is, so a collection nothing cascades into pays for one comparison.
+- **In rounds.** The object goes first, as any delete takes it. Then the objects deleted in the last round are looked up as one set in each collection that links to theirs, the objects found are deleted, those that were there make the next round, and the rounds end when one deletes nothing that is linked to. The keys are gathered before anything is deleted, since a walk borrows the transaction. An object already gone is not there to delete, and does not go on, so a cycle or an object that links to itself ends.
+- **Finding the objects that link to one.** Through an index that begins with the link field, the one on that field alone if there is one, read as a query through a link reads it: each key's range of entries, or the whole index when it has fewer entries than the lookups would cost. Without such an index, the linking collection is walked, once for each round that reaches it, never once for each object, which is what a delete by query gathers its keys for. Each `delete` call is a round of its own, so a loop of deletes walks the collection each time. The alternative, a tree of backlinks kept beside each cascading link, would make every write of a link pay for deletes that may never come, where an index is the same tree at the application's choosing.
+- **What the calls say.** A delete returns whether the object it was given was there, and a delete by query how many objects the query found, neither counting what cascades. A key that names no object cascades to nothing, even if objects link to that key.
+- **Nothing is checked on insert.** A link may name an object that is not there, as any link may, and one that does stays until something else deletes it. A cascade removes the links to the objects it deletes; it does not promise that every link names an object.
+- **Migrations.** A migration's function deletes under the schema the migration moves to, so a cascade it adds works there. A collection the migration deletes goes without a cascade, since a schema that keeps a link to it does not validate.
+- **Failure.** Nothing refuses a delete, so a cascade keeps no undo log. A failure part-way, of the file or its reading, leaves the transaction holding what was deleted, to be aborted, as any such failure does. A link that holds a key of another type than the collection it names, in a walk of a collection without an index, is `CORRUPTED`.
 
 ## Queries
 
@@ -435,4 +449,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Indexes through a link, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, time zones and calendar arithmetic on dates, and cascading deletes.
+Indexes through a link, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, and time zones and calendar arithmetic on dates.

@@ -11,8 +11,8 @@ use super::value::Value;
 
 /// The newest object layer's format this build reads and writes, field 1 of
 /// the stored schema. Format 2 adds the date type, lists of embedded
-/// objects, and indexes on several fields or on a field inside an embedded
-/// object.
+/// objects, indexes on several fields or on a field inside an embedded
+/// object, and cascading links.
 pub(crate) const OBJECT_FORMAT: i64 = 2;
 
 /// The oldest object format this build reads: the one every release before
@@ -99,6 +99,10 @@ pub(crate) struct FieldDef {
     pub(crate) kind: Kind,
     pub(crate) optional: bool,
     pub(crate) default: Option<Value>,
+    /// Whether deleting the object a link names deletes the object that
+    /// holds the link. Only a to-one link of a collection itself has it.
+    /// Object format 2.
+    pub(crate) cascade: bool,
 }
 
 /// The fields of a collection or of an embedded object, by id in ascending
@@ -231,6 +235,19 @@ impl CollectionDef {
     }
 }
 
+/// A cascading link into a collection: what deleting one of the collection's
+/// objects has to follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cascade {
+    /// The position of the collection whose objects hold the link.
+    pub(crate) from: usize,
+    /// The link field's id.
+    pub(crate) field: u64,
+    /// Where among that collection's indexes the one that begins with the
+    /// link field is, if it has one.
+    pub(crate) index: Option<usize>,
+}
+
 /// The stored schema a database handle opened the file with, and its record
 /// as the file held it. An object transaction compares that record with the
 /// file's, to notice another process's migration.
@@ -247,6 +264,10 @@ pub(crate) struct OpenSchema {
     /// The names of each collection's trees, at its position, made once
     /// here for the same reason.
     names: Vec<CollectionNames>,
+    /// The cascading links into each collection, at its position, so that a
+    /// delete in a collection nothing cascades into asks one question of a
+    /// slice rather than walking the schema.
+    cascades: Vec<Vec<Cascade>>,
     /// How each Rust type a transaction of the handle reached its collection
     /// as lies in it, by the type's id: worked out from the type and the
     /// stored schema the first time, and kept for the life of the schema.
@@ -273,12 +294,14 @@ impl OpenSchema {
             .map(|collection| NameOrder::of(&collection.fields))
             .collect();
         let names = schema.collections.iter().map(CollectionNames::of).collect();
+        let cascades = cascades_of(&schema);
 
         Self {
             schema,
             encoded,
             orders,
             names,
+            cascades,
             typed: Mutex::new(Vec::new()),
             shapes: Mutex::new(Vec::new()),
         }
@@ -293,6 +316,12 @@ impl OpenSchema {
     /// position of one of the schema's collections.
     pub(crate) fn names(&self, position: usize) -> &CollectionNames {
         &self.names[position]
+    }
+
+    /// The cascading links into the collection at `position`, which is the
+    /// position of one of the schema's collections.
+    pub(crate) fn cascades(&self, position: usize) -> &[Cascade] {
+        &self.cascades[position]
     }
 
     /// What [`keep_typed`](Self::keep_typed) kept for the type `id`.
@@ -335,6 +364,48 @@ impl OpenSchema {
     }
 }
 
+/// The cascading links of `schema`, by the position of the collection each
+/// links to. An index on the link field alone is the shortest to walk; one
+/// that begins with the field finds the same objects.
+fn cascades_of(schema: &StoredSchema) -> Vec<Vec<Cascade>> {
+    let mut cascades = vec![Vec::new(); schema.collections.len()];
+
+    for (from, collection) in schema.collections.iter().enumerate() {
+        for field in collection.fields.list.iter().filter(|field| field.cascade) {
+            let Kind::Link { collection: target } = field.kind else {
+                continue;
+            };
+            let Some(target) = schema
+                .collections
+                .iter()
+                .position(|collection| collection.id == target)
+            else {
+                continue;
+            };
+            let index = collection
+                .indexes
+                .iter()
+                .position(|index| index.is_on(field.id))
+                .or_else(|| {
+                    collection.indexes.iter().position(|index| {
+                        index
+                            .components
+                            .first()
+                            .is_some_and(|path| *path == [field.id])
+                    })
+                });
+
+            cascades[target].push(Cascade {
+                from,
+                field: field.id,
+                index,
+            });
+        }
+    }
+
+    cascades
+}
+
 /// The schema a file holds.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StoredSchema {
@@ -369,8 +440,9 @@ impl StoredSchema {
     }
 
     /// The lowest object format that holds what the schema declares: 2 for
-    /// a date or a list of embedded objects anywhere in it, or an index that
-    /// is not on one field of its collection, and 1 otherwise.
+    /// a date or a list of embedded objects anywhere in it, an index that is
+    /// not on one field of its collection, or a cascading link, and 1
+    /// otherwise.
     pub(crate) fn needs(&self) -> i64 {
         fn needs_kind(kind: &Kind) -> i64 {
             match kind {
@@ -394,17 +466,14 @@ impl StoredSchema {
         self.collections
             .iter()
             .map(|collection| {
-                let indexes = if collection
+                let plain = collection
                     .indexes
                     .iter()
                     .all(|index| index.field().is_some())
-                {
-                    OLDEST_OBJECT_FORMAT
-                } else {
-                    2
-                };
+                    && collection.fields.list.iter().all(|field| !field.cascade);
+                let declared = if plain { OLDEST_OBJECT_FORMAT } else { 2 };
 
-                needs_fields(&collection.fields).max(indexes)
+                needs_fields(&collection.fields).max(declared)
             })
             .max()
             .unwrap_or(OLDEST_OBJECT_FORMAT)
@@ -482,6 +551,15 @@ impl StoredSchema {
 
             collection_ids.push(collection.id);
             check_fields(&collection.fields, self)?;
+
+            if collection
+                .fields
+                .list
+                .iter()
+                .any(|field| field.cascade && !matches!(field.kind, Kind::Link { .. }))
+            {
+                return Err("a field that is not a link cascades");
+            }
 
             if !collection
                 .key_field()
@@ -565,6 +643,9 @@ fn check_kind(kind: &Kind, schema: &StoredSchema) -> Result<(), &'static str> {
         }
         Kind::List(element) if matches!(**element, Kind::List(_)) => Err("a list holds lists"),
         Kind::List(element) => check_kind(element, schema),
+        Kind::Object(fields) if fields.list.iter().any(|field| field.cascade) => {
+            Err("a field inside an embedded object cascades")
+        }
         Kind::Object(fields) => check_fields(fields, schema),
         _ => Ok(()),
     }
@@ -642,6 +723,12 @@ fn encode_fields(fields: &[FieldDef]) -> Raw {
                     if let Some(value) = default_raw(default) {
                         raw.push((5, value));
                     }
+                }
+
+                // Only when set, so that a schema of format 1 keeps format
+                // 1's bytes.
+                if field.cascade {
+                    raw.push((6, Raw::Bool(true)));
                 }
 
                 Raw::Object(raw)
@@ -817,6 +904,10 @@ fn decode_fields(raw: &[Raw]) -> Result<Vec<FieldDef>, &'static str> {
                 kind: decode_kind(&field.object(3)?)?,
                 optional: field.bool(4)?,
                 default: field.get(5).ok().map(default_value).transpose()?,
+                cascade: match field.get(6) {
+                    Ok(_) => field.bool(6)?,
+                    Err(_) => false,
+                },
             })
         })
         .collect()
@@ -854,6 +945,7 @@ mod tests {
                 kind: Kind::String,
                 optional: false,
                 default: Some(Value::String("Seoul".into())),
+                cascade: false,
             }],
             next_id: 2,
         };
@@ -873,6 +965,7 @@ mod tests {
                                 kind: Kind::Int,
                                 optional: false,
                                 default: None,
+                                cascade: false,
                             },
                             FieldDef {
                                 id: 3,
@@ -880,6 +973,7 @@ mod tests {
                                 kind: Kind::List(Box::new(Kind::String)),
                                 optional: true,
                                 default: Some(Value::List(vec![Value::from("new")])),
+                                cascade: false,
                             },
                             FieldDef {
                                 id: 4,
@@ -887,6 +981,7 @@ mod tests {
                                 kind: Kind::Object(address),
                                 optional: true,
                                 default: None,
+                                cascade: false,
                             },
                         ],
                         next_id: 5,
@@ -910,6 +1005,7 @@ mod tests {
                                 kind: Kind::String,
                                 optional: false,
                                 default: None,
+                                cascade: false,
                             },
                             FieldDef {
                                 id: 2,
@@ -917,6 +1013,7 @@ mod tests {
                                 kind: Kind::Link { collection: 1 },
                                 optional: false,
                                 default: None,
+                                cascade: false,
                             },
                         ],
                         next_id: 3,
@@ -984,6 +1081,30 @@ mod tests {
         schema.collections[0].key = 3;
         broken.push(schema);
 
+        // A cascade anywhere but on a link of the collection itself.
+        let mut schema = sample();
+        schema.format = 2;
+        schema.collections[1].fields.list[0].cascade = true;
+        broken.push(schema);
+
+        let mut schema = sample();
+        schema.format = 2;
+        schema.collections[0].fields.list[1].kind =
+            Kind::List(Box::new(Kind::Link { collection: 1 }));
+        schema.collections[0].fields.list[1].default = None;
+        schema.collections[0].fields.list[1].cascade = true;
+        broken.push(schema);
+
+        let mut schema = sample();
+        schema.format = 2;
+        let Kind::Object(address) = &mut schema.collections[0].fields.list[2].kind else {
+            unreachable!()
+        };
+        address.list[0].kind = Kind::Link { collection: 1 };
+        address.list[0].default = None;
+        address.list[0].cascade = true;
+        broken.push(schema);
+
         for schema in broken {
             assert!(
                 matches!(StoredSchema::decode(&schema.encode()), Err(Some(_))),
@@ -1030,6 +1151,7 @@ mod tests {
             kind: Kind::List(Box::new(Kind::Date)),
             optional: false,
             default: Some(Value::List(vec![Value::Date(-1)])),
+            cascade: false,
         });
         address.next_id = 3;
 
@@ -1041,5 +1163,75 @@ mod tests {
             StoredSchema::decode(&schema.encode()),
             Err(Some(_))
         ));
+    }
+
+    #[test]
+    fn a_cascading_link_needs_format_2_and_reads_back() {
+        let mut schema = sample();
+
+        schema.collections[1].fields.list[1].cascade = true;
+
+        assert_eq!(schema.needs(), 2);
+        assert!(matches!(
+            StoredSchema::decode(&schema.encode()),
+            Err(Some(_))
+        ));
+
+        schema.format = 2;
+
+        let decoded = StoredSchema::decode(&schema.encode()).unwrap();
+
+        assert_eq!(decoded, schema);
+
+        let open = OpenSchema::new(decoded, Vec::new());
+
+        assert_eq!(
+            open.cascades(0),
+            [Cascade {
+                from: 1,
+                field: 2,
+                index: Some(0),
+            }]
+        );
+        assert!(open.cascades(1).is_empty());
+    }
+
+    #[test]
+    fn a_cascade_reads_an_index_that_begins_with_its_link() {
+        let mut schema = sample();
+
+        schema.format = 2;
+        schema.collections[1].fields.list[1].cascade = true;
+        schema.collections[1].indexes = vec![
+            IndexDef {
+                id: 5,
+                components: vec![vec![1], vec![2]],
+                unique: false,
+            },
+            IndexDef {
+                id: 6,
+                components: vec![vec![2], vec![1]],
+                unique: false,
+            },
+        ];
+        schema.next_index = 7;
+
+        assert_eq!(
+            OpenSchema::new(schema.clone(), Vec::new()).cascades(0)[0].index,
+            Some(1)
+        );
+
+        schema.collections[1].indexes.push(IndexDef {
+            id: 7,
+            components: vec![vec![2]],
+            unique: false,
+        });
+        schema.next_index = 8;
+
+        assert_eq!(
+            OpenSchema::new(schema, Vec::new()).cascades(0)[0].index,
+            Some(2),
+            "the index on the link alone is the shortest"
+        );
     }
 }
