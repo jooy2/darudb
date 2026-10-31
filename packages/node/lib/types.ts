@@ -68,6 +68,15 @@ export interface LinkType<M extends FieldMode = 'required'> extends Typed<Key, M
   optional(): LinkType<'optional'>;
   index(): LinkType<M>;
   unique(): LinkType<M>;
+  /**
+   * Deleting the object the link names deletes the object that holds it, in
+   * the same transaction, and so on down the chain. Only a link to one object
+   * of the collection itself cascades, not one in a list or an embedded
+   * object. An index on the field is how a delete finds the objects that
+   * link to one: without it, each delete reads the whole collection. A file
+   * with a cascading link cannot be opened by a release before this one.
+   */
+  cascade(): LinkType<M>;
 }
 
 /** An embedded object, whose fields have their own defaults, and no index. */
@@ -917,6 +926,8 @@ export interface StoredField {
    * field that has one. Absent otherwise.
    */
   readonly default?: unknown;
+  /** Whether deleting the object the link names deletes the object holding it. */
+  readonly cascade: boolean;
 }
 
 /** An index of a collection: the field it is on, and whether it is unique. */

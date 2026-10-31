@@ -104,7 +104,7 @@ export interface LinkKind {
 
 /**
  * A field of a stored schema: its id, name and kind, whether it may be null,
- * and its default, `undefined` for none.
+ * its default, `undefined` for none, and whether it is a cascading link.
  */
 export interface FieldLayout {
   id: number;
@@ -112,6 +112,7 @@ export interface FieldLayout {
   kind: Kind;
   optional: boolean;
   default: unknown;
+  cascade: boolean;
 }
 
 /** Makes an object of a layout from its fields' values, in the layout's order. */
@@ -1853,7 +1854,8 @@ function decodeSchemaFields(bytes: Uint8Array): SchemaLayout {
       name: field(fields, 2, 'string'),
       kind: kindOf(field(fields, 3, 'object')),
       optional: field(fields, 4, 'bool'),
-      default: defaultValue === undefined ? undefined : untag(defaultValue)
+      default: defaultValue === undefined ? undefined : untag(defaultValue),
+      cascade: fields.has(6) && field(fields, 6, 'bool')
     };
   };
   const collections = new Map<string, CollectionLayout>();
@@ -1985,11 +1987,12 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
         element.default !== undefined ||
         element.index ||
         element.unique ||
-        element.primaryKey
+        element.primaryKey ||
+        element.cascade
       ) {
         throw invalid(
           `\`${where}\` is a list, and a list's elements are neither optional, defaulted, ` +
-            'indexed nor a key: index the list itself'
+            'indexed, a key nor cascading: index the list itself'
         );
       }
 
@@ -2016,6 +2019,10 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
         );
       }
 
+      if (embedded && spec.cascade) {
+        throw invalid(`\`${where}.${name}\` is inside an embedded object, where no link cascades`);
+      }
+
       const entries: Entry[] = [
         [1, 'int', id],
         [2, 'string', name],
@@ -2025,6 +2032,11 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
 
       if (spec.default !== undefined) {
         entries.push([5, 'default', spec]);
+      }
+
+      // Only when set, so that a schema without one keeps its bytes.
+      if (spec.cascade) {
+        entries.push([6, 'bool', true]);
       }
 
       w.byte(OBJECT);

@@ -226,7 +226,7 @@ describe('records', () => {
   it('read records where a process forbids making code from strings', () => {
     const script = `
       const { decodeRecords, encodeRecords } = require(${JSON.stringify(require.resolve('../dist/codec.js'))});
-      const list = [{ id: 1, name: 'a', kind: { type: 'int' }, optional: true, default: undefined }];
+      const list = [{ id: 1, name: 'a', kind: { type: 'int' }, optional: true, default: undefined, cascade: false }];
       const layout = { name: 't', fields: { list, positions: new Map([[1, 0]]), byId: null, names: new Set(['a']), hasProto: false } };
       process.stdout.write(JSON.stringify(decodeRecords(layout, encodeRecords(layout, [{ a: 7 }]))));
     `;

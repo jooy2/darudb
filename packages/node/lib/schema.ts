@@ -27,6 +27,7 @@ export type Spec = (
   index?: boolean;
   unique?: boolean;
   primaryKey?: boolean;
+  cascade?: boolean;
 };
 
 /** The declared fields of a collection or an embedded object, by name. */
@@ -100,6 +101,19 @@ class FieldType {
   /** An index that also refuses two objects with the same value. */
   unique(): FieldType {
     return new FieldType({ ...this.spec, unique: true });
+  }
+
+  /**
+   * Deleting the object the link names deletes the object that holds it, in
+   * the same transaction, and so on down the chain. A link to one object of
+   * the collection itself, which an index makes quick to follow.
+   */
+  cascade(): FieldType {
+    if (this.spec.type !== 'link') {
+      throw invalid(`only a link cascades, not a ${this.spec.type}`);
+    }
+
+    return new FieldType({ ...this.spec, cascade: true });
   }
 
   /** The field is the collection's primary key: an int, a string or bytes. */

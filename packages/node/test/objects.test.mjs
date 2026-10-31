@@ -779,8 +779,8 @@ describe('a file opened without a schema', () => {
         key: 'name',
         autoIncrement: false,
         fields: [
-          { name: 'name', type: { kind: 'string' }, optional: false },
-          { name: 'city', type: { kind: 'string' }, optional: true }
+          { name: 'name', type: { kind: 'string' }, optional: false, cascade: false },
+          { name: 'city', type: { kind: 'string' }, optional: true, cascade: false }
         ],
         indexes: []
       },
@@ -789,25 +789,36 @@ describe('a file opened without a schema', () => {
         key: 'id',
         autoIncrement: true,
         fields: [
-          { name: 'name', type: { kind: 'string' }, optional: false },
-          { name: 'email', type: { kind: 'string' }, optional: true },
-          { name: 'age', type: { kind: 'int' }, optional: false, default: 0 },
-          { name: 'score', type: { kind: 'float' }, optional: true },
-          { name: 'tags', type: { kind: 'list', element: { kind: 'string' } }, optional: true },
-          { name: 'team', type: { kind: 'link', collection: 'teams' }, optional: true },
+          { name: 'name', type: { kind: 'string' }, optional: false, cascade: false },
+          { name: 'email', type: { kind: 'string' }, optional: true, cascade: false },
+          { name: 'age', type: { kind: 'int' }, optional: false, cascade: false, default: 0 },
+          { name: 'score', type: { kind: 'float' }, optional: true, cascade: false },
+          {
+            name: 'tags',
+            type: { kind: 'list', element: { kind: 'string' } },
+            optional: true,
+            cascade: false
+          },
+          {
+            name: 'team',
+            type: { kind: 'link', collection: 'teams' },
+            optional: true,
+            cascade: false
+          },
           {
             name: 'address',
             type: {
               kind: 'object',
               fields: [
-                { name: 'city', type: { kind: 'string' }, optional: false },
-                { name: 'zip', type: { kind: 'int' }, optional: true }
+                { name: 'city', type: { kind: 'string' }, optional: false, cascade: false },
+                { name: 'zip', type: { kind: 'int' }, optional: true, cascade: false }
               ]
             },
-            optional: true
+            optional: true,
+            cascade: false
           },
-          { name: 'avatar', type: { kind: 'bytes' }, optional: true },
-          { name: 'big', type: { kind: 'int' }, optional: true }
+          { name: 'avatar', type: { kind: 'bytes' }, optional: true, cascade: false },
+          { name: 'big', type: { kind: 'int' }, optional: true, cascade: false }
         ],
         indexes: [
           { field: 'email', fields: ['email'], unique: true },
@@ -1418,5 +1429,160 @@ describe('indexes on several fields', () => {
   it('refuse an index whose options are not of its shape', () => {
     assertCode(() => collection({ a: t.int() }, { indexes: [{ fields: [] }] }), 'INVALID_ARGUMENT');
     assertCode(() => collection({ a: t.int() }, { indexes: 'a' }), 'INVALID_ARGUMENT');
+  });
+});
+
+describe('cascading links', () => {
+  const library = schema(1, {
+    authors: collection({ name: t.string() }),
+    books: collection({ title: t.string(), author: t.link('authors').cascade().index() }),
+    reviews: collection({ book: t.link('books').optional().cascade() }),
+    notes: collection({ book: t.link('books') })
+  });
+
+  /** One author with a book, a review of it and a note on it, for each of `names`. */
+  const filled = (context) => {
+    const db = Database.open(tempPath(context), { schema: library });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      for (const name of ['Ada', 'Bo']) {
+        const author = txn.collection('authors').insert({ name });
+        const book = txn.collection('books').insert({ title: `${name}'s`, author });
+
+        txn.collection('reviews').insert({ book });
+        txn.collection('notes').insert({ book });
+      }
+    });
+
+    return db;
+  };
+  const counts = (db) =>
+    db.read((txn) =>
+      ['authors', 'books', 'reviews', 'notes'].map((name) => txn.collection(name).count())
+    );
+
+  it('take what links to a deleted object, down the chain and no further', (context) => {
+    const db = filled(context);
+
+    db.write((txn) => {
+      assert.equal(txn.collection('authors').delete(1), true);
+      assert.equal(txn.collection('authors').delete(1), false);
+    });
+
+    assert.deepEqual(counts(db), [1, 1, 1, 2]);
+    assert.equal(db.check().ok, true);
+  });
+
+  it('leave the count of a delete by query to what the query found', (context) => {
+    const db = filled(context);
+
+    db.write((txn) => {
+      assert.equal(txn.collection('authors').deleteWhere('name == "Ada"'), 1);
+    });
+
+    assert.deepEqual(counts(db), [1, 1, 1, 2]);
+  });
+
+  it('end at a cycle', (context) => {
+    const nodes = schema(1, {
+      nodes: collection({ next: t.link('nodes').optional().cascade().index() })
+    });
+    const db = Database.open(tempPath(context), { schema: nodes });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const all = txn.collection('nodes');
+
+      all.insert({ next: 2 });
+      all.insert({ next: 1 });
+      all.insert({ next: 3 });
+      all.insert({});
+      all.delete(1);
+      all.delete(3);
+      assert.equal(all.count(), 1);
+    });
+  });
+
+  it('work through the asynchronous API', async (context) => {
+    const db = filled(context);
+
+    await db.writeAsync(async (txn) => {
+      assert.equal(await txn.collection('authors').delete(1), true);
+      assert.equal(await txn.collection('authors').deleteWhere('name == "Bo"'), 1);
+    });
+
+    assert.deepEqual(counts(db), [0, 0, 0, 2]);
+  });
+
+  it('are read back from the stored schema', (context) => {
+    const db = filled(context);
+    const fields = (name) =>
+      db.storedSchema.collections
+        .find((each) => each.name === name)
+        .fields.map((field) => [field.name, field.cascade]);
+
+    assert.deepEqual(fields('books'), [
+      ['title', false],
+      ['author', true]
+    ]);
+    assert.deepEqual(fields('notes'), [['book', false]]);
+  });
+
+  it('work in a migration, which adds one without writing an object', (context) => {
+    const path = tempPath(context);
+    const posts = (cascade) =>
+      collection({ author: cascade ? t.link('users').cascade() : t.link('users') });
+    const users = collection({ name: t.string() });
+    const first = Database.open(path, { schema: schema(1, { users, posts: posts(false) }) });
+
+    first.write((txn) => {
+      txn.collection('users').insertMany([{ name: 'Ada' }, { name: 'Bo' }]);
+      txn.collection('posts').insertMany([{ author: 1 }, { author: 2 }]);
+    });
+    first.close();
+
+    const options = {
+      schema: schema(2, { users, posts: posts(true) }),
+      migrations: [
+        {
+          version: 2,
+          run: (migrating) => {
+            migrating.collection('users').delete(1);
+          }
+        }
+      ]
+    };
+
+    assertCode(() => Database.open(path, { ...options, upgradeFormat: false }), 'INVALID_ARGUMENT');
+
+    const db = Database.open(path, options);
+
+    context.after(() => db.close());
+
+    db.read((txn) => {
+      assert.deepEqual(
+        txn
+          .collection('posts')
+          .find()
+          .map((post) => post.author),
+        [2]
+      );
+    });
+  });
+
+  it('are refused on anything but a link to one object of the collection', (context) => {
+    assertCode(() => t.string().cascade(), 'INVALID_ARGUMENT');
+    assertCode(() => t.list(t.link('a')).cascade(), 'INVALID_ARGUMENT');
+
+    const opening = (fields) => () =>
+      Database.open(tempPath(context), {
+        schema: schema(1, { a: collection({}), b: collection(fields) })
+      });
+
+    assertCode(opening({ links: t.list(t.link('a').cascade()) }), 'INVALID_ARGUMENT');
+    assertCode(opening({ home: t.object({ a: t.link('a').cascade() }) }), 'INVALID_ARGUMENT');
   });
 });

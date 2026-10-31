@@ -45,6 +45,11 @@ t.list(t.object({ city: t.string() })).default([{ city: 'Busan' }]);
 // What the engine refuses in a declaration is refused here too.
 // @ts-expect-error a link has no default.
 t.link('teams').default('north');
+// A link cascades, and nothing else does.
+t.link('teams').cascade();
+t.link('teams').optional().cascade().index();
+// @ts-expect-error only a link cascades.
+t.int().cascade();
 // @ts-expect-error a float cannot be a primary key.
 t.float().primaryKey();
 // @ts-expect-error a primary key is required.

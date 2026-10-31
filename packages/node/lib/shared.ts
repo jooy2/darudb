@@ -566,6 +566,7 @@ function storedFieldsOf(list: FieldLayout[], left: FieldLayout | null): readonly
           name: field.name,
           type: storedTypeOf(field.kind),
           optional: field.optional,
+          cascade: field.cascade,
           ...(field.default === undefined ? {} : { default: field.default })
         })
       )
