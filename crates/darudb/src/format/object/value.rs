@@ -471,16 +471,18 @@ mod tests {
 
     #[test]
     fn times_are_microseconds_rounded_down() {
+        // In hundreds of nanoseconds, the finest a `SystemTime` holds on
+        // Windows, which drops anything finer from a time it is given.
         let after = |secs, nanos| UNIX_EPOCH + Duration::new(secs, nanos);
         let before = |secs, nanos| UNIX_EPOCH - Duration::new(secs, nanos);
 
         assert_eq!(micros_of(UNIX_EPOCH), Some(0));
-        assert_eq!(micros_of(after(0, 999)), Some(0));
+        assert_eq!(micros_of(after(0, 900)), Some(0));
         assert_eq!(micros_of(after(0, 1_000)), Some(1));
-        assert_eq!(micros_of(after(1, 1)), Some(1_000_000));
-        assert_eq!(micros_of(before(0, 1)), Some(-1));
+        assert_eq!(micros_of(after(1, 100)), Some(1_000_000));
+        assert_eq!(micros_of(before(0, 100)), Some(-1));
         assert_eq!(micros_of(before(0, 1_000)), Some(-1));
-        assert_eq!(micros_of(before(0, 1_001)), Some(-2));
+        assert_eq!(micros_of(before(0, 1_100)), Some(-2));
         assert_eq!(micros_of(before(1, 0)), Some(-1_000_000));
 
         for micros in [i64::MIN + 1, -1_000_001, -1, 0, 1, 1_793_361_600_000_000] {
@@ -492,6 +494,10 @@ mod tests {
             assert_eq!(micros_of(time), Some(micros));
         }
 
-        assert_eq!(micros_of(after(u64::MAX / 2, 0)), None);
+        // Past an `i64` of microseconds, on a platform whose `SystemTime`
+        // reaches that far.
+        if let Some(time) = UNIX_EPOCH.checked_add(Duration::new(u64::MAX / 2, 0)) {
+            assert_eq!(micros_of(time), None);
+        }
     }
 }
