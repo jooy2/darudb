@@ -533,6 +533,26 @@ export const SECTIONS: Section[] = [
         rocksdb: no(),
         redb: no()
       }),
+      row('cascade', 'Cascading deletes', '연쇄 삭제', {
+        darudb: yes(
+          'A link to one object, declared to cascade; cycles end',
+          '객체 하나를 가리키는 링크에 선언, 순환해도 끝남'
+        ),
+        sqlite: yes(
+          'ON DELETE CASCADE, with PRAGMA foreign_keys on for each connection',
+          'ON DELETE CASCADE, 연결마다 PRAGMA foreign_keys를 켜야 함'
+        ),
+        realm: partly(
+          'Embedded objects only; the application deletes linked ones',
+          '내장 객체만, 링크된 객체는 애플리케이션이 지움'
+        ),
+        objectbox: no(),
+        isar: no(),
+        hive: no(),
+        lmdb: no(),
+        rocksdb: no(),
+        redb: no()
+      }),
       row('embedded', 'Embedded objects and lists', '내장 객체와 리스트', {
         darudb: yes(),
         sqlite: partly('As JSON in a column', '열에 담은 JSON으로'),
