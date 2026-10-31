@@ -25,6 +25,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any: ...
 ```
 
@@ -129,6 +130,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any: ...
 ```
 
@@ -153,6 +155,10 @@ An index that also refuses a second object with the same value, with `DUPLICATE_
 ### link
 
 The field holds the primary key of an object of another collection, or of its own, given as the collection's class or its name; a collection links to itself by its name, since the class does not exist yet inside its own body. The annotation is the key's type, `int`, `str` or `bytes`, `| None` for an optional link, or a list of the key's type for a to-many link. A class that is not decorated with `@collection` fails with `INVALID_ARGUMENT` when the schema is made, and a collection the schema does not have when the database opens. A link to an object that does not exist is allowed. A query reads the linked object's fields through the link, as `F.author.name`.
+
+### cascade
+
+With `link`, deleting the object the link names deletes the object that holds it, in the same transaction, and so on down the chain. Only a link to one object of the collection itself cascades: a list of links, a field of an embedded class, or a field without `link` is refused with `INVALID_ARGUMENT` when the `Schema` is made. Give the field an index as well: without one, each delete of an object it can name reads the whole collection. A file with a cascading link is in object format 2. The guide has [the rules](../../guide/objects.md#delete-what-links-to-an-object).
 
 ### name
 

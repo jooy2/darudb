@@ -93,7 +93,7 @@ with db.write() as txn:
 def delete(self, key: Key) -> bool: ...
 ```
 
-Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A key that is not an `int`, a `str` or bytes fails with `INVALID_ARGUMENT`.
+Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A [cascading link](../../guide/objects.md#delete-what-links-to-an-object) takes the objects that name it with it, which the result does not count. A key that is not an `int`, a `str` or bytes fails with `INVALID_ARGUMENT`.
 
 ### delete_where
 
@@ -101,7 +101,7 @@ Deletes the object whose primary key is `key`, with its index entries, and retur
 def delete_where(self, query: QueryInput, /, *parameters: object) -> int: ...
 ```
 
-Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, in any form `find` takes, with its parameters after it, so that deleting every object is never an accident: `Query()` finds them all. `None` fails with `INVALID_ARGUMENT`.
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The query is required, in any form `find` takes, with its parameters after it, so that deleting every object is never an accident: `Query()` finds them all. `None` fails with `INVALID_ARGUMENT`.
 
 ### update_where
 

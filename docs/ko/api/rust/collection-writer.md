@@ -85,7 +85,7 @@ pub fn update(&mut self, key: impl Into<Value>, changes: Object) -> Result<bool>
 pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 ```
 
-기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다.
+기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. [연쇄 삭제](../../guide/objects.md#링크로-이어진-객체-함께-지우기) 링크는 이 객체를 가리키는 객체도 함께 지우며, 돌려주는 값에는 이들을 세지 않습니다.
 
 ### delete_where
 
@@ -93,7 +93,7 @@ pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 pub fn delete_where(&mut self, query: &Query) -> Result<u64>
 ```
 
-`query`가 찾은 객체를 정렬, 오프셋, 개수 제한을 거친 뒤 모두 지우고, 지운 개수를 돌려줍니다. 키를 먼저 모으므로, 쿼리가 지울 객체를 고르는 바로 그 필드를 검사해도 됩니다. 스키마와 맞지 않는 쿼리는 `INVALID_QUERY`로 실패합니다.
+`query`가 찾은 객체를 정렬, 오프셋, 개수 제한을 거친 뒤 모두 지우고, 지운 개수를 돌려줍니다. 연쇄 삭제로 함께 지워진 객체는 세지 않습니다. 키를 먼저 모으므로, 쿼리가 지울 객체를 고르는 바로 그 필드를 검사해도 됩니다. 스키마와 맞지 않는 쿼리는 `INVALID_QUERY`로 실패합니다.
 
 ### update_where
 

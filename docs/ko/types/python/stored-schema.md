@@ -48,9 +48,10 @@ class StoredField:
     type: StoredType
     optional: bool
     default: object = None
+    cascade: bool = False
 ```
 
-컬렉션이나 내장 객체의 필드이며, 이름은 파일에 저장된 이름입니다. `optional`은 필드가 None일 수 있는지 알려 주며, 객체에서 빠지면 None이 됩니다. `default`는 필수 필드가 객체에서 빠졌을 때 들어가는 값이고, 기본값이 없으면 None입니다.
+컬렉션이나 내장 객체의 필드이며, 이름은 파일에 저장된 이름입니다. `optional`은 필드가 None일 수 있는지 알려 주며, 객체에서 빠지면 None이 됩니다. `default`는 필수 필드가 객체에서 빠졌을 때 들어가는 값이고, 기본값이 없으면 None입니다. `cascade`는 링크가 가리키는 객체를 지울 때 그 링크를 가진 객체도 지우는지 알려 줍니다.
 
 ## StoredIndex
 

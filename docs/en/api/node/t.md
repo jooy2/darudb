@@ -104,7 +104,7 @@ list<T, I>(
 list(element: LinkType): FieldType<Key[]>;
 ```
 
-A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type with a modifier, `optional`, `default`, `index` or `unique`, or a list of lists, fails to open with `INVALID_ARGUMENT`. A list of `t.object(...)` is a list of embedded objects, an [`EmbeddedListType`](../../types/node/field-types.md#embeddedlisttype): a path through it, `stops.city`, tests the field of each element, and it has no index, no sort, and no default but `[]`. An index goes on the list itself, as `t.list(t.string()).index()`, with an entry for each element. A condition on a list holds when it holds for any element.
+A list of values of `element`, a scalar type or a link without modifiers. A list of links is a to-many link. A list holds no nulls, and an empty list is not null. An element type with a modifier, `optional`, `default`, `index`, `unique` or `cascade`, or a list of lists, fails to open with `INVALID_ARGUMENT`. A list of `t.object(...)` is a list of embedded objects, an [`EmbeddedListType`](../../types/node/field-types.md#embeddedlisttype): a path through it, `stops.city`, tests the field of each element, and it has no index, no sort, and no default but `[]`. An index goes on the list itself, as `t.list(t.string()).index()`, with an entry for each element. A condition on a list holds when it holds for any element.
 
 ### object
 
@@ -149,6 +149,14 @@ unique(): FieldType<T, M, I>;
 ```
 
 An index that also refuses two objects with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null. `unique` makes the index by itself, without `index`.
+
+### cascade
+
+```ts
+cascade(): LinkType<M>;
+```
+
+Deleting the object the link names deletes the object that holds it, in the same transaction, and so on down the chain. Only a link has it, and only a link to one object of the collection itself cascades: inside a `t.list` or a `t.object` it fails with `INVALID_ARGUMENT` when the database opens. Give the field an index as well: without one, each delete of an object it can name reads the whole collection. A file with a cascading link is in object format 2. The guide has [the rules](../../guide/objects.md#delete-what-links-to-an-object).
 
 ### primaryKey
 

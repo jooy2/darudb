@@ -94,7 +94,7 @@ users.update(alice, (q) => [q.age.set(37), q.email.set(null), q.tags.set(['admin
 bool delete(K key);
 ```
 
-기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다.
+기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. [연쇄 삭제](../../guide/objects.md#링크로-이어진-객체-함께-지우기) 링크는 이 객체를 가리키는 객체도 함께 지우며, 돌려주는 값에는 이들을 세지 않습니다.
 
 ### deleteWhere
 
@@ -104,7 +104,7 @@ int deleteWhereText(String text, [List<Object?> parameters = const []]);
 int deleteWherePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
 ```
 
-쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, 모든 객체를 지우려면 `(q) => q`를 줍니다. `Text`와 `Prepared`로 끝나는 메서드는 쿼리 언어로 쓴 쿼리나 준비한 쿼리를 받습니다.
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 연쇄 삭제로 함께 지워진 객체는 세지 않습니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, 모든 객체를 지우려면 `(q) => q`를 줍니다. `Text`와 `Prepared`로 끝나는 메서드는 쿼리 언어로 쓴 쿼리나 준비한 쿼리를 받습니다.
 
 ### updateWhere
 

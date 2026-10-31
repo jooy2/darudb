@@ -85,7 +85,7 @@ It fails as `put` does, and with `INVALID_ARGUMENT` when `changes` holds a prima
 pub fn delete(&mut self, key: impl Into<Value>) -> Result<bool>
 ```
 
-Deletes the object whose primary key is `key` with its index entries, and returns whether there was one.
+Deletes the object whose primary key is `key` with its index entries, and returns whether there was one. A [cascading link](../../guide/objects.md#delete-what-links-to-an-object) takes the objects that name it with it, which the result does not count.
 
 ### delete_where
 
@@ -93,7 +93,7 @@ Deletes the object whose primary key is `key` with its index entries, and return
 pub fn delete_where(&mut self, query: &Query) -> Result<u64>
 ```
 
-Deletes every object `query` finds, after its sort, offset and limit, and returns how many there were. The keys are gathered first, so the query may test the fields the objects are deleted by. It fails with `INVALID_QUERY` for a query that does not fit the schema.
+Deletes every object `query` finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The keys are gathered first, so the query may test the fields the objects are deleted by. It fails with `INVALID_QUERY` for a query that does not fit the schema.
 
 ### update_where
 

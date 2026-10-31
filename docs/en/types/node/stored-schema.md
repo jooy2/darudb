@@ -50,10 +50,11 @@ interface StoredField {
   readonly type: StoredType;
   readonly optional: boolean;
   readonly default?: unknown;
+  readonly cascade: boolean;
 }
 ```
 
-A field of a collection or of an embedded object. `optional` says whether it may be null, which it is when an object leaves it out. `default` is the value an object that leaves a required field out holds, and is absent when the field has none.
+A field of a collection or of an embedded object. `optional` says whether it may be null, which it is when an object leaves it out. `default` is the value an object that leaves a required field out holds, and is absent when the field has none. `cascade` says whether deleting the object the link names deletes the object that holds it.
 
 ## StoredIndex
 

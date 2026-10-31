@@ -26,6 +26,7 @@ This page moves the data of a SQLite database into DaruDB: how tables, columns a
 | An index on one column | An index |
 | An index on several columns | An index on several fields, in the same order, up to eight |
 | A foreign key | A link, which holds the other object's primary key |
+| `ON DELETE CASCADE` | A [cascading link](../guide/objects.md#delete-what-links-to-an-object), with an index on the field |
 | A join table between two tables | A list of links on one side, or a list of values |
 | A view, a trigger, a `CHECK` constraint | No counterpart: keep that logic in the application |
 

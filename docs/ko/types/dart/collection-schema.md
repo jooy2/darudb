@@ -116,6 +116,7 @@ final class FieldSpec {
     this.index = false,
     this.unique = false,
     this.primaryKey = false,
+    this.cascade = false,
   });
 }
 ```
@@ -131,6 +132,7 @@ final class FieldSpec {
 | `index`        | `bool`    | 필드에 인덱스가 있는지                                              |
 | `unique`       | `bool`    | 인덱스가 값이 같은 객체 둘을 거부하는지                             |
 | `primaryKey`   | `bool`    | 필드가 컬렉션의 기본 키인지                                         |
+| `cascade`      | `bool`    | 링크가 가리키는 객체를 지울 때 이 객체도 지우는지                   |
 
 ## Kind
 

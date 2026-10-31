@@ -94,7 +94,7 @@ It is refused as `put` is, with `INVALID_ARGUMENT` or `DUPLICATE_KEY`. Changing 
 bool delete(K key);
 ```
 
-Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one.
+Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A [cascading link](../../guide/objects.md#delete-what-links-to-an-object) takes the objects that name it with it, which the result does not count.
 
 ### deleteWhere
 
@@ -104,7 +104,7 @@ int deleteWhereText(String text, [List<Object?> parameters = const []]);
 int deleteWherePrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
 ```
 
-Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, so that deleting every object is never an accident: `(q) => q` finds them all. The `Text` and `Prepared` forms take it in the query language or prepared.
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The query is required, so that deleting every object is never an accident: `(q) => q` finds them all. The `Text` and `Prepared` forms take it in the query language or prepared.
 
 ### updateWhere
 

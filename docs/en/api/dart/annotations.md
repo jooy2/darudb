@@ -127,6 +127,14 @@ const Unique();
 
 Keeps an index on the field that also refuses two objects with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null.
 
+### Cascade
+
+```dart
+const Cascade();
+```
+
+Deleting the object the `Link` field names deletes the object that holds it, in the same transaction, and so on down the chain. Only a `Link`, nullable or not, of a collection cascades: the generator refuses it on any other type, on a `List` of links, and in an embedded class. Annotate the field [Index](#index) too: without an index, each delete of an object it can name reads the whole collection. A file with a cascading link is in object format 2. The guide has [the rules](../../guide/objects.md#delete-what-links-to-an-object).
+
 ### IndexOn
 
 ```dart

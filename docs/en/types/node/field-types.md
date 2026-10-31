@@ -111,6 +111,7 @@ interface LinkType<M extends FieldMode = 'required'> extends Typed<Key, M, false
   optional(): LinkType<'optional'>;
   index(): LinkType<M>;
   unique(): LinkType<M>;
+  cascade(): LinkType<M>;
 }
 ```
 

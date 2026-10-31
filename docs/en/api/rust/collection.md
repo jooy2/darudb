@@ -149,6 +149,14 @@ pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) 
 
 [`index_on`](#index-on), keeping the fields' values unique together: two objects cannot hold the same values in all of them, though any number may hold null in one of them. A write that would repeat another object's values fails with `DUPLICATE_KEY`, as with [`unique`](#unique).
 
+### cascade
+
+```rust
+pub fn cascade(mut self, name: impl Into<String>) -> Self
+```
+
+Makes the link field `name`, declared before this call, cascade: deleting the object it names deletes the object that holds the link, in the same transaction, and so on down the chain. The field is a link to one object, of the collection itself; anything else, or a name not declared by then, fails with `INVALID_ARGUMENT` when the database opens. Give the field an [index](#index): without one that begins with it, each delete of an object it can name reads this whole collection. A file with a cascading link is in object format 2. The guide has [the rules](../../guide/objects.md#delete-what-links-to-an-object).
+
 ### name
 
 ```rust

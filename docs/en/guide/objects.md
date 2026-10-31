@@ -197,7 +197,7 @@ A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes
 The rules the engine keeps are the same in every language:
 
 - **The automatic key.** A collection that names no primary key gets an integer field called `id`, and an object written without an `id` gets the next number, from 1 up. A number is never given twice in one file, even after its object is deleted.
-- **Links** hold the primary key of an object in the linked collection. A link to an object that does not exist is allowed, and reads as the key it holds.
+- **Links** hold the primary key of an object in the linked collection. A link to an object that does not exist is allowed, and reads as the key it holds. A link can [cascade](#delete-what-links-to-an-object), so that deleting the object takes the one that links to it.
 - **Indexes** let a query on the field read only the objects it finds. Any number of objects can hold null in a unique field, and an index on a list has an entry for each element. An index on several fields sorts its entries by the first, then by the next, and has one to eight of them; a path through a list is allowed only in an index of one field. A file with an index on several fields, or on a field inside an embedded object, is in object format 2.
 
 The first open stores the schema in the file. Every later open compares the declared schema with the stored one: the same version with a different schema fails with `SCHEMA_MISMATCH`, and a file holding a newer version fails with `SCHEMA_TOO_NEW`. Declaring collections or indexes in another order is not a change. To change the schema, raise its version: see [Migrations](./migrations.md).
@@ -425,6 +425,87 @@ with db.write() as txn:
 - **The keys come first.** The engine finds the objects through the query's plan, then changes each by its key, so a query can test the very fields the change sets.
 - **An update by query is all or nothing.** When one object refuses its change, a unique value another object holds or an index entry too long, the objects changed before it get their records and index entries back, and the call fails with the object's error. The transaction is as it was before the call and can go on. An update by query cannot set the primary key.
 - **A delete by query** cannot be refused.
+
+## Delete what links to an object
+
+A link can cascade: deleting the object it names deletes the object that holds the link, in the same transaction, and whatever cascades from that object in turn. In this schema, deleting a user deletes the user's posts and the comments on them.
+
+::: lang rust
+
+```rust
+use darudb::{Collection, Schema, Type};
+
+let schema = Schema::new(1)
+    .collection(Collection::new("users").field("name", Type::String))
+    .collection(
+        Collection::new("posts")
+            .field("author", Type::link("users"))
+            .cascade("author")
+            .index("author"),
+    )
+    .collection(
+        Collection::new("comments")
+            .field("post", Type::link("posts"))
+            .cascade("post")
+            .index("post"),
+    );
+```
+
+`cascade` names a field declared before it. On a derived type, `#[darudb(cascade)]` goes on a `Link<T>` or an `Option<Link<T>>` field, and on any other type does not compile.
+
+:::
+
+::: lang node
+
+```ts
+import { collection, schema, t } from 'darudb';
+
+const app = schema(1, {
+  users: collection({ name: t.string() }),
+  posts: collection({ author: t.link('users').cascade().index() }),
+  comments: collection({ post: t.link('posts').cascade().index() })
+});
+```
+
+:::
+
+::: lang dart
+
+```dart
+@Collection('posts')
+class Post {
+  const Post({this.id, required this.author});
+
+  final int? id;
+  @Index()
+  @Cascade()
+  final Link<User> author;
+}
+```
+
+`@Cascade()` goes on a `Link`, nullable or not, and the generator refuses it on anything else.
+
+:::
+
+::: lang python
+
+```python
+@darudb.collection("posts")
+class Post:
+    id: int | None = None
+    author: int = field(link=User, cascade=True, index=True)
+```
+
+:::
+
+- **Which links cascade.** A link to one object, in a field of the collection itself. A list of links does not, nor does a link inside an embedded object, and declaring one fails with `INVALID_ARGUMENT`.
+- **Give the link an index.** A delete finds the objects that link to one through an index that begins with the link field. Without one it reads every object of the linking collection, on each delete, or once for all the objects of a delete by query, so its cost follows the size of that collection rather than what is deleted. A chain through a collection that links to itself reads it once for each link in the chain.
+- **What the calls say.** A delete says whether the object it was given was there, and a delete by query how many objects the query found. Neither counts what cascades.
+- **Cycles end.** An object is deleted once, however many links reach it, so a cycle of links, or an object that links to itself, ends.
+- **It is part of the transaction.** Aborting brings back everything the cascade deleted. A failure part-way, of the file or of reading it, leaves the transaction to be aborted, as any such failure does.
+- **A link can still name nothing.** A cascade is not a check. Writing a link to an object that does not exist is allowed as ever, and the object that holds it stays until something else deletes it.
+- **Changing it.** Adding or removing a cascade raises the schema version and rewrites no object. A migration's function deletes under the schema the migration moves to, so a cascade it adds works there.
+- **Object format.** A file with a cascading link is in [object format 2](../engine/bindings.md#object-formats), which earlier releases do not open. Keeping a file in its format, with the option that turns upgrades off, refuses a schema that adds one.
 
 ## Objects as Rust types
 

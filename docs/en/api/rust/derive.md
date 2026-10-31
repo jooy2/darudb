@@ -107,6 +107,7 @@ Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype) an
 | `#[darudb(key)]` | The field is the primary key. `Object` only. |
 | `#[darudb(index)]` | An index on the field. `Object` only. |
 | `#[darudb(unique)]` | An index that also refuses two objects with the same value. `Object` only. |
+| `#[darudb(cascade)]` | Deleting the object the link names deletes this object too, as [`Collection::cascade`](./collection.md#cascade) declares. On a `Link<T>` or an `Option<Link<T>>` field of an `Object` only; on any other type it does not compile. |
 | `#[darudb(rename = "x")]` | The field's name in the collection, which is the Rust field's name otherwise. |
 | `#[darudb(default = 18)]` | The value a record that leaves the field out holds. The field is required. Not on the key. |
 

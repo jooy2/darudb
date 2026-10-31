@@ -107,6 +107,7 @@ fn main() -> Result<(), darudb::Error> {
 | `#[darudb(key)]` | 이 필드가 기본 키입니다. `Object`에만 씁니다. |
 | `#[darudb(index)]` | 이 필드에 인덱스를 둡니다. `Object`에만 씁니다. |
 | `#[darudb(unique)]` | 같은 값을 가진 두 객체를 거부하는 인덱스를 둡니다. `Object`에만 씁니다. |
+| `#[darudb(cascade)]` | 링크가 가리키는 객체를 지우면 이 객체도 함께 지웁니다. [`Collection::cascade`](./collection.md#cascade)와 같습니다. `Object`의 `Link<T>`나 `Option<Link<T>>` 필드에만 쓰고, 다른 타입에 붙이면 컴파일되지 않습니다. |
 | `#[darudb(rename = "x")]` | 컬렉션에서 쓰는 필드 이름입니다. 없으면 Rust 필드 이름을 씁니다. |
 | `#[darudb(default = 18)]` | 레코드에 필드가 없을 때 읽히는 값입니다. 필드는 필수가 됩니다. 키에는 붙일 수 없습니다. |
 

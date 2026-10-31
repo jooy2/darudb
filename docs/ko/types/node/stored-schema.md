@@ -50,10 +50,11 @@ interface StoredField {
   readonly type: StoredType;
   readonly optional: boolean;
   readonly default?: unknown;
+  readonly cascade: boolean;
 }
 ```
 
-컬렉션이나 내장 객체의 필드입니다. `optional`은 필드가 null일 수 있는지 알려 주며, 객체에서 빠지면 null이 됩니다. `default`는 필수 필드가 객체에서 빠졌을 때 들어가는 값이고, 기본값이 없는 필드에는 없습니다.
+컬렉션이나 내장 객체의 필드입니다. `optional`은 필드가 null일 수 있는지 알려 주며, 객체에서 빠지면 null이 됩니다. `default`는 필수 필드가 객체에서 빠졌을 때 들어가는 값이고, 기본값이 없는 필드에는 없습니다. `cascade`는 링크가 가리키는 객체를 지울 때 그 링크를 가진 객체도 지우는지 알려 줍니다.
 
 ## StoredIndex
 

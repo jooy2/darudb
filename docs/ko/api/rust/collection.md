@@ -149,6 +149,14 @@ pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) 
 
 [`index_on`](#index-on)과 같되, 필드들의 값 조합이 겹치지 않게 합니다. 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다. 다른 객체와 같은 값 조합을 쓰려는 쓰기는 [`unique`](#unique)처럼 `DUPLICATE_KEY`로 실패합니다.
 
+### cascade
+
+```rust
+pub fn cascade(mut self, name: impl Into<String>) -> Self
+```
+
+이 호출 앞에서 선언한 링크 필드 `name`에 연쇄 삭제를 겁니다. 링크가 가리키는 객체를 지우면 그 링크를 가진 객체도 같은 트랜잭션에서 지워지고, 사슬을 따라 계속 이어집니다. 필드는 컬렉션 자신의, 객체 하나를 가리키는 링크여야 합니다. 그렇지 않거나 이때까지 선언되지 않은 이름이면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 필드에는 [인덱스](#index)를 두세요. 이 필드로 시작하는 인덱스가 없으면, 필드가 가리킬 수 있는 객체를 지울 때마다 이 컬렉션 전체를 읽습니다. 연쇄 삭제 링크가 있는 파일은 객체 형식 2입니다. [규칙](../../guide/objects.md#링크로-이어진-객체-함께-지우기)은 가이드에 있습니다.
+
 ### name
 
 ```rust

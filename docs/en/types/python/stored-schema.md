@@ -48,9 +48,10 @@ class StoredField:
     type: StoredType
     optional: bool
     default: object = None
+    cascade: bool = False
 ```
 
-A field of a collection or of an embedded object, by the name the file stores. `optional` says whether it may be None, which it is when an object leaves it out. `default` is the value an object that leaves a required field out holds, and None when the field has none.
+A field of a collection or of an embedded object, by the name the file stores. `optional` says whether it may be None, which it is when an object leaves it out. `default` is the value an object that leaves a required field out holds, and None when the field has none. `cascade` says whether deleting the object the link names deletes the object that holds it.
 
 ## StoredIndex
 

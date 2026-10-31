@@ -65,6 +65,14 @@ pub fn is_optional(&self) -> bool
 
 필드가 null일 수 있는지 알려 줍니다. 객체에서 빠지면 null이 됩니다.
 
+### is_cascade
+
+```rust
+pub fn is_cascade(&self) -> bool
+```
+
+링크가 가리키는 객체를 지울 때 그 링크를 가진 객체도 지우는지 알려 줍니다. [`Collection::cascade`](../../api/rust/collection.md#cascade)로 선언합니다.
+
 ### default
 
 ```rust

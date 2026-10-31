@@ -25,6 +25,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any: ...
 ```
 
@@ -129,6 +130,7 @@ def field(
     unique: bool = False,
     link: type | str | None = None,
     name: str | None = None,
+    cascade: bool = False,
 ) -> Any: ...
 ```
 
@@ -153,6 +155,10 @@ def field(
 ### link
 
 필드에 다른 컬렉션이나 자기 컬렉션에 있는 객체의 기본 키를 담습니다. 컬렉션은 클래스나 이름으로 줍니다. 클래스 본문 안에서는 그 클래스가 아직 없으므로, 자기 컬렉션을 가리킬 때는 이름을 씁니다. 어노테이션은 키의 타입인 `int`, `str`, `bytes`이고, 선택 링크면 `| None`을 붙이며, 여러 객체를 가리키는 링크면 키 타입의 목록입니다. `@collection`을 붙이지 않은 클래스는 스키마를 만들 때, 스키마에 없는 컬렉션은 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 없는 객체를 가리키는 링크도 허용됩니다. 쿼리는 `F.author.name`처럼 링크를 지나 가리키는 객체의 필드를 읽습니다.
+
+### cascade
+
+`link`와 함께 쓰며, 링크가 가리키는 객체를 지우면 그 링크를 가진 객체도 같은 트랜잭션에서 지워지고, 사슬을 따라 계속 이어집니다. 컬렉션 자신의 객체 하나를 가리키는 링크에만 쓸 수 있습니다. 링크의 목록, 내장 클래스의 필드, `link`가 없는 필드는 `Schema`를 만들 때 `INVALID_ARGUMENT`로 거부됩니다. 필드에 인덱스도 두세요. 인덱스가 없으면 필드가 가리킬 수 있는 객체를 지울 때마다 컬렉션 전체를 읽습니다. 연쇄 삭제 링크가 있는 파일은 객체 형식 2입니다. [규칙](../../guide/objects.md#링크로-이어진-객체-함께-지우기)은 가이드에 있습니다.
 
 ### name
 

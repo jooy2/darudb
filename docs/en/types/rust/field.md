@@ -65,6 +65,14 @@ pub fn is_optional(&self) -> bool
 
 Whether the field may be null, which it is when an object leaves it out.
 
+### is_cascade
+
+```rust
+pub fn is_cascade(&self) -> bool
+```
+
+Whether deleting the object the link names deletes the object that holds it, as [`Collection::cascade`](../../api/rust/collection.md#cascade) declares.
+
 ### default
 
 ```rust

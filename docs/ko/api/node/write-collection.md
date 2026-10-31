@@ -90,7 +90,7 @@ update(key: Key, changes: Partial<I>): boolean;
 delete(key: Key): boolean;
 ```
 
-기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. 정수, 문자열, 바이트가 아닌 키를 주면 `INVALID_ARGUMENT`로 실패합니다.
+기본 키가 `key`인 객체를 인덱스 항목과 함께 지우고, 객체가 있었는지 돌려줍니다. [연쇄 삭제](../../guide/objects.md#링크로-이어진-객체-함께-지우기) 링크는 이 객체를 가리키는 객체도 함께 지우며, 돌려주는 값에는 이들을 세지 않습니다. 정수, 문자열, 바이트가 아닌 키를 주면 `INVALID_ARGUMENT`로 실패합니다.
 
 ### deleteWhere
 
@@ -98,7 +98,7 @@ delete(key: Key): boolean;
 deleteWhere(...query: RequiredQueryArguments<O>): number;
 ```
 
-쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 됩니다. 모든 객체를 지우려면 `(q) => q`를 줍니다. 쿼리가 없으면 `INVALID_ARGUMENT`로 실패합니다.
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 연쇄 삭제로 함께 지워진 객체는 세지 않습니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 됩니다. 모든 객체를 지우려면 `(q) => q`를 줍니다. 쿼리가 없으면 `INVALID_ARGUMENT`로 실패합니다.
 
 ### updateWhere
 

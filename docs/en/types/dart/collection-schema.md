@@ -116,6 +116,7 @@ final class FieldSpec {
     this.index = false,
     this.unique = false,
     this.primaryKey = false,
+    this.cascade = false,
   });
 }
 ```
@@ -131,6 +132,7 @@ One field, as the class declares it.
 | `index` | `bool` | Whether the field has an index |
 | `unique` | `bool` | Whether the index also refuses two objects with the same value |
 | `primaryKey` | `bool` | Whether the field is the collection's primary key |
+| `cascade` | `bool` | Whether deleting the object the link names deletes the object that holds it |
 
 ## Kind
 

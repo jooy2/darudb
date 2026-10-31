@@ -90,7 +90,7 @@ It is refused as `put` is: with `INVALID_ARGUMENT` for a field the collection do
 delete(key: Key): boolean;
 ```
 
-Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A key that is not an int, a string or bytes fails with `INVALID_ARGUMENT`.
+Deletes the object whose primary key is `key`, with its index entries, and returns whether there was one. A [cascading link](../../guide/objects.md#delete-what-links-to-an-object) takes the objects that name it with it, which the result does not count. A key that is not an int, a string or bytes fails with `INVALID_ARGUMENT`.
 
 ### deleteWhere
 
@@ -98,7 +98,7 @@ Deletes the object whose primary key is `key`, with its index entries, and retur
 deleteWhere(...query: RequiredQueryArguments<O>): number;
 ```
 
-Deletes every object a query finds, after its sort, offset and limit, and returns how many there were. The query is required, in any form `find` takes, so that deleting every object is never an accident: `(q) => q` finds them all. Without one it fails with `INVALID_ARGUMENT`.
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The query is required, in any form `find` takes, so that deleting every object is never an accident: `(q) => q` finds them all. Without one it fails with `INVALID_ARGUMENT`.
 
 ### updateWhere
 
