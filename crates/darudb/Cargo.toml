@@ -7,7 +7,9 @@ keywords = ["database", "embedded", "storage", "encryption"]
 categories = ["database-implementations"]
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# The engine's code is MIT. `src/query/fold_table.rs` is generated from
+# Unicode's data, whose licence is in `LICENSE-UNICODE`.
+license = "MIT AND Unicode-3.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

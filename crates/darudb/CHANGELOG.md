@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
+
 ## v1.5.0 (2026-11-01)
 
 ### Breaking changes
