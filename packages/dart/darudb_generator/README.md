@@ -9,7 +9,7 @@ The code generator of [DaruDB](https://darudb.cdget.com)'s Dart package. With `b
 ```yaml
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.1.0
+  darudb_generator: ^1.5.0
 ```
 
 ```bash

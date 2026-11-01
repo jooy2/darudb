@@ -113,13 +113,13 @@ const app = Schema(1, [userSchema, postSchema]);
 
 ```yaml
 dependencies:
-  darudb: ^1.4.0
+  darudb: ^1.5.0
   hive_ce: ^2.11.0
   hive_ce_flutter: ^2.3.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.1.0
+  darudb_generator: ^1.5.0
   hive_ce_generator: ^1.11.0
 ```
 
