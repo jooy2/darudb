@@ -1,3 +1,5 @@
+<img src="https://darudb.cdget.com/logo-256.png" alt="" width="64" height="64">
+
 # darudb
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jooy2/darudb/blob/main/LICENSE)
