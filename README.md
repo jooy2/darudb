@@ -37,6 +37,12 @@ These are the goals the design is built around, in order of priority. They are g
 
 The Rust crate is the engine itself. The other packages bind it to their language and add nothing to what it does, so every language reads and writes the same file in the same way. Each package **versions independently and keeps its own changelog** beside its own manifest.
 
+## DaruDB Studio
+
+[DaruDB Studio](https://github.com/jooy2/darudb-studio) is a desktop app for Windows, macOS and Linux that opens a DaruDB file, whichever language wrote it, to browse, query and edit its objects, change its schema, and run the tools on it. The installers are on its [Releases page](https://github.com/jooy2/darudb-studio/releases), and [the guide](https://darudb.cdget.com/guide/studio) goes through what it does.
+
+<img src="docs/public/studio/collection-grid.png" alt="DaruDB Studio with the sample shop database open: the collections and the fields of products in the sidebar, and the products in a grid" width="800">
+
 ## Repository layout
 
 | Path              | What it is                                      | How it is run                                                          |
