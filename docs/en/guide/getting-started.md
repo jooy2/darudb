@@ -384,4 +384,5 @@ The collection has no primary key field, so the engine gives each object an `id`
 - [Queries](./queries.md) finds objects by their fields, in code or as text.
 - [Transactions](./transactions.md) explains what a commit promises, and when to defer one.
 - [Errors](./errors.md) lists every error code.
+- [DaruDB Studio](./studio.md) opens the file your program wrote, to see and edit its objects.
 - [Migration](../migration/index.md) moves an application's data in from the embedded database it uses now.

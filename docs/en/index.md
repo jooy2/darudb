@@ -413,6 +413,14 @@ Every package has all of it, except that the Rust crate has no asynchronous API 
   { title: 'Errors', desc: 'One stable code for every failure, the same in every language.', link: '/guide/errors' }
 ]" />
 
+## See inside a file
+
+[DaruDB Studio](/guide/studio) is a desktop app for Windows, macOS and Linux that opens a DaruDB file, whichever language wrote it. It shows the collections, the objects and the schema, runs queries and the tools, and edits objects and the schema without a program written for it.
+
+<img src="/studio/collection-grid.png" alt="DaruDB Studio with the sample shop database open: the collections and the fields of products in the sidebar, and the products in a grid" width="1280" height="800" loading="lazy">
+
+The installers are on the [releases page](https://github.com/jooy2/darudb-studio/releases) of its repository, and [the guide](/guide/studio) goes through what it does.
+
 ## Start with your language
 
 Add the package for your language. The getting-started page opens in it, with its commands and its code.

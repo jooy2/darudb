@@ -49,3 +49,4 @@ The engine is written once, in Rust, and the Node.js, Dart and Python packages a
 - **Tools.** An integrity check, online backup, compaction, and salvage of a damaged file.
 - **Tests.** Thousands of simulated power cuts and hundreds of real processes killed in the middle of a commit, with encryption on and off, and several processes reading and writing one file while random ones are killed.
 - **Packages.** The Rust crate, the Node.js package, the Dart package and the Python package have all of the above. The Node.js, Dart and Python packages ship the engine prebuilt for every platform they support, so installing them needs no Rust compiler.
+- **An app.** [DaruDB Studio](./studio.md) opens a file on Windows, macOS and Linux to browse, query and edit its objects, change its schema and run the tools, whichever language wrote it.

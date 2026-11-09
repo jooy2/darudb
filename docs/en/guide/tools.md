@@ -7,6 +7,8 @@ order: 11
 
 DaruDB ships with tools for a file that has to be checked, copied, made smaller or rescued. The check, backup and compaction work while other handles and processes keep reading and writing the file; salvage is for a file nothing can use, and needs it alone.
 
+To run them on a file without writing a program, [DaruDB Studio](./studio.md) has each of them in its tools tab.
+
 ## Check a file
 
 The integrity check reads everything the published commit reaches and verifies it: every page against the check its parent recorded, the order of every key, every tree's count, that every page of the file is used, free or retained exactly once, and, in a file with a schema, every object against its indexes. It reports every problem it finds rather than stopping at the first, and it fails only when it cannot begin, as when the database is closed.

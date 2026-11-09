@@ -413,6 +413,14 @@ Rust 크레이트에 비동기 API가 따로 없다는 점만 빼면, 모든 패
   { title: '오류', desc: '모든 실패에 바뀌지 않는 코드가 있고, 그 코드는 모든 언어에서 같습니다.', link: '/ko/guide/errors' }
 ]" />
 
+## 파일 속 들여다보기
+
+[DaruDB Studio](/ko/guide/studio)는 어느 언어로 쓴 DaruDB 파일이든 열어 보는 Windows, macOS, Linux용 데스크톱 앱입니다. 컬렉션과 객체, 스키마를 보여 주고, 쿼리와 도구를 실행하며, 프로그램을 짜지 않고도 객체와 스키마를 고칩니다.
+
+<img src="/studio/collection-grid.png" alt="샘플 쇼핑몰 데이터베이스를 연 DaruDB Studio. 사이드바에 컬렉션과 products의 필드가, 오른쪽 표에 products의 객체가 보입니다." width="1280" height="800" loading="lazy">
+
+설치 파일은 저장소의 [Releases 페이지](https://github.com/jooy2/darudb-studio/releases)에 있고, 앱이 하는 일은 [가이드](/ko/guide/studio)에 정리돼 있습니다.
+
 ## 내 언어로 시작하기
 
 쓰는 언어의 패키지를 추가하세요. 시작하기 페이지가 그 언어의 명령과 코드로 열립니다.
