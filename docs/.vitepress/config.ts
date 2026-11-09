@@ -149,13 +149,20 @@ const vitePressSidebarConfig = supportLocales.map((lang) => ({
 }));
 
 /** The same destinations in every locale, prefixed with its base. */
-const navFor = (lang: string, labels: [string, string, string, string, string]) => [
-  { text: labels[0], link: `${localeBase(lang)}guide/introduction`, activeMatch: '/guide/' },
+const navFor = (lang: string, labels: [string, string, string, string, string, string]) => [
+  // Every guide page but the one on the app, which has an entry of its own
+  {
+    text: labels[0],
+    link: `${localeBase(lang)}guide/introduction`,
+    activeMatch: '/guide/(?!studio)'
+  },
   { text: labels[1], link: `${localeBase(lang)}engine/architecture`, activeMatch: '/engine/' },
   { text: labels[2], link: `${localeBase(lang)}api/`, activeMatch: '/api/' },
   { text: labels[3], link: `${localeBase(lang)}types/`, activeMatch: '/types/' },
+  // DaruDB Studio, the desktop app, whose page is in the guide
+  { text: labels[4], link: `${localeBase(lang)}guide/studio`, activeMatch: '/guide/studio' },
   // The overview, which sends a reader on to their language's changelog.
-  { text: labels[4], link: `${localeBase(lang)}changelog/`, activeMatch: '/changelog/' }
+  { text: labels[5], link: `${localeBase(lang)}changelog/`, activeMatch: '/changelog/' }
 ];
 
 const vitePressI18nConfig: VitePressI18nOptions = {
@@ -167,8 +174,8 @@ const vitePressI18nConfig: VitePressI18nOptions = {
     ko: '애플리케이션의 데이터를 로컬 파일 하나에 담는 임베디드 데이터베이스입니다. Rust로 작성한 엔진 하나를 Rust와 Node.js, Dart, Python에서 함께 쓰며, 암호화와 크래시 안전성, 여러 프로세스의 동시 접근을 엔진에 담았습니다.'
   },
   themeConfig: {
-    en: { nav: navFor('en', ['Guide', 'Engine', 'API', 'Types', 'Changelog']) },
-    ko: { nav: navFor('ko', ['가이드', '엔진', 'API', '타입', '변경 기록']) }
+    en: { nav: navFor('en', ['Guide', 'Engine', 'API', 'Types', 'Studio', 'Changelog']) },
+    ko: { nav: navFor('ko', ['가이드', '엔진', 'API', '타입', 'Studio', '변경 기록']) }
   }
 };
 
