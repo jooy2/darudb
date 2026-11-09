@@ -62,8 +62,8 @@ The root holds the Cargo workspace and no JavaScript or Python manifest. Each Ja
 | --------------------------------------------------------------------- | -------------------------------------------------------- |
 | [**Introduction**](https://darudb.cdget.com/guide/introduction)       | What DaruDB is, what it is for, and how far along it is. |
 | [**Getting started**](https://darudb.cdget.com/guide/getting-started) | Installing a package and opening a first database.       |
-| [**Collections and objects**](https://darudb.cdget.com/guide/objects) | Schemas, objects, queries and migrations, in Rust.       |
-| [**Node.js**](https://darudb.cdget.com/guide/nodejs)                  | The same in JavaScript and TypeScript.                   |
+| [**Collections and objects**](https://darudb.cdget.com/guide/objects) | Schemas and objects, in the language you choose.         |
+| [**API**](https://darudb.cdget.com/api/)                              | Every class and function of the package for a language.  |
 | [**Changelog**](https://darudb.cdget.com/changelog)                   | What changed in each package.                            |
 
 ## Contributing
