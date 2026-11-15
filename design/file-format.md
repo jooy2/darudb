@@ -36,7 +36,7 @@ Wherever this document stores an XXH3-128 value, it stores the 128-bit hash as a
 
 - In an **encrypted file**, the check is the page's authentication tag ([Encryption](#encryption)).
 
-XXH3-128 is fast enough that verifying every page on every read costs little, and 128 bits make an accidental match negligible even across billions of pages. It is not a cryptographic hash, and it does not need to be: it only has to catch accidents. Deliberate tampering is what the encrypted file's tags are for. Which Rust implementation of XXH3 the engine uses is decided when it is written, under the dependency rules in `CONTRIBUTING.md`.
+XXH3-128 is fast enough that verifying every page on every read costs little, and 128 bits make an accidental match negligible even across billions of pages. It is not a cryptographic hash, and it does not need to be: it only has to catch accidents. Deliberate tampering is what the encrypted file's tags are for. The engine takes it from the `twox-hash` crate, chosen under the dependency rules in `CONTRIBUTING.md`.
 
 ## Pointers
 
@@ -256,7 +256,7 @@ Pages that the published commit no longer reaches, but that an older commit may 
 
 ## Key order
 
-Every tree orders its keys by comparing bytes as unsigned numbers, and a key that is a prefix of another sorts first. The engine knows no other order. A layer that stores typed keys encodes them so that their byte order is the order it wants; the object layer's key encoding comes with phase 4.
+Every tree orders its keys by comparing bytes as unsigned numbers, and a key that is a prefix of another sorts first. The engine knows no other order. A layer that stores typed keys encodes them so that their byte order is the order it wants; the object layer's key encoding is in [Objects and queries](objects.md#keys).
 
 ## Limits
 

@@ -248,7 +248,7 @@ It also uses `CORRUPTED`, for a file recovery cannot repair or a page that fails
 
 ## What this means for the API
 
-The storage kernel's API is settled when it is written. The design implies at least:
+The design implies this much of the storage kernel's API, which the crate has:
 
 - A read transaction and a write transaction, each seeing one snapshot.
 - `commit`, which is a sync commit, and a way to make a deferred commit.
