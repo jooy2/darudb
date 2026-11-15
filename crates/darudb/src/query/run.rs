@@ -900,7 +900,7 @@ fn walk_entries(
 ///
 /// Walking backwards, one value's objects come in descending key order, so
 /// they are held back and given reversed once the value changes. A value
-/// with more than [`GROUP`] objects is walked forwards from its first entry
+/// with [`GROUP`] objects or more is walked forwards from its first entry
 /// instead, so that a query that stops after a few objects does not read a
 /// value's thousands: the entries are `value || key`, and the bounds of a
 /// range never cut a value's entries apart.

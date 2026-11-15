@@ -910,7 +910,7 @@ export type StoredType =
   | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' | 'date' }
   /** A link to an object of `collection`: its primary key. */
   | { readonly kind: 'link'; readonly collection: string }
-  /** A list of values of `element`, a scalar type or a link. */
+  /** A list of values of `element`: a scalar type, a link or an embedded object. */
   | { readonly kind: 'list'; readonly element: StoredType }
   /** An embedded object with fields of its own. */
   | { readonly kind: 'object'; readonly fields: readonly StoredField[] };

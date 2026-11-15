@@ -316,7 +316,7 @@ class StoredType:
     collection: str | None = None
     """The collection a link holds the primary key of."""
     element: StoredType | None = None
-    """The type of a list's values, a scalar type or a link."""
+    """The type of a list's values: a scalar type, a link or an embedded object."""
     fields: tuple[StoredField, ...] = ()
     """An embedded object's fields."""
 
