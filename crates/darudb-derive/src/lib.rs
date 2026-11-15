@@ -653,6 +653,7 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
 
         impl ::darudb::EmbeddedType for #ident {
             fn embedded() -> ::darudb::Embedded {
+                let _nesting = ::darudb::__derive::Nesting::enter(::core::stringify!(#ident));
                 let embedded = ::darudb::Embedded::new();
                 #(#declarations)*
                 embedded

@@ -2123,6 +2123,48 @@ pub mod derive {
 
     impl<T: CollectionType> ToOneLink for Option<Link<T>> {}
 
+    thread_local! {
+        /// How many embedded types are being declared inside one another on
+        /// this thread.
+        static NESTING: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The declaration of one embedded type under way, counted until it is
+    /// dropped. A type that holds itself, in a list or through another
+    /// type, would declare itself without end, which no schema can hold;
+    /// making one panics with the type's name, where the declarations
+    /// calling one another would have run the thread out of stack.
+    pub struct Nesting(());
+
+    impl Nesting {
+        /// Begins the declaration of the embedded type `name`.
+        ///
+        /// # Panics
+        ///
+        /// When more embedded types are being declared inside one another
+        /// than a schema can nest, which a type that holds itself does.
+        pub fn enter(name: &str) -> Self {
+            let depth = NESTING.with(|nesting| {
+                nesting.set(nesting.get() + 1);
+                nesting.get()
+            });
+            let entered = Self(());
+
+            assert!(
+                depth <= 64,
+                "the embedded type `{name}` holds itself, in a list or through another type, which a schema cannot declare"
+            );
+
+            entered
+        }
+    }
+
+    impl Drop for Nesting {
+        fn drop(&mut self) {
+            NESTING.with(|nesting| nesting.set(nesting.get().saturating_sub(1)));
+        }
+    }
+
     /// `collection` with its field `name`, a link of type `T`, cascading.
     pub fn cascade<T: ToOneLink>(collection: Collection, name: &str) -> Collection {
         collection.cascade(name)

@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- A type with `#[derive(Embedded)]` that holds itself, in a `Vec` or through another embedded type, panics with the type's name when its schema is declared, where it ran the thread out of stack.
+
 ## v1.5.0 (2026-11-01)
 
 ### Breaking changes

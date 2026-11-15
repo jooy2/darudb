@@ -1480,3 +1480,17 @@ fn a_derived_link_cascades() {
     assert_eq!(txn.collection_of::<Joined>().unwrap().len().unwrap(), 0);
     txn.commit().unwrap();
 }
+
+#[derive(darudb_derive::Embedded, Debug, Clone, PartialEq)]
+struct Comment {
+    text: String,
+    replies: Vec<Comment>,
+}
+
+/// A type that holds itself has no schema. Declaring it says so, where it
+/// used to run the thread out of stack and end the process.
+#[test]
+#[should_panic(expected = "the embedded type `Comment` holds itself")]
+fn an_embedded_type_that_holds_itself_is_named_when_it_is_declared() {
+    let _ = darudb::Embedded::of::<Comment>();
+}

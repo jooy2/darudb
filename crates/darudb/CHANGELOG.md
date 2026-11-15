@@ -28,6 +28,8 @@
 - `Database::sync` on one thread no longer forgets the unsynced window a deferred commit on another thread opens at the same moment, which left that commit without its time limit until the next commit, sync or close.
 - A write transaction that outlives every `Database` of its file closes the file before the process counts it as closed. Another thread opening the file at that moment could otherwise lose its locks when the transaction's descriptor closed.
 
+- A type with `#[derive(Embedded)]` that holds itself, in a `Vec` or through another embedded type, panics with the type's name when its schema is declared. It ran the thread out of stack, which ended the process with no message.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
