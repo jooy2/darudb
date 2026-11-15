@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- `Migrating::version`, the schema version of the step under way, which a function shared by several steps tells them apart by.
+
 ### Changed
 
 - `sum` and `avg` of a field with an index, over every object or over those a filter on that field alone finds, read the values from the index and no object, as `min` and `max` do: on 20,000 objects, a sum of every object took half the time, and a sum over a range of the field a tenth of it.

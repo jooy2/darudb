@@ -168,6 +168,7 @@ pub(crate) fn open(
         lenient: lenient(&previous),
         previous,
         steps,
+        step: None,
         delete: plan.delete,
     })))
 }
@@ -231,6 +232,8 @@ pub(crate) struct Pending {
     lenient: StoredSchema,
     /// The version steps to run, each with its function if it has one.
     steps: VecDeque<(u64, Option<MigrationFn>)>,
+    /// The version of the step under way, once one is.
+    step: Option<u64>,
     delete: Vec<u64>,
 }
 
@@ -275,6 +278,8 @@ impl Pending {
             return Ok(None);
         };
 
+        self.step = Some(version);
+
         if let Some(function) = function {
             function(&mut self.migrating())?;
         }
@@ -287,9 +292,16 @@ impl Pending {
     }
 
     pub(crate) fn migrating(&mut self) -> Migrating<'_> {
+        // Before the first step, the step is the one that comes first.
+        let version = self
+            .step
+            .or_else(|| self.steps.front().map(|(version, _)| *version))
+            .unwrap_or(self.schema.schema.version);
+
         Migrating {
             txn: &mut self.txn,
             previous: &self.lenient,
+            version,
         }
     }
 
@@ -449,12 +461,21 @@ pub struct Migrating<'a> {
     txn: &'a mut WriteTransaction,
     /// The schema before the migration, every field of it optional.
     previous: &'a StoredSchema,
+    /// The version of the step under way.
+    version: u64,
 }
 
 impl Migrating<'_> {
     /// The schema version the file held before the migration.
     pub fn previous_version(&self) -> u64 {
         self.previous.version
+    }
+
+    /// The schema version of the step under way: the one the function that
+    /// was given this was registered for, which a function shared by
+    /// several steps tells them apart by.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// The write transaction the migration runs in. Committing it is the

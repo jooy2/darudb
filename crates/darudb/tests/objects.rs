@@ -1010,6 +1010,7 @@ fn a_migration_function_moves_data_with_the_previous_schema() {
         .delete_collection("posts")
         .run(|migrating| {
             assert_eq!(migrating.previous_version(), 1);
+            assert_eq!(migrating.version(), 2);
 
             for key in migrating.previous_keys("users")? {
                 let old = migrating.previous("users", key.clone())?.unwrap();
