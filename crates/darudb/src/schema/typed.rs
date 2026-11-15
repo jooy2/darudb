@@ -844,7 +844,9 @@ impl<'a> ValueReader<'a> {
             .ok()
             .filter(|&count| count <= rest.len() - at)
             .ok_or_else(|| self.fail("a record counts more than it holds"))?;
-        let mut values = Vec::with_capacity(count);
+        // Room as the elements arrive past a bound: a value in memory is many
+        // times its smallest encoding, and the count is the record's word.
+        let mut values = Vec::with_capacity(count.min(codec::RESERVE));
 
         for _ in 0..count {
             let end = codec::skip_scalar(rest, at).map_err(|reason| self.fail(reason))?;
@@ -928,7 +930,7 @@ impl<'a> ValueReader<'a> {
             .ok()
             .filter(|&count| count <= rest.len() - at)
             .ok_or_else(|| self.fail("a record counts more than it holds"))?;
-        let mut elements = Vec::with_capacity(count);
+        let mut elements = Vec::with_capacity(count.min(codec::RESERVE));
 
         for _ in 0..count {
             let end = codec::skip_scalar(rest, at).map_err(|reason| self.fail(reason))?;

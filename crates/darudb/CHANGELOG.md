@@ -30,6 +30,9 @@
 
 - A type with `#[derive(Embedded)]` that holds itself, in a `Vec` or through another embedded type, panics with the type's name when its schema is declared. It ran the thread out of stack, which ended the process with no message.
 
+- Salvage rebuilds the indexes of a collection of large objects in batches of at most 32 MiB of records. A batch was 1,024 objects whatever their size, so a collection of objects of megabytes each took gigabytes of memory.
+- A typed read of a list reserves room for at most 256 elements before it has read them, as an untyped read does, rather than for as many as a damaged record counts.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.

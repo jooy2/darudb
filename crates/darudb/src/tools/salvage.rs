@@ -827,10 +827,26 @@ fn rebuild(copy: &Database, collection: &CollectionDef, report: &mut SalvageRepo
     loop {
         let mut txn = copy.begin_write()?;
         let start = after.as_deref().map_or(Bound::Unbounded, Bound::Excluded);
-        let batch = txn
-            .range_in::<&[u8]>(&tree, &(start, Bound::Unbounded), false)?
-            .take(REBUILD_BATCH)
-            .collect::<Result<Vec<_>>>()?;
+        // A batch ends at a number of objects or at the bytes one commit of
+        // the copy holds, whichever comes first: objects may be megabytes
+        // each, and a batch is in memory whole.
+        let mut batch = Vec::new();
+        let mut held = 0;
+        let mut done = true;
+
+        for entry in txn.range_in::<&[u8]>(&tree, &(start, Bound::Unbounded), false)? {
+            let (key, bytes) = entry?;
+
+            held += key.len() + bytes.len();
+            batch.push((key, bytes));
+
+            if batch.len() >= REBUILD_BATCH || held >= COMMIT_BYTES {
+                done = false;
+
+                break;
+            }
+        }
+
         let max_key_len = txn.max_key_len();
 
         for (key, bytes) in &batch {
@@ -851,8 +867,6 @@ fn rebuild(copy: &Database, collection: &CollectionDef, report: &mut SalvageRepo
                 report.objects_dropped += 1;
             }
         }
-
-        let done = batch.len() < REBUILD_BATCH;
 
         if let Some((key, _)) = batch.into_iter().next_back() {
             after = Some(key);
