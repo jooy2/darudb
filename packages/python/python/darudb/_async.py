@@ -685,6 +685,7 @@ async def open_async(
     password: str | bytes | bytearray | None,
     password_hashing: PasswordHashing | None,
     upgrade_format: bool,
+    read_only: bool,
 ) -> Database:
     check_options(
         schema=schema,
@@ -696,6 +697,7 @@ async def open_async(
         max_unsynced_time=max_unsynced_time,
         password_hashing=password_hashing,
         upgrade_format=upgrade_format,
+        read_only=read_only,
     )
     check_migrations(migrations)
     native = await run(
@@ -714,6 +716,7 @@ async def open_async(
             password=password,
             password_hashing=None if password_hashing is None else password_hashing.spec(),
             upgrade_format=upgrade_format,
+            read_only=read_only,
         )
     )
 

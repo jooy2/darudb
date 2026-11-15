@@ -679,6 +679,7 @@ def check_options(
     max_unsynced_time: object = None,
     password_hashing: object = None,
     upgrade_format: object = True,
+    read_only: object = False,
 ) -> None:
     """Refuses an option of the wrong kind before it reaches the engine, which
     checks the ranges."""
@@ -690,6 +691,9 @@ def check_options(
 
     if type(upgrade_format) is not bool:
         raise invalid(f"upgrade_format is True or False, not {upgrade_format!r}")
+
+    if type(read_only) is not bool:
+        raise invalid(f"read_only is True or False, not {read_only!r}")
 
     if page_size is not None:
         whole("page_size", page_size, high=2**32)
@@ -793,6 +797,7 @@ class Database:
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
         upgrade_format: bool = True,
+        read_only: bool = False,
     ) -> Database:
         """Opens the database at ``path``, creating it if nothing exists there,
         and stores, checks or migrates its schema.
@@ -822,6 +827,14 @@ class Database:
           afterwards, so an application that may go back to one passes False,
           and calls ``upgrade_format`` once it no longer may; a new database
           is then created in format version 5, which every release reads.
+        - ``read_only``: whether the database is opened read-only, so that
+          nothing done through it changes the file. It reads, checks and
+          backs up; a write block, ``compact``, ``upgrade_format`` and a
+          change of key fail with ``READ_ONLY``, and so does a schema the
+          file does not hold already. Nothing is created, and a file that
+          needs recovery, left by a process that died, is refused with
+          ``READ_ONLY`` until it has been opened once without the option.
+          The process still needs write access to the file.
         """
         location = os.fspath(path)
         check_options(
@@ -834,6 +847,7 @@ class Database:
             max_unsynced_time=max_unsynced_time,
             password_hashing=password_hashing,
             upgrade_format=upgrade_format,
+            read_only=read_only,
         )
         check_migrations(migrations)
         native = _native.open(
@@ -850,6 +864,7 @@ class Database:
             password=password,
             password_hashing=None if password_hashing is None else password_hashing.spec(),
             upgrade_format=upgrade_format,
+            read_only=read_only,
         )
 
         if isinstance(native, _native.NativeTransaction):
@@ -874,6 +889,7 @@ class Database:
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
         upgrade_format: bool = True,
+        read_only: bool = False,
     ) -> Database:
         """``open`` on the package's thread pool. A migration's ``run`` may be
         a coroutine function, given an ``AsyncMigrating``."""
@@ -894,6 +910,7 @@ class Database:
             password=password,
             password_hashing=password_hashing,
             upgrade_format=upgrade_format,
+            read_only=read_only,
         )
 
     @staticmethod
@@ -1000,6 +1017,11 @@ class Database:
         """The file format version recorded in the file: 6, which this package
         writes, or 5 for a file that opening did not raise."""
         return self._native.format_version
+
+    @property
+    def is_read_only(self) -> bool:
+        """Whether the database was opened read-only, with ``read_only``."""
+        return self._native.is_read_only
 
     @property
     def is_encrypted(self) -> bool:

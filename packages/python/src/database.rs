@@ -86,6 +86,11 @@ impl NativeDatabase {
     }
 
     #[getter]
+    fn is_read_only(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.handle(py)?.is_read_only())
+    }
+
+    #[getter]
     fn is_encrypted(&self, py: Python<'_>) -> PyResult<bool> {
         Ok(self.handle(py)?.is_encrypted())
     }
@@ -337,6 +342,7 @@ fn check_report<'py>(py: Python<'py>, report: &CheckReport) -> PyResult<Bound<'p
     password = None,
     password_hashing = None,
     upgrade_format = None,
+    read_only = None,
 ))]
 #[expect(
     clippy::too_many_arguments,
@@ -357,6 +363,7 @@ fn open<'py>(
     password: Option<&Bound<'py, PyAny>>,
     password_hashing: Option<(u32, u32, u32)>,
     upgrade_format: Option<bool>,
+    read_only: Option<bool>,
 ) -> PyResult<Bound<'py, PyAny>> {
     one_secret(py, key, password)?;
 
@@ -404,6 +411,10 @@ fn open<'py>(
 
     if let Some((memory, iterations, parallelism)) = password_hashing {
         options.password_hashing(memory, iterations, parallelism);
+    }
+
+    if let Some(read_only) = read_only {
+        options.read_only(read_only);
     }
 
     if let Some(upgrade) = upgrade_format {

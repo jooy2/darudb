@@ -304,3 +304,46 @@ def test_a_read_transaction_has_the_id_of_its_commit(path: Path) -> None:
 
         with db.read() as txn:
             assert txn.commit_id > before
+
+
+def test_a_read_only_database_reads_and_refuses_what_would_write(path: Path) -> None:
+    with pytest.raises(DaruError) as error:
+        darudb.Database.open(path, read_only=True)
+
+    assert error.value.code == "NOT_FOUND"
+    assert not path.exists()
+
+    with darudb.Database.open(path, schema=SCHEMA) as writer:
+        with writer.write() as txn:
+            txn.collection(User).insert(User(name="a"))
+
+        with darudb.Database.open(path, schema=SCHEMA, read_only=True) as reader:
+            assert reader.is_read_only
+            assert not writer.is_read_only
+
+            with reader.read() as txn:
+                assert txn.collection(User).count() == 1
+
+            for refused in (
+                lambda: reader.write().__enter__(),
+                reader.compact,
+                reader.upgrade_format,
+            ):
+                with pytest.raises(DaruError) as error:
+                    refused()
+
+                assert error.value.code == "READ_ONLY"
+
+            reader.sync()
+
+            # The handle beside it writes, and this one reads what it commits.
+            with writer.write() as txn:
+                txn.collection(User).insert(User(name="b"))
+
+            with reader.read() as txn:
+                assert txn.collection(User).count() == 2
+
+    with pytest.raises(DaruError) as error:
+        darudb.Database.open(path, read_only="yes")  # type: ignore[arg-type]
+
+    assert error.value.code == "INVALID_ARGUMENT"
