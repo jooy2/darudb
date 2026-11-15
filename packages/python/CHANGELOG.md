@@ -4,6 +4,12 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- An `async with db.write_async()` block left in another task than the one that entered it gives the file back. Closing an asynchronous generator that was suspended inside such a block raised `ValueError` before the transaction ended, and every later asynchronous write, sync or close on the file was refused or waited for good.
+- A task made inside an asynchronous write, or inside a migration's function, may write to the file once that write is over. It was refused with `INVALID_ARGUMENT` for as long as it lived.
+- A `with db.write()` block that fails as it is entered, after its transaction began, ends the transaction and no longer leaves the file marked as held by the thread.
+
 ## v1.5.0 (2026-11-01)
 
 ### Breaking changes

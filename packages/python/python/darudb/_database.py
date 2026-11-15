@@ -587,13 +587,20 @@ class _WriteScope:
         held.add(file_key)
         self._held = held
 
+        # Whatever fails before the block is entered, the file is no longer
+        # marked as held: `__exit__` does not run for a block never entered.
         try:
             self._txn = db._handle().begin_write()
+
+            return WriteTransaction(self._txn, db.schema)
         except BaseException:
+            txn, self._txn = self._txn, None
+
+            if txn is not None:
+                txn.end()
+
             held.discard(file_key)
             raise
-
-        return WriteTransaction(self._txn, db.schema)
 
     def __exit__(
         self,

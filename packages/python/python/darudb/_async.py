@@ -26,6 +26,7 @@ a time.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import inspect
 import os
@@ -99,11 +100,45 @@ async def run(work: Callable[[], R]) -> R:
 _queues: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[FileKey, asyncio.Lock]] = (
     weakref.WeakKeyDictionary()
 )
-# The files the asynchronous writes around the running code hold. Each task
-# made inside a write starts with a copy, so a task of its own sees them too.
-_inside: contextvars.ContextVar[frozenset[FileKey]] = contextvars.ContextVar(
+
+
+class _Inside:
+    """A file an asynchronous write holds, for as long as the write runs."""
+
+    __slots__ = ("active", "file_key")
+
+    def __init__(self, file_key: FileKey) -> None:
+        self.file_key = file_key
+        self.active = True
+
+
+# The asynchronous writes around the running code. Each task made inside a
+# write starts with a copy, so a task of its own sees them too; a task that
+# outlives the write still has its copy, which is why a write is marked as
+# over when it ends rather than only taken out of the set.
+_inside: contextvars.ContextVar[frozenset[_Inside]] = contextvars.ContextVar(
     "darudb_inside", default=frozenset()
 )
+
+
+def _is_inside(file_key: FileKey) -> bool:
+    return any(held.active and held.file_key == file_key for held in _inside.get())
+
+
+def _enter(file_key: FileKey) -> tuple[_Inside, contextvars.Token[frozenset[_Inside]]]:
+    held = _Inside(file_key)
+
+    return held, _inside.set(_inside.get() | {held})
+
+
+def _leave(held: _Inside, token: contextvars.Token[frozenset[_Inside]]) -> None:
+    held.active = False
+
+    # A block left from another task than the one that entered it, as the
+    # block of an asynchronous generator closed by the loop is, cannot put
+    # that task's set back, and need not: the write is marked as over.
+    with contextlib.suppress(ValueError):
+        _inside.reset(token)
 
 
 def _queue(file_key: FileKey) -> asyncio.Lock:
@@ -128,7 +163,7 @@ class _Hold:
         self._thread = threading.get_ident()
 
     async def take(self) -> None:
-        if self._file_key in _inside.get():
+        if _is_inside(self._file_key):
             raise invalid(
                 "the asynchronous write that holds the file is waiting for this call to finish: "
                 "write transactions on one file do not nest"
@@ -502,7 +537,7 @@ class AsyncReadScope:
 class AsyncWriteScope:
     """``async with db.write_async() as txn``."""
 
-    __slots__ = ("_db", "_deferred", "_hold", "_token", "_txn")
+    __slots__ = ("_db", "_deferred", "_hold", "_inside", "_txn")
 
     def __init__(self, db: Database, durability: Durability) -> None:
         if durability not in ("sync", "deferred"):
@@ -511,7 +546,7 @@ class AsyncWriteScope:
         self._db = db
         self._deferred = durability == "deferred"
         self._hold: _Hold | None = None
-        self._token: contextvars.Token[frozenset[FileKey]] | None = None
+        self._inside: tuple[_Inside, contextvars.Token[frozenset[_Inside]]] | None = None
         self._txn: AsyncWriteTransaction | None = None
 
     async def __aenter__(self) -> AsyncWriteTransaction:
@@ -530,9 +565,15 @@ class AsyncWriteScope:
             hold.release()
             raise
 
+        try:
+            self._inside = _enter(db._file_key)
+            self._txn = AsyncWriteTransaction(native, db.schema)
+        except BaseException:
+            native.end()
+            hold.release()
+            raise
+
         self._hold = hold
-        self._token = _inside.set(_inside.get() | {db._file_key})
-        self._txn = AsyncWriteTransaction(native, db.schema)
 
         return self._txn
 
@@ -542,16 +583,16 @@ class AsyncWriteScope:
         error: BaseException | None,
         trace: TracebackType | None,
     ) -> None:
-        txn, hold, token = self._txn, self._hold, self._token
-        self._txn = self._hold = self._token = None
+        txn, hold, inside = self._txn, self._hold, self._inside
+        self._txn = self._hold = self._inside = None
 
         if txn is None or hold is None:
             return
 
-        if token is not None:
-            _inside.reset(token)
-
         try:
+            if inside is not None:
+                _leave(*inside)
+
             await txn._drain()
 
             if kind is None:
@@ -635,11 +676,11 @@ async def open_async(
 
     if isinstance(native, _native.NativeTransaction):
         # The migration holds the file as a write does.
-        token = _inside.set(_inside.get() | {file_key_of(location)})
+        inside = _enter(file_key_of(location))
 
         try:
             native = await _migrate(native, schema, migrations)
         finally:
-            _inside.reset(token)
+            _leave(*inside)
 
     return cls._of(native, location, schema)

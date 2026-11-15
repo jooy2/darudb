@@ -262,3 +262,49 @@ def test_a_task_made_outside_a_write_waits_for_its_turn(path: Path) -> None:
         return order
 
     assert run(main()) == ["first", "second"]
+
+
+def test_a_task_made_inside_a_write_writes_once_the_write_is_over(path: Path) -> None:
+    async def main() -> None:
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            over = asyncio.Event()
+
+            async def later() -> None:
+                await over.wait()
+
+                async with db.write_async() as txn:
+                    await txn.collection(User).insert(User(name="Bob"))
+
+                await db.sync_async()
+
+            async with db.write_async() as txn:
+                await txn.collection(User).insert(User(name="Alice"))
+                task = asyncio.create_task(later())
+
+            over.set()
+            await task
+
+            async with db.read_async() as read:
+                assert await read.collection(User).count() == 2
+
+    run(main())
+
+
+def test_a_write_block_left_in_another_task_gives_the_file_back(path: Path) -> None:
+    async def main() -> None:
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            # What closing an asynchronous generator that was left inside a
+            # write block does: the block is entered in one task and left in
+            # another.
+            scope = db.write_async()
+            txn = await asyncio.create_task(scope.__aenter__())
+
+            await txn.collection(User).insert(User(name="Alice"))
+            await scope.__aexit__(None, None, None)
+
+            await asyncio.wait_for(db.sync_async(), 5)
+
+            async with db.write_async() as txn:
+                assert await txn.collection(User).count() == 1
+
+    run(main())
