@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- `@TextIndex()` on a `String` or a `List<String>` field generates `textIndex: true` in its `FieldSpec`, and `@IndexOn(['margin.note'], text: true)` an `IndexSpec` with `text: true`, by the names the collection stores. `@TextIndex()` on another type or inside an embedded class, and a text `@IndexOn` that is unique, on several fields or on a field that holds no text, are build errors.
+
 ### Fixed
 
 - A field whose name is a member of the query classes the generated code extends, `path`, `limit`, `offset`, `where`, `sortBy`, `linkedFrom`, `set`, `equals`, `notEquals`, `isIn`, `isNull` or `isNotNull`, is a build error that says to rename the Dart field and keep the stored name with `@Name`. The generated code did not compile.

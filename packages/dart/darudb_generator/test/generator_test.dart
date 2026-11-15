@@ -232,6 +232,108 @@ class Note {
 ''', 'names `nope`, which the class does not have');
   });
 
+  test('@TextIndex and a text @IndexOn declare text indexes', () async {
+    final (written, errors) = await generate('''
+@Embedded()
+class Margin {
+  const Margin({this.note});
+
+  @Name('memo')
+  final String? note;
+}
+
+@Collection('articles')
+@IndexOn(['margin.note'], text: true)
+class Article {
+  const Article({
+    this.id,
+    required this.title,
+    this.body,
+    this.tags = const [],
+    this.margin,
+  });
+
+  final int? id;
+  @Index()
+  @TextIndex()
+  final String title;
+  @TextIndex()
+  final String? body;
+  @TextIndex()
+  final List<String> tags;
+  final Margin? margin;
+}
+''');
+
+    expect(errors, isEmpty);
+    expect(
+      written,
+      contains(
+        "FieldSpec('title', StringKind(), index: true, textIndex: true)",
+      ),
+    );
+    expect(
+      written,
+      contains(
+        "FieldSpec('body', StringKind(), optional: true, textIndex: true)",
+      ),
+    );
+    expect(written, contains('textIndex: true,\n    ),'));
+    expect(
+      written,
+      contains(
+        "  indexes: [\n    IndexSpec(['margin.memo'], text: true),\n  ],",
+      ),
+    );
+  });
+
+  test('@TextIndex on anything but text is refused', () async {
+    await refused('''
+@Collection()
+class Note {
+  const Note({this.id, this.count = 0});
+
+  final int? id;
+  @TextIndex()
+  final int count;
+}
+''', 'only a `String` or a `List<String>` takes');
+    await refused('''
+@Embedded()
+class Place {
+  const Place({required this.city});
+
+  @TextIndex()
+  final String city;
+}
+''', 'no index reaches inside one');
+  });
+
+  test('a text @IndexOn is on one field of text and is not unique', () async {
+    const fields = '''
+class Note {
+  const Note({this.id, this.body, this.count = 0});
+
+  final int? id;
+  final String? body;
+  final int count;
+}
+''';
+
+    await refused('''
+@Collection()
+@IndexOn(['body'], text: true, unique: true)
+$fields''', 'is on one field and is not unique');
+    await refused('''
+@Collection()
+@IndexOn(['body', 'count'], text: true)
+$fields''', 'is on one field and is not unique');
+    await refused('''
+@Collection()
+@IndexOn(['count'], text: true)
+$fields''', 'which is not a `String` or a `List<String>`');
+  });
+
   test('a DateTime field is a date, alone or in a list', () async {
     final (written, errors) = await generate('''
 @Collection('events')

@@ -107,11 +107,18 @@ final class ObjectKind extends Kind {
 /// An index on several fields, or on a field inside an embedded object, as
 /// a [CollectionSchema] declares it: each field's path by the names the
 /// collection stores, joined by `.`, and whether it is unique.
+///
+/// With [text], it is a text index on its one field, a string or a list of
+/// strings: an entry for each word of the text, which a search for words
+/// reads. A text index is never unique.
 final class IndexSpec {
-  const IndexSpec(this.fields, {this.unique = false});
+  const IndexSpec(this.fields, {this.unique = false, this.text = false});
 
   final List<String> fields;
   final bool unique;
+
+  /// Whether the index holds the words of its field rather than its values.
+  final bool text;
 }
 
 /// A field as a schema declares it.
@@ -125,6 +132,7 @@ final class FieldSpec {
     this.unique = false,
     this.primaryKey = false,
     this.cascade = false,
+    this.textIndex = false,
   });
 
   final String name;
@@ -149,6 +157,11 @@ final class FieldSpec {
   /// Whether deleting the object the link names deletes the object that
   /// holds it, in a link to one object of the collection itself.
   final bool cascade;
+
+  /// Whether the field, a string or a list of strings of the collection
+  /// itself, has a text index, which a search for words reads. It may have
+  /// an [index] too.
+  final bool textIndex;
 }
 
 /// A link to an object of collection [T]: the object's primary key.
@@ -1135,7 +1148,17 @@ final class _SchemaEncoder {
     final key = collection.autoKey
         ? 1
         : fields.firstWhere((entry) => entry.$2.primaryKey).$1;
-    final indexes = <(int, List<List<int>>, bool)>[
+    for (final index in collection.indexes) {
+      if (index.text && (index.unique || index.fields.length != 1)) {
+        throw invalidArgument(
+          '`${collection.name}` has a text index on '
+          '`${index.fields.join(', ')}`; a text index is on one field and is '
+          'not unique',
+        );
+      }
+    }
+
+    final indexes = <(int, List<List<int>>, bool, bool)>[
       for (final (id, spec) in fields)
         if (spec.index || spec.unique)
           (
@@ -1144,6 +1167,17 @@ final class _SchemaEncoder {
               [id],
             ],
             spec.unique,
+            false,
+          ),
+      for (final (id, spec) in fields)
+        if (spec.textIndex)
+          (
+            nextIndex++,
+            [
+              [id],
+            ],
+            false,
+            true,
           ),
       // The fields' ids along each path: a field's place among its
       // collection's or its embedded object's fields.
@@ -1155,6 +1189,7 @@ final class _SchemaEncoder {
               _ids(fields, path, collection.name),
           ],
           index.unique,
+          index.text,
         ),
     ];
     final mark = writer.open();
@@ -1182,18 +1217,20 @@ final class _SchemaEncoder {
       ..byte(Tag.list)
       ..varint(indexes.length);
 
-    for (final (id, components, unique) in indexes) {
+    for (final (id, components, unique, text) in indexes) {
       final index = writer.open();
 
+      // A text index has one field more, field 5.
       writer
-        ..varint(3)
+        ..varint(text ? 4 : 3)
         ..varint(1)
         ..byte(Tag.int64)
         ..int64(id);
 
       // An index on one field of the collection keeps format 1's field 2;
-      // any other lists its components' paths in field 4.
-      if (components.length == 1 && components.single.length == 1) {
+      // any other lists its components' paths in field 4, and so does a
+      // text index, which adds field 5.
+      if (!text && components.length == 1 && components.single.length == 1) {
         writer
           ..varint(2)
           ..byte(Tag.int64)
@@ -1224,6 +1261,12 @@ final class _SchemaEncoder {
           }
 
           writer.close(component);
+        }
+
+        if (text) {
+          writer
+            ..varint(5)
+            ..byte(Tag.trueValue);
         }
       }
 
@@ -1282,7 +1325,8 @@ final class _SchemaEncoder {
     for (final (id, spec) in fields) {
       final path = '$where.${spec.name}';
 
-      if (embedded && (spec.index || spec.unique || spec.primaryKey)) {
+      if (embedded &&
+          (spec.index || spec.unique || spec.primaryKey || spec.textIndex)) {
         throw invalidArgument(
           '`$path` is inside an embedded object, where no field is a key or '
           'indexed',

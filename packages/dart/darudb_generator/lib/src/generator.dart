@@ -30,6 +30,10 @@ const _primaryKey = TypeChecker.typeNamedLiterally(
 const _index = TypeChecker.typeNamedLiterally('Index', inPackage: 'darudb');
 const _unique = TypeChecker.typeNamedLiterally('Unique', inPackage: 'darudb');
 const _cascade = TypeChecker.typeNamedLiterally('Cascade', inPackage: 'darudb');
+const _textIndex = TypeChecker.typeNamedLiterally(
+  'TextIndex',
+  inPackage: 'darudb',
+);
 const _name = TypeChecker.typeNamedLiterally('Name', inPackage: 'darudb');
 const _indexOn = TypeChecker.typeNamedLiterally('IndexOn', inPackage: 'darudb');
 const _link = TypeChecker.typeNamedLiterally('Link', inPackage: 'darudb');
@@ -128,6 +132,7 @@ final class _Field {
   bool index = false;
   bool unique = false;
   bool cascade = false;
+  bool textIndex = false;
   String? defaultCode;
 
   String get name => element.name!;
@@ -155,7 +160,7 @@ List<_Field> _fieldsOf(ClassElement element, {required bool embedded}) {
   // A field the class inherits is not one of its own, so it would be left
   // out of the schema without a word, and read back as its default.
   for (final parameter in constructor.formalParameters) {
-    if (parameter.isSuperFormal) {
+    if (parameter is SuperFormalParameterElement) {
       throw InvalidGenerationSourceError(
         '`${element.name}` takes `super.${parameter.name}`, a field of the '
         'class it extends, which is not stored: declare the field in '
@@ -219,9 +224,22 @@ List<_Field> _fieldsOf(ClassElement element, {required bool embedded}) {
           ..primaryKey = _primaryKey.hasAnnotationOfExact(field)
           ..index = _index.hasAnnotationOfExact(field)
           ..unique = _unique.hasAnnotationOfExact(field)
-          ..cascade = _cascade.hasAnnotationOfExact(field);
+          ..cascade = _cascade.hasAnnotationOfExact(field)
+          ..textIndex = _textIndex.hasAnnotationOfExact(field);
 
-    if (embedded && (parsed.primaryKey || parsed.index || parsed.unique)) {
+    if (parsed.textIndex && !_holdsText(field.type)) {
+      throw InvalidGenerationSourceError(
+        '`${element.name}.${field.name}` is annotated `@TextIndex()`, which '
+        'only a `String` or a `List<String>` takes.',
+        element: field,
+      );
+    }
+
+    if (embedded &&
+        (parsed.primaryKey ||
+            parsed.index ||
+            parsed.unique ||
+            parsed.textIndex)) {
       throw InvalidGenerationSourceError(
         '`${element.name}.${field.name}` is in an embedded object, which has '
         'no key, and no index reaches inside one.',
@@ -487,6 +505,7 @@ String _spec(_Field field) {
     if (field.unique) 'unique: true',
     if (field.primaryKey) 'primaryKey: true',
     if (field.cascade) 'cascade: true',
+    if (field.textIndex) 'textIndex: true',
   ];
 
   return 'FieldSpec(${[_string(field.slotName), field.type.kind, ...named].join(', ')})';
@@ -643,6 +662,7 @@ String _indexes(ClassElement element, List<_Field> fields) {
             .toList() ??
         const [];
     final unique = annotation.getField('unique')?.toBoolValue() ?? false;
+    final text = annotation.getField('text')?.toBoolValue() ?? false;
 
     if (paths.isEmpty || paths.any((path) => path == null || path.isEmpty)) {
       throw InvalidGenerationSourceError(
@@ -651,18 +671,69 @@ String _indexes(ClassElement element, List<_Field> fields) {
       );
     }
 
+    if (text && (unique || paths.length != 1)) {
+      throw InvalidGenerationSourceError(
+        'An `@IndexOn` with `text: true` is on one field and is not unique.',
+        element: element,
+      );
+    }
+
     final stored = [
       for (final path in paths) _string(_storedPath(element, fields, path!)),
     ];
 
+    if (text && !_holdsText(_typeAt(element, fields, paths.single!))) {
+      throw InvalidGenerationSourceError(
+        '`@IndexOn` on `${element.name}` has a text index on '
+        '`${paths.single}`, which is not a `String` or a `List<String>`.',
+        element: element,
+      );
+    }
+
     specs.add(
-      'IndexSpec([${stored.join(', ')}]${unique ? ', unique: true' : ''})',
+      'IndexSpec([${stored.join(', ')}]'
+      '${unique ? ', unique: true' : ''}${text ? ', text: true' : ''})',
     );
   }
 
   return specs.isEmpty
       ? ''
       : '\n  indexes: [\n${specs.map((spec) => '    $spec,').join('\n')}\n  ],';
+}
+
+/// Whether [type] is a `String` or a `List<String>`, nullable or not, which
+/// a text index is on.
+bool _holdsText(DartType type) =>
+    type.isDartCoreString ||
+    (type is InterfaceType &&
+        type.isDartCoreList &&
+        type.typeArguments.single.isDartCoreString);
+
+/// The type of the field at [path], Dart field names joined by `.`, which
+/// [_storedPath] has found to be there.
+DartType _typeAt(ClassElement owner, List<_Field> fields, String path) {
+  var at = fields;
+  late DartType found;
+
+  for (final name in path.split('.')) {
+    final field = at.firstWhere((field) => field.name == name);
+
+    found = field.dartType;
+
+    var type = found;
+
+    if (type is InterfaceType && type.isDartCoreList) {
+      type = type.typeArguments.single;
+    }
+
+    final target = type.element;
+
+    at = target is ClassElement && _embedded.hasAnnotationOfExact(target)
+        ? _fieldsOf(target, embedded: true)
+        : const [];
+  }
+
+  return found;
 }
 
 /// [path], Dart field names joined by `.`, as the names the collection
@@ -730,6 +801,7 @@ final class _Collection {
           !id.optional ||
           id.index ||
           id.unique ||
+          id.textIndex ||
           id.defaultCode != null) {
         throw InvalidGenerationSourceError(
           'Without a `@PrimaryKey()` field, `$className` is keyed by an '

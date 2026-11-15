@@ -112,6 +112,7 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
   // An index on one field of the collection is that field's, by its id in
   // field 2; any other lists its components' paths of ids in field 4.
   final unique = <int, bool>{};
+  final texts = <int>{};
   final indexes = <IndexSpec>[];
 
   for (final index in (raw[7] as List).cast<Map<int, Object?>>()) {
@@ -123,11 +124,25 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
       continue;
     }
 
+    final components = [
+      for (final component in (index[4] as List).cast<Map<int, Object?>>())
+        (component[1] as List).cast<int>(),
+    ];
+    final text = index[5] == true;
+
+    // A text index on a field of the collection itself is that field's.
+    if (text && components.length == 1 && components.single.length == 1) {
+      texts.add(components.single.single);
+
+      continue;
+    }
+
     indexes.add(
-      IndexSpec([
-        for (final component in (index[4] as List).cast<Map<int, Object?>>())
-          _pathOf(storedFields, (component[1] as List).cast<int>()),
-      ], unique: index[3] == true),
+      IndexSpec(
+        [for (final path in components) _pathOf(storedFields, path)],
+        unique: index[3] == true,
+        text: text,
+      ),
     );
   }
 
@@ -144,6 +159,7 @@ MapCollection _collection(Map<int, Object?> raw, Map<int, String> names) {
       unique: unique[id] == true,
       primaryKey: !auto && id == key,
       cascade: field[6] == true,
+      textIndex: texts.contains(id),
     );
 
     // A generated schema puts the auto-increment `id` first, in slot 0.

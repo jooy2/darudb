@@ -28,6 +28,7 @@ const int _startsWith = 13;
 const int _endsWith = 14;
 const int _isNull = 15;
 const int _linked = 16;
+const int _matches = 17;
 
 /// How deeply a filter may nest, as the engine holds every query to.
 const int _maxFilterDepth = 24;
@@ -245,6 +246,16 @@ final class StringField extends OrderedField<String> {
   /// Holds when the field ends with [text].
   Condition endsWith(String text, {bool ignoreCase = false}) =>
       _test(_endsWith, path, [text], ignoreCase);
+
+  /// Holds when the text has every word of [search], anywhere and in any
+  /// order: `matches('quick fox')`. Words are compared ignoring case, and a
+  /// word followed by `*` is the start of a word, so `'data*'` finds
+  /// `database`. Chinese characters, hiragana and katakana are searched two
+  /// at a time. A search without a word finds nothing.
+  ///
+  /// A text index on the field answers it without reading the objects;
+  /// without one, every object the rest of the query leaves is read.
+  Condition matches(String search) => _test(_matches, path, [search]);
 }
 
 /// A `Uint8List` field.
@@ -325,6 +336,10 @@ final class StringListField extends ListField<String> {
   /// Holds when an element ends with [text].
   Condition anyEndsWith(String text, {bool ignoreCase = false}) =>
       _test(_endsWith, path, [text], ignoreCase);
+
+  /// Holds when one string of the list has every word of [search], as
+  /// [StringField.matches] has it.
+  Condition matches(String search) => _test(_matches, path, [search]);
 }
 
 /// A link field: the key of the object linked to, compared as such. The

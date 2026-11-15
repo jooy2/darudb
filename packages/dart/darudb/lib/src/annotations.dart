@@ -40,6 +40,17 @@ final class Unique {
   const Unique();
 }
 
+/// Keeps a text index on the field, a `String` or a `List<String>`, nullable
+/// or not: an entry for each word of the text, which a search for words,
+/// `matches` in a query or `MATCHES` in the query language, reads rather
+/// than every object. The field may be annotated [Index] too, for an index
+/// on its values. Every write of the object writes an entry for each
+/// different word, so a long text costs more to write than any other field.
+/// A file with a text index is in object format 3.
+final class TextIndex {
+  const TextIndex();
+}
+
 /// Makes deleting the object the [Link] field names delete the object that
 /// holds it, in the same transaction, and so on down the chain. Only a
 /// `Link`, nullable or not, of the collection itself cascades, not one in a
@@ -61,11 +72,19 @@ final class Cascade {
 /// field, though any number may hold null in one. There are 1 to 8 fields,
 /// and a path through a list is allowed in an index of one field. A file
 /// with such an index is in object format 2.
+///
+/// With [text], it is a text index, as [TextIndex] keeps on a field, on the
+/// one field named, a `String` or a `List<String>` inside an embedded
+/// object: `@IndexOn(['meta.note'], text: true)`. A text index is on one
+/// field and is never unique.
 final class IndexOn {
-  const IndexOn(this.fields, {this.unique = false});
+  const IndexOn(this.fields, {this.unique = false, this.text = false});
 
   final List<String> fields;
   final bool unique;
+
+  /// Whether the index holds the words of its field, for a search to read.
+  final bool text;
 }
 
 /// Names the field [name] in the collection, rather than as the Dart field

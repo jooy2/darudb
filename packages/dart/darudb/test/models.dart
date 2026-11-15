@@ -201,3 +201,39 @@ class CascadingPost {
   @Cascade()
   final Link<Author> author;
 }
+
+@Embedded()
+class Margin {
+  const Margin({this.note});
+
+  final String? note;
+}
+
+@Collection('articles')
+@IndexOn(['margin.note'], text: true)
+class Article {
+  const Article({
+    this.id,
+    required this.title,
+    this.body,
+    this.tags = const [],
+    this.motto,
+    this.rank = 0,
+    this.margin,
+  });
+
+  final int? id;
+  @Index()
+  @TextIndex()
+  final String title;
+  @TextIndex()
+  @Name('text')
+  final String? body;
+  @TextIndex()
+  final List<String> tags;
+
+  /// Searched for words without an index.
+  final String? motto;
+  final int rank;
+  final Margin? margin;
+}

@@ -34,7 +34,7 @@ abstract final class Tag {
 /// The object format a declared schema is written in: the newest, which
 /// reads every declaration. The engine stores the file's schema in the
 /// lowest format that holds it, whatever this says.
-const int objectFormat = 2;
+const int objectFormat = 3;
 
 /// The microseconds since the Unix epoch of [value], as a date holds them.
 int microsOf(DateTime value) => value.microsecondsSinceEpoch;
