@@ -416,6 +416,9 @@ fn part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>, depth: usize) -> Opt
 
     match cond {
         Cond::Test { path, test } => path_part(collection, &path.steps, &path.leaf, test),
+        // An `AND` of nothing holds for every object, which no set of keys
+        // from an index is: as a part it would be the empty set.
+        Cond::And(terms) if terms.is_empty() => None,
         Cond::And(terms) => terms
             .iter()
             .map(|term| part(collection, term, depth + 1))

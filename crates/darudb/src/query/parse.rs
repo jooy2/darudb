@@ -563,15 +563,17 @@ impl Parser<'_> {
         invalid(self.position(), ignoring_order_message(operator))
     }
 
-    /// Whether `ANY` comes next followed by a name, which starts a test of
-    /// the objects that link to this one. `ANY` is read so only there, so a
-    /// field called `any` is a field everywhere else.
+    /// Whether `ANY` comes next followed by a name and a dot, which starts a
+    /// test of the objects that link to this one. `ANY` is read so only
+    /// there, so a field called `any` is a field everywhere else, before an
+    /// operator that is a word too: `any IN [1, 2]`, `any IS NULL`.
     fn at_linked(&self) -> bool {
         self.at_keyword("ANY")
             && matches!(
                 self.tokens.get(self.at + 1),
                 Some((Token::Word(_) | Token::Quoted(_), _))
             )
+            && matches!(self.tokens.get(self.at + 2), Some((Token::Symbol("."), _)))
     }
 
     /// `ANY collection.link`, then a filter of that collection's objects in

@@ -1173,6 +1173,47 @@ fn linked_filters_follow_the_documented_rules() {
             vec![Value::Int(1)]
         ))
     );
+
+    // Before an operator that is a word, too.
+    assert_eq!(
+        Query::parse("any IN [1, 2]", &[]).unwrap(),
+        Query::new().filter(Filter::is_in("any", [1, 2]))
+    );
+    assert_eq!(
+        Query::parse("any IS NULL OR any BETWEEN 1 AND 2", &[]).unwrap(),
+        Query::new().filter(Filter::is_null("any").or(Filter::between("any", 1, 2)))
+    );
+}
+
+/// An `AND` of no conditions holds for every object. A binding's builder
+/// makes one from an empty list of conditions.
+#[test]
+fn an_and_of_nothing_counts_as_it_finds() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let mut txn = db.begin_write().unwrap();
+    let mut players = txn.collection("players").unwrap();
+
+    for score in 0..100 {
+        players
+            .insert(Object::new().with("score", score % 50))
+            .unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let query = Query::from_ir(ir::Ir {
+        filter: Some(ir::Expr::Or(vec![
+            ir::Expr::And(Vec::new()),
+            ir::Expr::test(ir::Op::Eq, vec!["score".into()], vec![Value::Int(1)]),
+        ])),
+        ..ir::Ir::default()
+    });
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+
+    assert_eq!(players.query(&query).unwrap().len(), 104);
+    assert_eq!(players.count(&query).unwrap(), 104);
 }
 
 #[test]
