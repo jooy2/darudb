@@ -214,6 +214,8 @@ A value too large to store inline goes into an **overflow run**: `m` consecutive
 
 The run check lets a 44-byte reference vouch for any number of pages. Each page is verified by its own check, and together the checks must reproduce the run check.
 
+A leaf whose reference names page 0 or transaction 0, a length of 2^32 bytes or more, a page count other than the one its length needs, or a run that ends past page 2^64 − 1, is damaged. A reader reserves memory for the value as its pages pass their checks, not for the length the reference gives.
+
 ## Trees
 
 Every tree has an id, which every one of its pages carries.

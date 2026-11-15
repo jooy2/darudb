@@ -53,6 +53,10 @@ const WALKED_TREES: usize = 1024;
 /// What marks are kept by: a leaf's page and check, and the kind of mark.
 type MarksKey = (u64, Check, u64);
 
+/// The most memory a value read from an overflow run reserves before any of
+/// its pages has been read.
+const RESERVE: usize = 16 << 20;
+
 impl Loader {
     pub(crate) fn new(pager: Arc<Pager>, cache: Arc<Cache<LoadedNode>>) -> Self {
         let marks = Marks {
@@ -234,8 +238,11 @@ impl Load for Loader {
         let len = usize::try_from(reference.len)
             .map_err(|_| self.corrupted(reference.first, "holds a value too large for memory"))?;
         let page_size = self.pager.page_size();
-        let mut value = Vec::with_capacity(len);
-        let mut checks = Vec::with_capacity(reference.pages as usize * 16);
+        // Room for the whole value up to a bound, and more as its pages
+        // arrive and pass their checks: the length is the file's word for
+        // it, which a damaged or crafted file may put at gigabytes.
+        let mut value = Vec::with_capacity(len.min(RESERVE));
+        let mut checks = Vec::with_capacity((reference.pages as usize * 16).min(RESERVE));
         let mut index = 0u64;
 
         // A run of pages at a time, each read with one call.

@@ -19,6 +19,8 @@
 - `count` of a query whose filter holds an `AND` of no conditions inside an `OR` counts the objects the query finds. It counted only those the other terms of the `OR` found through an index, since the empty `AND` gave no keys. The Node.js builder makes such a filter from `and()` with no arguments.
 - In the query language, a field called `any` is read as a field before `IN`, `IS`, `BETWEEN`, `CONTAINS`, `STARTSWITH` and `ENDSWITH`, where the query failed to parse: `ANY` begins a test of linking objects only before a name and a dot.
 
+- A leaf whose overflow reference gives a value of 4 GiB or more, or a run that ends past the last page a file can have, is `CORRUPTED`, and reading a large value reserves at most 16 MiB before its pages have passed their checks. A crafted plain file could make a read, a check or a salvage reserve terabytes, which ends the process where the system refuses the memory.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.

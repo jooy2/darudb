@@ -226,8 +226,23 @@ impl OverflowRef {
             return Err("an overflow reference points at no page");
         }
 
+        // What a write refuses, a read does too: a file is untrusted, and a
+        // reader that took the length at its word would reserve that much
+        // memory before it had read a page of the value.
+        if reference.len > u64::from(u32::MAX) {
+            return Err("an overflow value is longer than a value may be");
+        }
+
         if u64::from(reference.pages) != overflow_pages(page_size, reference.len) {
             return Err("an overflow reference's page count does not fit its length");
+        }
+
+        if reference
+            .first
+            .checked_add(u64::from(reference.pages))
+            .is_none()
+        {
+            return Err("an overflow run ends past the last page a file can have");
         }
 
         Ok(reference)
@@ -1209,6 +1224,55 @@ mod tests {
             );
 
             assert!(decode_leaf(cells, &page, 1).is_err());
+        }
+    }
+
+    /// A value is under 4 GiB, and its run ends at a page a file can have:
+    /// a reader that took a longer length at its word would reserve that
+    /// much memory before reading a page of it.
+    #[test]
+    fn an_overflow_reference_past_the_limits_is_refused() {
+        let content = content_len(P) as u64;
+        let longest = u64::from(u32::MAX);
+        let mut long = reference();
+
+        long.len = longest + 1;
+        long.pages = u32::try_from(overflow_pages(P, long.len)).unwrap();
+
+        let mut huge = reference();
+
+        huge.pages = u32::MAX;
+        huge.len = u64::from(u32::MAX) * content;
+
+        let mut wrapping = reference();
+
+        wrapping.first = u64::MAX - 1;
+
+        let mut largest = reference();
+
+        largest.len = longest;
+        largest.pages = u32::try_from(overflow_pages(P, longest)).unwrap();
+
+        for (reference, fits) in [
+            (long, false),
+            (huge, false),
+            (wrapping, false),
+            (largest, true),
+        ] {
+            for cells in LAYOUTS {
+                let mut page = vec![0u8; P];
+
+                encode_leaf(
+                    cells,
+                    &[LeafEntry {
+                        key: b"k".to_vec(),
+                        value: StoredValue::Overflow(reference),
+                    }],
+                    &mut page,
+                );
+
+                assert_eq!(decode_leaf(cells, &page, 1).is_ok(), fits);
+            }
         }
     }
 }
