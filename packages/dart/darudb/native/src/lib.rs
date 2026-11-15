@@ -602,6 +602,26 @@ pub unsafe extern "C" fn darudb_txn_end(txn: *const Held) {
     }
 }
 
+/// The transaction id of the commit the read transaction `txn` sees, into
+/// `id`.
+///
+/// # Safety
+///
+/// `txn` came from this library and has not been freed; `id` points to a
+/// `u64` the caller can write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_txn_commit_id(txn: *const Held, id: *mut u64) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `txn`.
+        let found = unsafe { at(txn, ops::ended) }?.commit_id()?;
+
+        // SAFETY: the caller's promise for `id`.
+        unsafe { put(id, found) };
+
+        Ok(0)
+    })
+}
+
 /// Commits a write transaction, deferred or not, and ends it.
 ///
 /// # Safety

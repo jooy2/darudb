@@ -63,6 +63,14 @@ impl Held {
         operation(txn.as_mut().ok_or_else(ended)?)
     }
 
+    /// The transaction id of the commit a read transaction sees.
+    pub(crate) fn commit_id(&self) -> Result<u64> {
+        self.with(|txn| match txn {
+            Txn::Read(read) => Ok(read.commit_id()),
+            _ => Err(invalid("only a read transaction sees one commit")),
+        })
+    }
+
     /// Ends the transaction, throwing a write's changes away.
     pub(crate) fn end(&self) {
         *self.lock() = None;
@@ -291,6 +299,18 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
             }
             10 => {
                 options.upgrade_format(value.bool()?);
+            }
+            12 => {
+                options.max_unsynced_pages(
+                    u64::try_from(value.int()?)
+                        .map_err(|_| invalid("a negative number of unsynced pages"))?,
+                );
+            }
+            13 => {
+                let milliseconds = u64::try_from(value.int()?)
+                    .map_err(|_| invalid("a negative time for unsynced commits"))?;
+
+                options.max_unsynced_time(std::time::Duration::from_millis(milliseconds));
             }
             _ => {
                 return Err(invalid(format!(

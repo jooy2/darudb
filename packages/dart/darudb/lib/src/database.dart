@@ -94,9 +94,15 @@ final class MigrationContext {
 
   final WriteTransaction _txn;
   final StoredSchema _previous;
+  int _version = 0;
 
   /// The schema version the file held before the migration.
   int get previousVersion => _previous.version;
+
+  /// The schema version of the step under way: the one the function that
+  /// was given this was registered for, which a function shared by several
+  /// steps tells them apart by.
+  int get version => _version;
 
   /// The collection of [schema] in the new schema.
   WriteCollection<T, Q, K> collection<
@@ -333,6 +339,8 @@ Uint8List _options({
   required int? pageSize,
   required Duration? busyTimeout,
   required int? cacheSize,
+  Duration? maxUnsyncedTime,
+  int? maxUnsyncedPages,
   required Uint8List? schema,
   required Uint8List? key,
   required String? password,
@@ -370,6 +378,20 @@ Uint8List _options({
         (Writer w) => w
           ..byte(Tag.int64)
           ..int64(cacheSize),
+      ),
+    if (maxUnsyncedPages != null)
+      (
+        12,
+        (Writer w) => w
+          ..byte(Tag.int64)
+          ..int64(maxUnsyncedPages),
+      ),
+    if (maxUnsyncedTime != null)
+      (
+        13,
+        (Writer w) => w
+          ..byte(Tag.int64)
+          ..int64(maxUnsyncedTime.inMilliseconds),
       ),
     if (schema != null)
       (
@@ -600,6 +622,10 @@ final class Database implements Finalizable {
   /// between. A [key] of 32 bytes or a [password] encrypts a new database,
   /// and opens an encrypted one.
   ///
+  /// Deferred commits are made durable once they have written
+  /// `maxUnsyncedPages` pages, 16384 by default, or once `maxUnsyncedTime`
+  /// has passed, one second by default.
+  ///
   /// A file in an older format version is raised to the newest this
   /// package writes, while no other process has it open, unless
   /// `upgradeFormat` is `false`. Raising it rewrites the header only; the
@@ -617,6 +643,8 @@ final class Database implements Finalizable {
     int? pageSize,
     Duration? busyTimeout,
     int? cacheSize,
+    int? maxUnsyncedPages,
+    Duration? maxUnsyncedTime,
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
@@ -627,6 +655,8 @@ final class Database implements Finalizable {
       pageSize: pageSize,
       busyTimeout: busyTimeout,
       cacheSize: cacheSize,
+      maxUnsyncedPages: maxUnsyncedPages,
+      maxUnsyncedTime: maxUnsyncedTime,
       schema: schema == null ? null : encodeSchema(schema),
       key: key,
       password: password,
@@ -677,6 +707,8 @@ final class Database implements Finalizable {
       while (_check(darudb_migration_next_step(handle, _io.number)) == 1) {
         final version = _io.number.value;
 
+        context._version = version;
+
         for (final migration in migrations) {
           if (migration.version == version) {
             final result = migration.run?.call(context);
@@ -712,6 +744,8 @@ final class Database implements Finalizable {
     int? pageSize,
     Duration? busyTimeout,
     int? cacheSize,
+    int? maxUnsyncedPages,
+    Duration? maxUnsyncedTime,
     Uint8List? key,
     String? password,
     PasswordHashing? passwordHashing,
@@ -725,6 +759,8 @@ final class Database implements Finalizable {
       pageSize: pageSize,
       busyTimeout: busyTimeout,
       cacheSize: cacheSize,
+      maxUnsyncedPages: maxUnsyncedPages,
+      maxUnsyncedTime: maxUnsyncedTime,
       schema: schema == null ? null : encodeSchema(schema),
       key: key,
       password: password,
@@ -1491,6 +1527,16 @@ base class ReadTransaction implements Finalizable {
   collection<T, Q extends QueryBuilder<T>, K extends Object>(
     CollectionSchema<T, Q, K> schema,
   ) => ReadCollection<T, Q, K>._(this, schema, _collection(schema));
+
+  /// The id of the commit the transaction sees. It only grows from one
+  /// commit to the next, so a larger one than an earlier transaction saw
+  /// says that something was committed in between, by this process or
+  /// another. A write transaction has none, and throws `INVALID_ARGUMENT`.
+  int get commitId {
+    _check(darudb_txn_commit_id(_live(), _io.number));
+
+    return _io.number.value;
+  }
 }
 
 /// A write transaction: what a read transaction offers, with this

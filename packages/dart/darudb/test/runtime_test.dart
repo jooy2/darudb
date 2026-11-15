@@ -482,6 +482,54 @@ void main() {
     expect(found, ('a', 1));
   });
 
+  test('a read transaction has the id of the commit it sees', () async {
+    final before = db.read((txn) => txn.commitId);
+
+    expect(db.read((txn) => txn.commitId), before);
+    db.write((txn) {
+      txn.collection(userSchema).insert(const User(name: 'a'));
+      expect(
+        () => txn.commitId,
+        throwsA(
+          isA<DaruException>().having(
+            (e) => e.code,
+            'code',
+            'INVALID_ARGUMENT',
+          ),
+        ),
+      );
+    });
+    expect(await db.readAsync((txn) => txn.commitId), greaterThan(before));
+  });
+
+  test('the limits of deferred commits are options', () {
+    final limited = Database.open(
+      '${directory.path}/limited.darudb',
+      schema: const Schema(1, [userSchema]),
+      maxUnsyncedPages: 4,
+      maxUnsyncedTime: const Duration(milliseconds: 50),
+    );
+
+    for (var n = 0; n < 20; n++) {
+      limited.write(
+        (txn) => txn.collection(userSchema).insert(User(name: 'u$n')),
+        durability: Durability.deferred,
+      );
+    }
+
+    expect(limited.read((txn) => txn.collection(userSchema).count()), 20);
+    limited.close();
+    expect(
+      () => Database.open(
+        '${directory.path}/refused.darudb',
+        maxUnsyncedPages: -1,
+      ),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'INVALID_ARGUMENT'),
+      ),
+    );
+  });
+
   test('a closed database refuses calls with CLOSED', () {
     db.close();
     expect(

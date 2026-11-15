@@ -8,6 +8,12 @@
 
 - The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `cacheSize` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
 
+### Added
+
+- `maxUnsyncedPages` and `maxUnsyncedTime`, arguments of `Database.open` and `Database.openAsync`: how many pages deferred commits may write, and how long they may wait, before one of them is made durable anyway. 16384 pages and one second by default, as before.
+- `commitId` on a read transaction, and on one of the `Future` API: the id of the commit the transaction sees, which only grows, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another.
+- `MigrationContext.version`, the schema version of the step under way, which a function shared by several steps tells them apart by.
+
 ### Fixed
 
 - A transaction of the `Future` API whose isolate goes away before it ends, because the isolate was killed or a Flutter app restarted hot while its function was waiting, is freed with the isolate. A write transaction left that way held the file's writer for as long as the process lived, and every later write in the process failed with `BUSY`.

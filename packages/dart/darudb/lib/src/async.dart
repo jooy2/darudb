@@ -241,6 +241,8 @@ Future<Database> _openAsync(
         break;
       }
 
+      context._version = step.count;
+
       for (final migration in migrations) {
         if (migration.version == step.count) {
           await migration.run?.call(context);
@@ -265,6 +267,11 @@ base class AsyncReadTransaction {
 
   final ReadTransaction _txn;
   final _Serial _serial = _Serial();
+
+  /// The id of the commit the transaction sees; see
+  /// [ReadTransaction.commitId]. It is read without a trip to another
+  /// thread.
+  int get commitId => _txn.commitId;
 
   /// The collection of [schema], for reading its objects.
   AsyncReadCollection<T, Q, K> collection<

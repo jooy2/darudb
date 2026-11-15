@@ -46,6 +46,7 @@ void main() {
             final notes = context.collection(noteSchema);
 
             expect(context.previousVersion, 1);
+            expect(context.version, 2);
 
             for (final key in context.previousKeys('notes')) {
               final old = context.previous('notes', key)!;

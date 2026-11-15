@@ -135,6 +135,12 @@ external void darudb_txn_free(Pointer<NativeTransaction> txn);
 @Native<Void Function(Pointer<NativeTransaction>)>()
 external void darudb_txn_end(Pointer<NativeTransaction> txn);
 
+@Native<Int32 Function(Pointer<NativeTransaction>, Pointer<Uint64>)>()
+external int darudb_txn_commit_id(
+  Pointer<NativeTransaction> txn,
+  Pointer<Uint64> id,
+);
+
 @Native<Int32 Function(Pointer<NativeTransaction>, Uint8)>()
 external int darudb_commit(Pointer<NativeTransaction> txn, int deferred);
 
