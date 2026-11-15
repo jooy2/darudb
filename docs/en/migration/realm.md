@@ -165,11 +165,11 @@ environment:
   sdk: ^3.10.0
 
 dependencies:
-  darudb: ^1.5.0
+  darudb: ^1.6.0
 
 dev_dependencies:
   build_runner: ^2.10.0
-  darudb_generator: ^1.5.0
+  darudb_generator: ^1.6.0
 ```
 
 ```dart
