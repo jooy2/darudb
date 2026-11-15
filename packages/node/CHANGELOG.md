@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- The types `CollectionOptions`, `IndexDeclaration` and `IndexPath`, which `collection` takes its indexes in, are exported, so that code can name them.
+
 ### Fixed
 
 - An object with an embedded object that has no fields, `t.object({})`, is written, where every write of one threw a `SyntaxError`.
