@@ -1666,4 +1666,64 @@ describe('values at the edges', () => {
       }
     });
   });
+
+  it('read an object a migration rewrote through `previous`, inside embedded objects too', (context) => {
+    const path = tempPath(context);
+    const place = (fields) => t.object(fields);
+    const before = Database.open(path, {
+      schema: schema(1, {
+        users: collection({
+          name: t.string(),
+          address: place({ city: t.string(), zip: t.string() }),
+          stops: t.list(place({ city: t.string(), zip: t.string() }))
+        })
+      })
+    });
+
+    before.write((txn) =>
+      txn.collection('users').insert({
+        name: 'a',
+        address: { city: 'Seoul', zip: '04524' },
+        stops: [{ city: 'Busan', zip: '48058' }]
+      })
+    );
+    before.close();
+
+    let again;
+    const db = Database.open(path, {
+      schema: schema(2, {
+        users: collection({
+          name: t.string(),
+          address: place({ city: t.string() }),
+          stops: t.list(place({ city: t.string() }))
+        })
+      }),
+      migrations: [
+        {
+          version: 2,
+          run(migrating) {
+            const old = migrating.previous('users', 1);
+
+            assert.equal(old.address.zip, '04524');
+            migrating.collection('users').put({
+              id: 1,
+              name: old.name,
+              address: { city: old.address.city },
+              stops: old.stops.map((stop) => ({ city: stop.city }))
+            });
+            // Rewritten, the object no longer holds what the schema dropped.
+            again = migrating.previous('users', 1);
+          }
+        }
+      ]
+    });
+
+    context.after(() => db.close());
+    assert.deepEqual(again, {
+      id: 1,
+      name: 'a',
+      address: { city: 'Seoul', zip: null },
+      stops: [{ city: 'Busan', zip: null }]
+    });
+  });
 });

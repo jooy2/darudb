@@ -1198,7 +1198,7 @@ function skipValue(reader: Reader, depth: number): void {
 }
 
 /** Reads a value of `kind`. */
-function readValue(reader: Reader, kind: Kind, depth: number): unknown {
+function readValue(reader: Reader, kind: Kind, depth: number, lenient = false): unknown {
   if (depth >= MAX_DEPTH) {
     throw corrupted('it nests too deeply');
   }
@@ -1269,7 +1269,7 @@ function readValue(reader: Reader, kind: Kind, depth: number): unknown {
         const values = new Array<unknown>(count);
 
         for (let index = 0; index < count; index++) {
-          values[index] = readValue(reader, kind.element, depth + 1);
+          values[index] = readValue(reader, kind.element, depth + 1, lenient);
         }
 
         return values;
@@ -1280,7 +1280,9 @@ function readValue(reader: Reader, kind: Kind, depth: number): unknown {
       if (tag === OBJECT) {
         const length = reader.count();
         const inner = new Reader(reader.bytes, reader.at, reader.at + length);
-        const value = readFields(inner, kind.fields, false, depth + 1);
+        // A migration's earlier objects are read leniently all the way
+        // down, as the engine reads them.
+        const value = readFields(inner, kind.fields, lenient, depth + 1);
 
         if (inner.at !== inner.end) {
           throw corrupted('an embedded object has bytes after its last field');
@@ -1371,7 +1373,7 @@ function readFields(
     if (position < 0) {
       skipValue(reader, depth);
     } else {
-      values[position] = readValue(reader, fields.list[position].kind, depth);
+      values[position] = readValue(reader, fields.list[position].kind, depth, lenient);
     }
   }
 
@@ -1545,7 +1547,7 @@ function decoderOf(fields: Layout): Decoder | null {
         read = `const tag = reader.byte(); if (tag === ${BYTES}) ${v} = reader.bytesValue(); else wrongTag('bytes', tag);`;
         break;
       default:
-        read = `${v} = readValue(reader, list[${index}].kind, 0);`;
+        read = `${v} = readValue(reader, list[${index}].kind, 0, lenient);`;
     }
 
     body.push(`      case ${field.id}: { ${read} break; }`);
