@@ -239,12 +239,26 @@ pub(crate) struct Shared {
     /// checking them, and in an encrypted file the MAC, which costs a
     /// microsecond.
     verified: Mutex<Option<Verified>>,
+    /// What each slot held when a writer last read the header, with the
+    /// record it decoded to, or none if it failed. A writer reads all three
+    /// slots at every begin, and a commit writes one: the bytes of the other
+    /// two are the ones checked before, and the same bytes give the same
+    /// record, so they are not decoded, checked and, in an encrypted file,
+    /// authenticated again.
+    checked: Mutex<[Option<Checked>; SLOT_COUNT]>,
     /// Declared last, so that it is dropped last, once the handle has closed
     /// and the locks are released; see [`Hold`].
     hold: Arc<Hold>,
 }
 
 /// A published record known to be valid, and the bytes it was read from.
+/// The bytes of one slot and what they decode to.
+#[derive(Debug, Clone, Copy)]
+struct Checked {
+    bytes: [u8; RECORD_LEN],
+    record: Option<CommitRecord>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Verified {
     slot: usize,
@@ -301,6 +315,7 @@ impl Shared {
             writer_free: Condvar::new(),
             sync_failed: AtomicBool::new(false),
             verified: Mutex::new(None),
+            checked: Mutex::new([None; SLOT_COUNT]),
             hold: Arc::new(Hold),
         }
     }
@@ -406,12 +421,31 @@ impl Shared {
     /// leaves one like that.
     fn records_in(&self, bytes: &[u8]) -> [Option<CommitRecord>; SLOT_COUNT] {
         let mut records = [None; SLOT_COUNT];
+        let mut checked = lock(&self.checked);
 
         for (slot, record) in records.iter_mut().enumerate() {
-            *record = CommitRecord::decode(slot, &bytes[slot_offset(slot)..])
+            let raw = &bytes[slot_offset(slot)..][..RECORD_LEN];
+
+            if let Some(seen) = &checked[slot] {
+                if seen.bytes[..] == *raw {
+                    *record = seen.record;
+
+                    continue;
+                }
+            }
+
+            *record = CommitRecord::decode(slot, raw)
                 .ok()
                 .flatten()
                 .filter(|record| self.signed(slot, record));
+
+            let mut seen = Checked {
+                bytes: [0; RECORD_LEN],
+                record: *record,
+            };
+
+            seen.bytes.copy_from_slice(raw);
+            checked[slot] = Some(seen);
         }
 
         records
@@ -703,6 +737,12 @@ impl Shared {
     /// they hold no page back from the writer that is starting.
     pub(crate) fn release_idle_snapshots(&self) {
         self.locks.release_idle(None);
+    }
+
+    /// The oldest snapshot a read transaction of this process uses, which no
+    /// retained group above it can be reclaimed past.
+    pub(crate) fn oldest_local_snapshot(&self) -> Option<u64> {
+        self.locks.oldest_local()
     }
 
     /// The largest of `groups`, retained group ids in ascending order, that no

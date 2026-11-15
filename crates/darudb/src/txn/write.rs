@@ -251,6 +251,13 @@ impl WriteTransaction {
         // Reclaim every retained group that no snapshot and no possible
         // recovery can still reach. Recovery can go back to the durable
         // commit, which reaches every group above it.
+        //
+        // A read transaction of this process rules out every group above
+        // its snapshot, so the walk ends there: while a reader lives, each
+        // commit retires a group that stays, and reading them all at every
+        // begin, to reclaim none, made a write cost in proportion to the
+        // commits since the reader began.
+        let oldest = shared.oldest_local_snapshot();
         let mut retained = Vec::new();
 
         for entry in btree::Range::new(
@@ -264,7 +271,7 @@ impl WriteTransaction {
             let (group, _) =
                 decode_retained_key(&key).map_err(|reason| corrupted(shared, reason))?;
 
-            if group > durable.txn {
+            if group > durable.txn || oldest.is_some_and(|oldest| group > oldest) {
                 break;
             }
 
