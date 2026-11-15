@@ -14,6 +14,8 @@
 - Opening a database that exists no longer writes and syncs a temporary file beside it first. Such an open failed with `IO` in a directory the process could not create a file in, or on a full disk, where the database itself was readable and writable; and a file with a password hashed the password twice, which took a reopen from 43 to 19 milliseconds on one machine.
 - A database that cannot be created because its temporary file cannot be written, on a full disk for one, no longer leaves that file behind.
 
+- `delete` with a key longer than the file's keys returns false, as for any key no object has. It failed with `INVALID_ARGUMENT` and left the write transaction able only to abort.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.

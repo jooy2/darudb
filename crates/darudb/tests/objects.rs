@@ -1932,3 +1932,27 @@ fn dates_are_instants_kept_to_the_microsecond_and_queried_in_order() {
     );
     assert!(db.check().unwrap().is_ok());
 }
+
+/// A key longer than the file's keys names no object, so deleting it finds
+/// none, and the transaction goes on.
+#[test]
+fn a_delete_by_a_key_too_long_for_the_file_finds_nothing() {
+    let dir = TestDir::new();
+    let schema = Schema::new(1).collection(
+        Collection::new("notes")
+            .primary_key("slug", Type::String)
+            .field("body", Type::String),
+    );
+    let db = open(&dir, schema, &[]).unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut notes = txn.collection("notes").unwrap();
+    let long = "x".repeat(70_000);
+
+    notes
+        .put(Object::new().with("slug", "a").with("body", "x"))
+        .unwrap();
+    assert!(notes.get(long.as_str()).unwrap().is_none());
+    assert!(!notes.delete(long.as_str()).unwrap());
+    txn.commit().unwrap();
+    assert_eq!(objects(&db, "notes").len(), 1);
+}

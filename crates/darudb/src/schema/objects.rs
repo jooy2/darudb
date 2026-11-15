@@ -1494,6 +1494,13 @@ impl<'a> CollectionWriter<'a> {
 
     /// [`remove`](Self::remove) of the object whose key encodes as `key`.
     pub(crate) fn remove_encoded(&mut self, key: &[u8]) -> Result<bool> {
+        // No object has a key longer than the file's keys, and a delete of
+        // one that is not there refuses nothing: asked of the tree, such a
+        // key would be an error, which fails the whole transaction.
+        if key.len() > self.txn.max_key_len() {
+            return Ok(false);
+        }
+
         let collection = &self.schema.schema.collections[self.position];
         let names = self.schema.names(self.position);
         let mut entries = IndexKeys::lent(&mut self.txn.spare().old, 0);
