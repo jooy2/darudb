@@ -578,9 +578,21 @@ impl Salvager<'_> {
         }
 
         let mut pending: Vec<Pending> = vec![(root, None, None, None)];
+        // A bit for each page of the tree read so far. A tree has each page
+        // once, so a page reached again is damage, and is treated as a page
+        // that cannot be read: followed again, a crafted file whose branches
+        // all name one child would be walked for as long as its fan-out to
+        // the power of its depth.
+        let mut seen: Vec<u64> = Vec::new();
 
         while let Some((pointer, level, low, high)) = pending.pop() {
-            let Ok(loaded) = self.input.loader.load(&pointer, tree, level) else {
+            let loaded = self
+                .input
+                .loader
+                .load(&pointer, tree, level)
+                .ok()
+                .filter(|_| claim(&mut seen, pointer.page));
+            let Some(loaded) = loaded else {
                 gaps.push(Gap {
                     tree,
                     low,
@@ -815,6 +827,25 @@ fn repair(
 /// The entries an object gives the indexes of its collection: each index's
 /// id, whether it is unique, the entry and its value.
 type Entries = Vec<(u64, bool, Vec<u8>, Vec<u8>)>;
+
+/// Marks `page` in `seen`, a bit a page, and returns whether it was not
+/// marked before. The page has been read, so it lies inside the file, and
+/// the bits are no more than the file has pages.
+fn claim(seen: &mut Vec<u64>, page: u64) -> bool {
+    let Ok(word) = usize::try_from(page / 64) else {
+        return false;
+    };
+    let bit = 1u64 << (page % 64);
+
+    if word >= seen.len() {
+        seen.resize(word + 1, 0);
+    }
+
+    let fresh = seen[word] & bit == 0;
+
+    seen[word] |= bit;
+    fresh
+}
 
 /// Builds the indexes of `collection` from its records, dropping the
 /// objects that cannot be read or that take a unique index's entry another

@@ -1937,6 +1937,16 @@ fn a_link_holding_a_key_of_another_type_is_damage() {
             .map(|error| error.code()),
         Some("CORRUPTED")
     );
+
+    // The integrity check names it, rather than pass a file a query fails on.
+    txn.commit().unwrap();
+    assert!(
+        db.check()
+            .unwrap()
+            .problems
+            .iter()
+            .any(|problem| problem.message.contains("link holds a key of another type"))
+    );
 }
 
 /// Objects written before a field was added do not hold it, and read its

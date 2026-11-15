@@ -16,7 +16,8 @@ use crate::database::Database;
 use crate::error::Result;
 use crate::format::object::codec;
 use crate::format::object::names::{META, SCHEMA_KEY, counter, index_tree, records};
-use crate::format::object::schema::StoredSchema;
+use crate::format::object::schema::{Fields, Kind, StoredSchema};
+use crate::format::object::{Object, Value};
 use crate::format::{
     CATALOG_TREE, CommitRecord, FIRST_USER_TREE, FREE_TREE, Pointer, RETAINED_TREE, StoredRef,
     TreeDescriptor, decode_free_key, decode_free_value, decode_retained_key, decode_runs,
@@ -543,6 +544,16 @@ impl<'a> Checker<'a> {
                         continue;
                     }
                 };
+                // A link holds a key of the collection it names. A write
+                // refuses any other, and a query through such a link fails.
+                if !links_fit(&schema, &collection.fields, &object) {
+                    self.problem(
+                        None,
+                        Some(name),
+                        "an object's link holds a key of another type than its collection's",
+                    );
+                }
+
                 let key_value = collection
                     .key_field()
                     .and_then(|field| object.get(&field.name));
@@ -648,6 +659,34 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+}
+
+/// Whether every link of `object`, whose fields are `fields`, holds a key
+/// of the type the collection it names has, through lists and embedded
+/// objects.
+fn links_fit(schema: &StoredSchema, fields: &Fields, object: &Object) -> bool {
+    fields.list.iter().all(|field| {
+        object
+            .get(&field.name)
+            .is_none_or(|value| link_fits(schema, &field.kind, value))
+    })
+}
+
+fn link_fits(schema: &StoredSchema, kind: &Kind, value: &Value) -> bool {
+    match (kind, value) {
+        (_, Value::Null) => true,
+        (Kind::Link { collection }, value) => matches!(
+            (schema.key_kind(*collection), value),
+            (Some(Kind::Int), Value::Int(_))
+                | (Some(Kind::String), Value::String(_))
+                | (Some(Kind::Bytes), Value::Bytes(_))
+        ),
+        (Kind::List(element), Value::List(items)) => {
+            items.iter().all(|item| link_fits(schema, element, item))
+        }
+        (Kind::Object(fields), Value::Object(inner)) => links_fit(schema, fields, inner),
+        _ => true,
     }
 }
 

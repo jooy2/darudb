@@ -37,6 +37,8 @@
 - Salvage rebuilds the indexes of a collection of large objects in batches of at most 32 MiB of records. A batch was 1,024 objects whatever their size, so a collection of objects of megabytes each took gigabytes of memory.
 - A typed read of a list reserves room for at most 256 elements before it has read them, as an untyped read does, rather than for as many as a damaged record counts.
 - A commit that fails while it writes the selector, after the barrier of a sync commit, fails with `SYNC_FAILED`, whose outcome is unknown, rather than with `IO`, which read as a commit that did not happen: recovery publishes such a commit when the file is opened again. A commit that is published no longer fails because the file's length could not be read afterwards.
+- `check` reports an object whose link holds a key of another type than the collection it names has, which a query through the link fails on with `CORRUPTED`. It passed such a file.
+- Salvage reads each page of a tree once. A crafted file whose branches all name one child made it walk the same pages over and over, for longer than anyone would wait.
 
 ## v1.5.0 (2026-11-01)
 
