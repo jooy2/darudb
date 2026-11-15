@@ -349,6 +349,118 @@ These hold in every language:
 - An object that does not fit the schema, with a value of the wrong type, a field the schema does not have, or a required field missing, fails with `INVALID_ARGUMENT`.
 - A refused write changes nothing, and the transaction can go on and commit.
 - Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.
+- <LangCode rust="get_many" node="getMany" dart="getMany" python="get_many" /> reads the objects of several keys in one call, in the order of the keys, with nothing where no object has a key. Use it for a list of keys rather than a `get` for each, above all in the asynchronous APIs, where each call is a trip to another thread.
+
+## Follow a link in either direction
+
+A link is the key of another object, so following it is a read by key, and finding what links to an object is a query on the link field. Neither needs a call of its own.
+
+::: lang rust
+
+```rust
+use darudb::{Database, Filter, Query};
+
+fn linked(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let users = read.collection("users")?;
+    let posts = read.collection("posts")?;
+
+    // From a post to its author: the link is the author's key.
+    if let Some(post) = posts.get("hello")? {
+        let author = match post.get("author") {
+            Some(key) => users.get(key.clone())?,
+            None => None,
+        };
+
+        println!("{author:?}");
+    }
+
+    // From a user to the posts that link to it, through the index on `author`.
+    let written = posts.query(&Query::new().filter(Filter::eq("author", 1)))?;
+
+    println!("{} posts", written.len());
+
+    // Several keys at once, in their order.
+    let both = users.get_many([1, 2])?;
+
+    println!("{} users", both.iter().flatten().count());
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+db.read((txn) => {
+  const users = txn.collection('users');
+  const teams = txn.collection('teams');
+
+  // From a user to its team: the link is the team's key.
+  const alice = users.get(1);
+  const team = alice?.team == null ? null : teams.get(alice.team);
+
+  // From a team to the users that link to it.
+  const members = users.find((q) => q.where('team', '==', 'north'));
+
+  // Several keys at once, in their order, `null` where there is no object.
+  const [first, second] = users.getMany([1, 2]);
+
+  return { team, members, first, second };
+});
+```
+
+:::
+
+::: lang dart
+
+```dart
+db.read((txn) {
+  final users = txn.collection(userSchema);
+  final teams = txn.collection(teamSchema);
+
+  // From a user to its team: the link holds the team's key.
+  final alice = users.get(1);
+  final link = alice?.team;
+  final team = link == null ? null : teams.get(link.key as String);
+
+  // From a team to the users that link to it.
+  final members = users.find((q) => q.where(q.team.equals('north')));
+
+  // Several keys at once, in their order, `null` where there is no object.
+  final both = users.getMany([1, 2]);
+
+  return (team, members, both);
+});
+```
+
+:::
+
+::: lang python
+
+```python
+with db.read() as txn:
+    users = txn.collection(User)
+    teams = txn.collection(Team)
+
+    # From a user to its team: the link is the team's key.
+    alice = users.get(1)
+    team = teams.get(alice.team) if alice and alice.team is not None else None
+
+    # From a team to the users that link to it.
+    members = users.find(F.team == "north")
+
+    # Several keys at once, in their order, None where there is no object.
+    first, second = users.get_many([1, 2])
+```
+
+:::
+
+- **From the object that holds the link**, read the object the key names with `get`. A link to an object that is not there reads as its key all the same, and `get` then finds nothing.
+- **From the object linked to**, query the collection that holds the link for the key: the posts whose author is user 1, the users whose team is `north`. With an index on the link field the query reads only those objects; without one it walks the collection, so index a link that is followed this way.
+- **A list of links** is a list of keys. <LangCode rust="get_many" node="getMany" dart="getMany" python="get_many" /> reads their objects in one call, in the order of the keys, with nothing where no object has a key. It is also the call for any list of keys that comes from elsewhere, and in the asynchronous APIs it is one trip to another thread where a `get` for each key is one a key.
+- A query can also test the linked object without reading it, through a path such as `author.name`, or test what links to an object with `ANY`: see [Queries](./queries.md).
 
 ## Change the objects a query finds
 

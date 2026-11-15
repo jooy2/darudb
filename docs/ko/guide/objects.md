@@ -349,6 +349,118 @@ with db.read() as txn:
 - 값의 타입이 틀렸거나, 스키마에 없는 필드가 있거나, 필수 필드가 빠져 스키마에 맞지 않는 객체는 `INVALID_ARGUMENT`로 실패합니다.
 - 거부된 쓰기는 아무것도 바꾸지 않으므로, 트랜잭션은 계속 쓰다가 커밋해도 됩니다.
 - 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 값입니다. 스키마의 필드가 모두 들어 있고, 빠진 필드에는 기본값이나 null이 들어갑니다.
+- <LangCode rust="get_many" node="getMany" dart="getMany" python="get_many" />는 여러 키의 객체를 한 번의 호출로, 키의 순서대로 읽고, 그 키의 객체가 없는 자리는 비워 둡니다. 키 목록이 있을 때는 키마다 `get`을 부르지 말고 이 호출을 쓰십시오. 호출마다 다른 스레드를 오가는 비동기 API에서 특히 그렇습니다.
+
+## 링크를 양쪽으로 따라가기
+
+링크는 다른 객체의 키이므로, 링크를 따라가는 일은 키로 읽는 일이고, 어떤 객체를 가리키는 객체를 찾는 일은 링크 필드에 대한 쿼리입니다. 어느 쪽도 따로 호출이 필요하지 않습니다.
+
+::: lang rust
+
+```rust
+use darudb::{Database, Filter, Query};
+
+fn linked(db: &Database) -> Result<(), darudb::Error> {
+    let read = db.begin_read()?;
+    let users = read.collection("users")?;
+    let posts = read.collection("posts")?;
+
+    // 글에서 작성자로: 링크는 작성자의 키입니다.
+    if let Some(post) = posts.get("hello")? {
+        let author = match post.get("author") {
+            Some(key) => users.get(key.clone())?,
+            None => None,
+        };
+
+        println!("{author:?}");
+    }
+
+    // 사용자에서 그 사용자를 가리키는 글로: `author` 인덱스를 탑니다.
+    let written = posts.query(&Query::new().filter(Filter::eq("author", 1)))?;
+
+    println!("{} posts", written.len());
+
+    // 여러 키를 한 번에, 준 순서대로 읽습니다.
+    let both = users.get_many([1, 2])?;
+
+    println!("{} users", both.iter().flatten().count());
+    Ok(())
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+db.read((txn) => {
+  const users = txn.collection('users');
+  const teams = txn.collection('teams');
+
+  // 사용자에서 팀으로: 링크는 팀의 키입니다.
+  const alice = users.get(1);
+  const team = alice?.team == null ? null : teams.get(alice.team);
+
+  // 팀에서 그 팀을 가리키는 사용자로.
+  const members = users.find((q) => q.where('team', '==', 'north'));
+
+  // 여러 키를 한 번에, 준 순서대로 읽습니다. 객체가 없는 자리는 `null`입니다.
+  const [first, second] = users.getMany([1, 2]);
+
+  return { team, members, first, second };
+});
+```
+
+:::
+
+::: lang dart
+
+```dart
+db.read((txn) {
+  final users = txn.collection(userSchema);
+  final teams = txn.collection(teamSchema);
+
+  // 사용자에서 팀으로: 링크에 팀의 키가 들어 있습니다.
+  final alice = users.get(1);
+  final link = alice?.team;
+  final team = link == null ? null : teams.get(link.key as String);
+
+  // 팀에서 그 팀을 가리키는 사용자로.
+  final members = users.find((q) => q.where(q.team.equals('north')));
+
+  // 여러 키를 한 번에, 준 순서대로 읽습니다. 객체가 없는 자리는 `null`입니다.
+  final both = users.getMany([1, 2]);
+
+  return (team, members, both);
+});
+```
+
+:::
+
+::: lang python
+
+```python
+with db.read() as txn:
+    users = txn.collection(User)
+    teams = txn.collection(Team)
+
+    # 사용자에서 팀으로: 링크는 팀의 키입니다.
+    alice = users.get(1)
+    team = teams.get(alice.team) if alice and alice.team is not None else None
+
+    # 팀에서 그 팀을 가리키는 사용자로.
+    members = users.find(F.team == "north")
+
+    # 여러 키를 한 번에, 준 순서대로 읽습니다. 객체가 없는 자리는 None입니다.
+    first, second = users.get_many([1, 2])
+```
+
+:::
+
+- **링크를 가진 객체에서** 출발하면, 키가 가리키는 객체를 `get`으로 읽습니다. 없는 객체를 가리키는 링크도 키는 그대로 읽히고, 그때 `get`은 아무것도 찾지 못합니다.
+- **링크가 가리키는 객체에서** 출발하면, 링크를 가진 컬렉션을 그 키로 쿼리합니다. 작성자가 1번 사용자인 글, 팀이 `north`인 사용자가 그런 예입니다. 링크 필드에 인덱스가 있으면 쿼리는 해당 객체만 읽고, 없으면 컬렉션을 훑습니다. 이렇게 따라갈 링크에는 인덱스를 두십시오.
+- **링크의 목록**은 키의 목록입니다. <LangCode rust="get_many" node="getMany" dart="getMany" python="get_many" />는 그 객체들을 한 번의 호출로, 키의 순서대로 읽고, 그 키의 객체가 없는 자리는 비워 둡니다. 다른 곳에서 온 키 목록을 읽을 때도 이 호출을 씁니다. 비동기 API에서는 키마다 `get`을 부르면 키마다 다른 스레드를 오가지만, 이 호출은 한 번만 오갑니다.
+- 쿼리는 연결된 객체를 읽지 않고도 `author.name` 같은 경로로 그 객체를 검사할 수 있고, `ANY`로 어떤 객체를 가리키는 객체를 검사할 수도 있습니다. [쿼리](./queries.md)를 보십시오.
 
 ## 쿼리가 찾은 객체 바꾸기
 

@@ -51,6 +51,17 @@ pub fn get(&self, key: impl Into<Value>) -> Result<Option<T>>
 
 The object whose primary key is `key`, or `None`. A key of another type than the collection's fails with `INVALID_ARGUMENT`.
 
+### get_many
+
+```rust
+pub fn get_many<K: Into<Value>>(
+    &self,
+    keys: impl IntoIterator<Item = K>,
+) -> Result<Vec<Option<T>>>
+```
+
+The objects whose primary keys are `keys`, in the order of the keys: `None` where no object has a key, and an object once for each time its key is given.
+
 ### query
 
 ```rust

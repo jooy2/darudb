@@ -119,6 +119,17 @@ pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>>
 
 기본 키가 `key`인 객체를 이 트랜잭션의 변경까지 반영해 돌려줍니다. 없으면 `None`입니다.
 
+### get_many
+
+```rust
+pub fn get_many<K: Into<Value>>(
+    &self,
+    keys: impl IntoIterator<Item = K>,
+) -> Result<Vec<Option<Object>>>
+```
+
+기본 키가 `keys`인 객체를 이 트랜잭션의 변경까지 반영해 키의 순서대로 돌려줍니다. 그 키의 객체가 없는 자리는 `None`입니다.
+
 ### iter
 
 ```rust

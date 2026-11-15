@@ -36,6 +36,18 @@ get(key: Key): O | null;
 
 The object whose primary key is `key`, or `null`. A [Key](../../types/node/key.md) is an int, as a number or a `bigint`, a string, or bytes; a `bigint` finds the int it equals. Any other value, such as `1.5`, `true` or `null`, fails with `INVALID_ARGUMENT`.
 
+### getMany
+
+```ts
+getMany(keys: readonly Key[]): (O | null)[];
+```
+
+The objects whose primary keys are `keys`, in the order of the keys, with `null` where no object has a key. A key given twice gives the same object twice. The keys are an array, and each is a key as `get` takes one: anything else fails with `INVALID_ARGUMENT`. It is one call into the engine for every 1024 keys, where a loop of `get` makes one a key.
+
+```ts
+const [third, missing, first] = db.read((txn) => txn.collection('users').getMany([3, 99, 1]));
+```
+
 ### find
 
 ```ts
@@ -140,6 +152,7 @@ The mean of a number field over the objects a query finds: the exact sum over th
 interface AsyncReadCollection<O> {
   readonly name: string;
   get(key: Key): Promise<O | null>;
+  getMany(keys: readonly Key[]): Promise<(O | null)[]>;
   find(query?: QueryInput<O>): Promise<O[]>;
   find(text: string, parameters?: QueryParameters): Promise<O[]>;
   find(prepared: Prepared<O>, parameters?: QueryParameters): Promise<O[]>;

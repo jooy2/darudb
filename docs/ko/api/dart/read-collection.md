@@ -36,6 +36,18 @@ T? get(K key);
 
 기본 키가 `key`인 객체를 돌려줍니다. 없으면 `null`입니다.
 
+### getMany
+
+```dart
+List<T?> getMany(Iterable<K> keys);
+```
+
+기본 키가 `keys`인 객체를 키의 순서대로 돌려주고, 그 키의 객체가 없는 자리는 `null`입니다. 같은 키를 두 번 주면 그 객체가 두 번 나옵니다. `get`을 반복하면 키마다 라이브러리를 부르지만 이 호출은 한 번만 부르고, `Future` API에서는 모든 키를 한 번에 다른 스레드로 보냅니다.
+
+```dart
+final found = db.read((txn) => txn.collection(userSchema).getMany([3, 99, 1]));
+```
+
 ### find
 
 ```dart
@@ -190,6 +202,7 @@ double? avgPrepared(OrderedField<num> Function(Q q) field, Prepared<T> prepared,
 base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   String get name;
   Future<T?> get(K key);
+  Future<List<T?>> getMany(Iterable<K> keys);
   Future<List<T>> find([QueryBuilder<T> Function(Q q)? query]);
   Future<T?> findOne([QueryBuilder<T> Function(Q q)? query]);
   Future<int> count([QueryBuilder<T> Function(Q q)? query]);

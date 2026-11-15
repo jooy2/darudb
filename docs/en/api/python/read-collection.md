@@ -37,6 +37,19 @@ def get(self, key: Key) -> T | None: ...
 
 The object whose primary key is `key`, or `None`. A [Key](../../types/python/key.md) is an `int`, a `str` or bytes, of the type of the collection's key. A key of another type, a `bool`, a `float` or `None` fails with `INVALID_ARGUMENT`.
 
+### get_many
+
+```python
+def get_many(self, keys: Iterable[Key]) -> list[T | None]: ...
+```
+
+The objects whose primary keys are `keys`, in the order of the keys, with `None` where no object has a key. A key given twice gives its object twice. `keys` is any iterable of keys, each as `get` takes one, and a key of another type fails with `INVALID_ARGUMENT`. It is one call into the engine, where a loop of `get` makes one a key.
+
+```python
+with db.read() as txn:
+    third, missing, first = txn.collection(User).get_many([3, 99, 1])
+```
+
 ### find
 
 ```python
@@ -132,6 +145,7 @@ class AsyncReadCollection(Generic[T]):
     @property
     def name(self) -> str: ...
     async def get(self, key: Key) -> T | None: ...
+    async def get_many(self, keys: Iterable[Key]) -> list[T | None]: ...
     async def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]: ...
     async def find_one(self, query: QueryInput = None, /, *parameters: object) -> T | None: ...
     async def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...

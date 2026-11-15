@@ -37,6 +37,19 @@ def get(self, key: Key) -> T | None: ...
 
 기본 키가 `key`인 객체이고, 없으면 `None`입니다. [Key](../../types/python/key.md)는 컬렉션의 키 타입에 맞는 `int`, `str`, 바이트입니다. 타입이 다른 키나 `bool`, `float`, `None`을 주면 `INVALID_ARGUMENT`로 실패합니다.
 
+### get_many
+
+```python
+def get_many(self, keys: Iterable[Key]) -> list[T | None]: ...
+```
+
+기본 키가 `keys`인 객체를 키의 순서대로 돌려주고, 그 키의 객체가 없는 자리는 `None`입니다. 같은 키를 두 번 주면 그 객체가 두 번 나옵니다. `keys`는 키를 내놓는 이터러블이면 되고, 하나하나가 `get`이 받는 키여야 합니다. 타입이 다른 키는 `INVALID_ARGUMENT`로 실패합니다. `get`을 반복하면 키마다 엔진을 부르지만 이 호출은 한 번만 부릅니다.
+
+```python
+with db.read() as txn:
+    third, missing, first = txn.collection(User).get_many([3, 99, 1])
+```
+
 ### find
 
 ```python
@@ -132,6 +145,7 @@ class AsyncReadCollection(Generic[T]):
     @property
     def name(self) -> str: ...
     async def get(self, key: Key) -> T | None: ...
+    async def get_many(self, keys: Iterable[Key]) -> list[T | None]: ...
     async def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]: ...
     async def find_one(self, query: QueryInput = None, /, *parameters: object) -> T | None: ...
     async def count(self, query: QueryInput = None, /, *parameters: object) -> int: ...

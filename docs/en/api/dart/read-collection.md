@@ -36,6 +36,18 @@ T? get(K key);
 
 The object whose primary key is `key`, or `null`.
 
+### getMany
+
+```dart
+List<T?> getMany(Iterable<K> keys);
+```
+
+The objects whose primary keys are `keys`, in the order of the keys, with `null` where no object has a key. A key given twice gives its object twice. It is one call into the library, where a loop of `get` makes one a key, and with the `Future` API one trip to another thread for all of them.
+
+```dart
+final found = db.read((txn) => txn.collection(userSchema).getMany([3, 99, 1]));
+```
+
 ### find
 
 ```dart
@@ -190,6 +202,7 @@ The aggregates above over the objects a prepared query finds with `parameters`.
 base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   String get name;
   Future<T?> get(K key);
+  Future<List<T?>> getMany(Iterable<K> keys);
   Future<List<T>> find([QueryBuilder<T> Function(Q q)? query]);
   Future<T?> findOne([QueryBuilder<T> Function(Q q)? query]);
   Future<int> count([QueryBuilder<T> Function(Q q)? query]);

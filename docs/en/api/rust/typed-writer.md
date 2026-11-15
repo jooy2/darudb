@@ -137,6 +137,17 @@ pub fn get(&self, key: impl Into<Value>) -> Result<Option<T>>
 
 The object whose primary key is `key`, or `None`, with this transaction's changes.
 
+### get_many
+
+```rust
+pub fn get_many<K: Into<Value>>(
+    &self,
+    keys: impl IntoIterator<Item = K>,
+) -> Result<Vec<Option<T>>>
+```
+
+The objects whose primary keys are `keys`, in the order of the keys, with this transaction's changes: `None` where no object has a key.
+
 ### query
 
 ```rust

@@ -36,6 +36,18 @@ get(key: Key): O | null;
 
 기본 키가 `key`인 객체이고, 없으면 `null`입니다. [Key](../../types/node/key.md)는 number나 `bigint`로 쓴 정수, 문자열, 바이트입니다. `bigint`는 값이 같은 정수를 찾습니다. `1.5`, `true`, `null`처럼 그 밖의 값을 주면 `INVALID_ARGUMENT`로 실패합니다.
 
+### getMany
+
+```ts
+getMany(keys: readonly Key[]): (O | null)[];
+```
+
+기본 키가 `keys`인 객체를 키의 순서대로 돌려주고, 그 키의 객체가 없는 자리는 `null`입니다. 같은 키를 두 번 주면 같은 객체가 두 번 나옵니다. 키는 배열로 주고, 하나하나가 `get`이 받는 키여야 합니다. 그 밖의 값은 `INVALID_ARGUMENT`로 실패합니다. `get`을 반복하면 키마다 엔진을 부르지만, 이 호출은 키 1024개마다 한 번 부릅니다.
+
+```ts
+const [third, missing, first] = db.read((txn) => txn.collection('users').getMany([3, 99, 1]));
+```
+
 ### find
 
 ```ts
@@ -140,6 +152,7 @@ avg(field: NumberFields<O> | DottedPath, ...query: QueryArguments<O>): number | 
 interface AsyncReadCollection<O> {
   readonly name: string;
   get(key: Key): Promise<O | null>;
+  getMany(keys: readonly Key[]): Promise<(O | null)[]>;
   find(query?: QueryInput<O>): Promise<O[]>;
   find(text: string, parameters?: QueryParameters): Promise<O[]>;
   find(prepared: Prepared<O>, parameters?: QueryParameters): Promise<O[]>;

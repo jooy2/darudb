@@ -53,6 +53,23 @@ pub fn get(&self, key: impl Into<Value>) -> Result<Option<Object>>
 
 기본 키가 `key`인 객체를 돌려줍니다. 없으면 `None`입니다.
 
+### get_many
+
+```rust
+pub fn get_many<K: Into<Value>>(
+    &self,
+    keys: impl IntoIterator<Item = K>,
+) -> Result<Vec<Option<Object>>>
+```
+
+기본 키가 `keys`인 객체를 키의 순서대로 돌려줍니다. 그 키의 객체가 없는 자리는 `None`이고, 같은 키를 두 번 주면 그 객체가 두 번 나옵니다. 키마다 `get`을 부르는 일을 한 번의 호출로 합니다. 컬렉션의 키와 타입이 다른 키는 `INVALID_ARGUMENT`로 실패합니다.
+
+```rust
+let found = users.get_many([3, 99, 1])?;
+
+assert!(found[1].is_none());
+```
+
 ### iter
 
 ```rust
