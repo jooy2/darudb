@@ -88,6 +88,7 @@ fn main() -> Result<(), darudb::Error> {
 
 - **컬렉션 이름**은 구조체 이름을 그대로 씁니다. 구조체에 `#[darudb(collection = "name")]`을 붙이면 그 이름을 씁니다.
 - **여러 필드에 두는 인덱스**는 구조체에 선언합니다. `#[darudb(index(last, first))]`는 `last`와 `first` 필드에 이 순서로 인덱스 하나를 두고, `#[darudb(unique(last, first))]`는 두 필드의 값 조합이 겹치지 않게 합니다. 필드는 `rename`과 상관없이 구조체에서 쓰는 이름으로 적습니다. 그 자리에 문자열을 쓰면 `"address.city"`처럼 컬렉션에 저장된 이름의 경로가 되어 내장 객체 안의 필드를 가리키고, `#[darudb(index("address.city"))]`는 그 필드 하나에 인덱스를 둡니다. 어떤 쿼리가 이런 인덱스를 읽는지는 [`Collection::index_on`](./collection.md#index-on)에 있습니다.
+- **경로에 두는 텍스트 인덱스**도 구조체에 선언합니다. `#[darudb(text_index("margin.note"))]`는 내장 객체 `margin` 안의 문자열 필드 `note`에 [`Collection::text_index`](./collection.md#text-index)처럼 텍스트 인덱스를 둡니다. 필드 하나를 구조체의 필드 이름이나 문자열로 쓴 경로로 가리킵니다.
 - **기본 키**는 `#[darudb(key)]`를 붙인 필드이고, 타입은 `i64`, `String`, `Vec<u8>` 가운데 하나입니다. 키 필드가 없으면 자동 증가 키를 쓰므로 구조체에 `id: Option<i64>` 필드가 있어야 합니다. 이 필드는 객체를 넣기 전까지 `None`이고, 넣을 때 다음 번호를 받습니다.
 - **필드**는 구조체에 적힌 순서대로 선언되고, 타입은 Rust 타입에서 정해집니다. [`FieldType`](../../types/rust/field-type.md)을 보세요. `Option`이면 선택 필드이고, 나머지는 모두 필수 필드입니다.
 - **필드마다 상수**를 하나씩 구조체에 선언합니다. 이름은 필드 이름을 대문자로 쓴 것이고, 공개 범위는 필드와 같습니다. `age` 필드라면 `User::AGE`이며, 컬렉션에서의 필드 이름을 담은 [`FieldOf`](../../types/rust/field-of.md)입니다. [`TypedWriter::set`](./typed-writer.md#set)이 그 필드 하나를 바꿀 때 받고, 그 메서드로 `User::AGE.ge(18)` 같은 쿼리 조건을 만듭니다. 같은 이름의 상수를 구조체에 직접 선언하면 함께 컴파일되지 않습니다.
@@ -107,6 +108,7 @@ fn main() -> Result<(), darudb::Error> {
 | `#[darudb(key)]` | 이 필드가 기본 키입니다. `Object`에만 씁니다. |
 | `#[darudb(index)]` | 이 필드에 인덱스를 둡니다. `Object`에만 씁니다. |
 | `#[darudb(unique)]` | 같은 값을 가진 두 객체를 거부하는 인덱스를 둡니다. `Object`에만 씁니다. |
+| `#[darudb(text_index)]` | 이 필드에 단어 검색이 읽는 텍스트 인덱스를 둡니다. [`Collection::text_index`](./collection.md#text-index)와 같습니다. `Object`의 `String`, `Vec<String>`, 또는 그 `Option` 필드에만 씁니다. `index`와 함께 쓸 수 있습니다. |
 | `#[darudb(cascade)]` | 링크가 가리키는 객체를 지우면 이 객체도 함께 지웁니다. [`Collection::cascade`](./collection.md#cascade)와 같습니다. `Object`의 `Link<T>`나 `Option<Link<T>>` 필드에만 쓰고, 다른 타입에 붙이면 컴파일되지 않습니다. |
 | `#[darudb(rename = "x")]` | 컬렉션에서 쓰는 필드 이름입니다. 없으면 Rust 필드 이름을 씁니다. |
 | `#[darudb(default = 18)]` | 레코드에 필드가 없을 때 읽히는 값입니다. 필드는 필수가 됩니다. 키에는 붙일 수 없습니다. |

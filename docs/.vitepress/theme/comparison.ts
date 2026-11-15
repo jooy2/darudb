@@ -568,7 +568,10 @@ export const SECTIONS: Section[] = [
         redb: partly('Tuples, vectors and custom value types', '튜플, 벡터, 사용자 값 타입')
       }),
       row('fts', 'Full-text search', '전문 검색', {
-        darudb: no(),
+        darudb: partly(
+          'Words and the starts of words through a text index; no ranking',
+          '텍스트 인덱스로 단어와 단어의 앞부분을 검색, 순위는 없음'
+        ),
         sqlite: yes('FTS5'),
         realm: partly('Whole words, Latin scripts only', '단어 단위, 라틴 문자만'),
         objectbox: no(),

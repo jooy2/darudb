@@ -109,6 +109,7 @@ A condition tests one field, given by its name or by a [path](#fields-and-paths)
 | `CONTAINS` | `name CONTAINS "in"` | is a string holding the text, or a list holding the value |
 | `STARTSWITH` | `name STARTSWITH "J"` | is a string that starts with the text |
 | `ENDSWITH` | `email ENDSWITH "@example.com"` | is a string that ends with the text |
+| `MATCHES` | `body MATCHES "quick fox"` | is a string, or a list with a string, that has every word of the [search](#search-for-words) |
 | `IS NULL` | `email IS NULL` | is null, which a field left out of an object is |
 | `IS NOT NULL` | `email IS NOT NULL` | holds a value |
 | `== null`, `!= null` | `email == null` | is null, or is not null: the same as `IS NULL` and `IS NOT NULL` |
@@ -130,6 +131,23 @@ tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
 - **Strings only.** It applies to a string field or a list of strings, through embedded objects and links as any condition does. On another field, or after `<`, `BETWEEN` or `IS NULL`, the query fails with `INVALID_QUERY`: order ignoring case is not supported.
 - **No index.** An index keeps the exact bytes, so a condition that ignores case is tested on each object read. A query that also has a condition an index answers, joined with `AND`, still reads only those objects.
 - **Not keywords.** `IGNORE` and `CASE` are read as such only after a condition, so a field may be called `ignore` or `case` without backticks.
+
+## Search for words
+
+`MATCHES` finds the objects whose text has every word of a search, wherever the words stand and in whatever order: `body MATCHES "quick fox"` finds `The QUICK brown fox`.
+
+```text
+body MATCHES "quick fox"
+body MATCHES "data*" AND author == $0
+title MATCHES $0 OR body MATCHES $0
+```
+
+- **Words** are runs of letters, digits and marks, compared ignoring case and by their first 64 characters. A word followed at once by `*` is the start of a word, so `data*` finds `database`; a `*` anywhere else separates words, as punctuation does.
+- **Chinese characters, hiragana and katakana** are searched two characters at a time, and one character alone finds it anywhere in a text.
+- **Strings only.** It applies to a string field or a list of strings, through embedded objects and links as any condition does, and a list holds when one of its strings has every word. On another field, or with a value that is not a string, the query fails with `INVALID_QUERY`, and so does `IGNORE CASE` after it, since it ignores case already.
+- **A search without a word** finds nothing.
+- **A text index** on the field answers it; without one, each object is read and searched. [Queries](./queries.md#search-text-for-words) has the rules in full.
+- **Not a keyword.** `MATCHES` is read as an operator only after a field, so a field may be called `matches` without backticks.
 
 ## Objects that link here
 
@@ -229,7 +247,7 @@ A date is a date and a time with seconds, up to six digits of a second, and `Z` 
 
 ## Keywords
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts. `IGNORE CASE` is read only after a condition, and `ANY` only before a collection's name, so neither is among them.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`. They are case-insensitive, so `sort by age desc` is the same query, and a field with one of these names goes in backticks where a path starts. `IGNORE CASE` is read only after a condition, `MATCHES` only after a field, and `ANY` only before a collection's name, so none of them is among the keywords.
 
 ## Errors
 
@@ -257,6 +275,7 @@ condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
             | path "IN" "[" [ value { "," value } ] "]" [ case ]
             | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
+            | path "MATCHES" value
             | path "IS" [ "NOT" ] "NULL"
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="

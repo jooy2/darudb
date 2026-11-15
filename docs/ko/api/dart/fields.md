@@ -189,6 +189,20 @@ Condition endsWith(String text, {bool ignoreCase = false});
 
 필드가 `text`로 끝날 때 참입니다.
 
+### matches
+
+```dart
+Condition matches(String search);
+```
+
+필드에 `search`의 단어가 모두 들어 있을 때 참입니다. 단어의 위치와 순서는 상관없습니다. `q.body.matches('quick fox')`처럼 씁니다. 단어는 대소문자를 무시하고 비교하며, 단어 뒤에 `*`를 붙이면 그 글자로 시작하는 단어를 찾으므로 `'data*'`는 `database`를 찾습니다. 단어가 없는 검색은 아무것도 찾지 않습니다. `StringListField`에도 있으며, 목록의 문자열 하나에 단어가 모두 들어 있을 때 참입니다.
+
+```dart
+final found = articles.find((q) => q.where(q.body.matches('data* file')));
+```
+
+필드에 [`@TextIndex()`](./annotations.md#textindex)로 둔 텍스트 인덱스가 있으면 객체를 읽지 않고 답합니다. 없으면 쿼리의 나머지 조건이 남긴 객체를 모두 읽어 검색합니다. 맵으로 읽는 컬렉션에서는 `q.stringField('body').matches(...)`와 `q.stringListField('tags').matches(...)`가 같은 조건을 만들며, 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. 쿼리 언어의 `MATCHES`와 같으며, 규칙은 가이드의 [단어로 텍스트 검색하기](../../guide/queries.md#단어로-텍스트-검색하기)에 있습니다.
+
 ## 목록 필드의 메서드
 
 목록에 건 조건은 원소 하나라도 맞으면 참입니다. `ListField<E>`와 `StringListField`에 있습니다.

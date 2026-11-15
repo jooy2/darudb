@@ -151,6 +151,24 @@ unique(): FieldType<T, M, I>;
 
 An index that also refuses two objects with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null. `unique` makes the index by itself, without `index`.
 
+### textIndex
+
+```ts
+textIndex(this: TextTyped): this;
+```
+
+A text index on the field: an entry for each different word of the string, or of the strings of the list, which [`matches`](./conditions.md#matches) and `MATCHES` in the query language read rather than every object. Only a string and a list of strings have it, in TypeScript and when it is called: on another type it throws `INVALID_ARGUMENT`. The field may be marked `index()` too, for an index on its values.
+
+```ts
+const articles = collection({
+  title: t.string().index().textIndex(),
+  body: t.string().optional().textIndex(),
+  tags: t.list(t.string()).textIndex()
+});
+```
+
+A word is a run of letters, digits and marks, compared ignoring case and by its first 64 characters; Chinese characters, hiragana and katakana are indexed two at a time. Every write of an object writes an entry for each different word, so a long text costs more to write than any other field. A field inside an embedded object gets one by its path, with `text: true` in the `indexes` option of [collection](./collection.md#text-indexes-on-a-path); `textIndex()` there, or on a list's element, fails with `INVALID_ARGUMENT` when the database opens. A file with a text index is in object format 3, which earlier releases do not open; `upgradeFormat: false` in [OpenOptions](../../types/node/open-options.md#upgradeformat) refuses a schema that adds one.
+
 ### cascade
 
 ```ts

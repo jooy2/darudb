@@ -70,6 +70,7 @@ interface FieldType<T, M extends FieldMode = 'required', I = T> extends Typed<T,
   default(value: I): FieldType<T, 'default', I>;
   index(): FieldType<T, M, I>;
   unique(): FieldType<T, M, I>;
+  textIndex(this: TextTyped): this;
 }
 ```
 
@@ -79,6 +80,7 @@ The type of an ordinary field. `t.bool()`, `t.float()` and `t.list(element)` mak
 - **`default(value)`**: the field holds `value` when it is left out. A value that does not have the field's type fails with `INVALID_ARGUMENT` when the database opens.
 - **`index()`**: the engine keeps an index on the field, so that a query on it reads the index rather than every object. An index on a list has an entry for each element.
 - **`unique()`**: an index that also refuses a second object with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null.
+- **`textIndex()`**: a text index, which holds the words of a string or of a list of strings for [`matches`](../../api/node/conditions.md#matches) to read. Its `this` is a `TextTyped`, `Typed<string | string[], FieldMode, boolean, any>`, so a field of another type does not compile with it, and throws `INVALID_ARGUMENT` if it is called all the same. [t](../../api/node/t.md#textindex) has the rules.
 
 A list's element is a type without modifiers: an optional or defaulted element fails with `INVALID_ARGUMENT` when the database opens, and so does a list of lists.
 
@@ -100,10 +102,11 @@ A collection has at most one key field, and two fail with `INVALID_ARGUMENT` whe
 interface KeyType<T, I = T> extends Typed<T, 'required', true, I> {
   index(): KeyType<T, I>;
   unique(): KeyType<T, I>;
+  textIndex(this: TextTyped): this;
 }
 ```
 
-The primary key's field, as `primaryKey()` makes it: required, without a default, and never optional. Its third type parameter, `true`, is how [ObjectOf](./object-types.md#objectof) knows that the collection's objects have no engine-numbered `id`. Of the modifiers, it keeps `index()` and `unique()`.
+The primary key's field, as `primaryKey()` makes it: required, without a default, and never optional. Its third type parameter, `true`, is how [ObjectOf](./object-types.md#objectof) knows that the collection's objects have no engine-numbered `id`. Of the modifiers, it keeps `index()`, `unique()` and, on a string key, `textIndex()`.
 
 ## LinkType
 

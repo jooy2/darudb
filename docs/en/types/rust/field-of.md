@@ -75,6 +75,7 @@ Each method makes a [`Filter`](../../api/rust/filter.md) on the field, the one i
 | `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, and `Option` of one | [`Filter::lt`](../../api/rust/filter.md#lt) and the others |
 | `between(low, high)` | the same | [`Filter::between`](../../api/rust/filter.md#between) |
 | `contains(text)`, `starts_with(text)`, `ends_with(text)` | `String`, `Option<String>` | [`Filter::contains`](../../api/rust/filter.md#contains) and the others |
+| `matches(search)` | `String`, `Option<String>`, `Vec<String>` | [`Filter::matches`](../../api/rust/filter.md#matches) |
 | `contains(element)` | `Vec<E>` | [`Filter::contains`](../../api/rust/filter.md#contains) on a list |
 | `is_null()`, `is_not_null()` | any | [`Filter::is_null`](../../api/rust/filter.md#is-null), [`Filter::is_not_null`](../../api/rust/filter.md#is-not-null) |
 | `any()`, `any_where(filter)` | `Link<U>`, `Option<Link<U>>`, `Vec<Link<U>>`, of a collection type | [`Filter::linked`](../../api/rust/filter.md#linked), [`Filter::linked_where`](../../api/rust/filter.md#linked-where) |

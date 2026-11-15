@@ -144,6 +144,26 @@ endsWith(path: DottedPath, value: Operand<string>): Condition;
 
 A string field ends with `value`. On a list of strings, an element does.
 
+### matches
+
+```ts
+matches<K extends FieldNames<O>>(field: K, search: Operand<string>): Condition;
+matches(path: DottedPath, search: Operand<string>): Condition;
+```
+
+A string field has every word of `search`, wherever the words stand and in whatever order. On a list of strings, one string has them all. Words are compared ignoring case, and a word followed by `*` is the start of a word: `'data*'` finds `database`. A search without a word finds nothing.
+
+```ts
+db.read((txn) => {
+  const articles = txn.collection('articles');
+
+  articles.find((q) => q.where((c) => c.matches('body', 'quick fox')));
+  articles.find((q) => q.where('body', 'matches', 'data* file'));
+});
+```
+
+A text index on the field, which [`textIndex()`](./t.md#textindex) declares, answers it without reading the objects; without one, every object the rest of the query leaves is read and searched. A field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `MATCHES` in the query language, and the guide on [searching text](../../guide/queries.md#search-text-for-words) has the rules.
+
 ### isNull
 
 ```ts
@@ -190,7 +210,7 @@ not(condition: Condition): Condition;
 ignoreCase(condition: Condition): Condition;
 ```
 
-`condition` with every test in it of `eq`, `ne`, `in`, `contains`, `startsWith` and `endsWith` comparing strings ignoring case, by Unicode's simple case folding; the other tests stay as they are. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
+`condition` with every test in it of `eq`, `ne`, `in`, `contains`, `startsWith` and `endsWith` comparing strings ignoring case, by Unicode's simple case folding; the other tests, a [`matches`](#matches) among them, stay as they are. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
 
 ### linked
 

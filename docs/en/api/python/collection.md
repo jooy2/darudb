@@ -28,6 +28,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any: ...
 ```
 
@@ -133,6 +134,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any: ...
 ```
 
@@ -162,6 +164,21 @@ The field holds the primary key of an object of another collection, or of its ow
 
 With `link`, deleting the object the link names deletes the object that holds it, in the same transaction, and so on down the chain. Only a link to one object of the collection itself cascades: a list of links, a field of an embedded class, or a field without `link` is refused with `INVALID_ARGUMENT` when the `Schema` is made. Give the field an index as well: without one, each delete of an object it can name reads the whole collection. A file with a cascading link is in object format 2. The guide has [the rules](../../guide/objects.md#delete-what-links-to-an-object).
 
+### text_index
+
+A text index on the field, a `str` or a `list[str]`, optional or not: an entry for each different word of the text, which a search for words, [`matches`](./conditions.md#matches) or `MATCHES` in the query language, reads rather than every object. The field may take `index=True` too, for an index on its values.
+
+```python
+@darudb.collection("articles")
+class Article:
+    id: int | None = None
+    title: str = darudb.field(index=True, text_index=True)
+    body: str | None = darudb.field(default=None, text_index=True)
+    tags: list[str] = darudb.field(default_factory=list, text_index=True)
+```
+
+A word is a run of letters, digits and marks, compared ignoring case and by its first 64 characters; Chinese characters, hiragana and katakana are indexed two at a time. Every write of an object writes an entry for each different word, so a long text costs more to write than any other field. A `text_index` that is not a `bool` fails with `INVALID_ARGUMENT` at once, one on a field of an embedded class when the `Schema` is made, and one on a field that holds no text when the database opens. A field of an embedded class gets one by its path, with [`index(..., text=True)`](#index-1). A file with a text index is in object format 3, which earlier releases do not open; `upgrade_format=False` in [open](./database.md#open) refuses a schema that adds one.
+
 ### name
 
 The name the file stores the field under, when it is not the attribute's. Queries built with [F](./conditions.md) and the changes of `update` name the attribute, and the package gives the engine the stored name. Text in the query language, a [Migration](./migration.md) and [Migrating.previous](./migrating.md#previous) use the stored name.
@@ -169,10 +186,10 @@ The name the file stores the field under, when it is not the attribute's. Querie
 ## index
 
 ```python
-def index(*fields: Any, unique: bool = False) -> Index: ...
+def index(*fields: Any, unique: bool = False, text: bool = False) -> Index: ...
 ```
 
-An index on `fields`, in order, for `@collection(indexes=[...])`. Its entries sort by the first field, then by the second, and so on. Each field is an attribute's name, a path of names through embedded objects such as `"address.city"`, or an [F](./conditions.md) path such as `F.address.city`, and an index has one to eight of them. What it returns is an `Index`, a value with two attributes: `fields`, the fields as they were given, and `unique`.
+An index on `fields`, in order, for `@collection(indexes=[...])`. Its entries sort by the first field, then by the second, and so on. Each field is an attribute's name, a path of names through embedded objects such as `"address.city"`, or an [F](./conditions.md) path such as `F.address.city`, and an index has one to eight of them. What it returns is an `Index`, a value with three attributes: `fields`, the fields as they were given, `unique` and `text`.
 
 ```python
 from datetime import datetime
@@ -195,3 +212,5 @@ class Post:
 ```
 
 A query reads the index when it tests the first fields for equality, with `==`, `is_null()` or `is_in()`, and the next one, if any, for a range or with `startswith()`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. With `unique=True`, two objects cannot hold the same values in all the fields, though any number may hold `None` in one of them, and a write that would repeat them fails with `DUPLICATE_KEY`. No field, a value that is not a name or a path, or a `unique` that is not a `bool` fails with `INVALID_ARGUMENT` at once; a field the class does not have, a path through a link, more than eight fields, or several fields with a path through a list fail when the database opens. A file with such an index is in object format 2, which the `upgrade_format` option of [open](./database.md#open) governs.
+
+With `text=True`, the index is a text index, as [`field(text_index=True)`](#text-index) declares one, on the one field named, a `str` or a `list[str]` inside an embedded class: `darudb.index(F.margin.note, text=True)`. With `unique=True`, with several fields, or with a `text` that is not a `bool`, it fails with `INVALID_ARGUMENT` at once; on a field that holds no text, when the database opens. A file with one is in object format 3.

@@ -36,7 +36,7 @@ pub trait LinkType {
 | `ComparableType` | `eq`, `ne`, `is_in` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`, and `Option` of one |
 | `OrderedType` | `lt`, `le`, `gt`, `ge`, `between`; `min` and `max` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, and `Option` of one |
 | `NumberType` | `sum` and `avg` | `i64`, `f64`, and `Option` of either |
-| `TextType` | `contains`, `starts_with`, `ends_with` | `String`, `Option<String>` |
+| `TextType` | `contains`, `starts_with`, `ends_with`, `matches` | `String`, `Option<String>` |
 | `NestedType` | `then` | an embedded object type, `Link<T>`, `Option` of either, and a `Vec` of an embedded object type |
 | `LinkType` | `any`, `any_where` | `Link<T>`, `Option<Link<T>>`, `Vec<Link<T>>` |
 

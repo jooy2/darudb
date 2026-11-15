@@ -129,6 +129,23 @@ pub fn ends_with(field: &str, value: impl Into<Value>) -> Self
 
 A string field ends with `value`.
 
+### matches
+
+```rust
+pub fn matches(field: &str, search: impl Into<Value>) -> Self
+```
+
+A string field has every word of `search`, or one string of a list field does, wherever the words stand and in whatever order. Words are compared ignoring case, and a word followed by `*` is the start of a word: `"data*"` finds `database`. A search without a word finds nothing.
+
+```rust
+use darudb::Filter;
+
+let both = Filter::matches("body", "quick fox");
+let starting = Filter::matches("body", "data* file");
+```
+
+A text index on the field, which [`Collection::text_index`](./collection.md#text-index) declares, answers it without reading the objects; without one, every object the rest of the query leaves is read and searched. A field that holds no strings, or a `search` that is not a string, fails with `INVALID_QUERY` when the query runs. It is `MATCHES` in the query language, and the guide on [searching text](../../guide/queries.md#search-text-for-words) has the rules.
+
 ### is_null
 
 ```rust
@@ -193,4 +210,4 @@ The condition does not hold. It is the `Not` operator, so it is written `!filter
 pub fn ignore_case(self) -> Self
 ```
 
-This filter with every test of `eq`, `ne`, `is_in`, `contains`, `starts_with` and `ends_with` in it comparing strings ignoring case, by Unicode's simple case folding; the other tests stay as they are. `Filter::eq("name", "ada").ignore_case()` finds `Ada` and `ADA`. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
+This filter with every test of `eq`, `ne`, `is_in`, `contains`, `starts_with` and `ends_with` in it comparing strings ignoring case, by Unicode's simple case folding; the other tests, a [`matches`](#matches) among them, stay as they are. `Filter::eq("name", "ada").ignore_case()` finds `Ada` and `ADA`. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.

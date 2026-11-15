@@ -8,14 +8,14 @@ pageClass: reference-page
 
 # Index
 
-`Index`는 컬렉션의 인덱스를 스키마가 선언한 모습 그대로 다시 읽은 것입니다. 인덱스를 둔 필드들의 순서와, 고유 인덱스인지를 담습니다.
+`Index`는 컬렉션의 인덱스를 스키마가 선언한 모습 그대로 다시 읽은 것입니다. 인덱스를 둔 필드들의 순서와, 고유 인덱스인지, 텍스트 인덱스인지를 담습니다.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Index
 ```
 
-필드 하나에 두는 인덱스는 [`Collection::index`](../../api/rust/collection.md#index)와 [`Collection::unique`](../../api/rust/collection.md#unique)로 선언하고, 여러 필드나 내장 객체 안의 필드에 두는 인덱스는 [`Collection::index_on`](../../api/rust/collection.md#index-on)과 [`Collection::unique_on`](../../api/rust/collection.md#unique-on)으로 선언합니다. [`Collection::indexes`](../../api/rust/collection.md#indexes)가 이를 다시 돌려주며, [`Database::stored_schema`](../../api/rust/database.md#stored-schema)가 파일에서 읽은 스키마에서도 마찬가지입니다.
+필드 하나에 두는 인덱스는 [`Collection::index`](../../api/rust/collection.md#index)와 [`Collection::unique`](../../api/rust/collection.md#unique)로 선언하고, 여러 필드나 내장 객체 안의 필드에 두는 인덱스는 [`Collection::index_on`](../../api/rust/collection.md#index-on)과 [`Collection::unique_on`](../../api/rust/collection.md#unique-on)으로 선언합니다. 텍스트 인덱스는 [`Collection::text_index`](../../api/rust/collection.md#text-index)로 선언합니다. [`Collection::indexes`](../../api/rust/collection.md#indexes)가 이를 다시 돌려주며, [`Database::stored_schema`](../../api/rust/database.md#stored-schema)가 파일에서 읽은 스키마에서도 마찬가지입니다.
 
 ```rust
 use darudb::Database;
@@ -53,3 +53,11 @@ pub fn is_unique(&self) -> bool
 ```
 
 인덱스의 모든 필드에서 같은 값을 가진 두 객체를 거부하는지 알려 줍니다. 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다.
+
+### is_text
+
+```rust
+pub fn is_text(&self) -> bool
+```
+
+텍스트 인덱스인지 알려 줍니다. 텍스트 인덱스는 필드의 값이 아니라 문자열 필드 하나, 또는 문자열 목록 하나의 단어를 담아 단어 검색이 읽게 합니다. 필드 하나에만 두며 고유 인덱스가 될 수 없습니다.

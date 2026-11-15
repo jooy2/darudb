@@ -62,9 +62,10 @@ class StoredIndex:
     field: str
     unique: bool
     fields: tuple[str, ...] = ()
+    text: bool = False
 ```
 
-컬렉션의 인덱스입니다. 인덱스를 둔 필드들을 순서대로 담고, 각 필드는 저장된 이름이거나 `"address.city"` 같은 경로입니다. `unique`는 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지 알려 줍니다. `field`는 `fields`의 첫 필드이며, `field(index=True)`나 `field(unique=True)`로 선언한 인덱스에는 이 필드 하나뿐입니다. `fields` 없이 만든 `StoredIndex`는 `(field,)`를 받습니다.
+컬렉션의 인덱스입니다. 인덱스를 둔 필드들을 순서대로 담고, 각 필드는 저장된 이름이거나 `"address.city"` 같은 경로입니다. `unique`는 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지 알려 줍니다. `field`는 `fields`의 첫 필드이며, `field(index=True)`나 `field(unique=True)`로 선언한 인덱스에는 이 필드 하나뿐입니다. `fields` 없이 만든 `StoredIndex`는 `(field,)`를 받습니다. `text`는 텍스트 인덱스인지 알려 줍니다. 텍스트 인덱스는 필드의 값이 아니라 필드 하나의 단어를 담아 [`matches`](../../api/python/conditions.md#matches)가 읽게 합니다.
 
 ## StoredType
 

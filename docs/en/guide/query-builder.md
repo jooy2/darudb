@@ -110,6 +110,7 @@ Each associated function of `Filter` tests one field, named by a path, against v
 | `Filter::contains("tags", "admin")` | `tags CONTAINS "admin"` | holds the text, or the element in a list |
 | `Filter::starts_with("name", "J")` | `name STARTSWITH "J"` | starts with the text |
 | `Filter::ends_with("email", "@example.com")` | `email ENDSWITH "@example.com"` | ends with the text |
+| `Filter::matches("bio", "quick fox")` | `bio MATCHES "quick fox"` | has every word of the [search](#search-for-words) |
 | `Filter::is_null("email")` | `email IS NULL` | is null |
 | `Filter::is_not_null("email")` | `email IS NOT NULL` | holds a value |
 
@@ -169,6 +170,7 @@ The query is not tied to the type, so the engine still checks every field when t
 | `where('tags', 'contains', 'admin')` | `c.contains('tags', 'admin')` | `tags CONTAINS "admin"` | holds the text, or the element in a list |
 | `where('name', 'startsWith', 'J')` | `c.startsWith('name', 'J')` | `name STARTSWITH "J"` | starts with the text |
 | `where('email', 'endsWith', '@example.com')` | `c.endsWith('email', '@example.com')` | `email ENDSWITH "@example.com"` | ends with the text |
+| `where('bio', 'matches', 'quick fox')` | `c.matches('bio', 'quick fox')` | `bio MATCHES "quick fox"` | has every word of the [search](#search-for-words) |
 | `where('email', '==', null)` | `c.isNull('email')` | `email IS NULL` | is null |
 | `where('email', '!=', null)` | `c.isNotNull('email')` | `email IS NOT NULL` | holds a value |
 
@@ -193,6 +195,7 @@ A field object has the methods that fit its type: every field tests for null, a 
 | `q.name.contains('in')` | `name CONTAINS "in"` | holds the text |
 | `q.name.startsWith('J')` | `name STARTSWITH "J"` | starts with the text |
 | `q.email.endsWith('@example.com')` | `email ENDSWITH "@example.com"` | ends with the text |
+| `q.bio.matches('quick fox')` | `bio MATCHES "quick fox"` | has every word of the [search](#search-for-words) |
 | `q.email.isNull()` | `email IS NULL` | is null |
 | `q.email.isNotNull()` | `email IS NOT NULL` | holds a value |
 
@@ -204,6 +207,7 @@ A list field tests its elements, and holds when any element does:
 | `q.tags.containsAny(['admin', 'editor'])` | `tags IN ["admin", "editor"]` | has an element equal to one of the values |
 | `q.tags.anyStartsWith('team-')` | `tags STARTSWITH "team-"` | has an element that starts with the text |
 | `q.tags.anyEndsWith('-lead')` | `tags ENDSWITH "-lead"` | has an element that ends with the text |
+| `q.tags.matches('team lead')` | `tags MATCHES "team lead"` | has an element with every word of the [search](#search-for-words) |
 
 :::
 
@@ -224,6 +228,7 @@ A comparison of `F.field` with a value is a condition, and so are its methods.
 | `F.tags.contains("admin")` | `tags CONTAINS "admin"` | holds the text, or the element in a list |
 | `F.name.startswith("J")` | `name STARTSWITH "J"` | starts with the text |
 | `F.email.endswith("@example.com")` | `email ENDSWITH "@example.com"` | ends with the text |
+| `F.bio.matches("quick fox")` | `bio MATCHES "quick fox"` | has every word of the [search](#search-for-words) |
 | `F.email.is_null()`, `F.email == None` | `email IS NULL` | is null |
 | `F.email.is_not_null()`, `F.email != None` | `email IS NOT NULL` | holds a value |
 
@@ -289,6 +294,57 @@ users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
 :::
 
 `ß` matches `ẞ` but not `ss`, since folding keeps one character for one. A test that ignores case on a field holding no strings fails with `INVALID_QUERY`. No index answers it, so the objects it tests are read.
+
+## Search for words
+
+`matches` finds the objects whose text has every word of a search, wherever the words stand and in whatever order, ignoring case. It is `MATCHES` in the [query language](./query-language.md#search-for-words), and it tests a string field or a list of strings, where one string has to have every word.
+
+::: lang rust
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let both = Filter::matches("bio", "quick fox");
+    let starts = Filter::matches("bio", "data*").and(Filter::ge("age", 18));
+    let _ = (both, starts);
+}
+```
+
+`ignore_case` leaves it as it is, since it ignores case already. A derived type's string fields and lists of strings have `matches` too: `User::BIO.matches("quick fox")`.
+
+:::
+
+::: lang node
+
+```ts
+users.find((q) => q.where('bio', 'matches', 'quick fox'));
+users.find((q) => q.where((c) => c.and(c.matches('bio', 'data*'), c.ge('age', 18))));
+```
+
+:::
+
+::: lang dart
+
+A string field and a list of strings have `matches`, through embedded objects too, and so have `stringField` and `stringListField` of a collection read as maps.
+
+```dart
+users.find((q) => q.where(q.bio.matches('quick fox')));
+users.find((q) => q.where(q.bio.matches('data*') & q.age.atLeast(18)));
+```
+
+:::
+
+::: lang python
+
+```python
+users.find(F.bio.matches("quick fox"))
+users.find(F.bio.matches("data*") & (F.age >= 18))
+```
+
+:::
+
+A word followed by `*` is the start of a word, and a search without a word finds nothing. A [text index](./objects.md#declare-a-schema) on the field answers the search without reading the objects; without one, each object is read and searched. [Queries](./queries.md#search-text-for-words) says what a word is, in Korean, Chinese and Japanese text too.
 
 ## Objects that link here
 

@@ -70,6 +70,7 @@ interface FieldType<T, M extends FieldMode = 'required', I = T> extends Typed<T,
   default(value: I): FieldType<T, 'default', I>;
   index(): FieldType<T, M, I>;
   unique(): FieldType<T, M, I>;
+  textIndex(this: TextTyped): this;
 }
 ```
 
@@ -79,6 +80,7 @@ interface FieldType<T, M extends FieldMode = 'required', I = T> extends Typed<T,
 - **`default(value)`**: 필드가 빠지면 `value`가 들어갑니다. 필드의 타입과 맞지 않는 값은 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다.
 - **`index()`**: 엔진이 필드에 인덱스를 두어, 이 필드로 찾는 쿼리가 모든 객체 대신 인덱스를 읽게 합니다. 리스트 필드의 인덱스에는 원소마다 항목이 생깁니다.
 - **`unique()`**: 인덱스를 두고, 값이 같은 객체가 또 들어오면 `DUPLICATE_KEY`로 거부합니다. null은 몇 개가 있어도 됩니다.
+- **`textIndex()`**: 문자열이나 문자열 목록의 단어를 담아 [`matches`](../../api/node/conditions.md#matches)가 읽게 하는 텍스트 인덱스를 둡니다. `this`가 `TextTyped`, 곧 `Typed<string | string[], FieldMode, boolean, any>`여서 다른 타입의 필드에서는 컴파일되지 않고, 그래도 호출하면 `INVALID_ARGUMENT`를 던집니다. 규칙은 [t](../../api/node/t.md#textindex)에 있습니다.
 
 리스트의 원소는 수식 메서드를 붙이지 않은 타입이어야 합니다. 원소가 선택 필드이거나 기본값이 있으면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패하고, 리스트의 리스트도 마찬가지입니다.
 
@@ -100,10 +102,11 @@ interface KeyableType<T, I = T> extends FieldType<T, 'required', I> {
 interface KeyType<T, I = T> extends Typed<T, 'required', true, I> {
   index(): KeyType<T, I>;
   unique(): KeyType<T, I>;
+  textIndex(this: TextTyped): this;
 }
 ```
 
-`primaryKey()`가 만든 기본 키 필드입니다. 필수이고, 기본값이 없으며, 선택 필드가 될 수 없습니다. 세 번째 타입 매개변수 `true`를 보고 [ObjectOf](./object-types.md#objectof)는 그 컬렉션의 객체에 엔진이 매긴 `id`가 없다는 것을 압니다. 수식 메서드는 `index()`와 `unique()`만 남습니다.
+`primaryKey()`가 만든 기본 키 필드입니다. 필수이고, 기본값이 없으며, 선택 필드가 될 수 없습니다. 세 번째 타입 매개변수 `true`를 보고 [ObjectOf](./object-types.md#objectof)는 그 컬렉션의 객체에 엔진이 매긴 `id`가 없다는 것을 압니다. 수식 메서드는 `index()`와 `unique()`, 그리고 문자열 키라면 `textIndex()`가 남습니다.
 
 ## LinkType
 

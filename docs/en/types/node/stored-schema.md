@@ -63,10 +63,11 @@ interface StoredIndex {
   readonly field: string;
   readonly fields: readonly string[];
   readonly unique: boolean;
+  readonly text: boolean;
 }
 ```
 
-An index of a collection: the fields it is on, in order, each a name or a path such as `address.city`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `index()` or `unique()`.
+An index of a collection: the fields it is on, in order, each a name or a path such as `address.city`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `index()` or `unique()`. `text` says whether it is a text index, which holds the words of its one field for [`matches`](../../api/node/conditions.md#matches) to read rather than the field's values.
 
 ## StoredType
 

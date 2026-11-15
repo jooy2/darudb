@@ -80,12 +80,13 @@ where(
   value: readonly Operand<QueryValue>[],
   options?: WhereOptions
 ): Query<O>;
+where(field: FieldNames<O> | DottedPath, op: 'matches', search: Operand<string>): Query<O>;
 where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<O>;
 ```
 
 조건에 맞는 객체만 남깁니다. 앞서 `where`에 준 조건도 모두 지켜야 하며, 부를 때마다 앞의 조건과 `and`로 이어집니다. 조건은 다음 세 형태 중 하나로 주고, 앞의 두 형태에는 값 뒤에 옵션을 붙일 수 있습니다.
 
-- **필드, 연산자, 값.** 연산자는 [Comparison](../../types/node/query-input.md)에 있는 `==`, `!=`, `<`, `<=`, `>`, `>=`와, 쌍 `[low, high]`를 받는 `between`, 배열을 받는 `in`, 그리고 `contains`, `startsWith`, `endsWith`입니다. `== null`은 필드가 null인지, `!= null`은 null이 아닌지 검사합니다.
+- **필드, 연산자, 값.** 연산자는 [Comparison](../../types/node/query-input.md)에 있는 `==`, `!=`, `<`, `<=`, `>`, `>=`와, 쌍 `[low, high]`를 받는 `between`, 배열을 받는 `in`, 그리고 `contains`, `startsWith`, `endsWith`입니다. `matches`는 [`conditions.matches`](./conditions.md#matches)처럼 단어 검색을 받으며 옵션은 받지 않습니다. `== null`은 필드가 null인지, `!= null`은 null이 아닌지 검사합니다.
 - **점으로 이은 경로.** 필드 대신 `address.city`나 `team.city`처럼 내장 객체나 링크를 지나는 경로를 씁니다. TypeScript는 경로를 검사하지 않고 엔진이 검사합니다.
 - **조건.** [conditions](./conditions.md)로 만든 조건이나, 컬렉션에 맞게 타입이 정해진 조건을 받아 조건 하나를 돌려주는 함수입니다. `or`, `not`, `isNull`, 중첩된 묶음은 이 형태로 씁니다.
 - **옵션**은 앞의 두 형태에서 값 뒤에 `WhereOptions`로 줍니다. 생략할 수 있는 필드 `ignoreCase` 하나만 있는 객체입니다. `{ ignoreCase: true }`를 주면 `==`, `!=`, `in`, `contains`, `startsWith`, `endsWith` 검사가 [`conditions.ignoreCase`](./conditions.md#ignorecase)처럼 대소문자를 무시하고 문자열을 비교합니다.

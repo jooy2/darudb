@@ -67,7 +67,7 @@ Whether the engine assigns the primary key: an `int` field `id`, the first of `f
 final List<IndexSpec> indexes;
 ```
 
-The indexes on several fields or on fields inside embedded objects, which `@IndexOn` declares. An index on one field is in its [FieldSpec](#fieldspec), as `index` or `unique`.
+The indexes on several fields or on fields inside embedded objects, which `@IndexOn` declares. An index on one field is in its [FieldSpec](#fieldspec), as `index`, `unique` or `textIndex`.
 
 ## Methods
 
@@ -95,14 +95,15 @@ What the generator writes for a class annotated `@Embedded()`, such as `addressS
 
 ```dart
 final class IndexSpec {
-  const IndexSpec(this.fields, {this.unique = false});
+  const IndexSpec(this.fields, {this.unique = false, this.text = false});
 
   final List<String> fields;
   final bool unique;
+  final bool text;
 }
 ```
 
-An index on several fields, or on a field inside an embedded object, as `@IndexOn` declares it: each field's path by the names the file stores, joined by `.`, such as `'home.city'`, and whether two objects may not hold the same values in all of them.
+An index on several fields, or on a field inside an embedded object, as `@IndexOn` declares it: each field's path by the names the file stores, joined by `.`, such as `'home.city'`, and whether two objects may not hold the same values in all of them. With `text`, it is a text index on its one field, a string or a list of strings, which holds the words of the text for [`matches`](../../api/dart/fields.md#matches) to read. A text index that is unique or on several fields is refused with `INVALID_ARGUMENT` when the database opens.
 
 ## FieldSpec
 
@@ -117,6 +118,7 @@ final class FieldSpec {
     this.unique = false,
     this.primaryKey = false,
     this.cascade = false,
+    this.textIndex = false,
   });
 }
 ```
@@ -133,6 +135,7 @@ One field, as the class declares it.
 | `unique` | `bool` | Whether the index also refuses two objects with the same value |
 | `primaryKey` | `bool` | Whether the field is the collection's primary key |
 | `cascade` | `bool` | Whether deleting the object the link names deletes the object that holds it |
+| `textIndex` | `bool` | Whether the field, a string or a list of strings of the collection itself, has a text index, as `@TextIndex()` declares |
 
 ## Kind
 

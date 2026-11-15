@@ -189,6 +189,20 @@ Condition endsWith(String text, {bool ignoreCase = false});
 
 Holds when the field ends with `text`.
 
+### matches
+
+```dart
+Condition matches(String search);
+```
+
+Holds when the field has every word of `search`, wherever the words stand and in whatever order: `q.body.matches('quick fox')`. Words are compared ignoring case, and a word followed by `*` is the start of a word, so `'data*'` finds `database`. A search without a word finds nothing. `StringListField` has it too, and holds when one string of the list has every word.
+
+```dart
+final found = articles.find((q) => q.where(q.body.matches('data* file')));
+```
+
+A text index on the field, which [`@TextIndex()`](./annotations.md#textindex) keeps, answers it without reading the objects; without one, every object the rest of the query leaves is read and searched. In a collection read as maps, `q.stringField('body').matches(...)` and `q.stringListField('tags').matches(...)` make the same condition, and a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `MATCHES` in the query language, and the guide on [searching text](../../guide/queries.md#search-text-for-words) has the rules.
+
 ## Methods of list fields
 
 A condition on a list holds when it holds for any element. `ListField<E>` and `StringListField` have these.

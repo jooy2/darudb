@@ -75,6 +75,7 @@ pub const fn name(self) -> &'static str
 | `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`과 그 `Option` | [`Filter::lt`](../../api/rust/filter.md#lt) 등 |
 | `between(low, high)` | 위와 같음 | [`Filter::between`](../../api/rust/filter.md#between) |
 | `contains(text)`, `starts_with(text)`, `ends_with(text)` | `String`, `Option<String>` | [`Filter::contains`](../../api/rust/filter.md#contains) 등 |
+| `matches(search)` | `String`, `Option<String>`, `Vec<String>` | [`Filter::matches`](../../api/rust/filter.md#matches) |
 | `contains(element)` | `Vec<E>` | 목록에 쓴 [`Filter::contains`](../../api/rust/filter.md#contains) |
 | `is_null()`, `is_not_null()` | 모든 타입 | [`Filter::is_null`](../../api/rust/filter.md#is-null), [`Filter::is_not_null`](../../api/rust/filter.md#is-not-null) |
 | `any()`, `any_where(filter)` | 컬렉션 타입의 `Link<U>`, `Option<Link<U>>`, `Vec<Link<U>>` | [`Filter::linked`](../../api/rust/filter.md#linked), [`Filter::linked_where`](../../api/rust/filter.md#linked-where) |

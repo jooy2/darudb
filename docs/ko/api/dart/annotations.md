@@ -128,6 +128,32 @@ const Unique();
 
 필드에 인덱스를 두되, 값이 같은 객체 둘을 `DUPLICATE_KEY`로 거부합니다. null은 몇 개가 있어도 됩니다.
 
+### TextIndex
+
+```dart
+const TextIndex();
+```
+
+필드에 텍스트 인덱스를 둡니다. 필드는 `String`이나 `List<String>`이며 null 허용이어도 됩니다. 텍스트의 서로 다른 단어마다 항목을 하나씩 두어, 단어를 찾는 검색인 [`matches`](./fields.md#matches)나 쿼리 언어의 `MATCHES`가 객체를 모두 읽지 않고 이 인덱스를 읽게 합니다. 값으로 찾는 인덱스가 필요하면 [Index](#index)를 함께 붙일 수 있습니다.
+
+```dart
+@Collection('articles')
+class Article {
+  const Article({this.id, required this.title, this.body, this.tags = const []});
+
+  final int? id;
+  @Index()
+  @TextIndex()
+  final String title;
+  @TextIndex()
+  final String? body;
+  @TextIndex()
+  final List<String> tags;
+}
+```
+
+단어는 글자, 숫자, 결합 기호가 이어진 구간이며, 대소문자를 무시하고 앞의 64자로 비교합니다. 한자, 히라가나, 가타카나는 두 글자씩 인덱스에 넣습니다. 객체를 쓸 때마다 서로 다른 단어마다 항목을 쓰므로, 긴 텍스트는 다른 어떤 필드보다 쓰기 비용이 큽니다. 다른 타입의 필드, 자동 증가 `id`, 내장 클래스의 필드에 붙이면 생성기가 거부합니다. 내장 클래스의 필드에는 [IndexOn](#indexon)에 경로를 주어 둡니다. 텍스트 인덱스가 있는 파일은 객체 형식 3이며 이전 릴리스는 이 파일을 열지 못합니다. [open](./database.md#open)의 `upgradeFormat: false`는 텍스트 인덱스를 더하는 스키마를 거부합니다.
+
 ### Cascade
 
 ```dart
@@ -139,7 +165,7 @@ const Cascade();
 ### IndexOn
 
 ```dart
-const IndexOn(List<String> fields, {bool unique = false});
+const IndexOn(List<String> fields, {bool unique = false, bool text = false});
 ```
 
 `@Collection()`을 붙인 클래스에 붙여 `fields`에 차례대로 인덱스 하나를 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 Dart 필드 이름이거나, `'home.city'`처럼 내장 객체를 따라 Dart 이름을 `.`으로 이은 경로이며, 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. 한 클래스에 여러 번 붙여도 됩니다.
@@ -159,6 +185,8 @@ class Post {
 ```
 
 쿼리가 앞쪽 필드들을 `equals`, `isNull`, `isIn`으로 같은지 검사하고, 그다음 필드가 있다면 그 필드를 범위나 `startsWith`로 검사하면 이 인덱스를 읽습니다. 같은지 검사한 필드 뒤의 필드를 모두 인덱스의 순서대로 정렬하는 쿼리에는 인덱스가 객체를 정렬된 순서로 내줍니다. 그래서 작성자 한 명의 글을 `written` 내림차순으로 정렬해 20개만 가져오는 쿼리는 항목 스무 개를 읽고 멈춥니다. `unique: true`이면 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다. 같은 값 조합을 쓰려는 쓰기는 `DUPLICATE_KEY`로 실패합니다. 클래스에 없는 필드나 링크를 거치는 경로를 쓰거나, 필드가 하나도 없거나 빈 경로가 있으면 생성기가 멈춥니다. 필드가 여덟 개를 넘는 인덱스와, 필드가 여럿인데 목록을 거치는 경로가 있는 인덱스는 데이터베이스를 열 때 엔진이 `INVALID_ARGUMENT`로 거부합니다. 이런 인덱스가 있는 파일은 객체 형식 2이며, 이 형식으로 올릴지는 [open](./database.md#open)의 `upgradeFormat` 옵션이 정합니다.
+
+`text: true`를 주면 필드에 붙이는 [TextIndex](#textindex)처럼 텍스트 인덱스가 됩니다. 이름으로 가리킨 필드 하나에 두며, 그 필드는 내장 객체 안의 `String`이나 `List<String>`입니다. `@IndexOn(['margin.note'], text: true)`처럼 씁니다. 고유 인덱스로 선언하거나, 필드를 여러 개 주거나, 텍스트를 담지 않은 필드를 가리키면 생성기가 멈춥니다. 이런 인덱스가 있는 파일은 객체 형식 3입니다.
 
 ### Name
 

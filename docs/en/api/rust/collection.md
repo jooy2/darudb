@@ -149,6 +149,33 @@ pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) 
 
 [`index_on`](#index-on), keeping the fields' values unique together: two objects cannot hold the same values in all of them, though any number may hold null in one of them. A write that would repeat another object's values fails with `DUPLICATE_KEY`, as with [`unique`](#unique).
 
+### text_index
+
+```rust
+pub fn text_index(mut self, path: impl Into<String>) -> Self
+```
+
+Gives the string field `path`, or the list of strings, a text index: an entry for each different word of the text, which a search for words, [`Filter::matches`](./filter.md#matches) or `MATCHES` in the query language, reads rather than every object. The path is a field's name, or names joined by `.` through embedded objects, such as `margin.note`. The field may have another index too, on its values.
+
+```rust
+use darudb::{Collection, Embedded, Type};
+
+fn articles() -> Collection {
+    Collection::new("articles")
+        .field("title", Type::String)
+        .optional("body", Type::String)
+        .field("tags", Type::list(Type::String))
+        .optional("margin", Type::object(Embedded::new().optional("note", Type::String)))
+        .index("title")
+        .text_index("title")
+        .text_index("body")
+        .text_index("tags")
+        .text_index("margin.note")
+}
+```
+
+A word is a run of letters, digits and marks, compared ignoring case and by its first 64 characters; Chinese characters, hiragana and katakana, written without spaces between words, are indexed two at a time. A null and a text without a word have no entry. Every write of an object writes an entry for each different word of the field, so a long text costs more to write than any other field. A text index on a field that holds no text, on a path through a link, or declared twice on one path fails with `INVALID_ARGUMENT` when the database opens. A file with a text index is in object format 3, which earlier releases do not open and [`OpenOptions::upgrade_format`](./open-options.md#upgrade-format) governs. The guide on [searching text](../../guide/queries.md#search-text-for-words) has the rules of a search.
+
 ### cascade
 
 ```rust

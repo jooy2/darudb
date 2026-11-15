@@ -80,12 +80,13 @@ where(
   value: readonly Operand<QueryValue>[],
   options?: WhereOptions
 ): Query<O>;
+where(field: FieldNames<O> | DottedPath, op: 'matches', search: Operand<string>): Query<O>;
 where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<O>;
 ```
 
 Keeps the objects that meet a condition, and every condition given to `where` before: each call is joined to the earlier ones with `and`. The condition takes one of three forms, the first two with options after the value.
 
-- **A field, an operator and a value.** The operators are the [Comparison](../../types/node/query-input.md) operators `==`, `!=`, `<`, `<=`, `>` and `>=`, then `between` with a pair `[low, high]`, `in` with an array, and `contains`, `startsWith` and `endsWith`. `== null` tests that the field is null, and `!= null` that it is not.
+- **A field, an operator and a value.** The operators are the [Comparison](../../types/node/query-input.md) operators `==`, `!=`, `<`, `<=`, `>` and `>=`, then `between` with a pair `[low, high]`, `in` with an array, and `contains`, `startsWith` and `endsWith`. `matches` takes a search for words, as [`conditions.matches`](./conditions.md#matches) does, and no options. `== null` tests that the field is null, and `!= null` that it is not.
 - **A dotted path** in place of the field, through an embedded object or a link, such as `address.city` or `team.city`. TypeScript does not check it; the engine does.
 - **A condition** from [conditions](./conditions.md), or a function that receives the conditions typed for the collection and returns one. This is the form for `or`, `not`, `isNull` and nested groups.
 - **Options** after the value of the first two forms, a `WhereOptions`, an object whose one field, `ignoreCase`, is optional: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.

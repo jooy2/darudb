@@ -36,7 +36,7 @@ pub trait LinkType {
 | `ComparableType` | `eq`, `ne`, `is_in` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`와 그 `Option` |
 | `OrderedType` | `lt`, `le`, `gt`, `ge`, `between`, 그리고 `min`과 `max` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`과 그 `Option` |
 | `NumberType` | `sum`과 `avg` | `i64`, `f64`와 그 `Option` |
-| `TextType` | `contains`, `starts_with`, `ends_with` | `String`, `Option<String>` |
+| `TextType` | `contains`, `starts_with`, `ends_with`, `matches` | `String`, `Option<String>` |
 | `NestedType` | `then` | 내장 객체 타입, `Link<T>`와 그 `Option`, 내장 객체 타입의 `Vec` |
 | `LinkType` | `any`, `any_where` | `Link<T>`, `Option<Link<T>>`, `Vec<Link<T>>` |
 

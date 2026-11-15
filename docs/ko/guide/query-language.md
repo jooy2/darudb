@@ -109,6 +109,7 @@ with db.read() as txn:
 | `CONTAINS` | `name CONTAINS "in"` | 필드가 그 글자를 담은 문자열이거나 그 값을 담은 목록인 객체 |
 | `STARTSWITH` | `name STARTSWITH "J"` | 필드가 그 글자로 시작하는 문자열인 객체 |
 | `ENDSWITH` | `email ENDSWITH "@example.com"` | 필드가 그 글자로 끝나는 문자열인 객체 |
+| `MATCHES` | `body MATCHES "quick fox"` | 필드가 [검색어](#단어-검색)의 단어를 모두 가진 문자열이거나, 그런 문자열이 든 목록인 객체 |
 | `IS NULL` | `email IS NULL` | 필드가 null인 객체. 객체에서 빠진 필드도 null입니다 |
 | `IS NOT NULL` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 | `== null`, `!= null` | `email == null` | `IS NULL`, `IS NOT NULL`과 같습니다 |
@@ -130,6 +131,23 @@ tags CONTAINS "Admin" IGNORE CASE AND city IN ["seoul", "busan"] IGNORE CASE
 - **문자열에만 씁니다.** 문자열 필드나 문자열 목록에 쓰며, 다른 조건처럼 내장 객체와 링크를 거칠 수 있습니다. 다른 필드에 쓰거나 `<`, `BETWEEN`, `IS NULL` 뒤에 쓰면 `INVALID_QUERY`로 실패합니다. 대소문자를 무시한 순서 비교는 없습니다.
 - **인덱스는 쓰지 않습니다.** 인덱스는 바이트를 그대로 담으므로, 대소문자를 무시하는 조건은 읽은 객체마다 검사합니다. 인덱스가 답하는 다른 조건이 `AND`로 붙어 있으면 그 객체만 읽습니다.
 - **키워드가 아닙니다.** `IGNORE`와 `CASE`는 조건 바로 뒤에서만 그렇게 읽으므로, `ignore`나 `case`라는 필드도 백틱 없이 쓸 수 있습니다.
+
+## 단어 검색
+
+`MATCHES`는 검색어의 단어가 모두 들어 있는 텍스트를 가진 객체를 찾습니다. 단어의 위치와 순서는 따지지 않습니다. `body MATCHES "quick fox"`는 `The QUICK brown fox`를 찾습니다.
+
+```text
+body MATCHES "quick fox"
+body MATCHES "data*" AND author == $0
+title MATCHES $0 OR body MATCHES $0
+```
+
+- **단어**는 글자, 숫자, 결합 기호가 이어진 구간이며, 대소문자를 가리지 않고 앞의 64자로 비교합니다. 단어 바로 뒤에 `*`를 붙이면 단어의 앞부분이 되어, `data*`가 `database`를 찾습니다. 다른 자리의 `*`는 문장부호처럼 단어를 나눕니다.
+- **한자, 히라가나, 가타카나**는 두 글자씩 묶어 검색하고, 한 글자만 쓰면 텍스트 어디에 있든 찾습니다.
+- **문자열에만 씁니다.** 문자열 필드나 문자열 목록에 쓰며, 다른 조건처럼 내장 객체와 링크를 거칠 수 있습니다. 목록은 문자열 하나에 모든 단어가 있어야 맞습니다. 다른 필드에 쓰거나 문자열이 아닌 값을 주면 `INVALID_QUERY`로 실패합니다. 이미 대소문자를 가리지 않으므로 뒤에 `IGNORE CASE`를 붙여도 같은 오류가 납니다.
+- **단어가 없는 검색**은 아무것도 찾지 않습니다.
+- **텍스트 인덱스**가 필드에 있으면 인덱스가 답하고, 없으면 객체를 하나씩 읽어 검색합니다. 자세한 규칙은 [쿼리](./queries.md#단어로-텍스트-검색하기)에 있습니다.
+- **키워드가 아닙니다.** `MATCHES`는 필드 뒤에서만 연산자로 읽으므로, `matches`라는 필드도 백틱 없이 쓸 수 있습니다.
 
 ## 이 객체를 가리키는 객체
 
@@ -229,7 +247,7 @@ NOT ANY posts.author
 
 ## 키워드
 
-`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다. `IGNORE CASE`는 조건 바로 뒤에서만, `ANY`는 컬렉션 이름 앞에서만 그렇게 읽으므로 둘 다 이 목록에 들지 않습니다.
+`AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT`, `OFFSET`입니다. 대소문자를 가리지 않으므로 `sort by age desc`도 같은 쿼리이며, 이 이름을 가진 필드는 경로가 시작하는 자리에서 백틱으로 감쌉니다. `IGNORE CASE`는 조건 바로 뒤에서만, `MATCHES`는 필드 뒤에서만, `ANY`는 컬렉션 이름 앞에서만 그렇게 읽으므로 셋 다 이 목록에 들지 않습니다.
 
 ## 오류
 
@@ -257,6 +275,7 @@ condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
             | path "IN" "[" [ value { "," value } ] "]" [ case ]
             | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
+            | path "MATCHES" value
             | path "IS" [ "NOT" ] "NULL"
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="

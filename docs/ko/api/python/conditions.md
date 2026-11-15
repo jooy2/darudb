@@ -117,6 +117,23 @@ def endswith(self, value: object) -> Condition: ...
 
 문자열 필드가 `value`로 끝납니다. 문자열 목록이면 원소 하나라도 `value`로 끝날 때 참입니다.
 
+### matches
+
+```python
+def matches(self, search: object) -> Condition: ...
+```
+
+문자열 필드에 `search`의 단어가 모두 들어 있습니다. 단어의 위치와 순서는 상관없습니다. 문자열 목록이면 문자열 하나에 단어가 모두 들어 있을 때 참입니다. 단어는 대소문자를 무시하고 비교하며, 단어 뒤에 `*`를 붙이면 그 글자로 시작하는 단어를 찾습니다. `"data*"`는 `database`를 찾습니다. 단어가 없는 검색은 아무것도 찾지 않습니다.
+
+```python
+with db.read() as txn:
+    articles = txn.collection(Article)
+    both = articles.find(F.body.matches("quick fox"))
+    starting = articles.find(F.body.matches("data* file"))
+```
+
+필드에 [`field(text_index=True)`](./collection.md#text-index)로 선언한 텍스트 인덱스가 있으면 객체를 읽지 않고 답합니다. 없으면 쿼리의 나머지 조건이 남긴 객체를 모두 읽어 검색합니다. 문자열을 담지 않은 필드에 쓰거나 `search`가 문자열이 아니면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. 쿼리 언어의 `MATCHES`와 같으며, 규칙은 가이드의 [단어로 텍스트 검색하기](../../guide/queries.md#단어로-텍스트-검색하기)에 있습니다.
+
 ### is_null
 
 ```python
@@ -178,7 +195,7 @@ def __invert__(self) -> Condition: ...
 def ignore_case(self) -> Condition: ...
 ```
 
-조건 안의 `==`, `!=`, `is_in`, `contains`, `startswith`, `endswith` 검사가 모두 Unicode의 단순 대소문자 접기로 대소문자를 무시하고 문자열을 비교하게 바꾼 조건을 돌려주고, 다른 검사는 그대로 둡니다. `(F.name == "ada").ignore_case()`는 `Ada`와 `ADA`를 찾습니다. 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#대소문자-무시하기)의 `IGNORE CASE`와 같으며, 인덱스는 이 검사에 답하지 않습니다.
+조건 안의 `==`, `!=`, `is_in`, `contains`, `startswith`, `endswith` 검사가 모두 Unicode의 단순 대소문자 접기로 대소문자를 무시하고 문자열을 비교하게 바꾼 조건을 돌려주고, [`matches`](#matches)를 비롯한 다른 검사는 그대로 둡니다. `(F.name == "ada").ignore_case()`는 `Ada`와 `ADA`를 찾습니다. 문자열을 담지 않은 필드에 쓰면 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다. [쿼리 언어](../../guide/query-language.md#대소문자-무시하기)의 `IGNORE CASE`와 같으며, 인덱스는 이 검사에 답하지 않습니다.
 
 ### query
 

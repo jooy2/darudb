@@ -117,6 +117,23 @@ def endswith(self, value: object) -> Condition: ...
 
 A string field ends with `value`. On a list of strings, an element does.
 
+### matches
+
+```python
+def matches(self, search: object) -> Condition: ...
+```
+
+A string field has every word of `search`, wherever the words stand and in whatever order. On a list of strings, one string has them all. Words are compared ignoring case, and a word followed by `*` is the start of a word: `"data*"` finds `database`. A search without a word finds nothing.
+
+```python
+with db.read() as txn:
+    articles = txn.collection(Article)
+    both = articles.find(F.body.matches("quick fox"))
+    starting = articles.find(F.body.matches("data* file"))
+```
+
+A text index on the field, which [`field(text_index=True)`](./collection.md#text-index) declares, answers it without reading the objects; without one, every object the rest of the query leaves is read and searched. A field that holds no strings, or a `search` that is not a string, fails with `INVALID_QUERY` when the query runs. It is `MATCHES` in the query language, and the guide on [searching text](../../guide/queries.md#search-text-for-words) has the rules.
+
 ### is_null
 
 ```python
@@ -178,7 +195,7 @@ The condition does not hold.
 def ignore_case(self) -> Condition: ...
 ```
 
-The condition with every test in it of `==`, `!=`, `is_in`, `contains`, `startswith` and `endswith` comparing strings ignoring case, by Unicode's simple case folding, and the other tests as they are: `(F.name == "ada").ignore_case()` finds `Ada` and `ADA`. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
+The condition with every test in it of `==`, `!=`, `is_in`, `contains`, `startswith` and `endswith` comparing strings ignoring case, by Unicode's simple case folding, and the other tests, a [`matches`](#matches) among them, as they are: `(F.name == "ada").ignore_case()` finds `Ada` and `ADA`. Such a test of a field that holds no strings fails with `INVALID_QUERY` when the query runs. It is `IGNORE CASE` in the [query language](../../guide/query-language.md#ignore-case), and no index answers it.
 
 ### query
 

@@ -135,6 +135,7 @@ What a condition means is the same in every language:
 - **Order.** Without a sort, objects come in primary key order, and objects that sort equal come in primary key order too. Null sorts first ascending and last descending. Strings compare by their bytes.
 - **Objects that link here.** A condition can test the objects that link to an object, through their [link field](./query-builder.md#objects-that-link-here).
 - **Case.** A test of equality or of text compares strings exactly, unless it [ignores case](./query-builder.md#ignore-case), which a test of order cannot.
+- **Words.** A string field, or a list of strings, can be [searched for words](#search-text-for-words), which a text index answers.
 
 ## Write a query as text
 
@@ -373,9 +374,79 @@ What an aggregate gives is the same in every language:
 - **Sums are exact.** Integers add up without rounding, and a sum outside the range of a 64-bit integer fails with `INVALID_ARGUMENT`. A sum or a mean of floats is the exact value rounded once, so it does not depend on the order the objects are read in. A mean is always a float.
 - **An index helps.** With no condition left for the objects to meet, the least or greatest value of an indexed field is read from the end of its index, without reading any object. Otherwise the engine reads the objects the query finds, one field from each.
 
+## Search text for words
+
+A search for words finds the objects whose text has every word of the search, wherever the words stand and in whatever order, ignoring case. It is `matches` in the builder and `MATCHES` in the [query language](./query-language.md#search-for-words).
+
+::: lang rust
+
+```rust
+use darudb::{Filter, Query};
+
+fn main() -> Result<(), darudb::Error> {
+    // A text with both words, such as "The QUICK brown fox".
+    let both = Query::new().filter(Filter::matches("body", "quick fox"));
+    // What a person typed goes in as a parameter, never into the text.
+    let typed = Query::parse("body MATCHES $0", &["data* file".into()])?;
+    let _ = (both, typed);
+    Ok(())
+}
+```
+
+A derived type's string fields have it too: `Post::BODY.matches("quick fox")`.
+
+:::
+
+::: lang node
+
+```ts
+posts.find((q) => q.where('body', 'matches', 'quick fox'));
+posts.find((q) => q.where((c) => c.or(c.matches('title', 'fox'), c.matches('body', 'fox'))));
+// What a person typed goes in as a parameter, never into the text.
+posts.find('body MATCHES $0', [typed]);
+```
+
+:::
+
+::: lang dart
+
+```dart
+posts.find((q) => q.where(q.body.matches('quick fox')));
+posts.find((q) => q.where(q.title.matches('fox') | q.body.matches('fox')));
+// What a person typed goes in as a parameter, never into the text.
+posts.findText(r'body MATCHES $0', [typed]);
+```
+
+A collection read as maps has it on `q.stringField('body')` and `q.stringListField('tags')`.
+
+:::
+
+::: lang python
+
+```python
+posts.find(F.body.matches("quick fox"))
+posts.find(F.title.matches("fox") | F.body.matches("fox"))
+# What a person typed goes in as a parameter, never into the text.
+posts.find("body MATCHES $0", typed)
+```
+
+:::
+
+- **Every word.** `quick fox` finds a text with both words. For a text with either, join two searches with `or`.
+- **The start of a word.** A word followed at once by `*` stands for every word that begins so: `data*` finds `data` and `database`. Without the `*`, a word is found whole, so `data` does not find `database`.
+- **What a word is.** A run of letters, digits and marks, in any script. Everything else separates words, the apostrophe, the hyphen and the underscore among them, so `don't` is `don` and `t`. A word is known by its first 64 characters. Nothing else is done to it: no word is reduced to a stem, so `run` does not find `running`, and text is not normalized, so a letter with an accent is a letter of its own and `cafe` does not find `café`.
+- **Korean** is split at spaces like any script with them, so a word with a particle attached is a word of its own: `검색` does not find `검색을`, and `검색*` does.
+- **Chinese and Japanese.** Chinese characters, hiragana and katakana are written without spaces, so they are taken two characters at a time: `東京` finds a text with those two characters side by side, and `東京都` one with both `東京` and `京都`. One character alone finds a text with that character anywhere.
+- **Lists.** A list of strings holds when one of its strings has every word.
+- **Nothing to search for.** A search without a word, such as an empty string or punctuation alone, finds nothing, and a null field never matches. A field that holds no strings fails with `INVALID_QUERY`.
+- **No ranking, and no phrases.** The objects come in the query's order, not by how well they match, and nothing tests that the words stand next to each other. `contains` tests an exact run of characters.
+- **A text index** on the field answers a search without reading the objects: [declare one](./objects.md#declare-a-schema) on a string field, a list of strings, or a field inside an embedded object. Without one the search still works, and reads every object the rest of the query leaves.
+
 ## How the engine reads
 
 A condition on the primary key or on an indexed field, joined to the rest of the filter with AND, lets the engine read only the objects that meet it. A query sorted by an indexed field alone reads its objects in that order and stops at the limit. Otherwise the engine reads every object of the collection. Whichever way it reads, the result is the same.
+
+A [search for words](#search-text-for-words) on a field with a text index reads, for each word, the objects the index names for it, and then only the objects every word names.
 
 <Diagram name="query" alt="A query built in code and one written as text become one query in the engine. If a condition on the primary key or an index is joined to the rest with AND, the engine reads only that range of the index; otherwise, if the query is sorted by one indexed field alone, it walks that index in order; otherwise it reads every object. It then applies the rest of the filter, sorts if needed, skips the offset and stops at the limit." />
 

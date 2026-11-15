@@ -128,6 +128,32 @@ const Unique();
 
 Keeps an index on the field that also refuses two objects with the same value, with `DUPLICATE_KEY`. Any number of objects may hold null.
 
+### TextIndex
+
+```dart
+const TextIndex();
+```
+
+Keeps a text index on the field, a `String` or a `List<String>`, nullable or not: an entry for each different word of the text, which a search for words, [`matches`](./fields.md#matches) or `MATCHES` in the query language, reads rather than every object. The field may be annotated [Index](#index) too, for an index on its values.
+
+```dart
+@Collection('articles')
+class Article {
+  const Article({this.id, required this.title, this.body, this.tags = const []});
+
+  final int? id;
+  @Index()
+  @TextIndex()
+  final String title;
+  @TextIndex()
+  final String? body;
+  @TextIndex()
+  final List<String> tags;
+}
+```
+
+A word is a run of letters, digits and marks, compared ignoring case and by its first 64 characters; Chinese characters, hiragana and katakana are indexed two at a time. Every write of an object writes an entry for each different word, so a long text costs more to write than any other field. The generator refuses it on a field of another type, on the auto-increment `id`, and in an embedded class, whose fields get one by their paths with [IndexOn](#indexon). A file with a text index is in object format 3, which earlier releases do not open; `upgradeFormat: false` in [open](./database.md#open) refuses a schema that adds one.
+
 ### Cascade
 
 ```dart
@@ -139,7 +165,7 @@ Deleting the object the `Link` field names deletes the object that holds it, in 
 ### IndexOn
 
 ```dart
-const IndexOn(List<String> fields, {bool unique = false});
+const IndexOn(List<String> fields, {bool unique = false, bool text = false});
 ```
 
 On a class annotated `@Collection()`, keeps an index on `fields`, in order, whose entries sort by the first field, then by the second, and so on. Each is a field's Dart name, or Dart names joined by `.` through embedded objects, such as `'home.city'`, and an index has one to eight of them. A class may carry several.
@@ -159,6 +185,8 @@ class Post {
 ```
 
 A query reads the index when it tests the first fields for equality, with `equals`, `isNull` or `isIn`, and the next one, if any, for a range or with `startsWith`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. With `unique: true`, two objects cannot hold the same values in all the fields, though any number may hold null in one of them, and a write that would repeat them fails with `DUPLICATE_KEY`. The generator stops on a field the class does not have, a path through a link, and an index with no field or with an empty path. An index on more than eight fields, or on several fields one of which is a path through a list, is refused by the engine when the database opens, with `INVALID_ARGUMENT`. A file with such an index is in object format 2, which the `upgradeFormat` option of [open](./database.md#open) governs.
+
+With `text: true`, the index is a text index, as [TextIndex](#textindex) keeps on a field, on the one field named, a `String` or a `List<String>` inside an embedded object: `@IndexOn(['margin.note'], text: true)`. The generator stops on one that is unique, on several fields, or on a field that holds no text. A file with one is in object format 3.
 
 ### Name
 

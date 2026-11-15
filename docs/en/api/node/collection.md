@@ -48,10 +48,17 @@ interface CollectionOptions<F extends Fields = Fields> {
   readonly indexes?: readonly IndexDeclaration<F>[];
 }
 
-interface IndexDeclaration<F extends Fields = Fields> {
-  readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
-  readonly unique?: boolean;
-}
+type IndexDeclaration<F extends Fields = Fields> =
+  | {
+      readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
+      readonly unique?: boolean;
+      readonly text?: false;
+    }
+  | {
+      readonly fields: readonly [IndexPath<F>];
+      readonly text: true;
+      readonly unique?: false;
+    };
 ```
 
 ```ts
@@ -70,6 +77,24 @@ const posts = collection(
 Each of `fields` is a field's name, or names joined by `.` through embedded objects, and an index has one to eight of them. With `unique: true`, two objects cannot hold the same values in all of them, though any number may hold null in one. Options of another shape throw `INVALID_ARGUMENT` at once; an index the schema cannot have, on a field it does not have, through a link, or on several fields with a path through a list, fails to open with `INVALID_ARGUMENT`.
 
 A query reads the index when it tests the first fields for equality, with `eq`, `isNull` or `in`, and the next one, if any, for a range or with `startsWith`. The index gives its objects in order when the query sorts by every field after those it tests for equality, in the index's order: a query for one author's posts sorted by `written` descending, with a limit of 20, reads twenty entries and stops. A file with such an index is in object format 2, which the `upgradeFormat` option of [OpenOptions](../../types/node/open-options.md#upgradeformat) governs.
+
+### Text indexes on a path
+
+With `text: true`, the index is a text index, as [`textIndex()`](./t.md#textindex) on a field declares one, on the one field named: a string or a list of strings, which a path reaches inside an embedded object.
+
+```ts
+const articles = collection(
+  {
+    title: t.string().textIndex(),
+    margin: t.object({ note: t.string().optional() }).optional()
+  },
+  {
+    indexes: [{ fields: ['margin.note'], text: true }]
+  }
+);
+```
+
+A text index holds the words of its field, which [`matches`](./conditions.md#matches) reads, and no query reads it by the field's values. `text` with `unique: true`, with several fields, or with a value that is not a boolean throws `INVALID_ARGUMENT` at once; one on a field that holds no text fails to open with `INVALID_ARGUMENT`. A file with a text index is in object format 3.
 
 The returned `Collection` is frozen:
 

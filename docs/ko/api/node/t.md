@@ -151,6 +151,24 @@ unique(): FieldType<T, M, I>;
 
 값이 같은 객체 둘을 `DUPLICATE_KEY`로 거부하는 인덱스입니다. null은 몇 개가 있어도 됩니다. `index` 없이 `unique`만으로 인덱스가 생깁니다.
 
+### textIndex
+
+```ts
+textIndex(this: TextTyped): this;
+```
+
+필드에 텍스트 인덱스를 둡니다. 문자열의, 또는 목록에 든 문자열들의 서로 다른 단어마다 항목을 하나씩 두어, [`matches`](./conditions.md#matches)와 쿼리 언어의 `MATCHES`가 객체를 모두 읽지 않고 이 인덱스를 읽게 합니다. 문자열과 문자열 목록에만 있으며, TypeScript가 이를 검사하고 호출할 때도 검사합니다. 다른 타입에서 부르면 `INVALID_ARGUMENT`를 던집니다. 값으로 찾는 인덱스가 필요하면 `index()`를 함께 붙일 수 있습니다.
+
+```ts
+const articles = collection({
+  title: t.string().index().textIndex(),
+  body: t.string().optional().textIndex(),
+  tags: t.list(t.string()).textIndex()
+});
+```
+
+단어는 글자, 숫자, 결합 기호가 이어진 구간이며, 대소문자를 무시하고 앞의 64자로 비교합니다. 한자, 히라가나, 가타카나는 두 글자씩 인덱스에 넣습니다. 객체를 쓸 때마다 서로 다른 단어마다 항목을 쓰므로, 긴 텍스트는 다른 어떤 필드보다 쓰기 비용이 큽니다. 내장 객체 안의 필드에는 [collection](./collection.md#경로에-두는-텍스트-인덱스)의 `indexes` 옵션에 `text: true`와 경로를 주어 둡니다. 그런 필드나 목록의 원소에 `textIndex()`를 붙이면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 텍스트 인덱스가 있는 파일은 객체 형식 3이며 이전 릴리스는 이 파일을 열지 못합니다. [OpenOptions](../../types/node/open-options.md#upgradeformat)의 `upgradeFormat: false`는 텍스트 인덱스를 더하는 스키마를 거부합니다.
+
 ### cascade
 
 ```ts

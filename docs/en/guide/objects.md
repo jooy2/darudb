@@ -46,6 +46,7 @@ The types are `Bool`, `Int` (64-bit), `Float` (64-bit), `String`, `Bytes`, `Date
 - **Required and optional fields.** `field` is required, and writing an object without it fails. `optional` may be null, which is what it holds when it is left out. `with_default` is required, and an object written without it gets the default.
 - **Primary keys.** `primary_key` names a field of type `Int`, `String` or `Bytes`.
 - **Indexes.** `index` keeps an index on a field, and `unique` an index that also refuses two objects with the same value. `index_on(["author", "written"])` and `unique_on` keep one on several fields, or on a field inside an embedded object named by its path, `index_on(["place.city"])`; the derive declares them on the struct, `#[darudb(index(author, written))]`.
+- **Text indexes.** `text_index("body")` keeps an index of the words of a string field or a list of strings, for a [search for words](./queries.md#search-text-for-words) to read, and takes a path through embedded objects too, `text_index("meta.note")`. The derive declares one with `#[darudb(text_index)]` on the field, or `#[darudb(text_index("meta.note"))]` on the struct.
 
 :::
 
@@ -79,6 +80,7 @@ The types are `t.bool()`, `t.int()`, `t.bigint()`, `t.float()`, `t.string()`, `t
 - **Required and optional fields.** A field is required unless it says otherwise, and writing an object without it fails. `optional()` lets it be null, which is what it holds when it is left out. `default(value)` keeps it required and fills it in when it is left out.
 - **Primary keys.** `primaryKey()` makes an `int`, `bigint`, `string` or `bytes` field the key.
 - **Indexes.** `index()` keeps an index on a field, and `unique()` an index that also refuses two objects with the same value. The second argument of `collection` keeps one on several fields, or on a field inside an embedded object named by its path: `{ indexes: [{ fields: ['author', 'written'] }, { fields: ['place.city'] }] }`.
+- **Text indexes.** `textIndex()` on a `t.string()` or a `t.list(t.string())` keeps an index of the field's words, for a [search for words](./queries.md#search-text-for-words) to read. A field inside an embedded object gets one through the options, by its path: `{ indexes: [{ fields: ['meta.note'], text: true }] }`.
 - **Numbers.** A `t.int()` field holds a number. A value beyond 2^53, which a number does not hold exactly, is refused when written and fails when read; declare such a field with `t.bigint()`, which always reads as a `bigint`. Bytes are a `Uint8Array`.
 
 :::
@@ -144,6 +146,7 @@ A field's Dart type is its type: `bool`, `int` (64-bit), `double`, `String`, `Ui
 - **Required and optional fields.** A field whose type is not nullable is required, and writing an object without it fails. A nullable one is optional, and null when it is left out. A constructor parameter's default is the field's default: the field stays required and holds the default when a record leaves it out.
 - **Primary keys.** `@PrimaryKey()` makes an `int`, `String` or `Uint8List` field the key. Without one, the class has a field `final int? id`, which is `null` until the object is inserted.
 - **Indexes.** `@Index()` keeps an index on a field, and `@Unique()` an index that also refuses two objects with the same value. `@IndexOn(['author', 'written'])` on the class keeps one on several fields, or on a field inside an embedded object named by its path, `@IndexOn(['place.city'])`. `@Name('...')` gives a field another name in the file than in Dart.
+- **Text indexes.** `@TextIndex()` on a `String` or a `List<String>` field keeps an index of the field's words, for a [search for words](./queries.md#search-text-for-words) to read. A field inside an embedded object gets one on the class, by its path: `@IndexOn(['meta.note'], text: true)`.
 - **Objects are values.** The fields are final, and a changed object is a copy, made with the generated `copyWith`, written back with `put`.
 
 :::
@@ -189,6 +192,7 @@ A field's annotation is its type: `bool`, `int` (64-bit), `float`, `str`, `bytes
 - **Primary keys.** `field(primary_key=True)` makes an `int`, `str` or `bytes` field the key, which is required and has no default. Without one, the class has the field `id: int | None = None`, which is `None` until the object is inserted.
 - **Links.** `field(link=Team)` makes an `int`, `str` or `bytes` field, or a list of them, hold primary keys of another collection, named by its class or by its name.
 - **Indexes.** `field(index=True)` keeps an index on a field, and `field(unique=True)` an index that also refuses two objects with the same value. `field(name="...")` gives a field another name in the file than in Python. `@darudb.collection("posts", indexes=[darudb.index("author", "written")])` keeps one on several fields, and `darudb.index(F.place.city)` one on a field inside an embedded object.
+- **Text indexes.** `field(text_index=True)` on a `str` or a `list[str]` field keeps an index of the field's words, for a [search for words](./queries.md#search-text-for-words) to read. A field inside an embedded object gets one among the collection's indexes, by its path: `darudb.index(F.meta.note, text=True)`.
 - **Objects are values.** The class is frozen, and a changed object is a copy, made with `dataclasses.replace`, written back with `put`. An object read from the file is made without calling the class's `__init__`, so a `__post_init__` does not run for it.
 - **Values.** A `float` field takes an `int` too, but an `int` field refuses a `float` and a `bool`, and an `int` beyond 64 bits. Bytes go in as `bytes`, `bytearray` or `memoryview`, and come out as `bytes`. A `datetime` has to be aware, and comes out in UTC. A list holds no `None`, and a list of lists is refused. A `list` of an `@darudb.embedded` class is a list of embedded objects.
 
@@ -199,6 +203,10 @@ The rules the engine keeps are the same in every language:
 - **The automatic key.** A collection that names no primary key gets an integer field called `id`, and an object written without an `id` gets the next number, from 1 up. A number is never given twice in one file, even after its object is deleted.
 - **Links** hold the primary key of an object in the linked collection. A link to an object that does not exist is allowed, and reads as the key it holds. A link can [cascade](#delete-what-links-to-an-object), so that deleting the object takes the one that links to it.
 - **Indexes** let a query on the field read only the objects it finds. Any number of objects can hold null in a unique field, and an index on a list has an entry for each element. An index on several fields sorts its entries by the first, then by the next, and has one to eight of them; a path through a list is allowed only in an index of one field. A file with an index on several fields, or on a field inside an embedded object, is in object format 2.
+- **Text indexes** hold the words of a text rather than the text: an entry for each different word of a string field, of a list of strings, or of such a field inside an embedded object. Only a [search for words](./queries.md#search-text-for-words) reads one, so a field that is also compared or sorted by its value takes an ordinary index as well, and may have both. A text index is never unique and is on one field.
+  - **What it costs.** Every write of an object writes an entry for each different word of the field, so a long text costs more to write than any other field. On an Apple M1 Max, with 50,000 objects of thirty words each, counting the objects with one word took 9 µs through the index and 69 ms without it, while inserting them took 1.0 s with the index and 0.12 s without, into a file of 43 MiB rather than 13.
+  - **Object format 3.** A file with a text index is in [object format 3](../engine/bindings.md#object-formats), which earlier releases do not open. Keeping a file in its format, with the option that turns upgrades off, refuses a schema that adds one.
+  - **Added later.** A text index a later version of the schema declares is built from the objects already there when the file is opened with that version.
 
 The first open stores the schema in the file. Every later open compares the declared schema with the stored one: the same version with a different schema fails with `SCHEMA_MISMATCH`, and a file holding a newer version fails with `SCHEMA_TOO_NEW`. Declaring collections or indexes in another order is not a change. To change the schema, raise its version: see [Migrations](./migrations.md).
 

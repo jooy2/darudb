@@ -110,6 +110,7 @@ with db.read() as txn:
 | `Filter::contains("tags", "admin")` | `tags CONTAINS "admin"` | 필드가 그 글자나 그 원소를 담은 객체 |
 | `Filter::starts_with("name", "J")` | `name STARTSWITH "J"` | 필드가 그 글자로 시작하는 객체 |
 | `Filter::ends_with("email", "@example.com")` | `email ENDSWITH "@example.com"` | 필드가 그 글자로 끝나는 객체 |
+| `Filter::matches("bio", "quick fox")` | `bio MATCHES "quick fox"` | 필드에 [검색어](#단어-검색)의 단어가 모두 있는 객체 |
 | `Filter::is_null("email")` | `email IS NULL` | 필드가 null인 객체 |
 | `Filter::is_not_null("email")` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 
@@ -169,6 +170,7 @@ fn main() {
 | `where('tags', 'contains', 'admin')` | `c.contains('tags', 'admin')` | `tags CONTAINS "admin"` | 필드가 그 글자나 그 원소를 담은 객체 |
 | `where('name', 'startsWith', 'J')` | `c.startsWith('name', 'J')` | `name STARTSWITH "J"` | 필드가 그 글자로 시작하는 객체 |
 | `where('email', 'endsWith', '@example.com')` | `c.endsWith('email', '@example.com')` | `email ENDSWITH "@example.com"` | 필드가 그 글자로 끝나는 객체 |
+| `where('bio', 'matches', 'quick fox')` | `c.matches('bio', 'quick fox')` | `bio MATCHES "quick fox"` | 필드에 [검색어](#단어-검색)의 단어가 모두 있는 객체 |
 | `where('email', '==', null)` | `c.isNull('email')` | `email IS NULL` | 필드가 null인 객체 |
 | `where('email', '!=', null)` | `c.isNotNull('email')` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 
@@ -193,6 +195,7 @@ fn main() {
 | `q.name.contains('in')` | `name CONTAINS "in"` | 필드가 그 글자를 담은 객체 |
 | `q.name.startsWith('J')` | `name STARTSWITH "J"` | 필드가 그 글자로 시작하는 객체 |
 | `q.email.endsWith('@example.com')` | `email ENDSWITH "@example.com"` | 필드가 그 글자로 끝나는 객체 |
+| `q.bio.matches('quick fox')` | `bio MATCHES "quick fox"` | 필드에 [검색어](#단어-검색)의 단어가 모두 있는 객체 |
 | `q.email.isNull()` | `email IS NULL` | 필드가 null인 객체 |
 | `q.email.isNotNull()` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 
@@ -204,6 +207,7 @@ fn main() {
 | `q.tags.containsAny(['admin', 'editor'])` | `tags IN ["admin", "editor"]` | 목록에 값 가운데 하나와 같은 원소가 있는 객체 |
 | `q.tags.anyStartsWith('team-')` | `tags STARTSWITH "team-"` | 목록에 그 글자로 시작하는 원소가 있는 객체 |
 | `q.tags.anyEndsWith('-lead')` | `tags ENDSWITH "-lead"` | 목록에 그 글자로 끝나는 원소가 있는 객체 |
+| `q.tags.matches('team lead')` | `tags MATCHES "team lead"` | 목록에 [검색어](#단어-검색)의 단어가 모두 있는 원소가 있는 객체 |
 
 :::
 
@@ -224,6 +228,7 @@ fn main() {
 | `F.tags.contains("admin")` | `tags CONTAINS "admin"` | 필드가 그 글자나 그 원소를 담은 객체 |
 | `F.name.startswith("J")` | `name STARTSWITH "J"` | 필드가 그 글자로 시작하는 객체 |
 | `F.email.endswith("@example.com")` | `email ENDSWITH "@example.com"` | 필드가 그 글자로 끝나는 객체 |
+| `F.bio.matches("quick fox")` | `bio MATCHES "quick fox"` | 필드에 [검색어](#단어-검색)의 단어가 모두 있는 객체 |
 | `F.email.is_null()`, `F.email == None` | `email IS NULL` | 필드가 null인 객체 |
 | `F.email.is_not_null()`, `F.email != None` | `email IS NOT NULL` | 필드에 값이 있는 객체 |
 
@@ -289,6 +294,57 @@ users.find((F.name.startswith("A") | F.tags.contains("ADMIN")).ignore_case())
 :::
 
 접기는 한 글자를 한 글자로 바꾸므로 `ß`는 `ẞ`와 맞지만 `ss`와는 맞지 않습니다. 문자열을 담지 않은 필드에서 대소문자를 무시하면 `INVALID_QUERY`로 실패합니다. 인덱스는 이런 조건에 답하지 않으므로, 검사할 객체를 읽습니다.
+
+## 단어 검색
+
+`matches`는 검색어의 단어가 모두 들어 있는 텍스트를 가진 객체를 찾습니다. 단어의 위치와 순서는 따지지 않고, 대소문자도 가리지 않습니다. [쿼리 언어](./query-language.md#단어-검색)의 `MATCHES`와 같으며, 문자열 필드나 문자열 목록에 씁니다. 목록은 문자열 하나에 모든 단어가 있어야 맞습니다.
+
+::: lang rust
+
+```rust
+use darudb::Filter;
+
+fn main() {
+    let both = Filter::matches("bio", "quick fox");
+    let starts = Filter::matches("bio", "data*").and(Filter::ge("age", 18));
+    let _ = (both, starts);
+}
+```
+
+이미 대소문자를 가리지 않으므로 `ignore_case`는 이 조건을 그대로 둡니다. derive한 타입의 문자열 필드와 문자열 목록에도 `matches`가 있어서 `User::BIO.matches("quick fox")`처럼 씁니다.
+
+:::
+
+::: lang node
+
+```ts
+users.find((q) => q.where('bio', 'matches', 'quick fox'));
+users.find((q) => q.where((c) => c.and(c.matches('bio', 'data*'), c.ge('age', 18))));
+```
+
+:::
+
+::: lang dart
+
+문자열 필드와 문자열 목록에 `matches`가 있고, 내장 객체 안의 필드에도 있습니다. 맵으로 읽는 컬렉션에서는 `stringField`와 `stringListField`에 있습니다.
+
+```dart
+users.find((q) => q.where(q.bio.matches('quick fox')));
+users.find((q) => q.where(q.bio.matches('data*') & q.age.atLeast(18)));
+```
+
+:::
+
+::: lang python
+
+```python
+users.find(F.bio.matches("quick fox"))
+users.find(F.bio.matches("data*") & (F.age >= 18))
+```
+
+:::
+
+단어 뒤에 `*`를 붙이면 단어의 앞부분이 되고, 단어가 없는 검색은 아무것도 찾지 않습니다. 필드에 [텍스트 인덱스](./objects.md#스키마-선언하기)가 있으면 객체를 읽지 않고 답하며, 없으면 객체를 하나씩 읽어 검색합니다. 단어의 기준은 [쿼리](./queries.md#단어로-텍스트-검색하기)에 있고, 한국어와 중국어, 일본어 텍스트를 다루는 방법도 거기에 있습니다.
 
 ## 이 객체를 가리키는 객체
 

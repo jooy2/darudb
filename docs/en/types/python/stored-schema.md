@@ -62,9 +62,10 @@ class StoredIndex:
     field: str
     unique: bool
     fields: tuple[str, ...] = ()
+    text: bool = False
 ```
 
-An index of a collection: the fields it is on, in order, each a stored name or a path such as `"address.city"`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `field(index=True)` or `field(unique=True)`. A `StoredIndex` made without `fields` gets `(field,)`.
+An index of a collection: the fields it is on, in order, each a stored name or a path such as `"address.city"`, and whether two objects may not hold the same values in all of them. `field` is the first of `fields`, the only one of an index declared with `field(index=True)` or `field(unique=True)`. A `StoredIndex` made without `fields` gets `(field,)`. `text` says whether it is a text index, which holds the words of its one field for [`matches`](../../api/python/conditions.md#matches) to read rather than the field's values.
 
 ## StoredType
 

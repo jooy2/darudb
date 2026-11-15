@@ -67,7 +67,7 @@ final bool autoKey;
 final List<IndexSpec> indexes;
 ```
 
-`@IndexOn`으로 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스들입니다. 필드 하나에 둔 인덱스는 그 필드의 [FieldSpec](#fieldspec)에 `index`나 `unique`로 들어 있습니다.
+`@IndexOn`으로 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스들입니다. 필드 하나에 둔 인덱스는 그 필드의 [FieldSpec](#fieldspec)에 `index`, `unique`, `textIndex`로 들어 있습니다.
 
 ## 메서드
 
@@ -95,14 +95,15 @@ final class EmbeddedSchema<E> {
 
 ```dart
 final class IndexSpec {
-  const IndexSpec(this.fields, {this.unique = false});
+  const IndexSpec(this.fields, {this.unique = false, this.text = false});
 
   final List<String> fields;
   final bool unique;
+  final bool text;
 }
 ```
 
-`@IndexOn`이 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스입니다. 각 필드의 경로를 `'home.city'`처럼 파일에 저장된 이름을 `.`으로 이어 담고, 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지를 담습니다.
+`@IndexOn`이 선언한, 여러 필드나 내장 객체 안의 필드에 둔 인덱스입니다. 각 필드의 경로를 `'home.city'`처럼 파일에 저장된 이름을 `.`으로 이어 담고, 모든 필드의 값이 같은 두 객체를 거부하는 고유 인덱스인지를 담습니다. `text`가 참이면 필드 하나에 둔 텍스트 인덱스입니다. 그 필드는 문자열이나 문자열 목록이며, 인덱스는 텍스트의 단어를 담아 [`matches`](../../api/dart/fields.md#matches)가 읽게 합니다. 고유하거나 여러 필드에 둔 텍스트 인덱스는 데이터베이스를 열 때 `INVALID_ARGUMENT`로 거부됩니다.
 
 ## FieldSpec
 
@@ -117,22 +118,24 @@ final class FieldSpec {
     this.unique = false,
     this.primaryKey = false,
     this.cascade = false,
+    this.textIndex = false,
   });
 }
 ```
 
 클래스가 선언한 필드 하나입니다.
 
-| 필드           | 타입      | 설명                                                                |
-| -------------- | --------- | ------------------------------------------------------------------- |
-| `name`         | `String`  | 파일 안의 필드 이름. Dart 필드 이름이거나 `@Name`이 정한 이름입니다 |
-| `kind`         | `Kind`    | 필드가 담는 값의 종류                                               |
-| `optional`     | `bool`    | 필드가 null일 수 있는지. 레코드에 없으면 null이 됩니다              |
-| `defaultValue` | `Object?` | 필드가 없는 레코드가 갖는 값. 기본값이 없으면 `null`입니다          |
-| `index`        | `bool`    | 필드에 인덱스가 있는지                                              |
-| `unique`       | `bool`    | 인덱스가 값이 같은 객체 둘을 거부하는지                             |
-| `primaryKey`   | `bool`    | 필드가 컬렉션의 기본 키인지                                         |
-| `cascade`      | `bool`    | 링크가 가리키는 객체를 지울 때 이 객체도 지우는지                   |
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `name` | `String` | 파일 안의 필드 이름. Dart 필드 이름이거나 `@Name`이 정한 이름입니다 |
+| `kind` | `Kind` | 필드가 담는 값의 종류 |
+| `optional` | `bool` | 필드가 null일 수 있는지. 레코드에 없으면 null이 됩니다 |
+| `defaultValue` | `Object?` | 필드가 없는 레코드가 갖는 값. 기본값이 없으면 `null`입니다 |
+| `index` | `bool` | 필드에 인덱스가 있는지 |
+| `unique` | `bool` | 인덱스가 값이 같은 객체 둘을 거부하는지 |
+| `primaryKey` | `bool` | 필드가 컬렉션의 기본 키인지 |
+| `cascade` | `bool` | 링크가 가리키는 객체를 지울 때 이 객체도 지우는지 |
+| `textIndex` | `bool` | 컬렉션 자신의 문자열 필드나 문자열 목록 필드에 `@TextIndex()`로 선언한 텍스트 인덱스가 있는지 |
 
 ## Kind
 

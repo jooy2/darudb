@@ -28,6 +28,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any: ...
 ```
 
@@ -133,6 +134,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any: ...
 ```
 
@@ -162,6 +164,21 @@ def field(
 
 `link`와 함께 쓰며, 링크가 가리키는 객체를 지우면 그 링크를 가진 객체도 같은 트랜잭션에서 지워지고, 사슬을 따라 계속 이어집니다. 컬렉션 자신의 객체 하나를 가리키는 링크에만 쓸 수 있습니다. 링크의 목록, 내장 클래스의 필드, `link`가 없는 필드는 `Schema`를 만들 때 `INVALID_ARGUMENT`로 거부됩니다. 필드에 인덱스도 두세요. 인덱스가 없으면 필드가 가리킬 수 있는 객체를 지울 때마다 컬렉션 전체를 읽습니다. 연쇄 삭제 링크가 있는 파일은 객체 형식 2입니다. [규칙](../../guide/objects.md#링크로-이어진-객체-함께-지우기)은 가이드에 있습니다.
 
+### text_index
+
+필드에 텍스트 인덱스를 둡니다. 필드는 `str`이나 `list[str]`이며 선택 필드여도 됩니다. 텍스트의 서로 다른 단어마다 항목을 하나씩 두어, 단어를 찾는 검색인 [`matches`](./conditions.md#matches)나 쿼리 언어의 `MATCHES`가 객체를 모두 읽지 않고 이 인덱스를 읽게 합니다. 값으로 찾는 인덱스가 필요하면 `index=True`를 함께 줄 수 있습니다.
+
+```python
+@darudb.collection("articles")
+class Article:
+    id: int | None = None
+    title: str = darudb.field(index=True, text_index=True)
+    body: str | None = darudb.field(default=None, text_index=True)
+    tags: list[str] = darudb.field(default_factory=list, text_index=True)
+```
+
+단어는 글자, 숫자, 결합 기호가 이어진 구간이며, 대소문자를 무시하고 앞의 64자로 비교합니다. 한자, 히라가나, 가타카나는 두 글자씩 인덱스에 넣습니다. 객체를 쓸 때마다 서로 다른 단어마다 항목을 쓰므로, 긴 텍스트는 다른 어떤 필드보다 쓰기 비용이 큽니다. `bool`이 아닌 `text_index`는 바로 `INVALID_ARGUMENT`로 실패하고, 내장 클래스의 필드에 주면 `Schema`를 만들 때, 텍스트를 담지 않은 필드에 주면 데이터베이스를 열 때 실패합니다. 내장 클래스의 필드에는 [`index(..., text=True)`](#index-1)에 경로를 주어 둡니다. 텍스트 인덱스가 있는 파일은 객체 형식 3이며 이전 릴리스는 이 파일을 열지 못합니다. [open](./database.md#open)의 `upgrade_format=False`는 텍스트 인덱스를 더하는 스키마를 거부합니다.
+
 ### name
 
 파일에 저장할 필드 이름을 속성 이름 대신 정합니다. [F](./conditions.md)로 만든 쿼리와 `update`의 변경은 속성 이름으로 필드를 가리키고, 패키지가 엔진에는 저장된 이름을 넘깁니다. 쿼리 언어 문자열과 [Migration](./migration.md), [Migrating.previous](./migrating.md#previous)는 저장된 이름을 씁니다.
@@ -169,10 +186,10 @@ def field(
 ## index
 
 ```python
-def index(*fields: Any, unique: bool = False) -> Index: ...
+def index(*fields: Any, unique: bool = False, text: bool = False) -> Index: ...
 ```
 
-`@collection(indexes=[...])`에 넣을 인덱스를 `fields`에 차례대로 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 속성 이름이거나, `"address.city"`처럼 내장 객체를 따라 이름을 이은 경로이거나, `F.address.city` 같은 [F](./conditions.md) 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. 돌려주는 값은 `Index`이며, 준 그대로의 필드인 `fields`와 `unique` 두 속성이 있습니다.
+`@collection(indexes=[...])`에 넣을 인덱스를 `fields`에 차례대로 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 속성 이름이거나, `"address.city"`처럼 내장 객체를 따라 이름을 이은 경로이거나, `F.address.city` 같은 [F](./conditions.md) 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. 돌려주는 값은 `Index`이며, 준 그대로의 필드인 `fields`와 `unique`, `text` 세 속성이 있습니다.
 
 ```python
 from datetime import datetime
@@ -195,3 +212,5 @@ class Post:
 ```
 
 쿼리가 앞쪽 필드들을 `==`, `is_null()`, `is_in()`으로 같은지 검사하고, 그다음 필드가 있다면 그 필드를 범위나 `startswith()`로 검사하면 이 인덱스를 읽습니다. 같은지 검사한 필드 뒤의 필드를 모두 인덱스의 순서대로 정렬하는 쿼리에는 인덱스가 객체를 정렬된 순서로 내줍니다. 그래서 작성자 한 명의 글을 `written` 내림차순으로 정렬해 20개만 가져오는 쿼리는 항목 스무 개를 읽고 멈춥니다. `unique=True`이면 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 `None`인 객체는 몇 개가 있어도 됩니다. 같은 값 조합을 쓰려는 쓰기는 `DUPLICATE_KEY`로 실패합니다. 필드를 하나도 주지 않거나, 이름이나 경로가 아닌 값을 주거나, `unique`가 `bool`이 아니면 곧바로 `INVALID_ARGUMENT`로 실패합니다. 클래스에 없는 필드, 링크를 거치는 경로, 여덟 개를 넘는 필드, 필드가 여럿인데 목록을 거치는 경로는 데이터베이스를 열 때 실패합니다. 이런 인덱스가 있는 파일은 객체 형식 2이며, 이 형식으로 올릴지는 [open](./database.md#open)의 `upgrade_format` 옵션이 정합니다.
+
+`text=True`를 주면 [`field(text_index=True)`](#text-index)처럼 텍스트 인덱스가 됩니다. 이름으로 가리킨 필드 하나에 두며, 그 필드는 내장 클래스 안의 `str`이나 `list[str]`입니다. `darudb.index(F.margin.note, text=True)`처럼 씁니다. `unique=True`와 함께 주거나, 필드를 여러 개 주거나, `text`가 `bool`이 아니면 바로 `INVALID_ARGUMENT`로 실패하고, 텍스트를 담지 않은 필드를 가리키면 데이터베이스를 열 때 실패합니다. 이런 인덱스가 있는 파일은 객체 형식 3입니다.

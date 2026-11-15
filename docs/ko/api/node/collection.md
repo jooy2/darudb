@@ -48,10 +48,17 @@ interface CollectionOptions<F extends Fields = Fields> {
   readonly indexes?: readonly IndexDeclaration<F>[];
 }
 
-interface IndexDeclaration<F extends Fields = Fields> {
-  readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
-  readonly unique?: boolean;
-}
+type IndexDeclaration<F extends Fields = Fields> =
+  | {
+      readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
+      readonly unique?: boolean;
+      readonly text?: false;
+    }
+  | {
+      readonly fields: readonly [IndexPath<F>];
+      readonly text: true;
+      readonly unique?: false;
+    };
 ```
 
 ```ts
@@ -70,6 +77,24 @@ const posts = collection(
 `fields`의 값은 필드 이름이거나, 내장 객체를 따라 이름을 `.`으로 이은 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. `unique: true`이면 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다. 모양이 다른 옵션은 곧바로 `INVALID_ARGUMENT`를 던집니다. 컬렉션에 없는 필드, 링크를 거치는 경로, 필드가 여럿인데 목록을 거치는 경로처럼 스키마가 가질 수 없는 인덱스는 열 때 `INVALID_ARGUMENT`로 실패합니다.
 
 쿼리가 앞쪽 필드들을 `eq`, `isNull`, `in`으로 같은지 검사하고, 그다음 필드가 있다면 그 필드를 범위나 `startsWith`로 검사하면 이 인덱스를 읽습니다. 같은지 검사한 필드 뒤의 필드를 모두 인덱스의 순서대로 정렬하는 쿼리에는 인덱스가 객체를 정렬된 순서로 내줍니다. 그래서 작성자 한 명의 글을 `written` 내림차순으로 정렬해 20개만 가져오는 쿼리는 항목 스무 개를 읽고 멈춥니다. 이런 인덱스가 있는 파일은 객체 형식 2이며, 이 형식으로 올릴지는 [OpenOptions](../../types/node/open-options.md#upgradeformat)의 `upgradeFormat` 옵션이 정합니다.
+
+### 경로에 두는 텍스트 인덱스
+
+`text: true`를 주면 필드에 붙이는 [`textIndex()`](./t.md#textindex)처럼 텍스트 인덱스가 됩니다. 이름으로 가리킨 필드 하나에 두며, 그 필드는 문자열이나 문자열 목록입니다. 내장 객체 안의 필드는 경로로 가리킵니다.
+
+```ts
+const articles = collection(
+  {
+    title: t.string().textIndex(),
+    margin: t.object({ note: t.string().optional() }).optional()
+  },
+  {
+    indexes: [{ fields: ['margin.note'], text: true }]
+  }
+);
+```
+
+텍스트 인덱스는 필드의 단어를 담아 [`matches`](./conditions.md#matches)가 읽게 하며, 필드의 값으로 찾는 쿼리는 이 인덱스를 읽지 않습니다. `text`를 `unique: true`와 함께 주거나, 필드를 여러 개 주거나, 불리언이 아닌 값을 주면 바로 `INVALID_ARGUMENT`를 던집니다. 텍스트를 담지 않은 필드에 두면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 텍스트 인덱스가 있는 파일은 객체 형식 3입니다.
 
 돌려받는 `Collection`은 동결된 객체입니다.
 

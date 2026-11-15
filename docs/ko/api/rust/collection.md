@@ -149,6 +149,33 @@ pub fn unique_on<P: Into<String>>(mut self, paths: impl IntoIterator<Item = P>) 
 
 [`index_on`](#index-on)과 같되, 필드들의 값 조합이 겹치지 않게 합니다. 모든 필드의 값이 같은 객체는 둘일 수 없지만, 어느 한 필드가 null인 객체는 몇 개가 있어도 됩니다. 다른 객체와 같은 값 조합을 쓰려는 쓰기는 [`unique`](#unique)처럼 `DUPLICATE_KEY`로 실패합니다.
 
+### text_index
+
+```rust
+pub fn text_index(mut self, path: impl Into<String>) -> Self
+```
+
+문자열 필드나 문자열 목록인 `path`에 텍스트 인덱스를 둡니다. 텍스트의 서로 다른 단어마다 항목을 하나씩 두어, 단어를 찾는 검색인 [`Filter::matches`](./filter.md#matches)나 쿼리 언어의 `MATCHES`가 객체를 모두 읽지 않고 이 인덱스를 읽게 합니다. 경로는 필드 이름이거나, `margin.note`처럼 내장 객체를 따라 이름을 `.`으로 이은 것입니다. 같은 필드에 값으로 찾는 다른 인덱스를 함께 둘 수 있습니다.
+
+```rust
+use darudb::{Collection, Embedded, Type};
+
+fn articles() -> Collection {
+    Collection::new("articles")
+        .field("title", Type::String)
+        .optional("body", Type::String)
+        .field("tags", Type::list(Type::String))
+        .optional("margin", Type::object(Embedded::new().optional("note", Type::String)))
+        .index("title")
+        .text_index("title")
+        .text_index("body")
+        .text_index("tags")
+        .text_index("margin.note")
+}
+```
+
+단어는 글자, 숫자, 결합 기호가 이어진 구간이며, 대소문자를 무시하고 앞의 64자로 비교합니다. 단어 사이를 띄우지 않는 한자, 히라가나, 가타카나는 두 글자씩 인덱스에 넣습니다. null과 단어가 없는 텍스트는 항목을 만들지 않습니다. 객체를 쓸 때마다 필드의 서로 다른 단어마다 항목을 쓰므로, 긴 텍스트는 다른 어떤 필드보다 쓰기 비용이 큽니다. 텍스트를 담지 않은 필드에 두거나, 링크를 지나는 경로에 두거나, 한 경로에 두 번 선언하면 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 텍스트 인덱스가 있는 파일은 객체 형식 3이며, 이전 릴리스는 이 파일을 열지 못하고 [`OpenOptions::upgrade_format`](./open-options.md#upgrade-format)이 이를 다룹니다. 검색 규칙은 가이드의 [단어로 텍스트 검색하기](../../guide/queries.md#단어로-텍스트-검색하기)에 있습니다.
+
 ### cascade
 
 ```rust
