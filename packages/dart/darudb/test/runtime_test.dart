@@ -417,6 +417,25 @@ void main() {
     expect(db.read((txn) => txn.collection(userSchema).count()), 1);
   });
 
+  test('a transaction goes on reading after its database is closed', () {
+    db.write((txn) => txn.collection(userSchema).insert(const User(name: 'a')));
+
+    final found = db.read((txn) {
+      final users = txn.collection(userSchema);
+
+      db.close();
+
+      // What is allocated here would take the place of a name freed early.
+      final noise = [for (var i = 0; i < 1000; i++) 'collection-$i' * 2];
+
+      expect(noise, hasLength(1000));
+
+      return (users.get(1)?.name, users.count());
+    });
+
+    expect(found, ('a', 1));
+  });
+
   test('a closed database refuses calls with CLOSED', () {
     db.close();
     expect(

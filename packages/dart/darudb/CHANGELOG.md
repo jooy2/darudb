@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- A transaction that is still running when its database is closed goes on reading and writing safely until its function ends. `close` freed what the transaction's collections name their collection with, so `get`, `insert`, `put`, `update` and `delete` on such a collection read freed memory, which could fail with a wrong error or crash. It happened when `close` or `closeAsync` ran while a `readAsync` function was between two awaits.
+
 ## v1.5.0 (2026-11-01)
 
 ### Breaking changes

@@ -780,6 +780,12 @@ final class Database implements Finalizable {
   StoredSchema? _layouts;
   final Map<String, MapCollection> _byName = {};
   final Map<Object, _Collection> _collections = Map.identity();
+
+  /// The transactions of this database that have not ended. Their
+  /// collections hold the names in [_collections], so a database closed
+  /// while one lives frees the names when the last one ends.
+  int _transactions = 0;
+  bool _namesWait = false;
   final Map<String, Prepared<Object?>> _kept = {};
 
   /// Whether [close] has not been called.
@@ -1325,15 +1331,35 @@ final class Database implements Finalizable {
   void _release(Pointer<NativeDatabase> handle) {
     _handle = nullptr;
     _databaseFinalizer.detach(this);
-    _nameFinalizer.detach(this);
     darudb_database_free(handle);
+    _kept.clear();
+
+    // A transaction outlives the handle, and its collections go on naming
+    // their collection to the library.
+    if (_transactions > 0) {
+      _namesWait = true;
+    } else {
+      _freeNames();
+    }
+  }
+
+  void _freeNames() {
+    _namesWait = false;
+    _nameFinalizer.detach(this);
 
     for (final collection in _collections.values) {
       darudb_name_free(collection.name);
     }
 
     _collections.clear();
-    _kept.clear();
+  }
+
+  void _transactionEnded() {
+    _transactions -= 1;
+
+    if (_transactions == 0 && _namesWait) {
+      _freeNames();
+    }
   }
 
   _Collection _collection(Object schema) {
@@ -1389,7 +1415,9 @@ final class Prepared<T> implements Finalizable {
 
 /// A read transaction: one commit, as it was when the transaction began.
 base class ReadTransaction {
-  ReadTransaction._(this._handle, this._database);
+  ReadTransaction._(this._handle, this._database) {
+    _database?._transactions += 1;
+  }
 
   Pointer<NativeTransaction> _handle;
   final Database? _database;
@@ -1413,6 +1441,7 @@ base class ReadTransaction {
     if (handle != nullptr) {
       _handle = nullptr;
       darudb_txn_free(handle);
+      _database?._transactionEnded();
     }
   }
 
