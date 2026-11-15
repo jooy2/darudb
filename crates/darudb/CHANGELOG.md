@@ -11,6 +11,9 @@
 - An index on several fields that includes an auto-increment `id` holds the number an insert assigns. An object inserted without its `id` through `Object`, or through a binding into a collection with a list, an embedded object or a link, got an entry with a null in place of the number, which stayed behind when the object was deleted or updated: `check` reported it, and a query through the index failed with `CORRUPTED` once the object was gone.
 - A field a binding declares both optional and with a default is indexed as it reads. A null written to such a field reads back as the default, but its index entry was a null, so a query for the default through the index missed the object, and the entry stayed behind when the object was deleted.
 
+- Opening a database that exists no longer writes and syncs a temporary file beside it first. Such an open failed with `IO` in a directory the process could not create a file in, or on a full disk, where the database itself was readable and writable; and a file with a password hashed the password twice, which took a reopen from 43 to 19 milliseconds on one machine.
+- A database that cannot be created because its temporary file cannot be written, on a full disk for one, no longer leaves that file behind.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.

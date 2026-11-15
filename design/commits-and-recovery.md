@@ -210,6 +210,8 @@ Starting from each of `c`'s three root pointers whose transaction id is above `L
 
 ## Creating a database
 
+A path that names a file already is opened as it is, and nothing below happens: no temporary file is written beside a database that exists, so one opens in a directory that takes no new file. The steps are for a path with nothing at it.
+
 1. Build page 0: the static fields with a fresh random file id, slot 0 holding the first commit (transaction id 1, durable transaction id 0, page count 1, null roots, next tree id 16), slots 1 and 2 empty, and the selector pointing at slot 0 with the unsynced bit clear.
 1. Write it to a new temporary file in the same directory, named after the database with a random suffix, and issue a barrier.
 1. Move the temporary file to the database's name **without replacing anything**: link it to the name, which fails if the name exists, then remove the temporary name. On a file system without links, use the platform's no-replace rename where it has one: `renameat2` with `RENAME_NOREPLACE` on Linux and Android, `renamex_np` with `RENAME_EXCL` on macOS and iOS, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on Windows.

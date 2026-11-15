@@ -540,6 +540,8 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
         });
     }
 
+    let exists = key.is_some();
+
     if let Some(shared) = key.and_then(|key| find(&instances, &key)) {
         shared.admit(options.secret())?;
 
@@ -548,16 +550,32 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
 
     // Checked before anything is created, so that a refused database
     // leaves no file behind, and again below for the file that opens.
-    if options.creates() && FileKey::of(path).is_none() && on_network_file_system(path, None) {
+    if options.creates() && !exists && on_network_file_system(path, None) {
         return Err(Error::UnsupportedFileSystem {
             path: path.to_path_buf(),
         });
     }
 
-    let created = if options.creates() {
-        create(path, options)?
-    } else {
+    // A file that is there is opened as it is. Creating one beside it only
+    // to find the path taken would write and sync a file, and hash a
+    // password, for nothing, and would fail where the directory takes no new
+    // file, as a read-only one or a full disk does not. One that went away
+    // since is created after all.
+    let mut existing = None;
+    let created = if !options.creates() {
         None
+    } else if exists {
+        match open_file(path) {
+            Ok(file) => {
+                existing = Some(file);
+
+                None
+            }
+            Err(Error::NotFound { .. }) => create(path, options)?,
+            Err(error) => return Err(error),
+        }
+    } else {
+        create(path, options)?
     };
     // The first page of a file created empty in place, which is written
     // under the open lock.
@@ -569,7 +587,10 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
 
             (file, data_key)
         }
-        None => (open_file(path)?, None),
+        None => match existing {
+            Some(file) => (file, None),
+            None => (open_file(path)?, None),
+        },
     };
     let file = Arc::new(file);
 

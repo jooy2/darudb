@@ -38,7 +38,13 @@ pub(crate) enum Created {
 pub(crate) fn create_file(path: &Path, contents: &[u8]) -> io::Result<Option<Created>> {
     let temporary = temporary_path(path)?;
 
-    write_synced(&temporary, contents)?;
+    // A temporary file that could not be written whole, on a full disk for
+    // one, is not left behind.
+    if let Err(error) = write_synced(&temporary, contents) {
+        let _ = fs::remove_file(&temporary);
+
+        return Err(error);
+    }
 
     let placed = place(&temporary, path);
 

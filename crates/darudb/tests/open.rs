@@ -262,3 +262,45 @@ fn a_directory_at_the_path_is_an_io_error() {
 
     assert_eq!(error.code(), "IO");
 }
+
+/// Opening a database that exists writes nothing beside it, so it opens in
+/// a directory that takes no new file.
+#[cfg(unix)]
+#[test]
+fn an_existing_database_opens_in_a_directory_that_takes_no_new_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TestDir::new();
+    let folder = dir.path("locked");
+
+    std::fs::create_dir(&folder).unwrap();
+
+    let path = folder.join("app.darudb");
+
+    Database::open(&path).unwrap().close().unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // A process that may write anywhere, as root may, proves nothing here.
+    let restricted = std::fs::File::create(folder.join("probe")).is_err();
+    let opened = Database::open(&path).and_then(|db| {
+        let mut txn = db.begin_write()?;
+
+        txn.insert("t", b"k", b"v")?;
+        txn.commit()?;
+        db.close()
+    });
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    if restricted {
+        opened.unwrap();
+    }
+
+    let names: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != "probe")
+        .collect();
+
+    assert_eq!(names, ["app.darudb"]);
+}
