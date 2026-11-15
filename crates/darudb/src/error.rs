@@ -154,6 +154,13 @@ pub enum Error {
         /// Why the migration failed.
         message: String,
     },
+    /// The database was opened read-only, and the call would write to its
+    /// file: a write transaction, a change of schema, format or key, a
+    /// compaction, or the recovery a file needs before it can be read.
+    ReadOnly {
+        /// What was refused, and why.
+        message: String,
+    },
     /// An invariant of the engine does not hold, which only a bug in DaruDB can
     /// cause. Please report it.
     Internal {
@@ -188,6 +195,7 @@ impl Error {
             Error::DuplicateKey { .. } => "DUPLICATE_KEY",
             Error::InvalidQuery { .. } => "INVALID_QUERY",
             Error::MigrationFailed { .. } => "MIGRATION_FAILED",
+            Error::ReadOnly { .. } => "READ_ONLY",
             Error::Internal { .. } => "INTERNAL",
         }
     }
@@ -266,6 +274,7 @@ impl fmt::Display for Error {
             Error::DuplicateKey { message } => f.write_str(message),
             Error::InvalidQuery { message } => write!(f, "invalid query: {message}"),
             Error::MigrationFailed { message } => write!(f, "migration failed: {message}"),
+            Error::ReadOnly { message } => f.write_str(message),
             Error::Internal { message } => {
                 write!(f, "internal error, which is a bug in DaruDB: {message}")
             }
@@ -382,6 +391,12 @@ mod tests {
                     message: "a message".to_owned(),
                 },
                 "MIGRATION_FAILED",
+            ),
+            (
+                Error::ReadOnly {
+                    message: "a message".to_owned(),
+                },
+                "READ_ONLY",
             ),
             (
                 Error::Internal {

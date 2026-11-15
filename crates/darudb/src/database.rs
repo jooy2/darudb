@@ -34,6 +34,9 @@ pub struct Database {
     /// Handles to one file in a process share its instance but not this: each
     /// works with the schema it opened the file with.
     schema: Option<Arc<OpenSchema>>,
+    /// Whether the handle was opened read-only
+    /// ([`OpenOptions::read_only`]): it writes nothing to the file.
+    read_only: bool,
 }
 
 impl Database {
@@ -72,6 +75,7 @@ impl Database {
     /// has it open, it fails with [`Error::Busy`]. A build of the library
     /// that knows only the older version refuses the file afterwards.
     pub fn upgrade_format(&self) -> Result<bool> {
+        self.writable("raising the format version")?;
         self.shared.upgrade_format()
     }
 
@@ -84,7 +88,28 @@ impl Database {
     /// Starts the write transaction, waiting for one already running in
     /// another thread for up to the busy timeout.
     pub fn begin_write(&self) -> Result<WriteTransaction> {
+        self.writable("a write transaction")?;
         WriteTransaction::begin(&self.shared, self.schema.clone())
+    }
+
+    /// Whether the handle was opened read-only, with
+    /// [`OpenOptions::read_only`].
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Refuses `what`, which writes to the file, on a read-only handle.
+    fn writable(&self, what: &str) -> Result<()> {
+        if self.read_only {
+            return Err(Error::ReadOnly {
+                message: format!(
+                    "`{}` was opened read-only, which {what} would write to",
+                    self.path().display()
+                ),
+            });
+        }
+
+        Ok(())
     }
 
     /// Makes every commit so far durable, deferred ones included, whichever
@@ -94,6 +119,12 @@ impl Database {
     /// Otherwise it waits for a write transaction that is running, in this
     /// process or another, up to the busy timeout.
     pub fn sync(&self) -> Result<()> {
+        // A read-only handle made no commit, and writes no selector for the
+        // commits of others, which their own handles make durable.
+        if self.read_only {
+            return Ok(());
+        }
+
         self.shared.sync()
     }
 
@@ -161,6 +192,8 @@ impl Database {
     }
 
     fn rekey(&self, secret: &Secret) -> Result<()> {
+        self.writable("a change of key")?;
+
         let Some(data_key) = &self.shared.data_key else {
             return Err(Error::InvalidArgument {
                 message: format!(
@@ -261,6 +294,7 @@ impl Database {
     /// and the next compaction takes the rest. It waits for the writer lock
     /// as [`begin_write`](Self::begin_write) does.
     pub fn compact(&self) -> Result<crate::CompactReport> {
+        self.writable("a compaction")?;
         crate::tools::compact(self)
     }
 
@@ -295,14 +329,25 @@ impl Database {
         let Some((declared, migrations)) = options.declared() else {
             let schema = schema::stored(&shared);
 
-            return Ok(Opening::Open(Self { shared, schema }));
+            return Ok(Opening::Open(Self {
+                shared,
+                schema,
+                read_only: options.is_read_only(),
+            }));
         };
 
         Ok(
-            match schema::open(&shared, declared, migrations, options.upgrades_format())? {
+            match schema::open(
+                &shared,
+                declared,
+                migrations,
+                options.upgrades_format(),
+                options.is_read_only(),
+            )? {
                 Opened::Ready(schema) => Opening::Open(Self {
                     shared,
                     schema: Some(schema),
+                    read_only: options.is_read_only(),
                 }),
                 Opened::Migrating(pending) => {
                     Opening::Migrating(PendingMigration { shared, pending })
@@ -519,6 +564,7 @@ impl PendingMigration {
         Ok(Database {
             shared: self.shared,
             schema: Some(schema),
+            read_only: false,
         })
     }
 }
@@ -549,6 +595,7 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
 
     if let Some(shared) = key.and_then(|key| find(&instances, &key)) {
         shared.admit(options.secret())?;
+        shared.allow_writes(!options.is_read_only());
 
         return Ok(shared);
     }
@@ -613,6 +660,7 @@ fn open_shared(path: &Path, options: &OpenOptions) -> Result<Arc<Shared>> {
         // release the instance's locks, so the instance keeps it.
         shared.keep_handle(file);
         shared.admit(options.secret())?;
+        shared.allow_writes(!options.is_read_only());
 
         return Ok(shared);
     }
@@ -679,6 +727,7 @@ pub(crate) fn create_beside(
         Database {
             shared,
             schema: None,
+            read_only: false,
         },
     ))
 }
@@ -807,6 +856,10 @@ fn open_io(
         data_key,
     );
 
+    // An instance whose every handle is read-only writes nothing by itself
+    // either: it ends no window another process left open.
+    shared.allow_writes(!options.is_read_only());
+
     match access {
         Access::Alone => {
             // The lock tests stop a process here and kill it.
@@ -820,11 +873,19 @@ fn open_io(
                     .record_auth
                     .as_ref()
                     .map(|auth| (auth, &shared.static_header.file_id)),
+                options.is_read_only(),
             )?;
 
             shared.set_header(header);
             shared.set_last_barrier(last_barrier);
-            shared.finish_raising(&bytes)?;
+
+            // A raise of the format version that was cut short is recovery
+            // too, and writes the same way.
+            if !options.is_read_only() {
+                shared.finish_raising(&bytes)?;
+            } else if shared.raising_unfinished(&bytes) {
+                return Err(recovery::read_only(&shared.pager));
+            }
 
             if options.upgrades_format() && shared.format_version() < crate::FORMAT_VERSION {
                 shared.raise_format()?;

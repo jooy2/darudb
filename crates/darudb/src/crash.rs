@@ -1783,3 +1783,69 @@ fn a_migration_cut_short_leaves_the_old_schema_or_the_new_one() {
         }
     }
 }
+
+/// A file whose last commits were deferred, left by a process that died,
+/// needs recovery to say which commit it holds, and recovery writes that
+/// down. A read-only handle writes nothing, so it refuses the file until a
+/// handle that may write has opened it once.
+#[test]
+fn a_read_only_handle_refuses_a_file_that_needs_recovery_and_writes_nothing() {
+    let disk = Arc::new(SimDisk::default());
+    let db = Database::create_io(disk.clone(), 4096, &OpenOptions::new()).unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"durable", b"1").unwrap();
+    txn.commit().unwrap();
+
+    let mut txn = db.begin_write().unwrap();
+
+    txn.insert("t", b"deferred", b"2").unwrap();
+    txn.commit_deferred().unwrap();
+
+    // The process dies here: the file as it is, its selector unsynced.
+    let left = disk.current();
+    let mut read_only = OpenOptions::new();
+
+    read_only.read_only(true);
+
+    let refused = Arc::new(SimDisk::from_image(left.clone()));
+    let error = Database::open_io(refused.clone(), &read_only).unwrap_err();
+
+    assert_eq!(error.code(), "READ_ONLY");
+    assert_eq!(refused.current(), left, "a refused open wrote to the file");
+
+    // A handle that may write recovers the file.
+    let recovered = Arc::new(SimDisk::from_image(left));
+
+    Database::open_io(recovered.clone(), &OpenOptions::new())
+        .unwrap()
+        .close()
+        .unwrap();
+
+    let whole = recovered.current();
+    let disk = Arc::new(SimDisk::from_image(whole.clone()));
+    let db = Database::open_io(disk.clone(), &read_only).unwrap();
+    let read = db.begin_read().unwrap();
+
+    assert_eq!(read.get("t", b"deferred").unwrap(), Some(b"2".to_vec()));
+    drop(read);
+
+    for refused in [
+        db.begin_write().map(drop),
+        db.compact().map(drop),
+        db.upgrade_format().map(drop),
+        db.set_key([1; 32]),
+    ] {
+        assert_eq!(refused.unwrap_err().code(), "READ_ONLY");
+    }
+
+    assert!(db.is_read_only());
+    assert!(db.check().unwrap().is_ok());
+    db.sync().unwrap();
+    db.close().unwrap();
+    assert_eq!(
+        disk.current(),
+        whole,
+        "a read-only handle wrote to the file"
+    );
+}

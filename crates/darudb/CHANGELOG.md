@@ -6,6 +6,7 @@
 
 ### Added
 
+- Read-only handles: `OpenOptions::read_only(true)` opens a database through which the file's bytes never change, and `Database::is_read_only` says so. Such a handle reads, checks and backs up; a write transaction, a schema to store or migrate to, `upgrade_format`, `compact`, `set_key` and `set_password` fail with the new error `Error::ReadOnly`, whose code is `READ_ONLY`, and `sync` and `close` do nothing. It creates no file, and a file that needs recovery, left by a process that died or by a power cut, is refused with `READ_ONLY` until it has been opened once without the option, since recovery writes to it. The file is still opened for writing, which the locks need, so a read-only medium is not supported; other handles write beside it as ever.
 - `Migrating::version`, the schema version of the step under way, which a function shared by several steps tells them apart by.
 
 ### Changed

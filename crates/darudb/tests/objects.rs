@@ -1985,3 +1985,40 @@ fn a_schema_nested_too_deeply_to_be_read_back_is_refused() {
     open(&dir, nested(8), &[]).unwrap().close().unwrap();
     open(&dir, nested(8), &[]).unwrap().close().unwrap();
 }
+
+/// A read-only handle opens with the schema the file holds, or with none,
+/// and stores or migrates no other.
+#[test]
+fn a_read_only_handle_takes_the_schema_the_file_holds_and_no_other() {
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let path = dir.path("app.darudb");
+    let open = |schema: Option<Schema>| {
+        let mut options = OpenOptions::new();
+
+        options.read_only(true);
+
+        if let Some(schema) = schema {
+            options.schema(schema);
+        }
+
+        options.open(&path)
+    };
+
+    for schema in [Some(v1()), None] {
+        let db = open(schema).unwrap();
+        let read = db.begin_read().unwrap();
+
+        assert_eq!(read.collection("users").unwrap().len().unwrap(), 2);
+    }
+
+    let newer = Schema::new(2)
+        .collection(users_v1().optional("nick", Type::String))
+        .collection(posts_v1());
+
+    assert_eq!(code(open(Some(newer))), "READ_ONLY");
+    // The file is as it was: the first schema still opens it.
+    open(Some(v1())).unwrap();
+}

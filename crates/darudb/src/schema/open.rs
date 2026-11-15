@@ -72,6 +72,7 @@ pub(crate) fn open(
     declared: &Schema,
     migrations: &[Migration],
     upgrade: bool,
+    read_only: bool,
 ) -> Result<Opened> {
     // Most opens find the declared schema stored, which a read transaction
     // shows without waiting for the writer lock.
@@ -85,6 +86,16 @@ pub(crate) fn open(
                 return Ok(Opened::Ready(Arc::new(OpenSchema::new(schema, encoded))));
             }
         }
+    }
+
+    // Storing a schema, or migrating to one, writes to the file.
+    if read_only {
+        return Err(Error::ReadOnly {
+            message: format!(
+                "`{}` does not hold the declared schema, and it was opened read-only, which stores and migrates none",
+                shared.path.display()
+            ),
+        });
     }
 
     // Again under the writer lock: another process may have stored or

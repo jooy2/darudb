@@ -164,6 +164,14 @@ A barrier, followed by writing the selector with the unsynced bit clear, makes t
 
 Only the writer writes the selector, so `sync` and the engine's thread take the writer lock first.
 
+## Read-only handles
+
+A handle opened read-only is one through which the file's bytes never change. It begins no write transaction, stores and migrates no schema, raises no format version, compacts nothing, changes no key, and does not make the deferred commits of other handles durable; each of those fails with `READ_ONLY`, except a sync or a close, which does nothing. It creates no file: a path with nothing at it is `NOT_FOUND`.
+
+The first process to open a file runs recovery, and a read-only handle may be that process's. Recovery then chooses the commit as ever, but writes nothing: if what it chose has to be written down, the selector, a stale record erased, or the static check a raise of the format version left unwritten, the open fails with `READ_ONLY`, and the file is as it was. A file that was closed by the handle that wrote it last needs none of that and opens. A tail past the commit's last page is left for the next handle that writes to cut off.
+
+Read-only is a property of the handle, not of the file: the file is opened for writing all the same, since the locks need it, and other handles, in the process or another, write beside it. An instance whose handles are all read-only writes nothing by itself either: it does not end the unsynced window another process left open.
+
 ## When a barrier fails
 
 When a sync fails, the operating system may already have dropped the pages it could not write and marked them clean, so trying again can report a success that did not happen. The engine therefore does not try again:

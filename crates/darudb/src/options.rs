@@ -41,6 +41,7 @@ pub struct OpenOptions {
     cache_size: usize,
     max_unsynced_pages: u64,
     max_unsynced_time: Duration,
+    read_only: bool,
     secret: Option<Secret>,
     password_cost: PasswordCost,
     /// The page cipher of a new encrypted file, when the engine's own tests
@@ -62,6 +63,7 @@ impl OpenOptions {
             cache_size: DEFAULT_CACHE_SIZE,
             max_unsynced_pages: 16_384,
             max_unsynced_time: Duration::from_secs(1),
+            read_only: false,
             secret: None,
             password_cost: PasswordCost::DEFAULT,
             page_cipher: None,
@@ -150,6 +152,30 @@ impl OpenOptions {
     /// exists only while deferred commits are waiting.
     pub fn max_unsynced_time(&mut self, time: Duration) -> &mut Self {
         self.max_unsynced_time = time;
+        self
+    }
+
+    /// Whether the handle is read-only: one through which the file's bytes
+    /// never change. Off by default.
+    ///
+    /// A read-only handle reads, checks and backs the database up. It
+    /// begins no write transaction, stores and migrates no schema, raises no
+    /// format version, compacts nothing and changes no key: each fails with
+    /// [`Error::ReadOnly`](crate::Error::ReadOnly). Nothing is created: a
+    /// path that holds no database fails with
+    /// [`Error::NotFound`](crate::Error::NotFound). A file left
+    /// by a process that died, or by a power cut, may need recovery before
+    /// it can be read, and recovery writes to it: such a file is refused
+    /// the same way until it has been opened once without this option. A
+    /// declared schema has to be the one the file holds already.
+    ///
+    /// The file is still opened for writing, since the locks that
+    /// coordinate processes need that, so the process needs write access to
+    /// it, and a read-only medium is not supported. Other handles to the
+    /// file, in this process or another, write as ever, and this one reads
+    /// what they commit.
+    pub fn read_only(&mut self, read_only: bool) -> &mut Self {
+        self.read_only = read_only;
         self
     }
 
@@ -333,7 +359,11 @@ impl OpenOptions {
     }
 
     pub(crate) fn creates(&self) -> bool {
-        self.create
+        self.create && !self.read_only
+    }
+
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// The format version of a new file: the newest, unless opening is not
@@ -347,7 +377,7 @@ impl OpenOptions {
     }
 
     pub(crate) fn upgrades_format(&self) -> bool {
-        self.upgrade_format
+        self.upgrade_format && !self.read_only
     }
 
     pub(crate) fn new_page_size(&self) -> u32 {

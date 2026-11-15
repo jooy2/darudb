@@ -28,6 +28,7 @@ pub(crate) fn recover(
     pager: &Pager,
     loader: &Loader,
     auth: Option<(&RecordAuth, &[u8; 16])>,
+    read_only: bool,
 ) -> Result<(Header, Option<Selector>)> {
     let bytes = pager.read_header(HEADER_LEN)?;
     let selector = Selector::decode(bytes[SELECTOR_OFFSET])
@@ -94,6 +95,12 @@ pub(crate) fn recover(
         .filter(|other| intact[*other].is_some_and(|stale| stale.txn >= record.txn))
         .collect();
     let last_barrier = if slot != selector.slot || selector.unsynced || !stale.is_empty() {
+        // What recovery found has to be written down before anyone reads
+        // the file by it, and a read-only handle writes nothing.
+        if read_only {
+            return Err(self::read_only(pager));
+        }
+
         publish_recovered(pager, &stale, slot)?;
 
         for other in stale {
@@ -105,7 +112,9 @@ pub(crate) fn recover(
         None
     };
 
-    if pager.file_len()? > record.page_count * pager.page_size() as u64 {
+    // A tail past the commit's last page is cut off, unless the handle is
+    // read-only: nothing reads it, and the next handle that writes cuts it.
+    if !read_only && pager.file_len()? > record.page_count * pager.page_size() as u64 {
         pager.resize(record.page_count)?;
     }
 
@@ -116,6 +125,16 @@ pub(crate) fn recover(
         },
         last_barrier,
     ))
+}
+
+/// The error for a file that needs recovery, opened read-only.
+pub(crate) fn read_only(pager: &Pager) -> Error {
+    Error::ReadOnly {
+        message: format!(
+            "`{}` needs recovery, which writes to it, and it was opened read-only: open it once without `read_only`",
+            pager.path().display()
+        ),
+    }
 }
 
 /// Makes the adopted commit the published and durable one: a barrier, the

@@ -219,6 +219,10 @@ pub(crate) struct Shared {
     /// The last unsynced commit this process noticed, so that the reads that
     /// find the same one skip the lock of `unsynced`.
     noticed: AtomicU64,
+    /// Whether a handle that may write has been opened on the instance.
+    /// While every handle is read-only, the instance writes nothing to the
+    /// file by itself.
+    writes: std::sync::atomic::AtomicBool,
     /// The free runs of the commit with the given transaction id, which the
     /// last write transaction left for the next, so that it need not read the
     /// free tree again.
@@ -308,6 +312,7 @@ impl Shared {
             last_barrier: Mutex::new(None),
             unsynced: Mutex::new(Unsynced::default()),
             noticed: AtomicU64::new(0),
+            writes: std::sync::atomic::AtomicBool::new(true),
             free_runs: Mutex::new(None),
             young: Mutex::new(None),
             learned: Mutex::new(None),
@@ -565,6 +570,27 @@ impl Shared {
             version: self.format_version(),
             ..self.static_header
         }
+    }
+
+    /// Lets the instance write by itself once a handle that may write is
+    /// opened on it: `writes` is whether the handle being opened may. A
+    /// read-only handle opened later takes nothing back.
+    pub(crate) fn allow_writes(&self, writes: bool) {
+        if writes {
+            self.writes.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether a raise of the format version was cut short before its
+    /// static check was written, which [`finish_raising`] writes: `bytes`
+    /// are the static fields as they were read.
+    ///
+    /// [`finish_raising`]: Self::finish_raising
+    pub(crate) fn raising_unfinished(&self, bytes: &[u8]) -> bool {
+        let fields = self.static_header.encode();
+
+        bytes.get(..STATIC_CHECK_OFFSET) == Some(&fields[..STATIC_CHECK_OFFSET])
+            && bytes.get(STATIC_CHECK_OFFSET..STATIC_LEN) != Some(&fields[STATIC_CHECK_OFFSET..])
     }
 
     /// Writes the static check that a raise of the format version, cut
@@ -1044,6 +1070,13 @@ impl Shared {
     /// is alive; the thread ends it if it is still unsynced when its window,
     /// which the record says when it opened, is due by this process's limit.
     pub(crate) fn notice_unsynced(self: &Arc<Self>, record: &CommitRecord) {
+        // Ending another process's window writes the selector, which an
+        // instance of read-only handles does not: a handle that writes, here
+        // or in another process, ends it.
+        if !self.writes.load(Ordering::Relaxed) {
+            return;
+        }
+
         // Every read finds the same commit until the next one: a load, which
         // writes nothing the other readers' caches would have to fetch again.
         if self.noticed.load(Ordering::Relaxed) == record.txn {

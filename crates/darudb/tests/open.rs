@@ -304,3 +304,52 @@ fn an_existing_database_opens_in_a_directory_that_takes_no_new_file() {
 
     assert_eq!(names, ["app.darudb"]);
 }
+
+/// A read-only handle creates nothing, reads what other handles commit,
+/// and leaves the file's bytes as they are.
+#[test]
+fn a_read_only_handle_reads_beside_one_that_writes() {
+    let dir = TestDir::new();
+    let path = dir.path("app.darudb");
+    let mut read_only = OpenOptions::new();
+
+    read_only.read_only(true);
+
+    // Nothing is created for it.
+    assert!(matches!(read_only.open(&path), Err(Error::NotFound { .. })));
+    assert!(!path.exists());
+
+    let writer = Database::open(&path).unwrap();
+    let mut txn = writer.begin_write().unwrap();
+
+    txn.insert("t", b"k", b"1").unwrap();
+    txn.commit().unwrap();
+
+    let reader = read_only.open(&path).unwrap();
+
+    assert!(reader.is_read_only());
+    assert!(!writer.is_read_only());
+    assert_eq!(
+        reader.begin_read().unwrap().get("t", b"k").unwrap(),
+        Some(b"1".to_vec())
+    );
+    assert_eq!(reader.begin_write().unwrap_err().code(), "READ_ONLY");
+
+    // The handle beside it writes as ever, and this one reads the commit.
+    let mut txn = writer.begin_write().unwrap();
+
+    txn.insert("t", b"k", b"2").unwrap();
+    txn.commit().unwrap();
+    assert_eq!(
+        reader.begin_read().unwrap().get("t", b"k").unwrap(),
+        Some(b"2".to_vec())
+    );
+
+    writer.close().unwrap();
+
+    let before = fs::read(&path).unwrap();
+
+    reader.backup(dir.path("copy.darudb")).unwrap();
+    reader.close().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
