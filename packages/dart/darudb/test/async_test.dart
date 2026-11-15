@@ -348,4 +348,30 @@ void main() {
     );
     await expectLater(db.syncAsync(), failsWith('CLOSED'));
   });
+
+  test(
+    'what a write function started may write once the write is over',
+    () async {
+      final db = await Database.openAsync(
+        path,
+        schema: const Schema(1, [userSchema]),
+      );
+      final later = Completer<int>();
+
+      await db.writeAsync((txn) async {
+        await txn.collection(userSchema).insert(const User(name: 'a'));
+        Timer(const Duration(milliseconds: 20), () {
+          db
+              .writeAsync(
+                (txn) async =>
+                    txn.collection(userSchema).insert(const User(name: 'b')),
+              )
+              .then(later.complete, onError: later.completeError);
+        });
+      });
+
+      expect(await later.future, 2);
+      await db.closeAsync();
+    },
+  );
 }

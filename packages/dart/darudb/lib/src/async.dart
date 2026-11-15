@@ -95,6 +95,16 @@ Future<_Reply> _call(
 /// own turn is refused rather than waiting for ever.
 const Symbol _insideWrite = #darudbInsideWrite;
 
+/// A file an asynchronous write holds while its function runs. What the
+/// function starts, a timer or a listener, keeps the function's zone after
+/// the write is over, so the write is marked as over rather than only left.
+final class _Inside {
+  _Inside(this.file);
+
+  final String file;
+  bool active = true;
+}
+
 /// The asynchronous writes of this isolate, queued by file.
 final class _Turns {
   final Map<String, (Future<void>, int)> _queues = {};
@@ -110,7 +120,8 @@ final class _Turns {
   Future<T> inTurn<T>(String file, Future<T> Function() body) async {
     final inside = Zone.current[_insideWrite];
 
-    if (inside is Set<String> && inside.contains(file)) {
+    if (inside is Set<_Inside> &&
+        inside.any((held) => held.active && held.file == file)) {
       throw invalidArgument(
         'write transactions do not nest: inside a write function, a write, '
         'sync, close or compaction on the same file would wait for the '
@@ -908,12 +919,19 @@ Future<R> _writeAsync<R>(
 
   try {
     final inside = Zone.current[_insideWrite];
-    final result = await runZoned(
-      () => fn(txn),
-      zoneValues: {
-        _insideWrite: {if (inside is Set<String>) ...inside, database._file},
-      },
-    );
+    final held = _Inside(database._file);
+    final R result;
+
+    try {
+      result = await runZoned(
+        () => fn(txn),
+        zoneValues: {
+          _insideWrite: {if (inside is Set<_Inside>) ...inside, held},
+        },
+      );
+    } finally {
+      held.active = false;
+    }
 
     await txn._serial.drain();
     await _call(
