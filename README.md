@@ -16,7 +16,7 @@ DaruDB is a database that runs inside your application rather than beside it. Th
 
 ## Why DaruDB
 
-These are the goals the design is built around, in order of priority. They are goals rather than claims until the benchmarks and the test suites that prove each one are in this repository.
+These are the goals the design is built around, in order of priority. They are goals rather than claims: the [performance page](https://darudb.cdget.com/performance) shows what the benchmarks in `bench/` measure, and the test suites of each package say how far the rest is checked.
 
 - **Fast reads and writes.** The target is to outperform the embedded SQL engines applications usually reach for, measured at the same durability settings. Records cross the language boundary as packed binary buffers, and batch operations are the default.
 - **Encryption of the whole file.** Every page is encrypted and authenticated, so a file read without its key shows nothing, and a file changed without its key is detected. A password is turned into a key with a memory-hard function, and changing it does not rewrite the file.
@@ -60,7 +60,7 @@ The root holds the Cargo workspace and no JavaScript or Python manifest. Each Ja
 
 | Page                                                                  | What you will find                                       |
 | --------------------------------------------------------------------- | -------------------------------------------------------- |
-| [**Introduction**](https://darudb.cdget.com/guide/introduction)       | What DaruDB is, what it is for, and how far along it is. |
+| [**Introduction**](https://darudb.cdget.com/guide/introduction)       | What DaruDB is, what it is for, and what it leaves out.  |
 | [**Getting started**](https://darudb.cdget.com/guide/getting-started) | Installing a package and opening a first database.       |
 | [**Collections and objects**](https://darudb.cdget.com/guide/objects) | Schemas and objects, in the language you choose.         |
 | [**API**](https://darudb.cdget.com/api/)                              | Every class and function of the package for a language.  |

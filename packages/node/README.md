@@ -4,7 +4,7 @@
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jooy2/darudb/blob/main/LICENSE)
 
-The Node.js package of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file. It is a native addon over the DaruDB engine, which is written in Rust, so the same file reads the same from Node.js, Rust and Dart.
+The Node.js package of [DaruDB](https://darudb.cdget.com), an embedded database that keeps an application's data in one local file. It is a native addon over the DaruDB engine, which is written in Rust, so the same file reads the same from Node.js, Rust, Dart and Python.
 
 ## Installation
 
