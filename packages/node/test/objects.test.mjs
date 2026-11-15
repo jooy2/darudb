@@ -1601,3 +1601,29 @@ describe('cascading links', () => {
     assertCode(opening({ home: t.object({ a: t.link('a').cascade() }) }), 'INVALID_ARGUMENT');
   });
 });
+
+describe('values at the edges', () => {
+  it('keep a string that begins with U+FEFF as it was written', (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, {
+        notes: collection({ title: t.string().primaryKey(), body: t.string() })
+      })
+    });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const notes = txn.collection('notes');
+
+      notes.insert({ title: '﻿first', body: '﻿' });
+
+      const [read] = notes.find();
+
+      assert.deepEqual(read, { title: '﻿first', body: '﻿' });
+      // Written back, it replaces the object rather than adding one.
+      notes.put({ ...read, body: 'y' });
+      assert.equal(notes.count(), 1);
+      assert.equal(notes.get('﻿first').body, 'y');
+    });
+  });
+});

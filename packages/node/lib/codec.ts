@@ -66,7 +66,9 @@ const KIND_NAMES = Object.fromEntries(
 ) as Partial<Record<number, Kind['type']>>;
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder('utf-8', { fatal: true });
+// A string may begin with U+FEFF, which is a character of it like any other:
+// left to itself, the decoder takes it for a byte order mark and drops it.
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 /** An `Error` with a `code`, as every error the package throws has. */
 export interface CodeError extends Error {
