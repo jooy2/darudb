@@ -161,6 +161,11 @@ pub struct NativeOptions {
     /// The memory the page cache may take, in bytes: a whole number, which
     /// the JavaScript side checks.
     pub cache_size: Option<f64>,
+    /// How many pages deferred commits may write before one is made durable
+    /// anyway: a whole number, which the JavaScript side checks.
+    pub max_unsynced_pages: Option<f64>,
+    /// How long deferred commits may go without a barrier, in milliseconds.
+    pub max_unsynced_time: Option<u32>,
     /// The declared schema, as `Schema::decode` reads it.
     pub schema: Option<Buffer>,
     pub migrations: Option<Vec<NativeMigration>>,
@@ -534,6 +539,21 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
         let bytes = bytes as usize;
 
         open_options.cache_size(bytes);
+    }
+
+    if let Some(pages) = options.max_unsynced_pages {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a whole number from 0 up, which the JavaScript side checked"
+        )]
+        let pages = pages as u64;
+
+        open_options.max_unsynced_pages(pages);
+    }
+
+    if let Some(milliseconds) = options.max_unsynced_time {
+        open_options.max_unsynced_time(std::time::Duration::from_millis(u64::from(milliseconds)));
     }
 
     if let Some(schema) = &options.schema {
@@ -1700,6 +1720,18 @@ pub fn end_transaction(
     if let Ok(mut held) = lock(txn) {
         *held = None;
     }
+}
+
+/// The transaction id of the commit the read transaction `txn` sees, which
+/// only grows from one commit to the next.
+#[napi]
+pub fn commit_id(
+    #[napi(ts_arg_type = "ExternalObject<'NativeTransaction'>")] txn: &External<Held>,
+) -> Result<f64> {
+    with(txn, |txn| match txn {
+        Txn::Read(read) => Ok(u64_number(read.commit_id())),
+        _ => Err(invalid("only a read transaction sees one commit")),
+    })
 }
 
 /// Deletes the object whose key is `key`, and says whether there was one.

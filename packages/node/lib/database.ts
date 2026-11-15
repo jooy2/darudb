@@ -77,6 +77,8 @@ interface OpenOptions<M> extends Secret {
   pageSize?: number;
   busyTimeout?: number;
   cacheSize?: number;
+  maxUnsyncedPages?: number;
+  maxUnsyncedTime?: number;
   upgradeFormat?: boolean;
   schema?: DeclaredSchema;
   migrations?: Migration<M>[];
@@ -342,6 +344,14 @@ class ReadTransaction {
   collection(name: string): ReadCollection {
     return new ReadCollection(this.#txn, collectionOf(this.#layout, name));
   }
+
+  /**
+   * The id of the commit the transaction sees, which only grows: a larger
+   * one than an earlier transaction saw says something was committed since.
+   */
+  get commitId(): number {
+    return native.commitId(this.#txn);
+  }
 }
 
 /** A write transaction: changes that commit together when its function returns. */
@@ -428,6 +438,8 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     pageSize,
     busyTimeout,
     cacheSize,
+    maxUnsyncedPages,
+    maxUnsyncedTime,
     upgradeFormat,
     schema,
     migrations = [],
@@ -442,6 +454,14 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     throw invalid('`cacheSize` is a whole number of bytes from 0 up');
   }
 
+  if (
+    maxUnsyncedPages !== undefined &&
+    (!Number.isSafeInteger(maxUnsyncedPages) || maxUnsyncedPages < 0)
+  ) {
+    throw invalid('`maxUnsyncedPages` is a whole number of pages from 0 up');
+  }
+
+  checkWhole(maxUnsyncedTime, '`maxUnsyncedTime` is a whole number of milliseconds from 0 up');
   checkWhole(pageSize, '`pageSize` is a whole number of bytes');
   checkWhole(busyTimeout, '`busyTimeout` is a whole number of milliseconds from 0 up');
   checkPasswordHashing(passwordHashing);
@@ -451,6 +471,8 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     pageSize,
     busyTimeout,
     cacheSize,
+    maxUnsyncedPages,
+    maxUnsyncedTime,
     upgradeFormat,
     schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
     migrations: migrations.map(nativeMigration),
@@ -880,7 +902,7 @@ class Database {
     const serial = new Serial(txn);
 
     try {
-      return await fn(new AsyncReadTransaction(serial, this.#layout));
+      return await fn(new AsyncReadTransaction(serial, this.#layout, txn));
     } finally {
       await serial.close();
       txn.end();

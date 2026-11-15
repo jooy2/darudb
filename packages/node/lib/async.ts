@@ -696,15 +696,26 @@ class AsyncWriteCollection extends AsyncReadCollection {
 class AsyncReadTransaction {
   #serial: Serial;
   #layout: SchemaLayout | NoSchema;
+  #txn: NativeTransaction;
 
-  constructor(serial: Serial, layout: SchemaLayout | NoSchema) {
+  constructor(serial: Serial, layout: SchemaLayout | NoSchema, txn: NativeTransaction) {
     this.#serial = serial;
     this.#layout = layout;
+    this.#txn = txn;
   }
 
   /** Collection `name` of the schema, for reading. */
   collection(name: string): AsyncReadCollection {
     return new AsyncReadCollection(this.#serial, collectionOf(this.#layout, name));
+  }
+
+  /**
+   * The id of the commit the transaction sees, which only grows: a larger
+   * one than an earlier transaction saw says something was committed since.
+   * It is read without a trip to the thread pool.
+   */
+  get commitId(): number {
+    return native.commitId(this.#txn.handle);
   }
 }
 

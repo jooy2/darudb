@@ -1798,4 +1798,62 @@ describe('values at the edges', () => {
     assertCode(() => t.string().optional().default('x'), 'INVALID_ARGUMENT');
     assertCode(() => t.int().default(0).optional(), 'INVALID_ARGUMENT');
   });
+
+  it('give a read transaction the id of the commit it sees', async (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, { users: collection({ name: t.string() }) })
+    });
+
+    context.after(() => db.close());
+
+    const before = db.read((txn) => txn.commitId);
+
+    assert.equal(typeof before, 'number');
+    assert.equal(
+      db.read((txn) => txn.commitId),
+      before,
+      'nothing was committed'
+    );
+    db.write((txn) => txn.collection('users').insert({ name: 'a' }));
+
+    const after = await db.readAsync((txn) => txn.commitId);
+
+    assert.ok(after > before);
+    assert.equal(
+      db.read((txn) => txn.commitId),
+      after
+    );
+  });
+
+  it('take the limits of deferred commits, and refuse what is not a whole number', (context) => {
+    const path = tempPath(context);
+
+    for (const maxUnsyncedPages of [-1, 1.5, Infinity, '8']) {
+      assertCode(() => Database.open(path, { maxUnsyncedPages }), 'INVALID_ARGUMENT');
+    }
+
+    for (const maxUnsyncedTime of [-1, 0.5, Number.NaN, 2 ** 32]) {
+      assertCode(() => Database.open(path, { maxUnsyncedTime }), 'INVALID_ARGUMENT');
+    }
+
+    const db = Database.open(path, {
+      schema: schema(1, { users: collection({ name: t.string() }) }),
+      maxUnsyncedPages: 4,
+      maxUnsyncedTime: 50
+    });
+
+    context.after(() => db.close());
+
+    // More pages than the limit: a commit among them is made durable.
+    for (let round = 0; round < 20; round++) {
+      db.write((txn) => txn.collection('users').insert({ name: `u${round}` }), {
+        durability: 'deferred'
+      });
+    }
+
+    assert.equal(
+      db.read((txn) => txn.collection('users').count()),
+      20
+    );
+  });
 });

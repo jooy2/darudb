@@ -524,6 +524,13 @@ export interface WriteCollection<O, I> extends ReadCollection<O> {
 /** A read transaction: one commit, for as long as its function runs. */
 export interface ReadTransaction<S> {
   collection<N extends NameOf<S>>(name: N): ReadCollection<ObjectOf<FieldsOf<S, N>>>;
+  /**
+   * The id of the commit the transaction sees. It only grows from one
+   * commit to the next, so a larger one than an earlier transaction saw
+   * says that something was committed in between, by this process or
+   * another.
+   */
+  readonly commitId: number;
 }
 
 /** A write transaction: changes that commit together when its function returns. */
@@ -607,6 +614,8 @@ export interface AsyncWriteCollection<O, I> extends AsyncReadCollection<O> {
  */
 export interface AsyncReadTransaction<S> {
   collection<N extends NameOf<S>>(name: N): AsyncReadCollection<ObjectOf<FieldsOf<S, N>>>;
+  /** The id of the commit the transaction sees; see `ReadTransaction.commitId`. */
+  readonly commitId: number;
 }
 
 /**
@@ -691,11 +700,25 @@ export interface OpenOptions<S = Schema> {
    */
   busyTimeout?: number;
   /**
-   * How much memory the page cache may take, in bytes. 32 MiB by default. It
+   * How much memory the page cache may take, in bytes: 128 MiB by default
+   * and 256 MiB at most, and more than the most is taken as the most. It
    * holds at least 16 pages, and fills only as pages are read. Every
    * `Database` of one file in a process shares the cache of the first.
    */
   cacheSize?: number;
+  /**
+   * How many pages deferred commits may write before one of them is made
+   * durable anyway, each page counted once however often it is written.
+   * 16384 by default. It bounds what the flush that makes them durable has
+   * to write, and what recovery has to check after a power cut.
+   */
+  maxUnsyncedPages?: number;
+  /**
+   * How long, in milliseconds, deferred commits may go without being made
+   * durable. 1000 by default. When the time is up, a thread of the engine
+   * makes them durable, as `sync` would.
+   */
+  maxUnsyncedTime?: number;
   /**
    * Whether opening a file in an older format version raises it to the
    * newest one this package writes, `FORMAT_VERSION`. `true` by default.

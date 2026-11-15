@@ -10,6 +10,8 @@
 
 ### Added
 
+- `maxUnsyncedPages` and `maxUnsyncedTime`, options of `open` and `openAsync`: how many pages deferred commits may write, and how long they may wait, in milliseconds, before one of them is made durable anyway. 16384 pages and 1000 milliseconds by default, as before.
+- `commitId` on a read transaction, and on one of the asynchronous API: the id of the commit the transaction sees, which only grows, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another.
 - The types `CollectionOptions`, `IndexDeclaration` and `IndexPath`, which `collection` takes its indexes in, are exported, so that code can name them.
 
 ### Changed
