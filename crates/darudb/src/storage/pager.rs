@@ -11,7 +11,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use super::FileIo;
 use crate::crypto::PageCipher;
@@ -31,9 +31,52 @@ pub(crate) struct Pager {
     path: PathBuf,
     /// The page cipher of an encrypted file, `None` for a plain one.
     cipher: Option<PageCipher>,
+    /// Random bytes drawn ahead, for the nonces of pages sealed one at a
+    /// time.
+    nonces: Mutex<Nonces>,
+}
+
+/// Random bytes for nonces, drawn from the operating system 32 nonces at a
+/// time. A commit seals each node of its trees on its own, a dozen for a
+/// small one, and a request to the system for each cost more than the
+/// bytes: a nonce is public, so one drawn ahead of its page is as good as
+/// one drawn for it, as long as none is used twice. A process forked from
+/// this one would hold the same bytes, and is refused before it seals a
+/// page: an inherited handle begins and commits nothing (`Shared::check_owner`).
+struct Nonces {
+    bytes: [u8; 24 * 32],
+    /// Where the next unused nonce starts; at the end, there is none.
+    at: usize,
+}
+
+impl std::fmt::Debug for Nonces {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Nonces").finish_non_exhaustive()
+    }
 }
 
 impl Pager {
+    /// A nonce no page has been sealed with.
+    fn nonce(&self) -> Result<[u8; 24]> {
+        let mut nonces = self.nonces.lock().unwrap_or_else(PoisonError::into_inner);
+
+        if nonces.at == nonces.bytes.len() {
+            getrandom::fill(&mut nonces.bytes)
+                .map_err(|error| self.io_error(io::Error::other(error)))?;
+            nonces.at = 0;
+        }
+
+        let mut nonce = [0u8; 24];
+        let at = nonces.at;
+
+        nonce.copy_from_slice(&nonces.bytes[at..at + 24]);
+        // Wiped as it is handed out, so that it cannot be handed out again.
+        nonces.bytes[at..at + 24].fill(0);
+        nonces.at = at + 24;
+
+        Ok(nonce)
+    }
+
     pub(crate) fn new(
         io: Arc<dyn FileIo>,
         page_size: usize,
@@ -45,6 +88,10 @@ impl Pager {
             page_size,
             path,
             cipher,
+            nonces: Mutex::new(Nonces {
+                bytes: [0; 24 * 32],
+                at: 24 * 32,
+            }),
         }
     }
 
@@ -98,11 +145,16 @@ impl Pager {
     /// Stores page `page`'s check at its end, encrypting it first in an
     /// encrypted file, and returns the check.
     pub(crate) fn seal(&self, page: u64, bytes: &mut [u8]) -> Result<Check> {
-        let mut checks = Vec::with_capacity(1);
+        // One page, as a commit seals each node of a tree: no list of
+        // checks, and no list of nonces, to make for it.
+        match &self.cipher {
+            None => Ok(seal(page, bytes)),
+            Some(cipher) => {
+                let nonce = self.nonce()?;
 
-        self.seal_run(page, bytes, &mut checks)?;
-
-        Ok(checks[0])
+                Ok(cipher.seal(page, bytes, nonce))
+            }
+        }
     }
 
     /// [`seal`](Self::seal) for each page of `bytes`, consecutive pages from
@@ -291,5 +343,25 @@ impl Pager {
             path: self.path.clone(),
             source,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use crate::storage::sim::SimDisk;
+
+    /// Nonces drawn ahead are still each used once, across the refills of
+    /// the bytes they come from.
+    #[test]
+    fn no_nonce_is_handed_out_twice() {
+        let disk: Arc<dyn FileIo> = Arc::new(SimDisk::default());
+        let pager = Pager::new(disk, 4096, PathBuf::from("test.darudb"), None);
+        let nonces: HashSet<[u8; 24]> = (0..100).map(|_| pager.nonce().unwrap()).collect();
+
+        assert_eq!(nonces.len(), 100);
+        assert!(!nonces.contains(&[0; 24]));
     }
 }
