@@ -331,3 +331,17 @@ def test_a_cancelled_call_ends_before_the_transaction_goes_on(path: Path) -> Non
                 assert await read.collection(User).count() == 22000
 
     run(main())
+
+
+def test_several_keys_are_read_in_their_order(path: Path) -> None:
+    async def main() -> None:
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            async with db.write_async() as txn:
+                await txn.collection(User).insert_many([User(name=f"u{n}") for n in range(3)])
+
+            async with db.read_async() as txn:
+                found = await txn.collection(User).get_many([2, 0, 1])
+
+            assert [user.name if user else None for user in found] == ["u1", None, "u0"]
+
+    run(main())

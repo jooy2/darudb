@@ -307,6 +307,66 @@ impl NativeTransaction {
         }
     }
 
+    /// The objects of `collection` whose primary keys are `keys`, in the
+    /// order of the keys, with `None` where no object has a key: every key
+    /// looked up in one call, with the interpreter released once.
+    fn get_many<'py>(
+        &self,
+        py: Python<'py>,
+        collection: &str,
+        layout: Option<&Bound<'py, Layout>>,
+        keys: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let keys = keys
+            .try_iter()?
+            .map(|item| key(&item?))
+            .collect::<PyResult<Vec<Value>>>()?;
+        let list = PyList::empty(py);
+        let Some(layout) = layout.map(Bound::get) else {
+            let found = self.with(py, |txn| {
+                let reader = txn.reader(collection)?;
+
+                keys.into_iter()
+                    .map(|key| reader.object(key))
+                    .collect::<darudb::Result<Vec<_>>>()
+            })?;
+
+            for object in &found {
+                match object {
+                    Some(object) => list.append(dict_of(py, object)?)?,
+                    None => list.append(py.None())?,
+                }
+            }
+
+            return Ok(list);
+        };
+        let (shape, records, found) = self.with(py, |txn| {
+            let reader = txn.reader(collection)?;
+            let mut records = Records::default();
+            let mut found = Vec::with_capacity(keys.len());
+
+            for key in keys {
+                found.push(reader.record(key, &mut records)?);
+            }
+
+            Ok((reader.shape(layout)?, records, found))
+        })?;
+        let mut records = records.iter();
+        let mut values = Vec::new();
+
+        for found in found {
+            // A key with no object left no record to take.
+            match found.then(|| records.next()).flatten() {
+                Some(record) => {
+                    list.append(layout.read_record(py, &shape, record, &mut values)?)?;
+                }
+                None => list.append(py.None())?,
+            }
+        }
+
+        Ok(list)
+    }
+
     /// The objects `query` finds, with `parameters` for its parameters.
     fn find<'py>(
         &self,

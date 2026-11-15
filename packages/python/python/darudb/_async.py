@@ -286,6 +286,15 @@ class AsyncReadCollection(Generic[T]):
 
         return found
 
+    async def get_many(self, keys: Iterable[Key]) -> list[T | None]:
+        """The objects whose primary keys are ``keys``, in the order of the
+        keys, with None where no object has a key."""
+        found: list[T | None] = await self._order.call(
+            self._txn.get_many, self._resolved.name, self._resolved.layout, list(keys)
+        )
+
+        return found
+
     async def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]:
         """The objects a query finds, in its order: every object without one."""
         native = native_query(query, self._resolved, self._schema)

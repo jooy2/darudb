@@ -299,6 +299,14 @@ class ReadCollection(Generic[T]):
 
         return found
 
+    def get_many(self, keys: Iterable[Key]) -> list[T | None]:
+        """The objects whose primary keys are ``keys``, in the order of the
+        keys, with None where no object has a key: one call into the engine,
+        where a loop of ``get`` makes one a key."""
+        found: list[T | None] = self._txn.get_many(self._resolved.name, self._resolved.layout, keys)
+
+        return found
+
     def find(self, query: QueryInput = None, /, *parameters: object) -> list[T]:
         """The objects a query finds, in its order: every object without one.
 

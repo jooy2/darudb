@@ -421,3 +421,21 @@ def test_a_field_reference_is_not_iterable() -> None:
 
     with pytest.raises(TypeError):
         iter(F)  # type: ignore[call-overload]
+
+
+def test_several_keys_are_read_in_their_order(db: darudb.Database) -> None:
+    with db.write() as txn:
+        users = txn.collection(User)
+
+        users.insert_many([User(name=f"u{n}") for n in range(5)])
+
+        found = users.get_many([3, 99, 1, 3])
+
+        assert [user.name if user else None for user in found] == ["u2", None, "u0", "u2"]
+        assert users.get_many([]) == []
+        assert [user.name for user in users.get_many(iter([5])) if user] == ["u4"]
+
+        with pytest.raises(DaruError) as error:
+            users.get_many(["a"])  # type: ignore[list-item]
+
+        assert error.value.code == "INVALID_ARGUMENT"
