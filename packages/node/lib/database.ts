@@ -80,6 +80,7 @@ interface OpenOptions<M> extends Secret {
   maxUnsyncedPages?: number;
   maxUnsyncedTime?: number;
   upgradeFormat?: boolean;
+  readOnly?: boolean;
   schema?: DeclaredSchema;
   migrations?: Migration<M>[];
   passwordHashing?: { memoryKib: number; iterations: number; parallelism: number };
@@ -441,6 +442,7 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     maxUnsyncedPages,
     maxUnsyncedTime,
     upgradeFormat,
+    readOnly,
     schema,
     migrations = [],
     passwordHashing
@@ -474,6 +476,7 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     maxUnsyncedPages,
     maxUnsyncedTime,
     upgradeFormat,
+    readOnly,
     schema: schema === undefined ? undefined : toBuffer(encodeSchema(schema)),
     migrations: migrations.map(nativeMigration),
     passwordHashing
@@ -728,6 +731,11 @@ class Database {
   /** The file format version recorded in the file: 6, or 5 for one opening did not raise. */
   get formatVersion(): number {
     return this.#database().formatVersion;
+  }
+
+  /** Whether the database was opened read-only, with the option `readOnly`. */
+  get isReadOnly(): boolean {
+    return this.#database().isReadOnly;
   }
 
   /** Whether the file is encrypted. */

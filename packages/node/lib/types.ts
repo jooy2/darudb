@@ -733,6 +733,20 @@ export interface OpenOptions<S = Schema> {
    * options of the first.
    */
   upgradeFormat?: boolean;
+  /**
+   * Whether the database is opened read-only: nothing done through it
+   * changes the file. `false` by default. A read-only database reads,
+   * checks and backs up; `write`, `compact`, `upgradeFormat`, `setKey`,
+   * `setPassword` and their `Async` twins fail with `READ_ONLY`, and so
+   * does opening with a schema the file does not hold already, since
+   * storing one or migrating to it writes. Nothing is created: a path with
+   * no database fails with `NOT_FOUND`. A file left by a process that died
+   * or by a power cut may need recovery, which writes to it, and is refused
+   * with `READ_ONLY` until it has been opened once without this option. The
+   * process still needs write access to the file, which the locks that
+   * coordinate processes use.
+   */
+  readOnly?: boolean;
   /** The collections the database holds. */
   schema?: S;
   /** How an older schema version becomes this one. */
@@ -807,6 +821,8 @@ export interface Database<S extends Schema<any> = Schema> {
    * writes, or 5 for a file that opening did not raise (`upgradeFormat`).
    */
   readonly formatVersion: number;
+  /** Whether the database was opened read-only, with the option `readOnly`. */
+  readonly isReadOnly: boolean;
   /** Whether the file is encrypted. */
   readonly isEncrypted: boolean;
   /**

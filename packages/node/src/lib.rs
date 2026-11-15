@@ -179,6 +179,8 @@ pub struct NativeOptions {
     /// Whether opening a file in an older format version raises it to the
     /// newest one.
     pub upgrade_format: Option<bool>,
+    /// Whether the handle is read-only: nothing it does writes to the file.
+    pub read_only: Option<bool>,
 }
 
 /// What hashing a password costs: Argon2id memory in KiB, iterations and
@@ -572,6 +574,10 @@ fn open_options(options: NativeOptions) -> Result<darudb::OpenOptions> {
         open_options.password_hashing(cost.memory_kib, cost.iterations, cost.parallelism);
     }
 
+    if let Some(read_only) = options.read_only {
+        open_options.read_only(read_only);
+    }
+
     if let Some(upgrade) = options.upgrade_format {
         open_options.upgrade_format(upgrade);
     }
@@ -659,6 +665,11 @@ impl NativeDatabase {
     #[napi(getter)]
     pub fn format_version(&self) -> Result<u32> {
         Ok(self.database()?.format_version())
+    }
+
+    #[napi(getter)]
+    pub fn is_read_only(&self) -> Result<bool> {
+        Ok(self.database()?.is_read_only())
     }
 
     #[napi(getter)]

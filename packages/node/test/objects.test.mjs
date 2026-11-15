@@ -1856,4 +1856,48 @@ describe('values at the edges', () => {
       20
     );
   });
+
+  it('open read-only: read, and refuse what would write', async (context) => {
+    const path = tempPath(context);
+    const users = schema(1, { users: collection({ name: t.string() }) });
+
+    assertCode(() => Database.open(path, { readOnly: true }), 'NOT_FOUND');
+
+    const writer = Database.open(path, { schema: users });
+
+    writer.write((txn) => txn.collection('users').insert({ name: 'a' }));
+
+    const reader = Database.open(path, { schema: users, readOnly: true });
+
+    context.after(() => reader.close());
+    assert.equal(reader.isReadOnly, true);
+    assert.equal(writer.isReadOnly, false);
+    assert.equal(
+      reader.read((txn) => txn.collection('users').count()),
+      1
+    );
+    assertCode(() => reader.write(() => {}), 'READ_ONLY');
+    assertCode(() => reader.compact(), 'READ_ONLY');
+    assertCode(() => reader.upgradeFormat(), 'READ_ONLY');
+    await assert.rejects(
+      reader.writeAsync(() => {}),
+      { code: 'READ_ONLY' }
+    );
+    reader.sync();
+
+    // The handle beside it writes, and this one reads what it commits.
+    writer.write((txn) => txn.collection('users').insert({ name: 'b' }));
+    assert.equal(await reader.readAsync((txn) => txn.collection('users').count()), 2);
+    writer.close();
+
+    // A schema the file does not hold would have to be stored.
+    assertCode(
+      () =>
+        Database.open(path, {
+          readOnly: true,
+          schema: schema(2, { users: collection({ name: t.string(), age: t.int().default(0) }) })
+        }),
+      'READ_ONLY'
+    );
+  });
 });
