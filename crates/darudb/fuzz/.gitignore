@@ -1,0 +1,6 @@
+# What a fuzzing run builds, finds and keeps.
+target/
+corpus/
+artifacts/
+coverage/
+Cargo.lock

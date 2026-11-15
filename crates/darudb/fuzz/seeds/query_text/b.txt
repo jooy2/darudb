@@ -1,0 +1,1 @@
+ANY people.friend (age IN [1, 2, 3]) OR NOT (email IS NULL)

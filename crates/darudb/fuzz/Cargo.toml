@@ -1,0 +1,61 @@
+# Fuzz targets for what the engine reads from outside: query text, the IR and
+# the schema a binding hands it, records, and the file itself. Run with
+# `cargo +nightly fuzz run <target>` from `crates/darudb`; `README.md` here
+# says what each target does. A workspace of its own, since it needs a
+# nightly compiler and is never published.
+[package]
+name = "darudb-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+darudb = { path = ".." }
+# The fuzzer's entry point. MIT OR Apache-2.0 OR NCSA.
+libfuzzer-sys = "0.4.10"
+# A directory of its own for each process's files. MIT OR Apache-2.0.
+tempfile = "3.27.0"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "query_text"
+path = "fuzz_targets/query_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_ir"
+path = "fuzz_targets/query_ir.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "schema"
+path = "fuzz_targets/schema.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "record"
+path = "fuzz_targets/record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file"
+path = "fuzz_targets/file.rs"
+test = false
+doc = false
+bench = false

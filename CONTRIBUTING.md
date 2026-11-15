@@ -82,6 +82,8 @@ DARUDB_KILL_ROUNDS=500 cargo test -p darudb --release --test process_kill
 DARUDB_PROCESS_KILLS=300 cargo test -p darudb --release --lib processes
 ```
 
+What the engine reads from outside itself, a file, a query, a schema or a record a binding encodes, has fuzz targets in `crates/darudb/fuzz`, whose [README](crates/darudb/fuzz/README.md) says how to run them. They need a nightly compiler and `cargo-fuzz`, and the `run-fuzz` workflow runs each for a few minutes every week. Run the one a change touches for ten minutes or more before the change is merged: a change to `format/` or `btree/` the `file` target, one to the query language `query_text`.
+
 A change meant to make the engine faster comes with numbers from before and after it, on the same machine:
 
 ```bash

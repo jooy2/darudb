@@ -1,0 +1,55 @@
+name: run-fuzz
+
+# Runs each fuzz target of the engine for a few minutes: once a week, and
+# when the targets or what they feed change. A short run finds what a change
+# broke outright; `crates/darudb/fuzz/README.md` says how to run one longer.
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  pull_request:
+    branches: [main]
+    paths:
+      - crates/darudb/fuzz/**
+      - crates/darudb/src/format/**
+      - crates/darudb/src/query/ir.rs
+      - crates/darudb/src/query/parse.rs
+      - .github/workflows/run-fuzz.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.target }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [query_text, query_ir, schema, record, file]
+
+    defaults:
+      run:
+        working-directory: ./crates/darudb
+
+    steps:
+      - uses: actions/checkout@v5
+      # The targets need a nightly compiler, which nothing else here does.
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz
+        run: |
+          mkdir -p fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }}
+          cargo +nightly fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=240 -max_len=2048 -len_control=0 -rss_limit_mb=3072
+      # An input that failed, to run again where it can be looked into.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: crates/darudb/fuzz/artifacts

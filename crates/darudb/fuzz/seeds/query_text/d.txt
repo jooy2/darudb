@@ -1,0 +1,1 @@
+score BETWEEN 0.5 AND 2e3 AND `friend` != $0 SORT BY name, age

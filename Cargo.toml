@@ -7,6 +7,8 @@ members = [
   "packages/node",
   "packages/python",
 ]
+# The fuzz targets need a nightly compiler, and are a workspace of their own.
+exclude = ["crates/darudb/fuzz"]
 
 # What every crate in the repository shares. The version is not here: each
 # package versions on its own, so each manifest carries its own number.
