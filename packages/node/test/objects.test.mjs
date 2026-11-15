@@ -1900,4 +1900,57 @@ describe('values at the edges', () => {
       'READ_ONLY'
     );
   });
+
+  it('read several keys in one call, in their order', async (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, {
+        users: collection({ name: t.string() }),
+        notes: collection({ slug: t.string().primaryKey(), body: t.string() }),
+        blobs: collection({ id: t.bytes().primaryKey(), size: t.int() })
+      })
+    });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      txn
+        .collection('users')
+        .insertMany(Array.from({ length: 3000 }, (_, n) => ({ name: `u${n}` })));
+      txn.collection('notes').insertMany([
+        { slug: 'a', body: '1' },
+        { slug: 'b', body: '2' }
+      ]);
+      txn.collection('blobs').insert({ id: new Uint8Array([1, 2]), size: 2 });
+
+      const users = txn.collection('users');
+
+      assert.deepEqual(
+        users.getMany([3, 9999, 1, 3n]).map((user) => user?.name ?? null),
+        ['u2', null, 'u0', 'u2']
+      );
+      assert.deepEqual(users.getMany([]), []);
+      // More keys than one query looks up.
+      assert.equal(
+        users.getMany(Array.from({ length: 3000 }, (_, n) => 3000 - n)).filter(Boolean).length,
+        3000
+      );
+      assert.deepEqual(
+        txn
+          .collection('notes')
+          .getMany(['b', 'missing', 'a'])
+          .map((note) => note?.body ?? null),
+        ['2', null, '1']
+      );
+      assert.equal(txn.collection('blobs').getMany([new Uint8Array([1, 2])])[0].size, 2);
+      assertCode(() => users.getMany('1'), 'INVALID_ARGUMENT');
+      assertCode(() => users.getMany([null]), 'INVALID_ARGUMENT');
+    });
+
+    const found = await db.readAsync((txn) => txn.collection('users').getMany([2, 0, 1]));
+
+    assert.deepEqual(
+      found.map((user) => user?.name ?? null),
+      ['u1', null, 'u0']
+    );
+  });
 });

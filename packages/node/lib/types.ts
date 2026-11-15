@@ -447,6 +447,13 @@ export interface ReadCollection<O> {
   readonly name: string;
   /** The object whose primary key is `key`, or `null`. */
   get(key: Key): O | null;
+  /**
+   * The objects whose primary keys are `keys`, in the order of the keys,
+   * with `null` where no object has a key: one call into the engine for
+   * every 1024 keys, where a loop of `get` makes one a key. A key given
+   * twice gives the same object twice.
+   */
+  getMany(keys: readonly Key[]): (O | null)[];
   /** The objects a query finds, in its order; every object without one. */
   find(query?: QueryInput<O>): O[];
   /** The objects a query in the query language finds, with `$0`, `$1` and on. */
@@ -546,6 +553,8 @@ export interface AsyncReadCollection<O> {
   readonly name: string;
   /** The object whose primary key is `key`, or `null`. */
   get(key: Key): Promise<O | null>;
+  /** `getMany` of the synchronous API: the objects of `keys`, in their order. */
+  getMany(keys: readonly Key[]): Promise<(O | null)[]>;
   /** The objects a query finds, in its order; every object without one. */
   find(query?: QueryInput<O>): Promise<O[]>;
   /** The objects a query in the query language finds, with `$0`, `$1` and on. */

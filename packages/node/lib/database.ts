@@ -39,6 +39,8 @@ import {
   synchronous,
   nativeMigration,
   keyOf,
+  keyQueries,
+  inKeyOrder,
   lendParameters,
   irOf,
   required,
@@ -141,6 +143,23 @@ class ReadCollection {
     return typeof record === 'number'
       ? decodeRecord(this.#layout, scratch, false, record)
       : decodeRecord(this.#layout, record);
+  }
+
+  /**
+   * The objects whose primary keys are `keys`, in the order of the keys:
+   * `null` where no object has a key.
+   */
+  getMany(keys: readonly unknown[]): (Record<string, unknown> | null)[] {
+    const name = this.#layout.key.name;
+    const found: Record<string, unknown>[] = [];
+
+    for (const query of keyQueries(name, keys)) {
+      for (const object of this.find(query)) {
+        found.push(object);
+      }
+    }
+
+    return inKeyOrder(name, keys, found);
   }
 
   /** The objects a query finds, in its order; every object without one. */

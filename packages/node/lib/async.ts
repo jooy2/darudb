@@ -38,6 +38,8 @@ import type { CollectionLayout, SchemaLayout } from './codec.js';
 import {
   toBuffer,
   keyOf,
+  keyQueries,
+  inKeyOrder,
   irOf,
   required,
   aggregationOf,
@@ -538,6 +540,18 @@ class AsyncReadCollection {
 
     // A get resolves to the object's record, or null.
     return record === null ? null : decodeRecord(this.#layout, record as Buffer);
+  }
+
+  /**
+   * The objects whose primary keys are `keys`, in the order of the keys:
+   * `null` where no object has a key.
+   */
+  async getMany(keys: readonly unknown[]): Promise<(Record<string, unknown> | null)[]> {
+    const name = this.#layout.key.name;
+    // Called together, so that the batches go to the pool in one trip.
+    const found = await Promise.all(keyQueries(name, keys).map((query) => this.find(query)));
+
+    return inKeyOrder(name, keys, found.flat());
   }
 
   /** The objects a query finds, in its order; every object without one. */

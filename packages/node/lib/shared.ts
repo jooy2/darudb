@@ -168,6 +168,61 @@ function keyOf(key: unknown): Key {
   return key;
 }
 
+/** The most keys one query of `getMany` looks up. */
+const KEY_BATCH = 1024;
+
+/** A key as text that tells it from every other key, whatever its type. */
+function keyText(key: unknown): string {
+  if (typeof key === 'string') {
+    return `s${key}`;
+  }
+
+  if (key instanceof Uint8Array) {
+    return `b${Buffer.from(key.buffer, key.byteOffset, key.byteLength).toString('hex')}`;
+  }
+
+  // An int key reads as a number or, beyond 2^53, a `bigint`.
+  return `i${BigInt(key as number | bigint)}`;
+}
+
+/**
+ * The queries that find the objects of `keys` in a collection whose key is
+ * the field `name`, a batch of keys each: `getMany` is a lookup of several
+ * values of the primary key, which is one call into the engine a batch.
+ */
+function keyQueries(name: string, keys: unknown): Query[] {
+  if (!Array.isArray(keys)) {
+    throw invalid('the keys of `getMany` are an array');
+  }
+
+  const checked = keys.map(keyOf);
+  const queries: Query[] = [];
+
+  for (let at = 0; at < checked.length; at += KEY_BATCH) {
+    queries.push(new Query().where(name, 'in', checked.slice(at, at + KEY_BATCH)));
+  }
+
+  return queries;
+}
+
+/**
+ * The objects `found`, those of the queries `keyQueries` made, as `getMany`
+ * returns them: in the order of `keys`, `null` where no object has a key.
+ */
+function inKeyOrder(
+  name: string,
+  keys: readonly unknown[],
+  found: readonly Record<string, unknown>[]
+): (Record<string, unknown> | null)[] {
+  const byKey = new Map<string, Record<string, unknown>>();
+
+  for (const object of found) {
+    byKey.set(keyText(object[name]), object);
+  }
+
+  return keys.map((key) => byKey.get(keyText(key)) ?? null);
+}
+
 /** A query's parameters, checked: an array of single values or nulls. */
 function checkedParameters(parameters: unknown): readonly unknown[] {
   if (parameters === undefined) {
@@ -613,6 +668,8 @@ function describeSchema(layout: SchemaLayout): StoredSchema {
 }
 
 export {
+  keyQueries,
+  inKeyOrder,
   NoSchema,
   describeSchema,
   toBuffer,
