@@ -6,6 +6,9 @@
 
 ### Changed
 
+- A commit to an encrypted file draws the nonces of its pages from the operating system 32 at a time rather than one request a page: a deferred commit of one object takes about a sixth less processor time, 55.9 µs against 67.9 µs on an Apple M1 Max.
+- A write transaction begun while a read transaction of the process is open no longer reads every group of pages retired since that reader began, none of which it can reclaim. With a reader that began inside an unsynced window, a deferred commit of one object took 114 µs after twelve thousand commits, and takes 17 µs, as it does without the reader.
+- A writer does not decode, check and, in an encrypted file, authenticate again a commit record whose bytes it checked the last time it read the header, which is two of the three at each begin.
 - The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `OpenOptions::cache_size` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before, and a file is the same whichever platform opens it; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
 

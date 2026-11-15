@@ -105,6 +105,21 @@ Besides the writes, a commit takes and releases the writer lock (one `F_SETLK` e
 - **The turn lock test costs about 1%.** Removing it outright (`noturn.patch`, in the branch's history) made a deferred commit on an EPYC 7763 1.4% faster, with overlapping ranges. Testing it once a millisecond would keep the turn's bound and save less. A single call that takes the writer lock and fails while the turn is claimed would need the writer byte moved, since the bytes beside it are the open lock and the recovery lock, and moving it breaks running beside older versions. Left as it is.
 - **The snapshot test stays.** A write transaction reclaims the young part of the group the commit before it retired (`Locks::young_reclaimable` in `lock/mod.rs`), which is new at every commit, and only the operating system can say whether a snapshot of another process lies between the durable commit and that group: one `F_GETLK` per commit in the window. A transaction with no group to reclaim makes none already.
 
+### 4b. What a write transaction does besides its writes
+
+Measured on 2026-11-15 on the M1 Max with the A/B tools, one-object deferred commits on a file of 20,000 objects, each build against the one before it, by the thread's CPU time, and by its user time alone where that is said.
+
+Done:
+
+- **Nonces drawn 32 at a time** (`Nonces` in `storage/pager.rs`). A commit seals each node of its trees on its own, and each asked the operating system for 24 random bytes: in an encrypted file, a commit took 54.8 µs rather than 64.7 µs of processor time, 15.4% less, and 3.3% less in user time, since the request's time is the kernel's. Against the engine before this round, with the two changes below, 55.9 µs against 67.9 µs, 17.7% less. A plain file is as it was. The request is a system call on Linux too, so the gain should hold on the runners, which was not measured.
+- **The walk of the retained groups ends at the oldest reader of the process** (`WriteTransaction::begin`). With a read transaction that began inside an unsynced window, nothing the later commits retire can be reclaimed, and each begin read every such group, copying its key and value, to reclaim none: after 12,000 commits a commit took 114 µs, and it takes 17 µs. A reader in another process is not known without asking the operating system, and still costs the walk.
+- **A slot whose bytes a writer checked before is not checked again** (`Shared::records_in`): in an encrypted file, two of the three MACs of each begin, 3.6% of a commit in user time; in a plain file, within 0.1%.
+
+Tried and not kept:
+
+- **The slot a commit wrote, taken as checked** by the next writer, which would save the third MAC: 0.9% in an encrypted file and 1.0% in a plain one, inside what two builds of one engine differ by.
+- **Sealing one page without the list of checks and the list of nonces** was kept as part of the first item; alone it measured 1.5% and 1.1%.
+
 ### 5. Queries without an index
 
 LMDB scans several times faster in Rust, redb about twice as fast in Rust on an EPYC 7763 but level on a 9V45, Hive up to two and a half times in Dart, and SQLite 6 to 15% faster in Node.js, Dart and Python, before the changes below. A DaruDB record tags each field with an id and a type, so a scan steps over the fields before the one it tests; the stores ahead read fixed places, or, as SQLite, add up the sizes the record's header lists. Changing the record is a new format version, with a migration (`CLAUDE.md`, "The file format is released").
