@@ -162,6 +162,23 @@ external void darudb_name_free(Pointer<NativeName> name);
     Pointer<Buf>,
   )
 >()
+external int darudb_get_many(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> keys,
+  int keysLength,
+  Pointer<Buf> out,
+);
+
+@Native<
+  Int32 Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Pointer<Buf>,
+  )
+>()
 external int darudb_get(
   Pointer<NativeTransaction> txn,
   Pointer<NativeName> name,
@@ -565,6 +582,25 @@ external void darudb_set_password_async(
 external void darudb_commit_async(
   Pointer<NativeTransaction> txn,
   int deferred,
+  int id,
+  Pointer<NativeFunction<ResultCallback>> callback,
+);
+
+@Native<
+  Void Function(
+    Pointer<NativeTransaction>,
+    Pointer<NativeName>,
+    Pointer<Uint8>,
+    Size,
+    Int64,
+    Pointer<NativeFunction<ResultCallback>>,
+  )
+>()
+external void darudb_get_many_async(
+  Pointer<NativeTransaction> txn,
+  Pointer<NativeName> name,
+  Pointer<Uint8> keys,
+  int keysLength,
   int id,
   Pointer<NativeFunction<ResultCallback>> callback,
 );

@@ -466,6 +466,40 @@ pub unsafe extern "C" fn darudb_get_async(
     }
 }
 
+/// [`crate::darudb_get_many`] on a thread of the library.
+///
+/// # Safety
+///
+/// As [`crate::darudb_get_many`], without `out`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_get_many_async(
+    txn: *const Held,
+    name: *const String,
+    keys: *const u8,
+    keys_len: usize,
+    id: i64,
+    callback: Callback,
+) {
+    let arguments = || {
+        // SAFETY: the caller's promise for `name`.
+        let name = unsafe { name_of(name) }?;
+        // SAFETY: the caller's promise for `keys`.
+        let keys = ops::keys(unsafe { bytes(keys, keys_len) })?;
+
+        Ok((name, keys))
+    };
+
+    match caught(arguments) {
+        // SAFETY: the caller's promise for `txn`.
+        Ok((name, keys)) => unsafe {
+            on_txn(txn, id, callback, move |held, out| {
+                ops::get_many(held, &name, keys, out)
+            })
+        },
+        Err(failure) => refuse(id, callback, failure),
+    }
+}
+
 /// [`crate::darudb_find`] on a thread of the library.
 ///
 /// # Safety

@@ -709,6 +709,35 @@ pub unsafe extern "C" fn darudb_get(
     })
 }
 
+/// The records of the objects of collection `name` whose primary keys are
+/// the values at `keys`, one after another, in the order of the keys: for
+/// each, its record after the record's length plus one, or a zero where no
+/// object has the key.
+///
+/// # Safety
+///
+/// As [`darudb_get`], `keys` pointing to `keys_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn darudb_get_many(
+    txn: *const Held,
+    name: *const String,
+    keys: *const u8,
+    keys_len: usize,
+    out: *mut Buf,
+) -> i32 {
+    guard(|| {
+        // SAFETY: the caller's promise for `txn`.
+        let held = unsafe { at(txn, ops::ended) }?;
+        // SAFETY: the caller's promise for `name`.
+        let name = unsafe { name_at(name) }?;
+        // SAFETY: the caller's promise for `keys`.
+        let keys = ops::keys(unsafe { bytes(keys, keys_len) })?;
+
+        // SAFETY: the caller's promise for `out`.
+        unsafe { hand_out(out, |bytes| ops::get_many(held, name, keys, bytes)) }
+    })
+}
+
 /// The records of the objects the query whose IR is at `ir` finds, one after
 /// another, each after its length; only the first with `first`.
 ///

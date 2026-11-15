@@ -10,6 +10,7 @@
 
 ### Added
 
+- `getMany(keys)` on a collection, and on one of the `Future` API: the objects of several primary keys, in the order of the keys, with `null` where no object has a key. It is one call into the library, and with the `Future` API one trip to another thread, where a loop of `get` makes one a key.
 - Read-only databases: `readOnly: true` to `Database.open` and `Database.openAsync` opens a database through which the file never changes, and `isReadOnly` says so. It reads, checks and backs up; `write`, `compact`, `upgradeFormat`, `setKey`, `setPassword` and their `Future` forms fail with the new code `READ_ONLY`, and so does opening with a schema the file does not hold already. Nothing is created, and a file that needs recovery, left by a process that died or by a power cut, is refused with `READ_ONLY` until it has been opened once without the argument. The process still needs write access to the file; another `Database` of the file writes beside it as ever.
 - `maxUnsyncedPages` and `maxUnsyncedTime`, arguments of `Database.open` and `Database.openAsync`: how many pages deferred commits may write, and how long they may wait, before one of them is made durable anyway. 16384 pages and one second by default, as before.
 - `commitId` on a read transaction, and on one of the `Future` API: the id of the commit the transaction sees, which only grows, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another.

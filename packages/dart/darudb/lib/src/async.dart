@@ -345,6 +345,35 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
           );
   });
 
+  /// The objects whose primary keys are [keys], in the order of the keys,
+  /// with `null` where no object has a key: one trip to a thread of the
+  /// library for all of them.
+  Future<List<T?>> getMany(Iterable<K> keys) {
+    final list = keys.toList();
+
+    return _run((txn) async {
+      // A writer of its own: the call's bytes are copied when it is made.
+      final writer = Writer();
+
+      for (final key in list) {
+        writeKey(writer, key);
+      }
+
+      final reply = await _call(
+        (id, callback) => darudb_get_many_async(
+          txn,
+          _sync._known.name,
+          _io.load(writer.written),
+          writer.at,
+          id,
+          callback,
+        ),
+      );
+
+      return _sync._maybeRecords(reply.bytes);
+    });
+  }
+
   Future<List<T>> _find(
     QueryBuilder<T> Function(Q q)? query, {
     required bool first,

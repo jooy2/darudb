@@ -550,6 +550,51 @@ pub(crate) fn get(held: &Held, name: &str, key: darudb::Value, out: &mut Vec<u8>
     })
 }
 
+/// The primary keys in `bytes`, one tagged value after another.
+pub(crate) fn keys(bytes: &[u8]) -> Result<Vec<darudb::Value>> {
+    let mut reader = Reader::new(bytes);
+    let mut keys = Vec::new();
+
+    while !reader.is_empty() {
+        keys.push(reader.value()?.key()?);
+    }
+
+    Ok(keys)
+}
+
+/// The records of the objects of collection `name` whose primary keys are
+/// `keys`, in the order of the keys, into `out`: for each key, the record's
+/// length plus one and the record, or a zero where no object has the key.
+pub(crate) fn get_many(
+    held: &Held,
+    name: &str,
+    keys: Vec<darudb::Value>,
+    out: &mut Vec<u8>,
+) -> Result<i32> {
+    held.with(|txn| {
+        txn.reading(name, |collection| {
+            for key in keys {
+                let mut found = false;
+
+                collection.get_record_with(key, |record| {
+                    push_varint(out, record.len() as u64 + 1);
+                    out.extend_from_slice(record);
+                    found = true;
+
+                    Ok(())
+                })?;
+
+                if !found {
+                    out.push(0);
+                }
+            }
+
+            Ok(true)
+        })
+        .map(i32::from)
+    })
+}
+
 /// The records `query` finds on collection `name`, each after its length,
 /// into `out`.
 pub(crate) fn find(

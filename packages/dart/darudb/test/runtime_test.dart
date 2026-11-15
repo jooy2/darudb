@@ -571,6 +571,28 @@ void main() {
     reader.close();
   });
 
+  test('several keys are read in one call, in their order', () async {
+    db.write((txn) {
+      final users = txn.collection(userSchema);
+
+      users.insertMany([for (var n = 0; n < 5; n++) User(name: 'u$n')]);
+      expect(
+        [
+          for (final user in users.getMany([3, 99, 1, 3])) user?.name,
+        ],
+        ['u2', null, 'u0', 'u2'],
+      );
+      expect(users.getMany(const []), isEmpty);
+      expect(users.getMany([5, 4].where((key) => key > 4)).single?.name, 'u4');
+    });
+
+    final found = await db.readAsync(
+      (txn) => txn.collection(userSchema).getMany([2, 0, 1]),
+    );
+
+    expect([for (final user in found) user?.name], ['u1', null, 'u0']);
+  });
+
   test('a closed database refuses calls with CLOSED', () {
     db.close();
     expect(

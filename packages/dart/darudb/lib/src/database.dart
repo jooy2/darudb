@@ -1606,6 +1606,59 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     return _schema.decode(bytes, 0, bytes.length, _known.layout);
   }
 
+  /// The objects whose primary keys are [keys], in the order of the keys,
+  /// with `null` where no object has a key: one call into the library,
+  /// where a loop of [get] makes one a key.
+  List<T?> getMany(Iterable<K> keys) {
+    final handle = _txn._live();
+    // Read to its end before the shared writer is taken: what makes the
+    // keys may make calls of its own.
+    final list = keys is List<K> ? keys : keys.toList();
+    final writer = _io.writer..reset();
+
+    for (final key in list) {
+      writeKey(writer, key);
+    }
+
+    _check(
+      darudb_get_many(
+        handle,
+        _known.name,
+        _io.load(writer.written),
+        writer.at,
+        _io.out,
+      ),
+    );
+
+    return _maybeRecords(_io.outBytes());
+  }
+
+  /// The objects of the records [bytes] holds as `darudb_get_many` writes
+  /// them: each after its length plus one, a zero where there is none.
+  List<T?> _maybeRecords(Uint8List bytes) {
+    final reader = Reader(bytes);
+    final found = <T?>[];
+
+    while (!reader.isDone) {
+      final length = reader.varint();
+
+      if (length == 0) {
+        found.add(null);
+
+        continue;
+      }
+
+      final start = reader.at;
+
+      reader.at += length - 1;
+      found.add(
+        _schema.decode(bytes, start, start + length - 1, _known.layout),
+      );
+    }
+
+    return found;
+  }
+
   Q _built(QueryBuilder<T> Function(Q q)? query) {
     final builder = _schema.newQuery();
 
