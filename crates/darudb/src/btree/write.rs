@@ -706,7 +706,6 @@ fn run_reaches(reference: &OverflowRef, threshold: u64) -> bool {
 }
 
 /// Removes `key` and its value. Returns whether it was there. Nothing is
-/// copied when it was not./// Removes `key` and its value. Returns whether it was there. Nothing is
 /// copied when it was not.
 pub(crate) fn remove<L: Load, S: Store>(
     load: &L,
@@ -774,12 +773,13 @@ fn remove_one<L: Load, S: Store>(
     let Some(child) = root.as_mut() else {
         return Ok(false);
     };
-    let removed = remove_from(load, store, tree, child, None, take)?;
+    let (removed, split) = remove_from(load, store, tree, child, None, take)?;
 
     if let Some(run) = removed {
         release_run(store, run);
     }
 
+    grow_root(store, child, split)?;
     collapse_root(store, root)?;
 
     Ok(removed.is_some())
@@ -792,7 +792,7 @@ fn remove_from<L: Load, S: Store>(
     child: &mut Child,
     level: Option<u8>,
     take: Take<'_, '_>,
-) -> Result<Replaced> {
+) -> Result<(Replaced, Split)> {
     let Take {
         key,
         mut probe,
@@ -803,12 +803,13 @@ fn remove_from<L: Load, S: Store>(
     // known to be under it, nothing further down needs searching first.
     if probe && matches!(child, Child::Clean(_)) {
         if !contains_below(load, tree, child, level, key)? {
-            return Ok(None);
+            return Ok((None, None));
         }
 
         probe = false;
     }
 
+    let capacity = content_len(load.page_size());
     let node = make_dirty(load, store, child, tree, level)?;
 
     match node {
@@ -823,13 +824,13 @@ fn remove_from<L: Load, S: Store>(
                     }
                 }
 
-                Ok(Some(leaf.remove(index).map_err(internal)?))
+                Ok((Some(leaf.remove(index).map_err(internal)?), None))
             }
-            Err(_) => Ok(None),
+            Err(_) => Ok((None, None)),
         },
         Node::Branch(branch) => {
             let index = branch.keys.child_index(key);
-            let removed = remove_from(
+            let (removed, split) = remove_from(
                 load,
                 store,
                 tree,
@@ -838,12 +839,27 @@ fn remove_from<L: Load, S: Store>(
                 Take { key, probe, visit },
             )?;
 
-            // A child nothing was removed from is the size it was.
+            // A child that split is not small, and a child nothing was
+            // removed from is the size it was.
+            if split.is_some() {
+                return Ok((removed, take_split(store, branch, index, split, capacity)?));
+            }
+
             if removed.is_some() {
                 rebalance(load, store, tree, branch, index)?;
             }
 
-            Ok(removed)
+            // Sharing two children's entries out again gives the branch a
+            // new key between them, which may be longer than the one it
+            // replaces: a removal can make a branch outgrow its page, as an
+            // insert can, and the branch splits the same way.
+            let split = if branch.keys.branch_len() > capacity {
+                Some(split_branch(store, branch, capacity, None)?)
+            } else {
+                None
+            };
+
+            Ok((removed, split))
         }
     }
 }

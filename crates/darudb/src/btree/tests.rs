@@ -972,6 +972,98 @@ fn a_change_copies_a_node_older_than_the_window() {
     assert_eq!(harness.get(&[100]), Some(vec![1; 8]));
 }
 
+/// Sharing two leaves' entries out again after a removal gives their parent
+/// a new key between them, which may be longer than the one it replaces. A
+/// parent that was nearly full then no longer fits its page, and has to
+/// split, as it does when an insert gives it a key.
+#[test]
+fn a_removal_that_lengthens_a_separator_splits_a_full_branch() {
+    let mut harness = Harness::new(4096);
+    let value = vec![7u8; 990];
+
+    // Four entries to a leaf, and a root left two bytes short of full.
+    for key in 0u16..424 {
+        harness.insert(&key.to_be_bytes(), &value);
+    }
+
+    harness.commit();
+    assert_eq!(harness.check_structure(), 424);
+
+    // A long key in the second leaf, then removals from the first until it
+    // is small: the two no longer fit one page, and the key that parts them
+    // is the long one.
+    let mut long = vec![0u8, 5];
+
+    long.extend([0xAA; 200]);
+    assert!(harness.remove(&5u16.to_be_bytes()));
+    harness.insert(&long, &[9u8; 700]);
+
+    for key in [1u16, 2, 3] {
+        assert!(harness.remove(&key.to_be_bytes()));
+    }
+
+    harness.commit();
+    assert_eq!(harness.check_structure(), 421);
+    assert_eq!(harness.get(&long), Some(vec![9u8; 700]));
+    assert_eq!(harness.get(&423u16.to_be_bytes()), Some(value));
+}
+
+/// Keys of very different lengths, removed and inserted in turn in a tree
+/// whose branches are full, so that removals keep replacing the keys of
+/// branches with little room left.
+#[test]
+fn removals_among_keys_of_many_lengths_keep_every_branch_within_its_page() {
+    for seed in 0..6 {
+        let mut rng = Rng::new(1000 + seed);
+        let mut harness = Harness::new(4096);
+        let mut model = BTreeMap::new();
+        let key_of = |rng: &mut Rng| {
+            let mut key = u32::try_from(rng.below(20_000))
+                .unwrap()
+                .to_be_bytes()
+                .to_vec();
+
+            // A key in four is long.
+            if rng.below(4) == 0 {
+                key.extend(vec![0xAA; 1 + rng.index(300)]);
+            }
+
+            key
+        };
+
+        for round in 0..30 {
+            for _ in 0..400 {
+                let key = key_of(&mut rng);
+
+                // Removals outnumber inserts once the tree has grown.
+                if round >= 10 && rng.below(3) != 0 {
+                    let near = model
+                        .range::<Vec<u8>, _>(&key..)
+                        .next()
+                        .map(|(key, _): (&Vec<u8>, &Vec<u8>)| key.clone());
+
+                    if let Some(near) = near {
+                        assert!(harness.remove(&near), "seed {seed}");
+                        model.remove(&near);
+                    }
+                } else {
+                    let value = vec![u8::try_from(rng.below(250)).unwrap(); 200 + rng.index(700)];
+
+                    harness.insert(&key, &value);
+                    model.insert(key, value);
+                }
+            }
+
+            harness.commit();
+            assert_eq!(harness.check_structure(), model.len(), "seed {seed}");
+        }
+
+        for (key, value) in &model {
+            assert_eq!(harness.get(key).as_ref(), Some(value), "seed {seed}");
+        }
+    }
+}
+
 #[test]
 fn removing_everything_empties_the_tree_and_frees_its_pages() {
     let mut rng = Rng::new(99);

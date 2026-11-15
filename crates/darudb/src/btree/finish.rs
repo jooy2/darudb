@@ -74,6 +74,13 @@ pub(crate) fn finish(
             let header = header(PageKind::Branch, level, keys.len(), txn, tree)?;
             let size = keys.branch_len();
 
+            // Every change that adds to a branch splits it when it no
+            // longer fits. A branch that got past that would be written
+            // over its own slots, so the commit fails rather than write it.
+            if size > crate::format::content_len(pager.page_size()) {
+                return Err(internal("a branch larger than its page"));
+            }
+
             // A branch whose keys are those of the page it was read from
             // keeps the page, whose children are all that changed.
             let (bytes, heads) = match keys.into_page() {
