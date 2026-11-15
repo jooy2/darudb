@@ -260,7 +260,10 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
                 options.busy_timeout(std::time::Duration::from_millis(milliseconds));
             }
             4 => {
-                options.cache_size(usize::try_from(value.int()?).unwrap_or(usize::MAX));
+                let bytes =
+                    u64::try_from(value.int()?).map_err(|_| invalid("a negative cache size"))?;
+
+                options.cache_size(usize::try_from(bytes).unwrap_or(usize::MAX));
             }
             5 => {
                 options.schema(darudb::Schema::decode(value.bytes()?)?);

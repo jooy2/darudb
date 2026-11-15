@@ -602,6 +602,39 @@ void main() {
       [2],
     );
   });
+
+  test('a default of a list of floats may be written with whole numbers', () {
+    final weighted = CollectionSchema<Object?, QueryBuilder<Object?>, Object>(
+      name: 'weighted',
+      fields: const [
+        FieldSpec('id', IntKind(), primaryKey: true),
+        FieldSpec('weights', ListKind(FloatKind()), defaultValue: [1, 2.5]),
+      ],
+      autoKey: false,
+      writeField: _nothing,
+      read: _none,
+      query: () => throw UnsupportedError('no query here'),
+    );
+    final db = Database.open(
+      '${directory.path}/weighted.darudb',
+      schema: Schema(1, [weighted]),
+    );
+
+    expect(db.storedSchema!.collections.single.fields.last.defaultValue, [
+      1.0,
+      2.5,
+    ]);
+    db.close();
+  });
+
+  test('a negative cache size is refused', () {
+    expect(
+      () => Database.open('${directory.path}/cache.darudb', cacheSize: -1),
+      throwsA(
+        isA<DaruException>().having((e) => e.code, 'code', 'INVALID_ARGUMENT'),
+      ),
+    );
+  });
 }
 
 void _nothing(Object? object, int slot, FieldSink sink) {}

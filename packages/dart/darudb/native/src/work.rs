@@ -68,7 +68,12 @@ fn spawn(job: Job) {
 
     if state.idle > 0 {
         pool.ready.notify_one();
-    } else if state.threads < MOST_THREADS {
+    }
+
+    // A thread counts as idle until it wakes, so with jobs queued for every
+    // idle thread already, this one would wait behind one of them: behind a
+    // write waiting for the writer, whose holder's next call this may be.
+    if state.jobs.len() > state.idle && state.threads < MOST_THREADS {
         let started = std::thread::Builder::new()
             .name("darudb-dart".to_owned())
             .spawn(work);

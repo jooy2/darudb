@@ -1414,8 +1414,18 @@ void writeDefault(Writer writer, Kind kind, Object? value, String where) {
       ..byte(Tag.list)
       ..varint(value.length);
 
+    // A list of floats written with whole numbers, `const [1, 2]`, is a
+    // list of ints in Dart, as a float field's default may be an int.
+    final floats = kind is ListKind && kind.element is FloatKind;
+
     for (final element in value) {
-      writeElement(writer, element);
+      if (floats && element is int) {
+        writer
+          ..byte(Tag.float)
+          ..float(element.toDouble());
+      } else {
+        writeElement(writer, element);
+      }
     }
   } else {
     writeElement(writer, value);

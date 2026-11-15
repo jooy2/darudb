@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- A call of the `Future` API refused before it reaches the library, as `syncAsync` on a closed database is, no longer keeps the isolate alive: a program that made one did not exit when `main` returned.
+- Calls of the `Future` API made at the same moment each get a thread while fewer than 64 are busy. Two calls made before an idle thread woke shared that thread, so the second waited for the first, for the busy timeout when the first was a write waiting for the writer the second belonged to.
+- A default of a list of floats written with whole numbers, `const [1, 2]`, is stored as floats, as a float field's own default is. The database failed to open with `INVALID_ARGUMENT`.
+- A negative `cacheSize` fails with `INVALID_ARGUMENT`, where it asked for all the memory there is.
 - A timer, a `then` or a listener that a `writeAsync` function started may write to the file once that write is over. It was refused with `INVALID_ARGUMENT`, as a write nested in the function is, for as long as it lived.
 - A call made from inside another call's function no longer overwrites what that call was encoding. A `count` or `find` made in the function that gives `updateWhere` or `update` its changes, or in a query's function, replaced the outer call's query, so `updateWhere` changed the objects of the inner query; and an iterable given to `insertMany` or `putMany` that inserted as it was read lost objects and stored one twice.
 - A transaction that is still running when its database is closed goes on reading and writing safely until its function ends. `close` freed what the transaction's collections name their collection with, so `get`, `insert`, `put`, `update` and `delete` on such a collection read freed memory, which could fail with a wrong error or crash. It happened when `close` or `closeAsync` ran while a `readAsync` function was between two awaits.

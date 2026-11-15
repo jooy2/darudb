@@ -85,7 +85,21 @@ Future<_Reply> _call(
 
   _waiting[id] = completer;
   listener.keepIsolateAlive = true;
-  submit(id, listener.nativeFunction);
+
+  // A call refused before it reaches the library, as one on a closed
+  // database is, has no reply to wait for: left waiting, it would keep the
+  // isolate alive for good.
+  try {
+    submit(id, listener.nativeFunction);
+  } on Object {
+    _waiting.remove(id);
+
+    if (_waiting.isEmpty) {
+      listener.keepIsolateAlive = false;
+    }
+
+    rethrow;
+  }
 
   return completer.future;
 }
