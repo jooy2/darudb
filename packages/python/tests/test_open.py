@@ -260,3 +260,47 @@ def test_the_format_version_is_raised_on_the_thread_pool(tmp_path: Path) -> None
         await db.close_async()
 
     asyncio.run(main())
+
+
+def test_the_limits_of_deferred_commits_are_options(path: Path) -> None:
+    for wrong in (-1, 1.5, "8", True):
+        with pytest.raises(DaruError) as error:
+            darudb.Database.open(path, max_unsynced_pages=wrong)  # type: ignore[arg-type]
+
+        assert error.value.code == "INVALID_ARGUMENT"
+
+    for wrong in (-1, float("inf"), "1", True):
+        with pytest.raises(DaruError) as error:
+            darudb.Database.open(path, max_unsynced_time=wrong)  # type: ignore[arg-type]
+
+        assert error.value.code == "INVALID_ARGUMENT"
+
+    with darudb.Database.open(
+        path, schema=SCHEMA, max_unsynced_pages=4, max_unsynced_time=0.05
+    ) as db:
+        for n in range(20):
+            with db.write(durability="deferred") as txn:
+                txn.collection(User).insert(User(name=f"u{n}"))
+
+        with db.read() as txn:
+            assert txn.collection(User).count() == 20
+
+
+def test_a_read_transaction_has_the_id_of_its_commit(path: Path) -> None:
+    with darudb.Database.open(path, schema=SCHEMA) as db:
+        with db.read() as txn:
+            before = txn.commit_id
+
+        with db.read() as txn:
+            assert txn.commit_id == before
+
+        with db.write() as txn:
+            txn.collection(User).insert(User(name="a"))
+
+            with pytest.raises(DaruError) as error:
+                _ = txn.commit_id
+
+            assert error.value.code == "INVALID_ARGUMENT"
+
+        with db.read() as txn:
+            assert txn.commit_id > before

@@ -48,6 +48,8 @@ _Secret = bytes | bytearray | memoryview | str
 class NativeTransaction:
     @property
     def is_open(self) -> bool: ...
+    @property
+    def commit_id(self) -> int: ...
     def without_schema(self) -> None: ...
     def get(self, collection: str, layout: Layout | None, key: Any) -> Any: ...
     def find(
@@ -145,6 +147,8 @@ def open(
     page_size: int | None = None,
     busy_timeout: float | None = None,
     cache_size: int | None = None,
+    max_unsynced_pages: int | None = None,
+    max_unsynced_time: float | None = None,
     schema: NativeSchema | None = None,
     migrations: list[Any] = ...,
     key: _Secret | None = None,

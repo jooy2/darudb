@@ -329,6 +329,8 @@ fn check_report<'py>(py: Python<'py>, report: &CheckReport) -> PyResult<Bound<'p
     page_size = None,
     busy_timeout = None,
     cache_size = None,
+    max_unsynced_pages = None,
+    max_unsynced_time = None,
     schema = None,
     migrations = Vec::new(),
     key = None,
@@ -347,6 +349,8 @@ fn open<'py>(
     page_size: Option<u32>,
     busy_timeout: Option<f64>,
     cache_size: Option<usize>,
+    max_unsynced_pages: Option<u64>,
+    max_unsynced_time: Option<f64>,
     schema: Option<&Bound<'py, NativeSchema>>,
     migrations: Vec<MigrationSpec>,
     key: Option<&Bound<'py, PyAny>>,
@@ -372,6 +376,14 @@ fn open<'py>(
 
     if let Some(bytes) = cache_size {
         options.cache_size(bytes);
+    }
+
+    if let Some(pages) = max_unsynced_pages {
+        options.max_unsynced_pages(pages);
+    }
+
+    if let Some(seconds) = max_unsynced_time {
+        options.max_unsynced_time(timeout_of(py, seconds)?);
     }
 
     if let Some(schema) = schema {

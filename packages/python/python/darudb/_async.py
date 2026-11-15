@@ -449,6 +449,14 @@ class AsyncReadTransaction:
         self._schema = schema
         self._order = _Ordered()
 
+    @property
+    def commit_id(self) -> int:
+        """The id of the commit the transaction sees. It only grows from one
+        commit to the next, so a larger one than an earlier transaction saw
+        says that something was committed in between, by this process or
+        another."""
+        return self._native.commit_id
+
     def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema | None]:
         if self._schema is None:
             # The file's own schema, whose collections are reached by name.
@@ -671,6 +679,8 @@ async def open_async(
     page_size: int | None,
     busy_timeout: float | None,
     cache_size: int | None,
+    max_unsynced_pages: int | None,
+    max_unsynced_time: float | None,
     key: bytes | bytearray | memoryview | None,
     password: str | bytes | bytearray | None,
     password_hashing: PasswordHashing | None,
@@ -682,6 +692,8 @@ async def open_async(
         page_size=page_size,
         busy_timeout=busy_timeout,
         cache_size=cache_size,
+        max_unsynced_pages=max_unsynced_pages,
+        max_unsynced_time=max_unsynced_time,
         password_hashing=password_hashing,
         upgrade_format=upgrade_format,
     )
@@ -694,6 +706,8 @@ async def open_async(
             page_size=page_size,
             busy_timeout=busy_timeout,
             cache_size=cache_size,
+            max_unsynced_pages=max_unsynced_pages,
+            max_unsynced_time=max_unsynced_time,
             schema=None if schema is None else schema._native,
             migrations=[migration.spec() for migration in migrations],
             key=key,

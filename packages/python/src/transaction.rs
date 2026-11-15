@@ -248,6 +248,19 @@ impl NativeTransaction {
             .is_some()
     }
 
+    /// The transaction id of the commit a read transaction sees, which only
+    /// grows from one commit to the next.
+    #[getter]
+    fn commit_id(&self, py: Python<'_>) -> PyResult<u64> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+
+        match held.as_ref() {
+            Some(Txn::Read(read)) => Ok(read.commit_id()),
+            Some(_) => Err(invalid(py, "only a read transaction sees one commit")),
+            None => Err(failure(py, "CLOSED", "the transaction has ended")),
+        }
+    }
+
     /// Raises the engine's error for reaching a collection in a transaction
     /// of a database without a schema: the file holds none, the one it holds
     /// does not read, or it stored one after the database opened. Does

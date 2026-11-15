@@ -458,6 +458,14 @@ class ReadTransaction:
         self._native = native
         self._schema = schema
 
+    @property
+    def commit_id(self) -> int:
+        """The id of the commit the transaction sees. It only grows from one
+        commit to the next, so a larger one than an earlier transaction saw
+        says that something was committed in between, by this process or
+        another."""
+        return self._native.commit_id
+
     def _resolved(self, collection: type[Any] | str) -> tuple[Resolved, Schema | None]:
         if self._schema is None:
             # The file's own schema, whose collections are reached by name.
@@ -667,6 +675,8 @@ def check_options(
     page_size: object = None,
     busy_timeout: object = None,
     cache_size: object = None,
+    max_unsynced_pages: object = None,
+    max_unsynced_time: object = None,
     password_hashing: object = None,
     upgrade_format: object = True,
 ) -> None:
@@ -686,6 +696,18 @@ def check_options(
 
     if cache_size is not None:
         whole("cache_size", cache_size)
+
+    if max_unsynced_pages is not None:
+        whole("max_unsynced_pages", max_unsynced_pages)
+
+    if max_unsynced_time is not None and not (
+        isinstance(max_unsynced_time, int | float)
+        and not isinstance(max_unsynced_time, bool)
+        and 0 <= max_unsynced_time < float("inf")
+    ):
+        raise invalid(
+            f"max_unsynced_time is a number of seconds from 0 up, not {max_unsynced_time!r}"
+        )
 
     if busy_timeout is not None and not (
         isinstance(busy_timeout, int | float)
@@ -765,6 +787,8 @@ class Database:
         page_size: int | None = None,
         busy_timeout: float | None = None,
         cache_size: int | None = None,
+        max_unsynced_pages: int | None = None,
+        max_unsynced_time: float | None = None,
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
@@ -780,7 +804,12 @@ class Database:
         - ``busy_timeout``: how long, in seconds, opening and a write wait for
           another process's writer before failing with ``BUSY``. 5 by default.
         - ``cache_size``: how much memory the page cache may take, in bytes.
-          32 MiB by default.
+          128 MiB by default and 256 MiB at most, or 32 MiB for both on a
+          phone.
+        - ``max_unsynced_pages``: how many pages deferred commits may write
+          before one of them is made durable anyway. 16384 by default.
+        - ``max_unsynced_time``: how long, in seconds, deferred commits may go
+          without being made durable. 1 by default.
         - ``key`` or ``password``: encrypts a new database, or opens an
           encrypted one. A key is 32 bytes; a password is hashed with Argon2id
           at the cost ``password_hashing`` sets.
@@ -801,6 +830,8 @@ class Database:
             page_size=page_size,
             busy_timeout=busy_timeout,
             cache_size=cache_size,
+            max_unsynced_pages=max_unsynced_pages,
+            max_unsynced_time=max_unsynced_time,
             password_hashing=password_hashing,
             upgrade_format=upgrade_format,
         )
@@ -811,6 +842,8 @@ class Database:
             page_size=page_size,
             busy_timeout=busy_timeout,
             cache_size=cache_size,
+            max_unsynced_pages=max_unsynced_pages,
+            max_unsynced_time=max_unsynced_time,
             schema=None if schema is None else schema._native,
             migrations=[migration.spec() for migration in migrations],
             key=key,
@@ -835,6 +868,8 @@ class Database:
         page_size: int | None = None,
         busy_timeout: float | None = None,
         cache_size: int | None = None,
+        max_unsynced_pages: int | None = None,
+        max_unsynced_time: float | None = None,
         key: bytes | bytearray | memoryview | None = None,
         password: str | bytes | bytearray | None = None,
         password_hashing: PasswordHashing | None = None,
@@ -853,6 +888,8 @@ class Database:
             page_size=page_size,
             busy_timeout=busy_timeout,
             cache_size=cache_size,
+            max_unsynced_pages=max_unsynced_pages,
+            max_unsynced_time=max_unsynced_time,
             key=key,
             password=password,
             password_hashing=password_hashing,

@@ -4,6 +4,11 @@
 
 ## vNext (2026--)
 
+### Added
+
+- `max_unsynced_pages` and `max_unsynced_time`, options of `open` and `open_async`: how many pages deferred commits may write, and how long they may wait, in seconds, before one of them is made durable anyway. 16384 pages and one second by default, as before.
+- `commit_id` on a read transaction, and on one of the asynchronous API: the id of the commit the transaction sees, which only grows, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another.
+
 ### Changed
 
 - The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `cache_size` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
