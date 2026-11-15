@@ -44,7 +44,8 @@ const OPS = Object.freeze({
   in: 11,
   contains: 12,
   startsWith: 13,
-  endsWith: 14
+  endsWith: 14,
+  matches: 17
 });
 const IS_NULL = 15;
 
@@ -171,6 +172,8 @@ const conditions = Object.freeze({
   contains: (field: unknown, value: unknown) => test(OPS.contains, field, [value]),
   startsWith: (field: unknown, value: unknown) => test(OPS.startsWith, field, [value]),
   endsWith: (field: unknown, value: unknown) => test(OPS.endsWith, field, [value]),
+  /** A string field, or a string of a list, has every word of `search`. */
+  matches: (field: unknown, search: unknown) => test(OPS.matches, field, [search]),
   isNull: (field: unknown) => test(IS_NULL, field, []),
   isNotNull: (field: unknown) =>
     new Condition({ kind: 'not', term: test(IS_NULL, field, []).node }),

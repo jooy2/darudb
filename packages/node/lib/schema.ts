@@ -26,6 +26,7 @@ export type Spec = (
   default?: unknown;
   index?: boolean;
   unique?: boolean;
+  textIndex?: boolean;
   primaryKey?: boolean;
   cascade?: boolean;
 };
@@ -41,6 +42,8 @@ export type DeclaredFields = Readonly<Record<string, FieldType>>;
 export interface DeclaredIndex {
   readonly fields: readonly string[];
   readonly unique: boolean;
+  /** Whether it is a text index, on the words of one field. */
+  readonly text: boolean;
 }
 
 /** A declared collection, as `collection` makes it. */
@@ -113,6 +116,24 @@ class FieldType {
   /** An index that also refuses two objects with the same value. */
   unique(): FieldType {
     return new FieldType({ ...this.spec, unique: true });
+  }
+
+  /**
+   * A text index: an entry for each word of the string, or of the strings
+   * of the list, which a search for words reads rather than every object.
+   */
+  textIndex(): FieldType {
+    const { spec } = this;
+
+    if (spec.type !== 'string' && !(spec.type === 'list' && spec.element.type === 'string')) {
+      throw invalid(
+        `a text index is on a string or a list of strings, not a ${
+          spec.type === 'list' ? `list of ${spec.element.type}` : spec.type
+        }`
+      );
+    }
+
+    return new FieldType({ ...spec, textIndex: true });
   }
 
   /**
@@ -206,22 +227,34 @@ function indexesOf(options: unknown): readonly DeclaredIndex[] {
 
   return Object.freeze(
     ((indexes ?? []) as unknown[]).map((index) => {
-      const { fields, unique } = (index ?? {}) as { fields?: unknown; unique?: unknown };
+      const { fields, unique, text } = (index ?? {}) as {
+        fields?: unknown;
+        unique?: unknown;
+        text?: unknown;
+      };
 
       if (
         !Array.isArray(fields) ||
         fields.length === 0 ||
         !fields.every((path) => typeof path === 'string' && path.length > 0) ||
-        (unique !== undefined && typeof unique !== 'boolean')
+        (unique !== undefined && typeof unique !== 'boolean') ||
+        (text !== undefined && typeof text !== 'boolean')
       ) {
         throw invalid(
-          'an index of `collection` is `{ fields: [...names or paths], unique?: boolean }`'
+          'an index of `collection` is `{ fields: [...names or paths], unique?: boolean, text?: boolean }`'
+        );
+      }
+
+      if (text === true && (unique === true || fields.length !== 1)) {
+        throw invalid(
+          'a text index of `collection` is `{ fields: [one name or path], text: true }`: it holds the words of one field, which are not unique'
         );
       }
 
       return Object.freeze({
         fields: Object.freeze([...(fields as string[])]),
-        unique: unique === true
+        unique: unique === true,
+        text: text === true
       });
     })
   );

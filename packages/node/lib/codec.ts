@@ -34,7 +34,7 @@ const DATE = 0x0b;
  * every declaration. The engine stores the file's schema in the lowest
  * format that holds it, whatever this says.
  */
-const OBJECT_FORMAT = 2;
+const OBJECT_FORMAT = 3;
 
 /** How deeply a record read from the engine may nest, as the engine allows. */
 const MAX_DEPTH = 64;
@@ -172,6 +172,8 @@ export interface CollectionLayout {
 export interface IndexLayout {
   fields: string[];
   unique: boolean;
+  /** Whether it is a text index, on the words of its field. */
+  text: boolean;
 }
 
 /** A stored schema as `decodeSchema` reads it: its version and its collections by name. */
@@ -1920,7 +1922,10 @@ function decodeSchemaFields(bytes: Uint8Array): SchemaLayout {
               )
             );
 
-      return { fields: paths, unique: field(index, 3, 'bool') };
+      // Field 5 is written only for a text index.
+      const text = index.get(5) === undefined ? false : field(index, 5, 'bool');
+
+      return { fields: paths, unique: field(index, 3, 'bool'), text };
     });
     const collection = {
       id: field(fields, 1, 'int'),
@@ -2001,6 +2006,7 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
         element.default !== undefined ||
         element.index ||
         element.unique ||
+        element.textIndex ||
         element.primaryKey ||
         element.cascade
       ) {
@@ -2027,7 +2033,7 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
     w.varint(fields.length);
 
     for (const [id, name, spec] of fields) {
-      if (embedded && (spec.index || spec.unique || spec.primaryKey)) {
+      if (embedded && (spec.index || spec.unique || spec.textIndex || spec.primaryKey)) {
         throw invalid(
           `\`${where}.${name}\` is inside an embedded object, where no field is a key or indexed`
         );
@@ -2147,9 +2153,16 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
 
     // Without `auto`, `keys[0]` is one of the fields.
     const key = auto ? 1 : fields.find(([, fieldName]) => fieldName === keys[0][0])![0];
-    const indexes: [number, number[][], boolean][] = fields
+    const indexes: [number, number[][], boolean, boolean][] = fields
       .filter(([, , spec]) => spec.index || spec.unique)
-      .map(([id, , spec]) => [nextIndex++, [[id]], spec.unique === true]);
+      .map(([id, , spec]) => [nextIndex++, [[id]], spec.unique === true, false]);
+
+    // A field's text index is beside any other index it has.
+    for (const [id, , spec] of fields) {
+      if (spec.textIndex) {
+        indexes.push([nextIndex++, [[id]], false, true]);
+      }
+    }
 
     // An index of the options names its fields by their paths, which go to
     // the ids given here: a field's place among its collection's or its
@@ -2185,7 +2198,7 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
         return ids;
       });
 
-      indexes.push([nextIndex++, components, declaredIndex.unique]);
+      indexes.push([nextIndex++, components, declaredIndex.unique, declaredIndex.text]);
     }
 
     // Every name has an id.
@@ -2223,9 +2236,11 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
                     iw.byte(LIST);
                     iw.varint(collection.indexes.length);
 
-                    for (const [id, components, unique] of collection.indexes) {
+                    for (const [id, components, unique, text] of collection.indexes) {
                       const index = new Writer(16);
-                      const one = components.length === 1 && components[0].length === 1;
+                      // A text index lists its component, as any index that
+                      // is not on a field's values does, with field 5 true.
+                      const one = !text && components.length === 1 && components[0].length === 1;
 
                       writeEntries(
                         index,
@@ -2271,7 +2286,8 @@ function encodeSchema(declared: DeclaredSchema): Uint8Array {
                                     cw.bytesOf(component.bytes.subarray(0, component.at));
                                   }
                                 }
-                              ]
+                              ],
+                              ...(text ? [[5, 'bool', true] satisfies Entry] : [])
                             ],
                         collection.name
                       );

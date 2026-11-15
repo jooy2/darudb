@@ -836,9 +836,9 @@ describe('a file opened without a schema', () => {
           { name: 'big', type: { kind: 'int' }, optional: true, cascade: false }
         ],
         indexes: [
-          { field: 'email', fields: ['email'], unique: true },
-          { field: 'age', fields: ['age'], unique: false },
-          { field: 'tags', fields: ['tags'], unique: false }
+          { field: 'email', fields: ['email'], unique: true, text: false },
+          { field: 'age', fields: ['age'], unique: false, text: false },
+          { field: 'tags', fields: ['tags'], unique: false, text: false }
         ]
       }
     ]
@@ -1444,6 +1444,230 @@ describe('indexes on several fields', () => {
   it('refuse an index whose options are not of its shape', () => {
     assertCode(() => collection({ a: t.int() }, { indexes: [{ fields: [] }] }), 'INVALID_ARGUMENT');
     assertCode(() => collection({ a: t.int() }, { indexes: 'a' }), 'INVALID_ARGUMENT');
+  });
+});
+
+describe('text indexes', () => {
+  const notes = collection(
+    {
+      title: t.string().index().textIndex(),
+      body: t.string().optional().textIndex(),
+      tags: t.list(t.string()).default([]).textIndex(),
+      // Searched for words with no index.
+      memo: t.string().optional(),
+      pages: t.int().default(0),
+      meta: t.object({ note: t.string().optional() }).optional()
+    },
+    { indexes: [{ fields: ['meta.note'], text: true }] }
+  );
+  const library = schema(1, { notes });
+
+  const filled = (context) => {
+    const db = Database.open(tempPath(context), { schema: library });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      txn.collection('notes').insertMany([
+        {
+          title: 'Quick Start',
+          body: 'Open a database and write.',
+          tags: ['getting started', 'guide'],
+          memo: 'checked twice',
+          meta: { note: 'First draft' }
+        },
+        { title: 'Queries', body: 'Write a QUERY quickly.', tags: ['guide'], memo: 'Twice' },
+        { title: '검색', body: '빠른 검색을 한다', tags: [] },
+        { title: '東京', body: '東京都に住む' },
+        { title: 'Empty' }
+      ]);
+    });
+
+    return db;
+  };
+  const ids = (found) => found.map((note) => note.id);
+
+  it('answer a search for words, through the builder and the query language', (context) => {
+    const db = filled(context);
+
+    db.read((txn) => {
+      const all = txn.collection('notes');
+      const matching = (field, search) =>
+        ids(all.find((q) => q.where((c) => c.matches(field, search))));
+
+      assert.deepEqual(matching('body', 'write'), [1, 2]);
+      assert.deepEqual(matching('body', 'WRITE database'), [1]);
+      assert.deepEqual(matching('body', 'quick'), []);
+      assert.deepEqual(matching('body', 'quick*'), [2]);
+      assert.deepEqual(matching('title', 'quick start'), [1]);
+      assert.deepEqual(matching('body', ''), []);
+      assert.deepEqual(matching('body', '?! *'), []);
+      // Hangul by the words between spaces, and the scripts written
+      // without spaces by two characters, or one.
+      assert.deepEqual(matching('body', '검색'), []);
+      assert.deepEqual(matching('body', '검색*'), [3]);
+      assert.deepEqual(matching('body', '東京'), [4]);
+      assert.deepEqual(matching('body', '京都に'), [4]);
+      assert.deepEqual(matching('body', '住'), [4]);
+      assert.deepEqual(matching('body', '大阪'), []);
+      // A list holds when one of its strings has every word.
+      assert.deepEqual(matching('tags', 'guide'), [1, 2]);
+      assert.deepEqual(matching('tags', 'getting started'), [1]);
+      assert.deepEqual(matching('tags', 'guide started'), []);
+      // Inside an embedded object, and a field without a text index.
+      assert.deepEqual(matching('meta.note', 'draft'), [1]);
+      assert.deepEqual(matching('memo', 'twice'), [1, 2]);
+      assert.deepEqual(matching('memo', 'che* twice'), [1]);
+
+      assert.deepEqual(ids(all.find((q) => q.where('body', 'matches', 'write'))), [1, 2]);
+      assert.deepEqual(ids(all.find('body MATCHES "write" AND id > 1')), [2]);
+      assert.deepEqual(ids(all.find('body MATCHES $0 SORT BY id DESC', ['wri*'])), [2, 1]);
+      assert.equal(all.count('body MATCHES "write"'), 2);
+      assert.equal(
+        all.count((q) => q.where((c) => c.not(c.matches('body', 'write')))),
+        3
+      );
+      // Ignoring case leaves a search as it is: it ignores case already.
+      assert.deepEqual(
+        ids(all.find((q) => q.where((c) => c.ignoreCase(c.matches('body', 'WRITE'))))),
+        [1, 2]
+      );
+
+      assertCode(() => all.find((q) => q.where((c) => c.matches('pages', '1'))), 'INVALID_QUERY');
+      assertCode(() => all.find((q) => q.where((c) => c.matches('body', 1))), 'INVALID_QUERY');
+      assertCode(() => all.find('body MATCHES "x" IGNORE CASE'), 'INVALID_QUERY');
+    });
+
+    const prepared = db.prepare('notes', (q) => q.where((c) => c.matches('body', param(0))));
+
+    assert.deepEqual(
+      db.read((txn) => ids(txn.collection('notes').find(prepared, ['database']))),
+      [1]
+    );
+    assert.equal(db.check().ok, true);
+  });
+
+  it('follow the objects as they change', (context) => {
+    const db = filled(context);
+    const found = (search) =>
+      db.read((txn) => ids(txn.collection('notes').find('body MATCHES $0', [search])));
+
+    db.write((txn) => {
+      const all = txn.collection('notes');
+
+      all.update(1, { body: 'Close the file.' });
+      all.delete(2);
+      all.put({ id: 5, title: 'Empty', body: 'write once' });
+    });
+
+    assert.deepEqual(found('write'), [5]);
+    assert.deepEqual(found('database'), []);
+    assert.deepEqual(found('close file'), [1]);
+    assert.equal(db.check().ok, true);
+  });
+
+  it('work through the asynchronous API', async (context) => {
+    const db = filled(context);
+
+    await db.writeAsync(async (txn) => {
+      await txn.collection('notes').insert({ title: 'Later', body: 'Write it later.' });
+    });
+
+    await db.readAsync(async (txn) => {
+      const all = txn.collection('notes');
+
+      assert.deepEqual(
+        ids(await all.find((q) => q.where((c) => c.matches('body', 'write')))),
+        [1, 2, 6]
+      );
+      assert.deepEqual(ids(await all.find('body MATCHES $0', ['lat*'])), [6]);
+      assert.equal(await all.count('tags MATCHES "guide"'), 2);
+    });
+  });
+
+  it('are read back from the stored schema', (context) => {
+    const db = filled(context);
+
+    assert.deepEqual(
+      db.storedSchema.collections[0].indexes.map((index) => [
+        index.fields,
+        index.unique,
+        index.text
+      ]),
+      [
+        [['title'], false, false],
+        [['title'], false, true],
+        [['body'], false, true],
+        [['tags'], false, true],
+        [['meta.note'], false, true]
+      ]
+    );
+  });
+
+  it('are built by a migration, which a file kept from upgrading refuses', (context) => {
+    const path = tempPath(context);
+    const plain = schema(1, { notes: collection({ body: t.string() }) });
+    const searched = schema(2, { notes: collection({ body: t.string().textIndex() }) });
+    const first = Database.open(path, { schema: plain });
+
+    first.write((txn) => {
+      txn.collection('notes').insertMany([{ body: 'quick fox' }, { body: 'slow fox' }]);
+    });
+    first.close();
+
+    assertCode(
+      () => Database.open(path, { schema: searched, upgradeFormat: false }),
+      'INVALID_ARGUMENT'
+    );
+
+    const db = Database.open(path, { schema: searched });
+
+    context.after(() => db.close());
+
+    assert.deepEqual(
+      db.read((txn) => ids(txn.collection('notes').find('body MATCHES "fox quick"'))),
+      [1]
+    );
+    assert.equal(db.storedSchema.collections[0].indexes[0].text, true);
+    assert.equal(db.check().ok, true);
+  });
+
+  it('are refused on anything but a string or a list of strings', (context) => {
+    assertCode(() => t.int().textIndex(), 'INVALID_ARGUMENT');
+    assertCode(() => t.list(t.int()).textIndex(), 'INVALID_ARGUMENT');
+    assertCode(() => t.object({ a: t.string() }).textIndex(), 'INVALID_ARGUMENT');
+    assertCode(() => t.link('notes').textIndex(), 'INVALID_ARGUMENT');
+    assertCode(
+      () =>
+        collection({ a: t.string() }, { indexes: [{ fields: ['a'], text: true, unique: true }] }),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () =>
+        collection(
+          { a: t.string(), b: t.string() },
+          { indexes: [{ fields: ['a', 'b'], text: true }] }
+        ),
+      'INVALID_ARGUMENT'
+    );
+    assertCode(
+      () => collection({ a: t.string() }, { indexes: [{ fields: ['a'], text: 'yes' }] }),
+      'INVALID_ARGUMENT'
+    );
+
+    // What only the engine can tell: a path that ends at no string, an
+    // index inside a list's element or an embedded object, and one twice.
+    for (const notes of [
+      collection({ pages: t.int() }, { indexes: [{ fields: ['pages'], text: true }] }),
+      collection({ lines: t.list(t.string().textIndex()) }),
+      collection({ meta: t.object({ note: t.string().textIndex() }) }),
+      collection({ body: t.string().textIndex() }, { indexes: [{ fields: ['body'], text: true }] })
+    ]) {
+      assertCode(
+        () => Database.open(tempPath(context), { schema: schema(1, { notes }) }),
+        'INVALID_ARGUMENT'
+      );
+    }
   });
 });
 

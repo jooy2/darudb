@@ -49,7 +49,19 @@ export interface FieldType<T, M extends FieldMode = 'required', I = T> extends T
   index(): FieldType<T, M, I>;
   /** An index that also refuses two objects with the same value. Any number may hold null. */
   unique(): FieldType<T, M, I>;
+  /**
+   * A text index, on a string or a list of strings: an entry for each word
+   * of the text, which `matches` and `MATCHES` read rather than every
+   * object. The field may have an `index()` too. Every write of the object
+   * writes an entry for each different word, so a long text costs more to
+   * write than any other field. A file with a text index cannot be opened
+   * by a release before this one.
+   */
+  textIndex(this: TextTyped): this;
 }
+
+/** A field type that holds text: a string, or a list of strings. */
+export type TextTyped = Typed<string | string[], FieldMode, boolean, any>;
 
 /** The type of a field that can be the primary key: an int, a string or bytes. */
 export interface KeyableType<T, I = T> extends FieldType<T, 'required', I> {
@@ -61,6 +73,8 @@ export interface KeyableType<T, I = T> extends FieldType<T, 'required', I> {
 export interface KeyType<T, I = T> extends Typed<T, 'required', true, I> {
   index(): KeyType<T, I>;
   unique(): KeyType<T, I>;
+  /** A text index on a string key, as `FieldType.textIndex` declares one. */
+  textIndex(this: TextTyped): this;
 }
 
 /** A link, which has no default: it would name an object. */
@@ -205,10 +219,22 @@ export interface CollectionOptions<F extends Fields = Fields> {
  * path through embedded objects, such as `address.city`, and whether two
  * objects may not hold the same values in all of them.
  */
-export interface IndexDeclaration<F extends Fields = Fields> {
-  readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
-  readonly unique?: boolean;
-}
+export type IndexDeclaration<F extends Fields = Fields> =
+  | {
+      readonly fields: readonly [IndexPath<F>, ...IndexPath<F>[]];
+      readonly unique?: boolean;
+      readonly text?: false;
+    }
+  | {
+      /** The one string field, or list of strings, whose words the index holds. */
+      readonly fields: readonly [IndexPath<F>];
+      /**
+       * A text index, as `textIndex()` on a field declares one: for a field
+       * inside an embedded object, which only a path names.
+       */
+      readonly text: true;
+      readonly unique?: false;
+    };
 
 /** A field of `F` an index names: its name, or a path into an embedded object. */
 export type IndexPath<F extends Fields> = (keyof F & string) | DottedPath;
@@ -285,6 +311,15 @@ export interface Conditions<O = Record<string, unknown>> {
   startsWith(path: DottedPath, value: Operand<string>): Condition;
   endsWith<K extends FieldNames<O>>(field: K, value: Operand<string>): Condition;
   endsWith(path: DottedPath, value: Operand<string>): Condition;
+  /**
+   * A string field has every word of `search`, in any order and ignoring
+   * case, or one string of a list does. A word followed by `*` is the start
+   * of a word: `data*` finds `database`. A search without a word finds
+   * nothing. A text index on the field answers it without reading the
+   * objects; without one, every object is read and searched.
+   */
+  matches<K extends FieldNames<O>>(field: K, search: Operand<string>): Condition;
+  matches(path: DottedPath, search: Operand<string>): Condition;
   isNull(field: FieldNames<O> | DottedPath): Condition;
   isNotNull(field: FieldNames<O> | DottedPath): Condition;
   and(...conditions: Condition[]): Condition;
@@ -355,6 +390,7 @@ export interface Query<O = Record<string, unknown>> {
     value: Operand<ElementOf<O[K]>>,
     options?: WhereOptions
   ): Query<O>;
+  where(field: FieldNames<O> | DottedPath, op: 'matches', search: Operand<string>): Query<O>;
   where(
     path: DottedPath,
     op: Comparison | 'contains' | 'startsWith' | 'endsWith',
@@ -985,6 +1021,11 @@ export interface StoredIndex {
   /** Every field the index is on, in order, each a name or a path. */
   readonly fields: readonly string[];
   readonly unique: boolean;
+  /**
+   * Whether it is a text index, which holds the words of its field for
+   * `matches` to read, rather than the field's values.
+   */
+  readonly text: boolean;
 }
 
 /** A collection, as `Database.storedSchema` gives it. */

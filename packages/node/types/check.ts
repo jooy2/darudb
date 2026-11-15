@@ -36,6 +36,33 @@ collection({ last: t.string() }, { indexes: [{ fields: ['lsat'] }] });
 // @ts-expect-error an index is on one field at least.
 collection({ last: t.string() }, { indexes: [{ fields: [] }] });
 
+// A text index is on a string or a list of strings, beside any other index
+// of the field, or on one path of the options.
+t.string().textIndex();
+t.string().optional().index().textIndex();
+t.string().textIndex().primaryKey();
+t.string().primaryKey().textIndex();
+t.list(t.string()).default([]).textIndex();
+collection(
+  { body: t.string(), meta: t.object({ note: t.string() }) },
+  {
+    indexes: [
+      { fields: ['meta.note'], text: true },
+      { fields: ['body'], text: true }
+    ]
+  }
+);
+// @ts-expect-error a text index is on text, not a number.
+t.int().textIndex();
+// @ts-expect-error nor on a list of numbers.
+t.list(t.int()).textIndex();
+// @ts-expect-error nor on a date.
+t.date().optional().textIndex();
+// @ts-expect-error a text index is on one field.
+collection({ a: t.string(), b: t.string() }, { indexes: [{ fields: ['a', 'b'], text: true }] });
+// @ts-expect-error a text index is not unique.
+collection({ a: t.string() }, { indexes: [{ fields: ['a'], text: true, unique: true }] });
+
 // A list of embedded objects has no index, and no default but the empty list.
 // @ts-expect-error a list of embedded objects has no index.
 t.list(t.object({ city: t.string() })).index();
@@ -124,6 +151,15 @@ db.read((txn) => {
   users.find((q) => q.where((c) => c.or(c.eq('name', 'Alice'), c.isNull('email'))));
   users.find('age >= $0 SORT BY age DESC', [18]);
   users.count((q) => q.where('name', 'startsWith', 'A'));
+  // A search for words takes a string, or a parameter.
+  users.find((q) => q.where((c) => c.matches('name', 'ali*')));
+  users.find((q) => q.where((c) => c.matches('tags', param(0))));
+  users.find((q) => q.where((c) => c.matches('address.city', 'seoul')));
+  users.find((q) => q.where('name', 'matches', 'ali*'));
+  // @ts-expect-error a search is a string.
+  users.find((q) => q.where((c) => c.matches('name', 1)));
+  // @ts-expect-error a search is of a field the collection has.
+  users.find((q) => q.where((c) => c.matches('nmae', 'x')));
   users.findOne(new Query<typeof first>().where('age', '>', 1));
   // @ts-expect-error `agee` is not a field.
   users.find((q) => q.where('agee', '>=', 18));

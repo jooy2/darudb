@@ -654,7 +654,8 @@ function describeSchema(layout: SchemaLayout): StoredSchema {
           Object.freeze({
             field: index.fields[0],
             fields: Object.freeze([...index.fields]),
-            unique: index.unique
+            unique: index.unique,
+            text: index.text
           })
         )
       )
