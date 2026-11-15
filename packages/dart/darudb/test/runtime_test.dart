@@ -417,6 +417,52 @@ void main() {
     expect(db.read((txn) => txn.collection(userSchema).count()), 1);
   });
 
+  test('a call made while another one is being encoded leaves it whole', () {
+    db.write((txn) {
+      final users = txn.collection(userSchema);
+
+      users.insertMany(const [
+        User(name: 'a', age: 1),
+        User(name: 'b', age: 50),
+        User(name: 'c', age: 60),
+      ]);
+
+      // The changes come from a count of the same collection.
+      final changed = users.updateWhere(
+        (q) => [q.age.set(users.count((q) => q.where(q.age.atLeast(50))))],
+        (q) => q.where(q.name.equals('a')),
+      );
+
+      expect(changed, 1);
+      expect(users.update(2, (q) => [q.age.set(users.count())]), isTrue);
+      expect(users.count((q) => q.where(q.age.equals(users.count()))), 1);
+      expect(
+        [for (final user in users.find()) (user.name, user.age)],
+        [('a', 2), ('b', 3), ('c', 60)],
+      );
+
+      // An iterable that inserts as it is read.
+      final keys = users.insertMany(
+        ['x', 'y'].map((name) {
+          users.insert(User(name: '$name-friend'));
+
+          return User(name: name);
+        }),
+      );
+
+      expect(keys, hasLength(2));
+      expect([for (final user in users.find()) user.name]..sort(), [
+        'a',
+        'b',
+        'c',
+        'x',
+        'x-friend',
+        'y',
+        'y-friend',
+      ]);
+    });
+  });
+
   test('a transaction goes on reading after its database is closed', () {
     db.write((txn) => txn.collection(userSchema).insert(const User(name: 'a')));
 

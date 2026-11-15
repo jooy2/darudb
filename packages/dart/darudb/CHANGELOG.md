@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- A call made from inside another call's function no longer overwrites what that call was encoding. A `count` or `find` made in the function that gives `updateWhere` or `update` its changes, or in a query's function, replaced the outer call's query, so `updateWhere` changed the objects of the inner query; and an iterable given to `insertMany` or `putMany` that inserted as it was read lost objects and stored one twice.
 - A transaction that is still running when its database is closed goes on reading and writing safely until its function ends. `close` freed what the transaction's collections name their collection with, so `get`, `insert`, `put`, `update` and `delete` on such a collection read freed memory, which could fail with a wrong error or crash. It happened when `close` or `closeAsync` ran while a `readAsync` function was between two awaits.
 
 ## v1.5.0 (2026-11-01)

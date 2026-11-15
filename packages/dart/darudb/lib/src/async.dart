@@ -317,9 +317,12 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     QueryBuilder<T> Function(Q q)? query, {
     required bool first,
   }) => _run((txn) async {
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = _sync._built(query);
     final writer = _io.writer..reset();
 
-    encodeQuery(writer, _sync._schema.name, _sync._built(query));
+    encodeQuery(writer, _sync._schema.name, built);
 
     final reply = await _call(
       (id, callback) => darudb_find_async(
@@ -349,9 +352,12 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   /// How many objects the query finds.
   Future<int> count([QueryBuilder<T> Function(Q q)? query]) =>
       _run((txn) async {
+        // The query's function runs before the shared writer is taken, since
+        // it may make calls of its own, which write there too.
+        final built = _sync._built(query);
         final writer = _io.writer..reset();
 
-        encodeQuery(writer, _sync._schema.name, _sync._built(query));
+        encodeQuery(writer, _sync._schema.name, built);
 
         final reply = await _call(
           (id, callback) => darudb_count_async(
@@ -475,6 +481,9 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     Prepared<Object?>? prepared,
     List<Object?> parameters = const [],
   }) => _run((txn) async {
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = prepared == null ? _sync._built(query) : null;
     final writer = _io.writer..reset();
 
     if (prepared != null) {
@@ -486,7 +495,7 @@ base class AsyncReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     encodeQuery(
       writer,
       _sync._schema.name,
-      prepared == null ? _sync._built(query) : null,
+      built,
       aggregate: (code, field.path),
     );
 

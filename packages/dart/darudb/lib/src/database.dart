@@ -1543,9 +1543,12 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
 
   List<T> _find(QueryBuilder<T> Function(Q q)? query, {required bool first}) {
     final handle = _txn._live();
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = _built(query);
     final writer = _io.writer..reset();
 
-    encodeQuery(writer, _schema.name, _built(query));
+    encodeQuery(writer, _schema.name, built);
     _check(
       darudb_find(
         handle,
@@ -1580,9 +1583,12 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
   /// limit: every object without one.
   int count([QueryBuilder<T> Function(Q q)? query]) {
     final handle = _txn._live();
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = _built(query);
     final writer = _io.writer..reset();
 
-    encodeQuery(writer, _schema.name, _built(query));
+    encodeQuery(writer, _schema.name, built);
     _check(
       darudb_count(handle, _io.load(writer.written), writer.at, _io.number),
     );
@@ -1709,6 +1715,9 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
     List<Object?> parameters = const [],
   }) {
     final handle = _txn._live();
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = prepared == null ? _built(query) : null;
     final writer = _io.writer..reset();
 
     // The parameters, if any, then the IR, one after the other in one
@@ -1719,12 +1728,7 @@ base class ReadCollection<T, Q extends QueryBuilder<T>, K extends Object> {
 
     final split = writer.at;
 
-    encodeQuery(
-      writer,
-      _schema.name,
-      prepared == null ? _built(query) : null,
-      aggregate: (code, field.path),
-    );
+    encodeQuery(writer, _schema.name, built, aggregate: (code, field.path));
 
     final loaded = _io.load(writer.written);
 
@@ -1900,9 +1904,13 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
   List<K> _write(Iterable<T> objects, {required bool replace}) {
     final handle = _txn._live();
+    // An iterable that is not a list is read to its end first: what makes
+    // its objects may make calls of its own, which write to the shared
+    // writer too.
+    final list = objects is List<T> ? objects : objects.toList();
     final writer = _io.writer..reset();
 
-    for (final object in objects) {
+    for (final object in list) {
       final mark = writer.openLength();
 
       _schema.encode(object, writer, _known.layout, _sink);
@@ -1982,14 +1990,12 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
     writeKey(keyWriter, key);
 
+    // The function that makes the changes runs before the shared writer is
+    // taken, since it may make calls of its own, which write there too.
+    final made = changes(_schema.newQuery());
     final writer = _io.writer..reset();
 
-    encodeChanges(
-      writer,
-      changes(_schema.newQuery()),
-      _known.layout,
-      _known.names,
-    );
+    encodeChanges(writer, made, _known.layout, _known.names);
 
     final loaded = _io.load(keyWriter.written, writer.written);
 
@@ -2015,6 +2021,10 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
     List<Object?> parameters,
     List<Change> Function(Q q)? changes,
   ) {
+    final made = changes?.call(_schema.newQuery());
+    // The query's function runs before the shared writer is taken, since
+    // it may make calls of its own, which write there too.
+    final built = prepared == null ? _built(query) : null;
     final writer = _io.writer..reset();
 
     if (prepared != null) {
@@ -2023,17 +2033,12 @@ final class WriteCollection<T, Q extends QueryBuilder<T>, K extends Object>
 
     final split = writer.at;
 
-    encodeQuery(writer, _schema.name, prepared == null ? _built(query) : null);
+    encodeQuery(writer, _schema.name, built);
 
     final changed = Writer(64);
 
-    if (changes != null) {
-      encodeChanges(
-        changed,
-        changes(_schema.newQuery()),
-        _known.layout,
-        _known.names,
-      );
+    if (made != null) {
+      encodeChanges(changed, made, _known.layout, _known.names);
     }
 
     return (
