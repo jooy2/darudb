@@ -106,8 +106,20 @@ pub(crate) fn move_into_place(temporary: &Path, path: &Path) -> io::Result<()> {
             .create_new(true)
             .open(path)
             .and_then(|mut target| {
-                io::copy(&mut fs::File::open(temporary)?, &mut target)?;
-                target.sync_all()
+                let copied = fs::File::open(temporary)
+                    .and_then(|mut source| io::copy(&mut source, &mut target))
+                    .and_then(|_| target.sync_all());
+
+                // The name was free and is this call's own: a copy that
+                // failed part way, on a full disk for one, does not stay
+                // there as half a file.
+                if copied.is_err() {
+                    drop(target);
+
+                    let _ = fs::remove_file(path);
+                }
+
+                copied
             }),
         Err(error) => Err(error),
     };
@@ -306,5 +318,27 @@ mod tests {
             .collect();
 
         assert_eq!(names, ["app.darudb"]);
+    }
+
+    /// Where a file takes its name through a copy, a copy that fails leaves
+    /// the name free, for the next attempt and for whoever reads the path.
+    #[test]
+    fn a_copy_that_fails_leaves_no_file_under_the_name() {
+        use crate::testing::{NO_LINKS, NO_RENAME};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy.darudb");
+
+        NO_LINKS.set(true);
+        NO_RENAME.set(true);
+
+        // A temporary file that is not there cannot be copied.
+        let moved = move_into_place(&dir.path().join("missing.new"), &path);
+
+        NO_LINKS.set(false);
+        NO_RENAME.set(false);
+
+        assert!(moved.is_err());
+        assert!(!path.exists());
     }
 }
