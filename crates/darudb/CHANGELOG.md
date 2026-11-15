@@ -6,6 +6,10 @@
 
 ### Changed
 
+- `sum` and `avg` of a field with an index, over every object or over those a filter on that field alone finds, read the values from the index and no object, as `min` and `max` do: on 20,000 objects, a sum of every object took half the time, and a sum over a range of the field a tenth of it.
+- `min` of a field with an index begins past the index's nulls rather than reading each.
+- A query whose filter has `IS NULL` on a field with a unique index beside an equality on another indexed field reads through the other index. The planner took the null for one object, which a unique index holds for any value but null, and read every object without a value.
+- A condition left to test after an index answered the others is tested as a filter of one condition is: a count of `age == 7 AND city == "x"` through the index on `age` takes about 4% less time.
 - A commit to an encrypted file draws the nonces of its pages from the operating system 32 at a time rather than one request a page: a deferred commit of one object takes about a sixth less processor time, 55.9 µs against 67.9 µs on an Apple M1 Max.
 - A write transaction begun while a read transaction of the process is open no longer reads every group of pages retired since that reader began, none of which it can reclaim. With a reader that began inside an unsynced window, a deferred commit of one object took 114 µs after twelve thousand commits, and takes 17 µs, as it does without the reader.
 - A writer does not decode, check and, in an encrypted file, authenticate again a commit record whose bytes it checked the last time it read the header, which is two of the three at each begin.

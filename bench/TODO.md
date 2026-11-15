@@ -120,6 +120,22 @@ Tried and not kept:
 - **The slot a commit wrote, taken as checked** by the next writer, which would save the third MAC: 0.9% in an encrypted file and 1.0% in a plain one, inside what two builds of one engine differ by.
 - **Sealing one page without the list of checks and the list of nonces** was kept as part of the first item; alone it measured 1.5% and 1.1%.
 
+### 4c. The planner
+
+Measured on 2026-11-15 on the M1 Max with the A/B tools (`agecity`, `sumage` and `sumrange` in `darudb-compare/ab`, on 20,000 people), by the thread's CPU time.
+
+Done:
+
+- **`sum` and `avg` read from the index** of the field, when the index alone holds the values (`index_alone` in `query/run.rs`), as `min` and `max` did: a sum of every object 49% less time, and a sum over a range of the field 91% less.
+- **One term left stands alone** rather than inside an `AND` of one (`plan_parts` in `query/plan.rs`), so a walk tests it directly: a count of `age == n AND city == c` through the index on `age`, 4.4% less.
+- **A null looked up in a unique index is not taken for one object** (`Candidate::rank`, and `few` in `query/run.rs`), and `min` begins past the nulls. Not measured: the harness has no optional field with a unique index. A test holds the plan.
+- The complex suite's rows were within what two runs differ by (`darudb-compare/cx`, five cycles of eight rounds for the two that moved in a shorter run).
+
+Not tried yet:
+
+- **A count that needs only how many keys a set holds** still builds the set (`keep` in `query/run.rs`). The parts give a key once or more, so counting needs to know which give each once, and the set is built where the strategy is chosen, before the count: both would change.
+- A path or a composite index as a part of an `OR`; the distinct first components of an index's entries for `ANY c.link` with no filter; a seeker rather than a descent a key for a long `IN` on the primary key; a sort by several keys with a limit through the first key's index.
+
 ### 5. Queries without an index
 
 LMDB scans several times faster in Rust, redb about twice as fast in Rust on an EPYC 7763 but level on a 9V45, Hive up to two and a half times in Dart, and SQLite 6 to 15% faster in Node.js, Dart and Python, before the changes below. A DaruDB record tags each field with an id and a type, so a scan steps over the fields before the one it tests; the stores ahead read fixed places, or, as SQLite, add up the sizes the record's header lists. Changing the record is a new format version, with a migration (`CLAUDE.md`, "The file format is released").
