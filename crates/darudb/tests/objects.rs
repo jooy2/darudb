@@ -1953,6 +1953,11 @@ fn a_delete_by_a_key_too_long_for_the_file_finds_nothing() {
         .unwrap();
     assert!(notes.get(long.as_str()).unwrap().is_none());
     assert!(!notes.delete(long.as_str()).unwrap());
+    assert!(
+        !notes
+            .update(long.as_str(), Object::new().with("body", "y"))
+            .unwrap()
+    );
     txn.commit().unwrap();
     assert_eq!(objects(&db, "notes").len(), 1);
 }

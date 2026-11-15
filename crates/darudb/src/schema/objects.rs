@@ -1626,6 +1626,13 @@ impl<'a> CollectionWriter<'a> {
 
         key_bytes_into(collection, &key_value, &mut lent.key)?;
 
+        // No object has a key longer than the file's keys.
+        if lent.key.len() > self.txn.max_key_len() {
+            lent.give_back(self.txn.spare());
+
+            return Ok(false);
+        }
+
         let Lent {
             key,
             record,
@@ -1728,6 +1735,13 @@ impl<'a> CollectionWriter<'a> {
         let mut lent = Lent::take(self.txn.spare());
 
         key_bytes_into(collection, &key_value, &mut lent.key)?;
+
+        // No object has a key longer than the file's keys.
+        if lent.key.len() > self.txn.max_key_len() {
+            lent.give_back(self.txn.spare());
+
+            return Ok(false);
+        }
 
         // Changes that `flat_changes` refuses in a collection with other
         // fields than scalars may be changes of those, which objects take.
