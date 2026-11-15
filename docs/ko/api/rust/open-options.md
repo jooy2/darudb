@@ -52,6 +52,7 @@ fn main() -> darudb::Result<()> {
 | `max_unsynced_time`  | 1초                                               |
 | `password_hashing`   | 19456 KiB, 반복 2회, 레인 1개                     |
 | `upgrade_format`     | `true`                                            |
+| `read_only`          | `false`                                           |
 | `key`, `password`    | 없음. 데이터베이스를 암호화하지 않습니다          |
 | `schema`             | 없음. 파일에 저장된 스키마가 있으면 그것을 씁니다 |
 
@@ -128,6 +129,20 @@ pub fn upgrade_format(&mut self, upgrade: bool) -> &mut Self
 - **되돌아가기.** 예전 버전만 아는 빌드는 올린 파일을 거부합니다. 그런 빌드로 되돌아갈 수 있는 애플리케이션은 이 옵션을 끄고, 되돌아갈 일이 없어지면 [`Database::upgrade_format`](./database.md#upgrade-format)으로 버전을 올립니다. 옵션을 끄면 새 데이터베이스는 모든 릴리스가 읽는 형식 버전 5로 만듭니다.
 
 버전 사이에 무엇이 바뀌었는지는 [파일 형식](../../engine/file-format.md#형식-버전)에 있습니다.
+
+### read_only
+
+```rust
+pub fn read_only(&mut self, read_only: bool) -> &mut Self
+```
+
+핸들을 읽기 전용으로 열지 정합니다. 읽기 전용 핸들로는 파일의 바이트가 바뀌지 않습니다. 기본값은 꺼짐입니다.
+
+- **하는 일과 거절하는 일.** 읽기 전용 핸들은 읽고, 검사하고, 백업합니다. [`begin_write`](./database.md#begin-write), 파일에 저장돼 있지 않은 스키마, [`upgrade_format`](./database.md#upgrade-format), [`compact`](./database.md#compact), [`set_key`](./database.md#set-key), [`set_password`](./database.md#set-password)는 `READ_ONLY`로 실패하고, [`sync`](./database.md#sync)와 [`close`](./database.md#close)는 파일에 아무것도 하지 않습니다. 파일을 만들지 않으므로 데이터베이스가 없는 경로는 `NOT_FOUND`로 실패합니다.
+- **복구.** 프로세스가 죽었거나 정전이 난 뒤에 남은 파일은 읽기 전에 복구해야 할 수 있고, 복구는 파일에 씁니다. 그런 파일은 이 옵션 없이 한 번 열 때까지 `READ_ONLY`로 거절됩니다.
+- **쓰기 권한.** 프로세스 사이를 조율하는 잠금 때문에 파일은 여전히 쓰기용으로 엽니다. 그래서 프로세스에 파일을 쓸 권한이 있어야 하고, 읽기 전용 매체는 지원하지 않습니다. 같은 프로세스나 다른 프로세스의 다른 핸들은 전처럼 쓰고, 이 핸들은 그 핸들이 커밋한 내용을 읽습니다.
+
+예제는 [시작하기](../../guide/getting-started.md#읽기-전용으로-열기)에 있습니다.
 
 ### key
 

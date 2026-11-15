@@ -109,6 +109,14 @@ readonly formatVersion: number;
 
 파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6([FORMAT_VERSION](../../types/node/constants.md))이거나, 열 때 올리지 않은 파일이라면 5입니다([`upgradeFormat`](../../types/node/open-options.md#upgradeformat)).
 
+### isReadOnly
+
+```ts
+readonly isReadOnly: boolean;
+```
+
+데이터베이스를 [`readOnly`](../../types/node/open-options.md#readonly) 옵션으로 읽기 전용으로 열었는지 나타냅니다.
+
 ### isEncrypted
 
 ```ts

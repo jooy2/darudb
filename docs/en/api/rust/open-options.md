@@ -52,6 +52,7 @@ Every handle to a file in one process shares one instance, and some options belo
 | `max_unsynced_time`  | 1 second                                    |
 | `password_hashing`   | 19456 KiB, 2 iterations, 1 lane             |
 | `upgrade_format`     | `true`                                      |
+| `read_only`          | `false`                                     |
 | `key`, `password`    | None: the database is not encrypted         |
 | `schema`             | None: the one the file holds, if it has one |
 
@@ -128,6 +129,20 @@ Whether opening a file in an older format version raises it to [`FORMAT_VERSION`
 - **Going back.** A build that knows only the older version refuses the file once it is raised. An application that may go back to such a build turns this off, and raises the version with [`Database::upgrade_format`](./database.md#upgrade-format) once it no longer may. With it off, a new database is created in format version 5, which every release reads.
 
 [File format](../../engine/file-format.md#format-versions) says what changed between the versions.
+
+### read_only
+
+```rust
+pub fn read_only(&mut self, read_only: bool) -> &mut Self
+```
+
+Whether the handle is read-only: one through which the file's bytes never change. Off by default.
+
+- **What it does and refuses.** A read-only handle reads, checks and backs up. [`begin_write`](./database.md#begin-write), a schema the file does not hold already, [`upgrade_format`](./database.md#upgrade-format), [`compact`](./database.md#compact), [`set_key`](./database.md#set-key) and [`set_password`](./database.md#set-password) fail with `READ_ONLY`, and [`sync`](./database.md#sync) and [`close`](./database.md#close) do nothing to the file. Nothing is created: a path that holds no database fails with `NOT_FOUND`.
+- **Recovery.** A file left by a process that died, or by a power cut, may need recovery before it can be read, and recovery writes to it. Such a file is refused with `READ_ONLY` until it has been opened once without this option.
+- **Write access.** The file is still opened for writing, since the locks that coordinate processes need that, so the process needs write access to it, and a read-only medium is not supported. Other handles to the file, in this process or another, write as ever, and this one reads what they commit.
+
+[Getting started](../../guide/getting-started.md#open-a-database-read-only) has an example.
 
 ### key
 

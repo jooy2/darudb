@@ -41,6 +41,7 @@ const db = Database.open('notes.darudb', {
 | [`maxUnsyncedPages`](#maxunsyncedpages) | `number` | `16384` | How many pages deferred commits may write before one is made durable |
 | [`maxUnsyncedTime`](#maxunsyncedtime) | `number` | `1000` | How long deferred commits may wait to be made durable, in milliseconds |
 | [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | Whether to raise a file in an older format |
+| [`readOnly`](#readonly) | `boolean` | `false` | Whether nothing done through the database changes the file |
 | [`schema`](#schema) | `S` | None | The collections the database holds |
 | [`migrations`](#migrations) | `Migration<S>[]` | None | How an older schema version becomes this one |
 | [`key`](#key) | `Uint8Array` | None | The 32-byte key of an encrypted file |
@@ -106,6 +107,20 @@ Whether opening a file in an older format version raises it to [`FORMAT_VERSION`
 - **What it costs.** Raising the version rewrites the header and nothing else, with three barriers, whatever the file holds. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](../../api/node/database.md#compact) rewrites the trees where that saves room.
 - **When it happens.** Only while no other process has the file open, in the process that opens it then. With another process in, the file stays as it is until the next such open.
 - **Going back.** A release that knows only the older version refuses the file once it is raised. An application that may go back to such a release sets this to `false`, and raises the version with [`upgradeFormat`](../../api/node/database.md#upgradeformat) once it no longer may. With `false`, a new database is created in format version 5, which every release reads.
+
+### readOnly
+
+```ts
+readOnly?: boolean;
+```
+
+Whether the database is opened read-only, so that nothing done through it changes the file. `false` by default.
+
+- **What it does and refuses.** A read-only database reads, checks and backs up. [`write`](../../api/node/database.md#write), [`compact`](../../api/node/database.md#compact), [`upgradeFormat`](../../api/node/database.md#upgradeformat), [`setKey`](../../api/node/database.md#setkey), [`setPassword`](../../api/node/database.md#setpassword) and their `Async` twins fail with `READ_ONLY`, and so does opening with a `schema` the file does not hold already, since storing one or migrating to it writes. `sync` and `close` do nothing to the file. Nothing is created: a path with no database fails with `NOT_FOUND`.
+- **Recovery.** A file left by a process that died, or by a power cut, may need recovery before it can be read, and recovery writes to it. Such a file is refused with `READ_ONLY` until it has been opened once without this option.
+- **Write access.** The process still needs write access to the file, which the locks that coordinate processes use, so a read-only medium is not supported. Another `Database` of the file, in this process or another, writes as ever, and this one reads what it commits.
+
+Unlike the options that belong to the file, this one is the `Database`'s own: one `Database` of a file may be read-only beside another that writes.
 
 ### schema
 

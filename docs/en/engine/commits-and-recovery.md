@@ -103,6 +103,8 @@ Recovery runs in the first process to open the file, when no other process has i
 
 Recovery always finds a commit, because the durable commit always qualifies: its slot is never chosen for a new record, its pages are never reused, and everything it reaches was durable before it was published. If no record qualifies, the file is damaged beyond what recovery repairs, and opening fails with `CORRUPTED`. [Salvage](../guide/tools.md) is for that file.
 
+A handle opened read-only may be the first to open the file, and recovery then chooses the commit as ever but writes nothing. If what it chose has to be written down, the selector, a newer record erased, or the static check a raise of the format version left unwritten, the open fails with `READ_ONLY` and the file is as it was; a file closed by the handle that wrote it last needs none of that and opens. The tail past the commit's last page stays for the next handle that writes to cut off. Read-only is a property of the handle, not of the file: the file is opened for writing all the same, since the locks need it, and other handles write beside it. An instance whose handles are all read-only writes nothing by itself either: it does not raise the format version, and it does not end the unsynced window another process left open.
+
 ## Creating a database
 
 A new database is first written whole to a temporary file in the same directory, named after the database with a random suffix, and synced. It is then moved to its name without replacing anything: linked to the name, which fails if the name is taken, or on a file system without links, renamed with the platform's rename that never replaces a file. On Unix-like systems the directory is synced too, so that the new name survives a power cut.

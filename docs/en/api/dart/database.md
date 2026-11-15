@@ -37,6 +37,7 @@ static Database open(
   String? password,
   PasswordHashing? passwordHashing,
   bool upgradeFormat = true,
+  bool readOnly = false,
 });
 ```
 
@@ -56,6 +57,7 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `password` | A password, which does what `key` does through a key derived with Argon2id |
 | `passwordHashing` | What deriving a key from a password costs, for a new file and for `setPassword`. See [PasswordHashing](../../types/dart/password-hashing.md) |
 | `upgradeFormat` | Whether a file in an older format version is raised to the newest this package writes, [formatVersion](../../types/dart/constants.md): `true` by default. See below |
+| `readOnly` | Whether the database is opened read-only, so that nothing done through it changes the file: `false` by default. See below |
 
 Migration functions run inside this call, one version step after another, and receive a [MigrationContext](./migration-context.md). They have to be synchronous here: one that returns a `Future` fails with `INVALID_ARGUMENT`. If one throws, the file keeps its old schema and data, and `open` throws the same error.
 
@@ -69,6 +71,8 @@ Migration functions run inside this call, one version step after another, and re
 ```dart
 final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]));
 ```
+
+A read-only database reads, checks and backs up. `write`, `compact`, `upgradeFormat`, `setKey`, `setPassword` and their `Future` forms fail with `READ_ONLY`, and so does a `schema` the file does not hold already, since storing one or migrating to it writes; `sync` and `close` do nothing to the file. Nothing is created, so a path with no database fails with `NOT_FOUND`. A file left by a process that died, or by a power cut, may need recovery, which writes to it, and is refused with `READ_ONLY` until it has been opened once without `readOnly`. The process still needs write access to the file, which the locks that coordinate processes use; another `Database` of the file writes beside it as ever.
 
 Raising a file's format version rewrites the header and nothing else, with three barriers, and only while no other process has the file open. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](#compact) rewrites the trees where that saves room. A release that knows only the older version refuses the file once it is raised, so an app that may go back to such a release passes `upgradeFormat: false`, and calls [`upgradeFormat`](#upgradeformat) once it no longer may. With `false`, a new database is created in format version 5, which every release reads.
 
@@ -91,6 +95,7 @@ static Future<Database> openAsync(
   String? password,
   PasswordHashing? passwordHashing,
   bool upgradeFormat = true,
+  bool readOnly = false,
 });
 ```
 
@@ -162,6 +167,14 @@ int get formatVersion;
 ```
 
 The file format version recorded in the file: 6, which this package writes (the top-level [formatVersion](../../types/dart/constants.md)), or 5 for a file that opening did not raise, with `upgradeFormat: false` or while another process had the file open.
+
+### isReadOnly
+
+```dart
+bool get isReadOnly;
+```
+
+Whether the database was opened read-only, with `readOnly: true`.
 
 ### isEncrypted
 

@@ -58,6 +58,7 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 | [`DuplicateKey`](#duplicatekey) | `DUPLICATE_KEY` | 기본 키나 고유 값이 이미 쓰이고 있습니다 |
 | [`InvalidQuery`](#invalidquery) | `INVALID_QUERY` | 쿼리를 해석할 수 없거나 스키마에 맞지 않습니다 |
 | [`MigrationFailed`](#migrationfailed) | `MIGRATION_FAILED` | 마이그레이션 함수가 오류로 멈췄습니다 |
+| [`ReadOnly`](#readonly) | `READ_ONLY` | 읽기 전용 핸들에 파일을 쓰는 일을 요청했습니다 |
 | [`Internal`](#internal) | `INTERNAL` | DaruDB의 버그입니다 |
 
 ### Io
@@ -217,6 +218,14 @@ let migration = Migration::to(2).run(|migrating| {
     Ok(())
 });
 ```
+
+### ReadOnly
+
+```rust
+ReadOnly { message: String }
+```
+
+`READ_ONLY`. [`OpenOptions::read_only`](../../api/rust/open-options.md#read-only)로 읽기 전용으로 연 데이터베이스에서 파일에 써야 하는 호출을 했습니다. 쓰기 트랜잭션, 저장하거나 마이그레이션해야 하는 스키마, 형식 버전 올리기, 압축, 키 변경이 해당합니다. 파일에 복구가 필요할 때는 여는 것도 이 오류로 실패합니다. 복구가 파일에 쓰기 때문이며, 이 옵션 없이 한 번 열면 됩니다. `message`에 무엇을 거절했는지 적혀 있습니다.
 
 ### Internal
 

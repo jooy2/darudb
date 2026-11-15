@@ -97,6 +97,14 @@ pub fn sync(&self) -> Result<()>
 
 Makes every commit so far durable, the deferred ones included, whichever process made them. It returns at once when no deferred commit is waiting; otherwise it waits for a running write transaction, in this process or another, and fails with `BUSY` once the busy timeout has passed. A barrier that fails is reported as `SYNC_FAILED`, and the file has to be opened again. [Transactions](../../guide/transactions.md) explains deferred commits.
 
+### is_read_only
+
+```rust
+pub fn is_read_only(&self) -> bool
+```
+
+Whether the handle was opened read-only, with [`OpenOptions::read_only`](./open-options.md#read-only): nothing done through it changes the file, and what would fails with `READ_ONLY`.
+
 ### is_encrypted
 
 ```rust

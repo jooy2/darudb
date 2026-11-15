@@ -109,6 +109,14 @@ readonly formatVersion: number;
 
 The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/node/constants.md)), or 5 for a file that opening did not raise ([`upgradeFormat`](../../types/node/open-options.md#upgradeformat)).
 
+### isReadOnly
+
+```ts
+readonly isReadOnly: boolean;
+```
+
+Whether the database was opened read-only, with the option [`readOnly`](../../types/node/open-options.md#readonly).
+
 ### isEncrypted
 
 ```ts

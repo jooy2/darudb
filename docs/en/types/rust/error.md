@@ -58,6 +58,7 @@ fn open_now(path: &str) -> darudb::Result<Option<Database>> {
 | [`DuplicateKey`](#duplicatekey) | `DUPLICATE_KEY` | A primary key or a unique value is taken |
 | [`InvalidQuery`](#invalidquery) | `INVALID_QUERY` | A query does not parse, or does not fit the schema |
 | [`MigrationFailed`](#migrationfailed) | `MIGRATION_FAILED` | A migration function stopped with an error |
+| [`ReadOnly`](#readonly) | `READ_ONLY` | A read-only handle was asked for something that writes to the file |
 | [`Internal`](#internal) | `INTERNAL` | A bug in DaruDB |
 
 ### Io
@@ -217,6 +218,14 @@ let migration = Migration::to(2).run(|migrating| {
     Ok(())
 });
 ```
+
+### ReadOnly
+
+```rust
+ReadOnly { message: String }
+```
+
+`READ_ONLY`. The database was opened read-only, with [`OpenOptions::read_only`](../../api/rust/open-options.md#read-only), and the call would write to its file: a write transaction, a schema to store or migrate to, a raise of the format version, a compaction or a change of key. Opening fails with it too when the file needs recovery, which writes to it; open the file once without the option. `message` says what was refused.
 
 ### Internal
 

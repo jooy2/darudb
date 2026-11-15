@@ -107,6 +107,7 @@ A program can rely on the code, where the message is meant for a person and may 
 | `SCHEMA_TOO_NEW` | The file holds a newer schema version than the one declared: a newer application wrote it. |
 | `DUPLICATE_KEY` | An insert found its primary key taken, or a unique index found a value taken. |
 | `INVALID_QUERY` | A query names a field the collection does not have, tests one with a value of another type, or does not parse. |
+| `READ_ONLY` | The database was opened read-only, and the call would write to its file: a write transaction, a change of schema, format or key, a compaction, or the recovery a file needs before it can be read. |
 | `MIGRATION_FAILED` | A migration function reported that it failed. The file keeps its old schema and data. |
 | `INTERNAL` | Something only a bug in DaruDB can cause. Please report it. |
 | `IO` | The operating system failed an operation on the file. The message says what it reported. |

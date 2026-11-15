@@ -40,6 +40,7 @@ def open(
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
     upgrade_format: bool = True,
+    read_only: bool = False,
 ) -> Database: ...
 ```
 
@@ -59,6 +60,9 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `password` | A password, which does what `key` does through a key derived with Argon2id. A key and a password together fail with `INVALID_ARGUMENT` |
 | `password_hashing` | What deriving a key from a password costs, for a new file and for `set_password`. See [PasswordHashing](../../types/python/password-hashing.md) |
 | `upgrade_format` | Whether a file in an older format version is raised to the newest this package writes, [FORMAT_VERSION](../../types/python/constants.md): `True` by default. See below |
+| `read_only` | Whether the database is opened read-only, so that nothing done through it changes the file: `False` by default. See below |
+
+A read-only database reads, checks and backs up. A `write` block, `compact`, `upgrade_format`, `set_key`, `set_password` and their `_async` twins fail with `READ_ONLY`, and so does a `schema` the file does not hold already, since storing one or migrating to it writes; `sync` and `close` do nothing to the file. Nothing is created, so a path with no database fails with `NOT_FOUND`. A file left by a process that died, or by a power cut, may need recovery, which writes to it, and is refused with `READ_ONLY` until it has been opened once without `read_only`. The process still needs write access to the file, which the locks that coordinate processes use; another `Database` of the file writes beside it as ever.
 
 Raising a file's format version rewrites the header and nothing else, with three barriers, and only while no other process has the file open. The leaves written before keep their layout until a write changes them, when they take the newer, smaller one, and [`compact`](#compact) rewrites the trees where that saves room. A release that knows only the older version refuses the file once it is raised, so an application that may go back to such a release passes `upgrade_format=False`, and calls [`upgrade_format`](#upgrade-format) once it no longer may. With `False`, a new database is created in format version 5, which every release reads.
 
@@ -108,6 +112,7 @@ async def open_async(
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
     upgrade_format: bool = True,
+    read_only: bool = False,
 ) -> Database: ...
 ```
 
@@ -214,6 +219,15 @@ def format_version(self) -> int: ...
 ```
 
 The file format version recorded in the file: 6, which this package writes ([FORMAT_VERSION](../../types/python/constants.md)), or 5 for a file that opening did not raise, with `upgrade_format=False` or while another process had the file open.
+
+### is_read_only
+
+```python
+@property
+def is_read_only(self) -> bool: ...
+```
+
+Whether the database was opened read-only, with `read_only=True`.
 
 ### is_encrypted
 

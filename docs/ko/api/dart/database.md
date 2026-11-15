@@ -37,6 +37,7 @@ static Database open(
   String? password,
   PasswordHashing? passwordHashing,
   bool upgradeFormat = true,
+  bool readOnly = false,
 });
 ```
 
@@ -56,6 +57,7 @@ static Database open(
 | `password` | 비밀번호. Argon2id로 만든 키로 `key`와 같은 일을 합니다 |
 | `passwordHashing` | 비밀번호에서 키를 만드는 비용. 새 파일과 `setPassword`에 씁니다. [PasswordHashing](../../types/dart/password-hashing.md)을 보세요 |
 | `upgradeFormat` | 예전 형식 버전의 파일을 이 패키지가 쓰는 가장 새 버전인 [formatVersion](../../types/dart/constants.md)으로 올릴지 여부. 기본값은 `true`이며, 아래에 설명합니다 |
+| `readOnly` | 데이터베이스를 읽기 전용으로 열지 여부. 읽기 전용으로 열면 이 데이터베이스로 하는 일은 파일을 바꾸지 않습니다. 기본값은 `false`이며, 아래에 설명합니다 |
 
 마이그레이션 함수는 이 호출 안에서 버전 단계마다 차례로 실행되며 [MigrationContext](./migration-context.md)를 받습니다. 여기서는 동기 함수여야 하고, `Future`를 돌려주면 `INVALID_ARGUMENT`로 실패합니다. 함수가 예외를 던지면 파일은 예전 스키마와 데이터를 그대로 유지하고, `open`도 같은 예외를 던집니다.
 
@@ -69,6 +71,8 @@ static Database open(
 ```dart
 final db = Database.open('app.darudb', schema: const Schema(1, [userSchema]));
 ```
+
+읽기 전용 데이터베이스는 읽고, 검사하고, 백업합니다. `write`, `compact`, `upgradeFormat`, `setKey`, `setPassword`와 각각의 `Future` 형태는 `READ_ONLY`로 실패하고, 파일에 저장돼 있지 않은 `schema`도 그렇습니다. 스키마를 저장하거나 마이그레이션하려면 파일에 써야 하기 때문입니다. `sync`와 `close`는 파일에 아무것도 하지 않습니다. 파일을 만들지 않으므로 데이터베이스가 없는 경로는 `NOT_FOUND`로 실패합니다. 프로세스가 죽었거나 정전이 난 뒤에 남은 파일은 복구해야 할 수 있고 복구는 파일에 쓰므로, 그런 파일은 `readOnly` 없이 한 번 열 때까지 `READ_ONLY`로 거절됩니다. 프로세스 사이를 조율하는 잠금 때문에 프로세스에는 여전히 파일을 쓸 권한이 있어야 하며, 이 파일을 연 다른 `Database`는 전처럼 씁니다.
 
 형식 버전을 올릴 때는 헤더만 다시 쓰고 동기화를 세 번 하며, 다른 프로세스가 파일을 열고 있지 않을 때만 올립니다. 전에 쓴 리프는 쓰기가 바꿀 때까지 배치를 그대로 두다가, 바뀔 때 더 작은 새 배치로 쓰입니다. [`compact`](#compact)는 새 배치로 공간이 줄어드는 트리를 다시 씁니다. 예전 버전만 아는 릴리스는 올린 파일을 거부하므로, 그런 릴리스로 되돌아갈 수 있는 앱은 `upgradeFormat: false`를 넘기고, 되돌아갈 일이 없어지면 [`upgradeFormat`](#upgradeformat)을 부릅니다. 끄면 새 데이터베이스는 모든 릴리스가 읽는 형식 버전 5로 만듭니다.
 
@@ -91,6 +95,7 @@ static Future<Database> openAsync(
   String? password,
   PasswordHashing? passwordHashing,
   bool upgradeFormat = true,
+  bool readOnly = false,
 });
 ```
 
@@ -162,6 +167,14 @@ int get formatVersion;
 ```
 
 파일에 기록된 파일 형식 버전입니다. 이 패키지가 쓰는 6(최상위 [formatVersion](../../types/dart/constants.md))이거나, `upgradeFormat: false`로 열었거나 다른 프로세스가 파일을 열고 있어서 올리지 않은 파일이라면 5입니다.
+
+### isReadOnly
+
+```dart
+bool get isReadOnly;
+```
+
+데이터베이스를 `readOnly: true`로 읽기 전용으로 열었는지 나타냅니다.
 
 ### isEncrypted
 

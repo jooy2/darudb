@@ -325,6 +325,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migration` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgrade_format(false)` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
+- `read_only(true)` opens the database read-only, so that nothing done through it changes the file. See [Open a database read-only](#open-a-database-read-only).
 
 [`OpenOptions`](../api/rust/open-options.md) in the API section has each of them in full.
 
@@ -342,6 +343,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
+- `readOnly: true` opens the database read-only, so that nothing done through it changes the file. See [Open a database read-only](#open-a-database-read-only).
 
 [`OpenOptions`](../types/node/open-options.md) in the Types section has each of them in full.
 
@@ -359,6 +361,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
+- `readOnly: true` opens the database read-only, so that nothing done through it changes the file. See [Open a database read-only](#open-a-database-read-only).
 
 [`Database.open`](../api/dart/database.md#open) in the API section has each of them in full, and `Database.openAsync` takes the same.
 
@@ -376,10 +379,75 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgrade_format=False` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
+- `read_only=True` opens the database read-only, so that nothing done through it changes the file. See [Open a database read-only](#open-a-database-read-only).
 
 [`Database.open`](../api/python/database.md#open) in the API section has each of them in full, and `Database.open_async` takes the same.
 
 :::
+
+## Open a database read-only
+
+A database opened read-only is one through which the file's bytes never change. It is for a program that only looks: a report, a tool that inspects a file another program owns, or a part of an application that must not write by accident.
+
+::: lang rust
+
+```rust
+use darudb::OpenOptions;
+
+fn count(path: &str) -> darudb::Result<u64> {
+    let db = OpenOptions::new().read_only(true).open(path)?;
+    let read = db.begin_read()?;
+
+    read.collection("users")?.len()
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+import { Database } from 'darudb';
+
+const db = Database.open('app.darudb', { readOnly: true });
+const users = db.read((txn) => txn.collection('users').count());
+
+db.close();
+```
+
+:::
+
+::: lang dart
+
+```dart
+final db = Database.open('app.darudb', readOnly: true);
+final users = db.read(
+  (txn) => txn.collection(db.storedCollection('users')).count(),
+);
+
+db.close();
+```
+
+:::
+
+::: lang python
+
+```python
+import darudb
+
+with darudb.Database.open("app.darudb", read_only=True) as db:
+    with db.read() as txn:
+        users = txn.collection("users").count()
+```
+
+:::
+
+- **What it does.** It reads, checks the file and backs it up. Other handles to the file, in the process or in another, write as ever, and the read-only one reads what they commit.
+- **What it refuses.** A write transaction, a schema the file does not hold already, since storing one or migrating to it writes, raising the format version, compaction and a change of key fail with `READ_ONLY`. A sync and a close do nothing to the file. Nothing is created either: a path with no database fails with `NOT_FOUND`.
+- **A file that needs recovery.** A file left by a process that died, or by a power cut, with nobody having opened it since, may need recovery before it can be read, and recovery writes to it. A read-only open of such a file fails with `READ_ONLY` and leaves the file as it was. Open it once without the option, and it opens read-only from then on.
+- **Write access all the same.** The file is still opened for writing, because the locks that coordinate processes need that. The process has to be allowed to write to the file, and a database on a read-only medium does not open.
+
+<LangCode rust="Database::is_read_only" node="isReadOnly" dart="isReadOnly" python="is_read_only" /> says whether a database was opened this way.
 
 ## Next steps
 

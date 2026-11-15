@@ -325,6 +325,7 @@ db.close()
 - `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migration`은 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgrade_format(false)`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
+- `read_only(true)`를 주면 데이터베이스를 읽기 전용으로 엽니다. 이 핸들로 하는 일은 파일을 바꾸지 않습니다. [읽기 전용으로 열기](#읽기-전용으로-열기)를 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`OpenOptions`](../api/rust/open-options.md)에 있습니다.
 
@@ -342,6 +343,7 @@ db.close()
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
+- `readOnly: true`를 주면 데이터베이스를 읽기 전용으로 엽니다. 이 핸들로 하는 일은 파일을 바꾸지 않습니다. [읽기 전용으로 열기](#읽기-전용으로-열기)를 보세요.
 
 옵션마다 자세한 설명은 타입 섹션의 [`OpenOptions`](../types/node/open-options.md)에 있습니다.
 
@@ -359,6 +361,7 @@ db.close()
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
+- `readOnly: true`를 주면 데이터베이스를 읽기 전용으로 엽니다. 이 핸들로 하는 일은 파일을 바꾸지 않습니다. [읽기 전용으로 열기](#읽기-전용으로-열기)를 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/dart/database.md#open)에 있고, `Database.openAsync`도 같은 옵션을 받습니다.
 
@@ -376,10 +379,75 @@ db.close()
 - `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgrade_format=False`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
+- `read_only=True`를 주면 데이터베이스를 읽기 전용으로 엽니다. 이 핸들로 하는 일은 파일을 바꾸지 않습니다. [읽기 전용으로 열기](#읽기-전용으로-열기)를 보세요.
 
 옵션마다 자세한 설명은 API 섹션의 [`Database.open`](../api/python/database.md#open)에 있고, `Database.open_async`도 같은 옵션을 받습니다.
 
 :::
+
+## 읽기 전용으로 열기
+
+읽기 전용으로 연 데이터베이스는 파일의 바이트를 바꾸지 않습니다. 보고서를 만드는 프로그램, 다른 프로그램의 파일을 들여다보는 도구, 실수로라도 쓰면 안 되는 애플리케이션의 한 부분처럼 읽기만 하는 곳에 씁니다.
+
+::: lang rust
+
+```rust
+use darudb::OpenOptions;
+
+fn count(path: &str) -> darudb::Result<u64> {
+    let db = OpenOptions::new().read_only(true).open(path)?;
+    let read = db.begin_read()?;
+
+    read.collection("users")?.len()
+}
+```
+
+:::
+
+::: lang node
+
+```ts
+import { Database } from 'darudb';
+
+const db = Database.open('app.darudb', { readOnly: true });
+const users = db.read((txn) => txn.collection('users').count());
+
+db.close();
+```
+
+:::
+
+::: lang dart
+
+```dart
+final db = Database.open('app.darudb', readOnly: true);
+final users = db.read(
+  (txn) => txn.collection(db.storedCollection('users')).count(),
+);
+
+db.close();
+```
+
+:::
+
+::: lang python
+
+```python
+import darudb
+
+with darudb.Database.open("app.darudb", read_only=True) as db:
+    with db.read() as txn:
+        users = txn.collection("users").count()
+```
+
+:::
+
+- **하는 일.** 읽고, 파일을 검사하고, 백업합니다. 같은 프로세스나 다른 프로세스의 다른 핸들은 전처럼 쓰고, 읽기 전용 핸들은 그 핸들이 커밋한 내용을 읽습니다.
+- **거절하는 일.** 쓰기 트랜잭션, 파일에 저장돼 있지 않은 스키마, 형식 버전 올리기, 압축, 키 변경은 `READ_ONLY`로 실패합니다. 스키마를 저장하거나 마이그레이션하려면 파일에 써야 하기 때문입니다. 동기화와 닫기는 파일에 아무것도 하지 않습니다. 파일을 만들지도 않으므로, 데이터베이스가 없는 경로는 `NOT_FOUND`로 실패합니다.
+- **복구가 필요한 파일.** 프로세스가 죽었거나 정전이 난 뒤 아무도 다시 열지 않은 파일은 읽기 전에 복구해야 할 수 있고, 복구는 파일에 씁니다. 그런 파일을 읽기 전용으로 열면 `READ_ONLY`로 실패하고 파일은 그대로 남습니다. 이 옵션 없이 한 번 열고 나면 그 뒤로는 읽기 전용으로 열립니다.
+- **쓰기 권한은 여전히 필요합니다.** 프로세스 사이를 조율하는 잠금 때문에 파일은 여전히 쓰기용으로 엽니다. 프로세스에 파일을 쓸 권한이 있어야 하고, 읽기 전용 매체의 데이터베이스는 열리지 않습니다.
+
+데이터베이스를 이렇게 열었는지는 <LangCode rust="Database::is_read_only" node="isReadOnly" dart="isReadOnly" python="is_read_only" />가 알려 줍니다.
 
 ## 다음 단계
 

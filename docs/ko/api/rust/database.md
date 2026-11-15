@@ -97,6 +97,14 @@ pub fn sync(&self) -> Result<()>
 
 지금까지의 커밋을 지연 커밋까지 모두 디스크에 기록합니다. 어느 프로세스가 한 커밋인지는 상관없습니다. 기다리는 지연 커밋이 없으면 바로 반환합니다. 있으면 이 프로세스나 다른 프로세스에서 실행 중인 쓰기 트랜잭션을 기다리고, 바쁨 대기 시간이 지나면 `BUSY`로 실패합니다. 동기화가 실패하면 `SYNC_FAILED`를 돌려주며, 그 뒤에는 파일을 다시 열어야 합니다. 지연 커밋은 [트랜잭션](../../guide/transactions.md)에서 설명합니다.
 
+### is_read_only
+
+```rust
+pub fn is_read_only(&self) -> bool
+```
+
+핸들을 [`OpenOptions::read_only`](./open-options.md#read-only)로 읽기 전용으로 열었는지 알려 줍니다. 읽기 전용 핸들로 하는 일은 파일을 바꾸지 않고, 파일을 바꿀 호출은 `READ_ONLY`로 실패합니다.
+
 ### is_encrypted
 
 ```rust

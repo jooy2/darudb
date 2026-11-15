@@ -41,6 +41,7 @@ const db = Database.open('notes.darudb', {
 | [`maxUnsyncedPages`](#maxunsyncedpages) | `number` | `16384` | 지연 커밋이 디스크에 기록되기 전에 쓸 수 있는 페이지 수 |
 | [`maxUnsyncedTime`](#maxunsyncedtime) | `number` | `1000` | 지연 커밋이 디스크에 기록되기를 기다릴 수 있는 시간, 밀리초 단위 |
 | [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | 예전 형식의 파일을 올릴지 여부 |
+| [`readOnly`](#readonly) | `boolean` | `false` | 이 데이터베이스로 하는 일이 파일을 바꾸지 않게 할지 여부 |
 | [`schema`](#schema) | `S` | 없음 | 데이터베이스가 담는 컬렉션 |
 | [`migrations`](#migrations) | `Migration<S>[]` | 없음 | 예전 스키마 버전을 이 버전으로 바꾸는 방법 |
 | [`key`](#key) | `Uint8Array` | 없음 | 암호화한 파일의 32바이트 키 |
@@ -106,6 +107,20 @@ upgradeFormat?: boolean;
 - **드는 비용.** 파일에 무엇이 있든 헤더만 다시 쓰고, 동기화를 세 번 합니다. 전에 쓴 리프는 쓰기가 바꿀 때까지 배치를 그대로 두다가, 바뀔 때 더 작은 새 배치로 쓰입니다. [`compact`](../../api/node/database.md#compact)는 새 배치로 공간이 줄어드는 트리를 다시 씁니다.
 - **올리는 때.** 다른 프로세스가 파일을 열고 있지 않을 때, 그때 파일을 여는 프로세스가 올립니다. 다른 프로세스가 열고 있으면, 혼자 여는 다음 번까지 파일을 그대로 둡니다.
 - **되돌아가기.** 예전 버전만 아는 릴리스는 올린 파일을 거부합니다. 그런 릴리스로 되돌아갈 수 있는 애플리케이션은 이 값을 `false`로 두고, 되돌아갈 일이 없어지면 [`upgradeFormat`](../../api/node/database.md#upgradeformat)으로 버전을 올립니다. `false`면 새 데이터베이스는 모든 릴리스가 읽는 형식 버전 5로 만듭니다.
+
+### readOnly
+
+```ts
+readOnly?: boolean;
+```
+
+데이터베이스를 읽기 전용으로 열지 정합니다. 읽기 전용으로 열면 이 데이터베이스로 하는 일은 파일을 바꾸지 않습니다. 기본값은 `false`입니다.
+
+- **하는 일과 거절하는 일.** 읽기 전용 데이터베이스는 읽고, 검사하고, 백업합니다. [`write`](../../api/node/database.md#write), [`compact`](../../api/node/database.md#compact), [`upgradeFormat`](../../api/node/database.md#upgradeformat), [`setKey`](../../api/node/database.md#setkey), [`setPassword`](../../api/node/database.md#setpassword)와 각각의 `Async` 짝은 `READ_ONLY`로 실패합니다. 파일에 저장돼 있지 않은 `schema`로 여는 것도 그렇습니다. 스키마를 저장하거나 마이그레이션하려면 파일에 써야 하기 때문입니다. `sync`와 `close`는 파일에 아무것도 하지 않습니다. 파일을 만들지 않으므로 데이터베이스가 없는 경로는 `NOT_FOUND`로 실패합니다.
+- **복구.** 프로세스가 죽었거나 정전이 난 뒤에 남은 파일은 읽기 전에 복구해야 할 수 있고, 복구는 파일에 씁니다. 그런 파일은 이 옵션 없이 한 번 열 때까지 `READ_ONLY`로 거절됩니다.
+- **쓰기 권한.** 프로세스 사이를 조율하는 잠금이 쓰기 권한을 쓰므로 프로세스에는 여전히 파일을 쓸 권한이 있어야 하고, 읽기 전용 매체는 지원하지 않습니다. 같은 프로세스나 다른 프로세스에서 이 파일을 연 다른 `Database`는 전처럼 쓰고, 이 `Database`는 거기서 커밋한 내용을 읽습니다.
+
+파일에 딸린 옵션과 달리 이 옵션은 `Database`마다 따로입니다. 한 파일을 쓰는 `Database` 옆에 읽기 전용 `Database`를 둘 수 있습니다.
 
 ### schema
 
