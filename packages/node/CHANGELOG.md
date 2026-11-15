@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Asynchronous writes from several worker threads on one file take turns across the process. Each worker loads the package anew, with a queue of its own, and all of them share the four threads of the pool, so with more workers than that, their writes each waited there for the writer and left its holder no thread to finish on, until they failed with `BUSY`. A thread waiting for another's turn asks again after 1 to 16 milliseconds.
 - An object with an embedded object that has no fields, `t.object({})`, is written, where every write of one threw a `SyntaxError`.
 - `get`, `delete`, `update` and the other calls that take a primary key refuse a string with an unpaired surrogate with `INVALID_ARGUMENT`, as a write of such a string is refused. The key was looked up with U+FFFD in the surrogate's place, which is another key.
 - `busyTimeout` and `pageSize` are checked as whole numbers from 0 to 2^32 - 1 before they reach the engine, and anything else fails with `INVALID_ARGUMENT`. A `busyTimeout` of -1 became about 49 days, `Infinity` and `NaN` became 0, and a fraction was cut off.

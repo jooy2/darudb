@@ -67,6 +67,68 @@ pub fn engine_version() -> &'static str {
     darudb::VERSION
 }
 
+/// The files an asynchronous write, sync or close of some thread of the
+/// process has its turn on, each with the thread that has it.
+///
+/// A worker thread loads the package anew, with a queue of its own in
+/// JavaScript, while every thread's work goes to the one thread pool. Left
+/// to those queues, the writes of several workers on one file would each
+/// wait on a pool thread for the one that holds the writer, whose next call
+/// then finds no thread to run on, until they give up with `BUSY`. So a turn
+/// is taken here first, across the process, and a thread that does not get
+/// it waits in JavaScript, where it takes no pool thread.
+static TURNS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+/// The next number a thread that loaded the package is known by.
+static NEXT_REALM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+thread_local! {
+    /// The number this thread is known by in [`TURNS`], once it has one.
+    static REALM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The turns, whatever a thread that panicked with them left.
+fn turns() -> MutexGuard<'static, Vec<(String, u64)>> {
+    TURNS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Takes the process's turn on the file `key` for the calling thread, and
+/// returns whether it was free. A thread that goes away with a turn, as a
+/// worker that is terminated does, gives it back as it goes.
+#[napi]
+pub fn take_turn(env: Env, key: String) -> Result<bool> {
+    let mut realm = REALM.get();
+
+    if realm == 0 {
+        realm = NEXT_REALM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        REALM.set(realm);
+        env.add_env_cleanup_hook(realm, |realm| {
+            turns().retain(|(_, holder)| *holder != realm);
+        })
+        .map_err(|error| napi::Error::new("INTERNAL", error.reason.clone()))?;
+    }
+
+    let mut turns = turns();
+
+    if turns.iter().any(|(held, _)| *held == key) {
+        return Ok(false);
+    }
+
+    turns.push((key, realm));
+
+    Ok(true)
+}
+
+/// Gives back the turn [`take_turn`] took on the file `key`.
+#[napi]
+pub fn give_turn(key: String) {
+    let realm = REALM.get();
+
+    turns().retain(|(held, holder)| !(*held == key && *holder == realm));
+}
+
 /// What an asynchronous operation resolves to when it fails: the error's
 /// code and message, which the JavaScript side throws.
 #[napi(object)]

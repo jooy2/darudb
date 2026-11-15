@@ -145,6 +145,7 @@ await db.close_async()
 - Every collection method returns a promise. A transaction runs its operations in the order they were called, whether each was awaited or not, and commits only after the last one has settled. A rejected operation changes nothing, as in the synchronous API.
 - Operations called together, or while earlier ones are on the pool, go to the engine as one batch in one trip. A trip costs more than most operations, so starting many and awaiting them together is far cheaper than awaiting each in turn: `await Promise.all(keys.map((key) => users.get(key)))`.
 - The pool has four threads unless the `UV_THREADPOOL_SIZE` environment variable says otherwise, and Node.js runs its own file system calls there too.
+- Worker threads share that pool, and each loads the package for itself. Their asynchronous writes on one file take turns across the process, so a write waits for another thread's without taking a thread of the pool.
 
 :::
 

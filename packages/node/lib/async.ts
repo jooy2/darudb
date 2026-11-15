@@ -22,6 +22,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import native = require('../native.js');
 import type { NativeFailure, NativeTransaction } from '../native.js';
 import {
   Reader,
@@ -175,16 +176,37 @@ function turn(key: string): Promise<() => void> {
   file.queued += 1;
   file.tail = before.then(() => mine);
 
-  return before.then(() => {
+  const taken = () => {
     const release = hold(key);
 
     file.queued -= 1;
 
     return () => {
       release();
+      native.giveTurn(key);
       next();
     };
-  });
+  };
+
+  // This thread's own writes have gone. Another thread of the process, a
+  // worker or the main one, may have its turn on the file: each loads the
+  // package anew, with a queue of its own, and all of them share the thread
+  // pool, so the process's turn is taken before anything goes there.
+  return before.then(() => (native.takeTurn(key) ? taken() : othersTurn(key).then(taken)));
+}
+
+/** Waits until no other thread of the process has its turn on the file. */
+async function othersTurn(key: string): Promise<void> {
+  let wait = 1;
+
+  // Asked again and again, a little later each time up to 16 milliseconds:
+  // threads share no queue, and waiting here takes no thread of the pool.
+  do {
+    await new Promise((resolve) => {
+      setTimeout(resolve, wait);
+    });
+    wait = Math.min(wait * 2, 16);
+  } while (!native.takeTurn(key));
 }
 
 /**

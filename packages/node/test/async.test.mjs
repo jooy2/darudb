@@ -784,3 +784,78 @@ describe('asynchronous opening', () => {
     assert.equal(await again.readAsync((txn) => txn.collection('users').count()), 3);
   });
 });
+
+describe('worker threads', () => {
+  it('take turns writing one file without filling the thread pool', async (context) => {
+    const { Worker } = await import('node:worker_threads');
+    const path = tempPath(context);
+    const source = `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const { Database, collection, schema, t } = require(workerData.package);
+
+      (async () => {
+        const db = await Database.openAsync(workerData.path, {
+          schema: schema(1, { users: collection({ name: t.string() }) }),
+          busyTimeout: 2000
+        });
+        let written = 0;
+
+        try {
+          for (let round = 0; round < 10; round++) {
+            await db.writeAsync(async (txn) => {
+              const users = txn.collection('users');
+
+              await users.insert({ name: 'a' });
+              await users.count();
+              await users.insert({ name: 'b' });
+              written += 1;
+            });
+          }
+
+          parentPort.postMessage(written);
+        } catch (error) {
+          parentPort.postMessage(String(error.code));
+        } finally {
+          await db.closeAsync();
+        }
+      })();
+    `;
+
+    Database.open(path, {
+      schema: schema(1, { users: collection({ name: t.string() }) })
+    }).close();
+
+    // More workers than the pool has threads: each one's write waiting
+    // there for the writer would leave its holder no thread to finish on.
+    const results = await Promise.all(
+      Array.from(
+        { length: 6 },
+        () =>
+          new Promise((resolve, reject) => {
+            const worker = new Worker(source, {
+              eval: true,
+              workerData: {
+                path,
+                package: fileURLToPath(new URL('../dist/index.js', import.meta.url))
+              }
+            });
+
+            worker.once('message', resolve);
+            worker.once('error', reject);
+          })
+      )
+    );
+
+    assert.deepEqual(results, [10, 10, 10, 10, 10, 10]);
+
+    const db = Database.open(path, {
+      schema: schema(1, { users: collection({ name: t.string() }) })
+    });
+
+    assert.equal(
+      db.read((txn) => txn.collection('users').count()),
+      120
+    );
+    db.close();
+  });
+});
