@@ -134,6 +134,10 @@ fn bind(query: &Query, values: impl IntoIterator<Item = Value>) -> darudb::Resul
 pub fn run(directory: &Path, rows: &mut Rows) -> darudb::Result<()> {
     let mut options = OpenOptions::new();
 
+    // The page cache every store is given, by name, since DaruDB's default
+    // is larger on a desktop.
+    options.cache_size(32 << 20);
+
     options.schema(
         Schema::new(1)
             .collection(Collection::of::<Organization>())

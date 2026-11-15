@@ -12,6 +12,10 @@
 
 - The types `CollectionOptions`, `IndexDeclaration` and `IndexPath`, which `collection` takes its indexes in, are exported, so that code can name them.
 
+### Changed
+
+- The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `cacheSize` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
+
 ### Fixed
 
 - Asynchronous writes from several worker threads on one file take turns across the process. Each worker loads the package anew, with a queue of its own, and all of them share the four threads of the pool, so with more workers than that, their writes each waited there for the writer and left its holder no thread to finish on, until they failed with `BUSY`. A thread waiting for another's turn asks again after 1 to 16 milliseconds.

@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import darudb
-from common import OBJECTS, Digest, Rows, person, random_ids, random_numbers
+from common import CACHE_SIZE, OBJECTS, Digest, Rows, person, random_ids, random_numbers
 from darudb import F, Query, field, param, where
 
 
@@ -25,7 +25,7 @@ SCHEMA = darudb.Schema(1, [Person])
 
 
 def run(directory: Path, rows: Rows) -> None:
-    db = darudb.Database.open(directory / "commits.darudb", schema=SCHEMA)
+    db = darudb.Database.open(directory / "commits.darudb", schema=SCHEMA, cache_size=CACHE_SIZE)
 
     def insert(round_: int, durability: str, offset: int) -> None:
         with db.write(durability=durability) as txn:  # type: ignore[arg-type]
@@ -35,7 +35,7 @@ def run(directory: Path, rows: Rows) -> None:
     rows.each("insert-deferred", 10_000, lambda r, d: insert(r, "deferred", 1_000))
     db.close()
 
-    db = darudb.Database.open(directory / "objects.darudb", schema=SCHEMA)
+    db = darudb.Database.open(directory / "objects.darudb", schema=SCHEMA, cache_size=CACHE_SIZE)
 
     def bulk(d: Digest) -> None:
         with db.write() as txn:

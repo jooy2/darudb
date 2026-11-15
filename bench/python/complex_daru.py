@@ -10,7 +10,7 @@ from pathlib import Path
 
 import complex as cx
 import darudb
-from common import Digest, Rows
+from common import CACHE_SIZE, Digest, Rows
 from darudb import Query, field
 
 
@@ -68,7 +68,7 @@ def person_of(values: dict[str, object]) -> Person:
 
 
 def run(directory: Path, rows: Rows) -> None:
-    db = darudb.Database.open(directory / "complex.darudb", schema=SCHEMA)
+    db = darudb.Database.open(directory / "complex.darudb", schema=SCHEMA, cache_size=CACHE_SIZE)
 
     # The objects are made before the load's time starts.
     organizations = [

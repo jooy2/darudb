@@ -4,7 +4,7 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { Digest, OBJECTS, Rows, finish, person, randomIds, randomNumbers } from './common.mjs';
+import { CACHE_SIZE, Digest, OBJECTS, Rows, finish, person, randomIds, randomNumbers } from './common.mjs';
 
 const [, , directory, packageDir] = process.argv;
 const { collection, Database, schema, t, param } = await import(
@@ -22,7 +22,7 @@ const app = schema(1, {
 });
 
 const rows = new Rows();
-let db = Database.open(join(directory, 'commits.darudb'), { schema: app });
+let db = Database.open(join(directory, 'commits.darudb'), { schema: app, cacheSize: CACHE_SIZE });
 
 rows.each('insert-sync', 500, (round) => {
   db.write((txn) => txn.collection('people').insert(person(round)));
@@ -34,7 +34,7 @@ rows.each('insert-deferred', 10_000, (round) => {
 });
 db.close();
 
-db = Database.open(join(directory, 'objects.darudb'), { schema: app });
+db = Database.open(join(directory, 'objects.darudb'), { schema: app, cacheSize: CACHE_SIZE });
 
 rows.all('insert-bulk', OBJECTS, () => {
   db.write((txn) => {

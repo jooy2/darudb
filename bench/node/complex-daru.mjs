@@ -6,7 +6,7 @@
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { Digest, Rows, finish } from './common.mjs';
+import { CACHE_SIZE, Digest, Rows, finish } from './common.mjs';
 import { ROWS, batches, objects, runs, updatedCount } from './complex.mjs';
 
 const [, , directory, packageDir] = process.argv;
@@ -47,7 +47,7 @@ const app = schema(1, {
 });
 
 const rows = new Rows();
-const db = Database.open(join(directory, 'complex.darudb'), { schema: app });
+const db = Database.open(join(directory, 'complex.darudb'), { schema: app, cacheSize: CACHE_SIZE });
 const made = objects();
 const people = made.people.map(({ city, zip, ...person }) => ({
   ...person,

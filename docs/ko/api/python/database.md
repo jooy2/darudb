@@ -50,7 +50,7 @@ def open(
 | `create` | 없는 파일을 만들지 여부. `False`면 만들지 않고 `NOT_FOUND`로 실패합니다 |
 | `page_size` | 새 파일의 페이지 크기. 4096부터 65536 사이의 2의 거듭제곱이며 기본값은 4096입니다. 이미 있는 파일은 자기 페이지 크기를 씁니다 |
 | `busy_timeout` | 파일을 열 때와 쓸 때 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간. 단위는 초이며 기본값은 5입니다 |
-| `cache_size` | 페이지 캐시가 쓸 메모리. 단위는 바이트이며 기본값은 32 MiB입니다 |
+| `cache_size` | 페이지 캐시가 쓸 메모리. 단위는 바이트이며 기본값은 128 MiB, 최대 256 MiB이고 iOS와 Android에서는 둘 다 32 MiB입니다 |
 | `key` | 32바이트 키. 새 파일을 암호화하고, 암호화한 파일을 엽니다 |
 | `password` | 비밀번호. Argon2id로 만든 키로 `key`와 같은 일을 합니다. 키와 비밀번호를 함께 주면 `INVALID_ARGUMENT`로 실패합니다 |
 | `password_hashing` | 비밀번호에서 키를 만드는 비용. 새 파일과 `set_password`에 씁니다. [PasswordHashing](../../types/python/password-hashing.md)을 보세요 |

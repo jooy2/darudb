@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `cacheSize` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
+
 ### Fixed
 
 - A transaction of the `Future` API whose isolate goes away before it ends, because the isolate was killed or a Flutter app restarted hot while its function was waiting, is freed with the isolate. A write transaction left that way held the file's writer for as long as the process lived, and every later write in the process failed with `BUSY`.

@@ -12,8 +12,18 @@ use crate::format::{self, Cipher, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, MIN_PAGE_SIZ
 use crate::instance::Settings;
 use crate::schema::{self, Migration, Schema};
 
-/// The memory the page cache of a file may take by default, in bytes.
-const DEFAULT_CACHE_SIZE: usize = 32 << 20;
+/// The memory the page cache of a file may take by default, in bytes: 32 MiB
+/// on iOS and Android, where an app and its extensions have little, and
+/// 128 MiB elsewhere. The cache is in memory only, so a file is the same
+/// whichever platform opens it.
+const DEFAULT_CACHE_SIZE: usize = if MOBILE { 32 << 20 } else { 128 << 20 };
+
+/// The most memory the page cache of a file takes, whatever is asked for:
+/// 32 MiB on iOS and Android, and 256 MiB elsewhere.
+const MAX_CACHE_SIZE: usize = if MOBILE { 32 << 20 } else { 256 << 20 };
+
+/// Whether this build is for a phone or a tablet.
+const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android"));
 
 /// Options for opening a database, in the style of [`std::fs::OpenOptions`].
 ///
@@ -94,8 +104,9 @@ impl OpenOptions {
         self
     }
 
-    /// How much memory the file's page cache may take, in bytes. 32 MiB by
-    /// default.
+    /// How much memory the file's page cache may take, in bytes: 128 MiB by
+    /// default and 256 MiB at most, or 32 MiB for both on iOS and Android.
+    /// More than the most is taken as the most.
     ///
     /// The cache keeps pages read from the file, checked and decrypted, so
     /// that reading one again costs neither a read nor a check. It holds as
@@ -112,7 +123,7 @@ impl OpenOptions {
     /// Every handle to a file in one process shares one cache, and the
     /// options of the handle that opened the file first apply to all of them.
     pub fn cache_size(&mut self, bytes: usize) -> &mut Self {
-        self.cache_size = bytes;
+        self.cache_size = bytes.min(MAX_CACHE_SIZE);
         self
     }
 
@@ -413,5 +424,26 @@ impl OpenOptions {
 impl Default for OpenOptions {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cache is bounded whatever is asked for, and the bounds are the
+    /// documented ones: smaller where an app has little memory.
+    #[test]
+    fn the_cache_is_bounded_by_the_platform() {
+        let mut options = OpenOptions::new();
+        let (default, most) = if cfg!(any(target_os = "ios", target_os = "android")) {
+            (32 << 20, 32 << 20)
+        } else {
+            (128 << 20, 256 << 20)
+        };
+
+        assert_eq!(options.cache_size, default);
+        assert_eq!(options.cache_size(usize::MAX).cache_size, most);
+        assert_eq!(options.cache_size(4096).cache_size, 4096);
     }
 }

@@ -5,6 +5,9 @@
 
 export const OBJECTS = 100_000;
 
+// The page cache every store is given, in bytes: DaruDB is given it by name, since its default is larger on a desktop.
+export const CACHE_SIZE = 32 * 1024 * 1024;
+
 /** The `n`th object, counting from 0. It gets the key `n + 1`. */
 export const person = (n) => ({
   name: `person ${n}`,

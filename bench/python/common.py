@@ -13,6 +13,9 @@ from dataclasses import dataclass
 
 OBJECTS = 100_000
 
+# The page cache every store is given, in bytes: DaruDB is given it by name, since its default is larger on a desktop.
+CACHE_SIZE = 32 * 1024 * 1024
+
 _MASK = (1 << 64) - 1
 
 

@@ -5,7 +5,7 @@ library;
 
 import 'package:darudb/darudb.dart';
 
-import 'common.dart' show Digest, Rows;
+import 'common.dart' show Digest, Rows, cacheSize;
 import 'complex.dart';
 import 'complex_model.dart';
 
@@ -16,7 +16,7 @@ void _person(Digest d, Person p) => d.add(p.id!, p.age);
 void _post(Digest d, Post p) => d.add(p.id!, p.likes);
 
 void run(String directory, Rows rows) {
-  final db = Database.open('$directory/complex.darudb', schema: _schema);
+  final db = Database.open('$directory/complex.darudb', schema: _schema, cacheSize: cacheSize);
 
   // The objects are made before the load's time starts.
   final organizations = [

@@ -9,6 +9,9 @@ import 'dart:io';
 
 const int objects = 100000;
 
+/// The page cache every store is given, in bytes: DaruDB is given it by name, since its default is larger on a desktop.
+const int cacheSize = 32 * 1024 * 1024;
+
 /// An object's fields, as the stores that keep no class of their own write
 /// them and give them back.
 final class Fields {

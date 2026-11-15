@@ -50,7 +50,7 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `create` | Whether a missing file is created. `False` fails with `NOT_FOUND` instead |
 | `page_size` | The page size of a new file: a power of two from 4096 to 65536, 4096 by default. An existing file keeps its own |
 | `busy_timeout` | How long, in seconds, opening and a write wait for another writer before failing with `BUSY`: 5 by default |
-| `cache_size` | The memory the page cache may take, in bytes: 32 MiB by default |
+| `cache_size` | The memory the page cache may take, in bytes: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android |
 | `key` | A key of 32 bytes, which encrypts a new file and opens an encrypted one |
 | `password` | A password, which does what `key` does through a key derived with Argon2id. A key and a password together fail with `INVALID_ARGUMENT` |
 | `password_hashing` | What deriving a key from a password costs, for a new file and for `set_password`. See [PasswordHashing](../../types/python/password-hashing.md) |

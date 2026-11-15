@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- The page cache of a file takes up to 128 MiB by default on Windows, macOS and Linux, where it took 32 MiB, and `cache_size` takes at most 256 MiB there. On iOS and Android both stay 32 MiB. A value above the most is taken as the most. The cache fills only as pages are read and is in memory alone, so a file smaller than it takes no more than before; a scan of a file larger than 32 MiB no longer reads it from the disk each time.
+
 ### Fixed
 
 - A call of an asynchronous transaction that is cancelled while it runs, by `asyncio.wait_for` for one, ends before the cancellation is raised, and so does a commit. The transaction went on while the call still ran on the pool, and leaving the block then waited for it on the event loop's thread, which stopped the loop for as long as the call took. What a cancelled call did is part of the transaction, and a cancelled commit has committed.

@@ -47,7 +47,7 @@ Every handle to a file in one process shares one instance, and some options belo
 | `create`             | `true`                                      |
 | `page_size`          | 4096 bytes                                  |
 | `busy_timeout`       | 5 seconds                                   |
-| `cache_size`         | 32 MiB                                      |
+| `cache_size`         | 128 MiB, or 32 MiB on iOS and Android       |
 | `max_unsynced_pages` | 16384 pages                                 |
 | `max_unsynced_time`  | 1 second                                    |
 | `password_hashing`   | 19456 KiB, 2 iterations, 1 lane             |
@@ -97,7 +97,7 @@ How long [`Database::begin_write`](./database.md#begin-write) waits for a write 
 pub fn cache_size(&mut self, bytes: usize) -> &mut Self
 ```
 
-How much memory the file's page cache may take, in bytes. The cache keeps pages read from the file, checked and decrypted, so that reading one again costs neither a read nor a check. It holds as many pages as fit in `bytes`, and at least 16, and it fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up reading a database that does not fit in it; a process with little memory, such as a mobile app extension, can give it less. Beside the pages, it keeps where a field lies in each record of the pages a query without an index read, for the next query that tests or sorts by that field, in up to a sixteenth more than its size.
+How much memory the file's page cache may take, in bytes: at most 256 MiB, or 32 MiB on iOS and Android, and more than that is taken as the most. The cache keeps pages read from the file, checked and decrypted, so that reading one again costs neither a read nor a check. It holds as many pages as fit in `bytes`, and at least 16, and it fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up reading a database that does not fit in it; a process with little memory, such as a mobile app extension, can give it less. Beside the pages, it keeps where a field lies in each record of the pages a query without an index read, for the next query that tests or sorts by that field, in up to a sixteenth more than its size.
 
 ### max_unsynced_pages
 

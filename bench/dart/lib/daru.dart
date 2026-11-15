@@ -24,7 +24,7 @@ Person _person(int n) {
 void _digest(Digest d, Person p) => d.add(p.id!, p.age);
 
 void run(String directory, Rows rows) {
-  var db = Database.open('$directory/commits.darudb', schema: _schema);
+  var db = Database.open('$directory/commits.darudb', schema: _schema, cacheSize: cacheSize);
 
   rows.each('insert-sync', 500, (round, _) {
     db.write((txn) => txn.collection(personSchema).insert(_person(round)));
@@ -37,7 +37,7 @@ void run(String directory, Rows rows) {
   });
   db.close();
 
-  db = Database.open('$directory/objects.darudb', schema: _schema);
+  db = Database.open('$directory/objects.darudb', schema: _schema, cacheSize: cacheSize);
 
   rows.all('insert-bulk', objects, (_) {
     db.write((txn) {
