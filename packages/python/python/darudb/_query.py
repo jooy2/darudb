@@ -44,6 +44,7 @@ _OPS: Final = {
     "contains": 12,
     "startswith": 13,
     "endswith": 14,
+    "matches": 17,
 }
 _IS_NULL: Final = 15
 _AND: Final = 1
@@ -221,6 +222,17 @@ class FieldRef:
     def endswith(self, value: object) -> Condition:
         """A string field ends with ``value``."""
         return _test("endswith", self._path, (value,))
+
+    def matches(self, search: object) -> Condition:
+        """A string field has every word of ``search``, or one string of a
+        list does: ``F.body.matches("quick fox")`` finds a text with both
+        words, anywhere and in any order. Words are compared ignoring case,
+        and a word followed by ``*`` is the start of a word: ``"data*"``
+        finds ``database``. A search without a word finds nothing. A text
+        index on the field answers it without reading the objects; without
+        one, every object the rest of the query leaves is read and
+        searched."""
+        return _test("matches", self._path, (search,))
 
     def is_null(self) -> Condition:
         """The field is None."""

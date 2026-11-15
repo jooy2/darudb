@@ -496,6 +496,7 @@ fn schema_dict<'py>(py: Python<'py>, schema: &Schema) -> PyResult<Bound<'py, PyD
             index.set_item("field", fields.first())?;
             index.set_item("fields", fields)?;
             index.set_item("unique", declared.is_unique())?;
+            index.set_item("text", declared.is_text())?;
             indexes.append(index)?;
         }
 

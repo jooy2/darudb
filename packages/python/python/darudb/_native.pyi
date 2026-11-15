@@ -20,7 +20,9 @@ class NativeSchema:
         version: int,
         collections: list[
             tuple[
-                str, list[tuple[str, Any, str, Any, bool, bool, bool]], list[tuple[list[str], bool]]
+                str,
+                list[tuple[str, Any, str, Any, bool, bool, bool, bool]],
+                list[tuple[list[str], bool, bool]],
             ]
         ],
     ) -> None: ...

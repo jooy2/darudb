@@ -22,7 +22,8 @@ pub(crate) struct NativeSchema {
 
 /// One field as Python declares it: the name the file stores, its type, how
 /// it holds its value (`"key"`, `"required"`, `"optional"` or `"default"`),
-/// its default, whether it is indexed and unique, and whether it cascades.
+/// its default, whether it is indexed and unique, whether it cascades, and
+/// whether it has a text index.
 type FieldSpec<'py> = (
     String,
     Bound<'py, PyAny>,
@@ -31,25 +32,27 @@ type FieldSpec<'py> = (
     bool,
     bool,
     bool,
+    bool,
 );
 
 /// One collection as Python declares it: its name, its fields, and its
 /// indexes on several fields or on paths.
-type CollectionSpec<'py> = (String, Vec<FieldSpec<'py>>, Vec<(Vec<String>, bool)>);
+type CollectionSpec<'py> = (String, Vec<FieldSpec<'py>>, Vec<(Vec<String>, bool, bool)>);
 
 #[pymethods]
 impl NativeSchema {
     /// A schema at `version` with `collections`, each a name, its fields,
     /// and its indexes on several fields or on paths: their paths by the
-    /// names the file stores, and whether each is unique.
+    /// names the file stores, whether each is unique, and whether it is a
+    /// text index.
     #[new]
-    fn new(version: u64, collections: Vec<CollectionSpec<'_>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, version: u64, collections: Vec<CollectionSpec<'_>>) -> PyResult<Self> {
         let mut schema = Schema::new(version);
 
         for (name, fields, indexes) in collections {
             let mut collection = Collection::new(name);
 
-            for (stored, kind, mode, default, index, unique, cascade) in fields {
+            for (stored, kind, mode, default, index, unique, cascade, text) in fields {
                 let kind = type_of(&kind)?;
 
                 collection = match mode.as_str() {
@@ -68,17 +71,26 @@ impl NativeSchema {
                 }
 
                 if unique {
-                    collection = collection.unique(stored);
+                    collection = collection.unique(stored.clone());
                 } else if index {
-                    collection = collection.index(stored);
+                    collection = collection.index(stored.clone());
+                }
+
+                // The field's name is taken whole, as `index` takes it,
+                // where `Collection::text_index` reads a `.` as a path.
+                if text {
+                    collection = darudb::__derive::text_index(collection, &stored);
                 }
             }
 
-            for (paths, unique) in indexes {
-                collection = if unique {
-                    collection.unique_on(paths)
-                } else {
-                    collection.index_on(paths)
+            for (paths, unique, text) in indexes {
+                collection = match (text, paths.as_slice()) {
+                    (true, [path]) => collection.text_index(path.as_str()),
+                    (true, _) => {
+                        return Err(crate::invalid(py, "a text index is on one field"));
+                    }
+                    (false, _) if unique => collection.unique_on(paths),
+                    (false, _) => collection.index_on(paths),
                 };
             }
 
@@ -115,7 +127,9 @@ fn type_of(kind: &Bound<'_, PyAny>) -> PyResult<Type> {
         "object" => {
             let mut embedded = Embedded::new();
 
-            for (stored, kind, mode, default, _, _, _) in inner.extract::<Vec<FieldSpec<'_>>>()? {
+            for (stored, kind, mode, default, _, _, _, _) in
+                inner.extract::<Vec<FieldSpec<'_>>>()?
+            {
                 let kind = type_of(&kind)?;
 
                 embedded = match mode.as_str() {

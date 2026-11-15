@@ -43,13 +43,14 @@ class Index:
     """An index on several fields, or on a field inside an embedded object,
     which ``collection(indexes=...)`` declares and ``index`` makes: its
     fields, each an attribute's name, a path such as ``"home.city"`` or an
-    ``F`` path, and whether it is unique."""
+    ``F`` path, whether it is unique, and whether it is a text index."""
 
     fields: tuple[Any, ...]
     unique: bool = False
+    text: bool = False
 
 
-def index(*fields: Any, unique: bool = False) -> Index:
+def index(*fields: Any, unique: bool = False, text: bool = False) -> Index:
     """An index on ``fields``, in order, for ``collection(indexes=[...])``:
     ``index("last", "first", unique=True)``, or ``index(F.home.city)`` for a
     field inside an embedded object. Its entries sort by the first field,
@@ -57,7 +58,12 @@ def index(*fields: Any, unique: bool = False) -> Index:
     the next one for a range reads it. A unique one refuses two objects with
     the same values in all its fields, though any number may hold a ``None``
     in one. There are 1 to 8 fields; a path through a list is allowed in an
-    index of one field."""
+    index of one field.
+
+    With ``text=True`` it is a text index, on one field that holds a ``str``
+    or a list of them: ``index(F.meta.note, text=True)``. It holds the words
+    of the text, which ``matches`` and ``MATCHES`` search, and is never
+    unique."""
     from ._query import FieldRef
 
     if not fields:
@@ -70,7 +76,16 @@ def index(*fields: Any, unique: bool = False) -> Index:
     if type(unique) is not bool:
         raise invalid(f"an index's unique is a bool, not {unique!r}")
 
-    return Index(tuple(fields), unique)
+    if type(text) is not bool:
+        raise invalid(f"an index's text is a bool, not {text!r}")
+
+    if text and unique:
+        raise invalid("a text index holds words, which are not unique")
+
+    if text and len(fields) != 1:
+        raise invalid("a text index is on one field")
+
+    return Index(tuple(fields), unique, text)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -92,6 +107,7 @@ class _Options:
     link: type | str | None = None
     name: str | None = None
     cascade: bool = False
+    text_index: bool = False
 
 
 @overload
@@ -104,6 +120,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> T: ...
 
 
@@ -117,6 +134,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> T: ...
 
 
@@ -129,6 +147,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any: ...
 
 
@@ -142,6 +161,7 @@ def field(
     link: type | str | None = None,
     name: str | None = None,
     cascade: bool = False,
+    text_index: bool = False,
 ) -> Any:
     """A field of a collection or an embedded object, with what its annotation
     cannot say.
@@ -162,8 +182,15 @@ def field(
       chain. Only a link to one object of the collection itself cascades. An
       index on the field is how a delete finds the objects that link to one:
       without it, each delete reads the whole collection.
+    - ``text_index``: on a ``str`` field or a list of them, an index of the
+      text's words, which ``F.body.matches("quick fox")`` and ``MATCHES``
+      read rather than every object. The field may have an ``index`` too.
+      Every write of the object writes an entry for each different word.
     """
-    options = _Options(primary_key, index, unique, link, name, cascade)
+    if type(text_index) is not bool:
+        raise invalid(f"a field's text_index is a bool, not {text_index!r}")
+
+    options = _Options(primary_key, index, unique, link, name, cascade, text_index)
 
     return dataclasses.field(
         default=default,
@@ -264,7 +291,7 @@ class _Field:
     attr: str
     stored: str
     kind: Any
-    spec: tuple[str, Any, str, Any, bool, bool, bool]
+    spec: tuple[str, Any, str, Any, bool, bool, bool, bool]
     link: str | None
     """The collection a link or a list of links names."""
     embedded: type | None
@@ -340,13 +367,15 @@ class StoredField:
 @dataclasses.dataclass(frozen=True)
 class StoredIndex:
     """An index of a collection: the fields it is on, each a name or a path
-    the file stores, and whether it is unique."""
+    the file stores, whether it is unique, and whether it is a text index."""
 
     field: str
     """The first field, the only one of most indexes."""
     unique: bool
     fields: tuple[str, ...] = ()
     """Every field, in order: ``(field,)`` when left out."""
+    text: bool = False
+    """Whether it is a text index, which holds the words of its field."""
 
     def __post_init__(self) -> None:
         if not self.fields:
@@ -418,6 +447,7 @@ def stored_schema_of(raw: dict[str, Any] | None) -> StoredSchema | None:
                         field=index["field"],
                         unique=index["unique"],
                         fields=tuple(index["fields"]),
+                        text=index["text"],
                     )
                     for index in collection["indexes"]
                 ),
@@ -501,7 +531,7 @@ def _type_of(annotation: Any, options: _Options, owner: type, attr: str) -> tupl
     )
 
 
-def _stored_indexes(resolved: Resolved) -> list[tuple[list[str], bool]]:
+def _stored_indexes(resolved: Resolved) -> list[tuple[list[str], bool, bool]]:
     """The indexes ``resolved``'s class declares, each with the paths of its
     fields by the names the file stores, through embedded classes: the
     attributes ``F`` and the strings name."""
@@ -509,7 +539,7 @@ def _stored_indexes(resolved: Resolved) -> list[tuple[list[str], bool]]:
 
     info = info_of(resolved.cls)
     translate = _Translator(resolved, None)
-    stored: list[tuple[list[str], bool]] = []
+    stored: list[tuple[list[str], bool, bool]] = []
 
     for declared in info.indexes if info is not None else ():
         paths = [
@@ -518,7 +548,7 @@ def _stored_indexes(resolved: Resolved) -> list[tuple[list[str], bool]]:
             )
             for item in declared.fields
         ]
-        stored.append((paths, declared.unique))
+        stored.append((paths, declared.unique, declared.text))
 
     return stored
 
@@ -567,7 +597,9 @@ def _resolve(cls: type) -> Resolved:
         has_default = item.default is not MISSING or item.default_factory is not MISSING
         where = f"{cls.__name__}.{item.name}"
 
-        if info.kind == "embedded" and (options.primary_key or options.index or options.unique):
+        if info.kind == "embedded" and (
+            options.primary_key or options.index or options.unique or options.text_index
+        ):
             raise invalid(f"{where} is a field of an embedded object, which has no key or index")
 
         if options.cascade and (info.kind == "embedded" or options.link is None):
@@ -624,7 +656,16 @@ def _resolve(cls: type) -> Resolved:
         else:
             mode, default = "required", None
 
-        field_spec = (stored, spec, mode, default, options.index, options.unique, options.cascade)
+        field_spec = (
+            stored,
+            spec,
+            mode,
+            default,
+            options.index,
+            options.unique,
+            options.cascade,
+            options.text_index,
+        )
         link = spec[1] if isinstance(spec, tuple) and spec[0] == "link" else None
 
         if isinstance(spec, tuple) and spec[0] == "list" and isinstance(spec[1], tuple):
