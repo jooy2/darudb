@@ -59,6 +59,14 @@ pub fn previous_version(&self) -> u64
 
 The schema version the file held before the migration. It is the same in every step of a migration that spans several versions.
 
+### version
+
+```rust
+pub fn version(&self) -> u64
+```
+
+The schema version of the step under way: the one the function was registered for with [`Migration::to`](./migration.md). A function shared by several steps tells them apart by it.
+
 ### collection
 
 ```rust

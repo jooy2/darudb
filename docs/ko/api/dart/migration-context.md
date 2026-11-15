@@ -56,6 +56,14 @@ int get previousVersion;
 
 마이그레이션 전에 파일에 있던 스키마 버전입니다. 모든 단계에서 같습니다.
 
+### version
+
+```dart
+int get version;
+```
+
+지금 실행 중인 단계의 스키마 버전입니다. 실행 중인 함수가 속한 [Migration](./migration.md)의 `version`이며, 여러 단계가 함께 쓰는 함수는 이 값으로 단계를 구분합니다.
+
 ## 메서드
 
 ### collection

@@ -33,6 +33,28 @@ ReadCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Objec
 
 The collection of `schema`, as a [ReadCollection](./read-collection.md) whose objects are of the class `T`, whose queries `Q` builds and whose primary key is a `K`. The type arguments come from the schema constant, such as `userSchema`, so they are never written out. A database opened without a schema takes the [MapCollection](../../types/dart/map-collection.md)s of the file's own, and a schema constant whose fields are the stored ones. It throws `INVALID_ARGUMENT` for a collection the database was not opened with, and when the database has no schema at all, as when the file holds none. If another process or handle has migrated the file since this handle opened it, reading the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
 
+## Properties
+
+### commitId
+
+```dart
+int get commitId;
+```
+
+The id of the commit the transaction sees. It only grows from one commit to the next, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another. An app that keeps what it read, a list on the screen for one, compares the two to tell whether to read again. A [WriteTransaction](./write-transaction.md) sees no one commit, and its `commitId` throws `INVALID_ARGUMENT`.
+
+```dart
+var seen = 0;
+
+final changed = db.read((txn) {
+  final changed = txn.commitId != seen;
+
+  seen = txn.commitId;
+
+  return changed;
+});
+```
+
 ## AsyncReadTransaction
 
 ```dart
@@ -40,10 +62,11 @@ base class AsyncReadTransaction {
   AsyncReadCollection<T, Q, K> collection<T, Q extends QueryBuilder<T>, K extends Object>(
     CollectionSchema<T, Q, K> schema,
   );
+  int get commitId;
 }
 ```
 
-The read transaction of `Database.readAsync`. Its function may be asynchronous, and the transaction sees one commit until the function completes. `collection` works as above and gives an [AsyncReadCollection](./read-collection.md#asyncreadcollection), whose calls return a `Future` and run on threads of the native library, one at a time, in the order they were made. The transaction ends once the function has completed and every call it made has finished; a call made after that fails with `CLOSED`.
+The read transaction of `Database.readAsync`. Its function may be asynchronous, and the transaction sees one commit until the function completes. `collection` works as above and gives an [AsyncReadCollection](./read-collection.md#asyncreadcollection), whose calls return a `Future` and run on threads of the native library, one at a time, in the order they were made. The transaction ends once the function has completed and every call it made has finished; a call made after that fails with `CLOSED`. `commitId` is as above, read without a trip to another thread.
 
 ```dart
 final (alice, adults) = await db.readAsync((txn) async {

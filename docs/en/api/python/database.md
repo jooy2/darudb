@@ -34,6 +34,8 @@ def open(
     page_size: int | None = None,
     busy_timeout: float | None = None,
     cache_size: int | None = None,
+    max_unsynced_pages: int | None = None,
+    max_unsynced_time: float | None = None,
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,
@@ -51,6 +53,8 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `page_size` | The page size of a new file: a power of two from 4096 to 65536, 4096 by default. An existing file keeps its own |
 | `busy_timeout` | How long, in seconds, opening and a write wait for another writer before failing with `BUSY`: 5 by default |
 | `cache_size` | The memory the page cache may take, in bytes: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android |
+| `max_unsynced_pages` | How many pages [deferred commits](../../types/python/durability.md) may write before one of them is made durable anyway: 16384 by default |
+| `max_unsynced_time` | How long, in seconds, deferred commits may go without being made durable: 1 by default |
 | `key` | A key of 32 bytes, which encrypts a new file and opens an encrypted one |
 | `password` | A password, which does what `key` does through a key derived with Argon2id. A key and a password together fail with `INVALID_ARGUMENT` |
 | `password_hashing` | What deriving a key from a password costs, for a new file and for `set_password`. See [PasswordHashing](../../types/python/password-hashing.md) |
@@ -98,6 +102,8 @@ async def open_async(
     page_size: int | None = None,
     busy_timeout: float | None = None,
     cache_size: int | None = None,
+    max_unsynced_pages: int | None = None,
+    max_unsynced_time: float | None = None,
     key: bytes | bytearray | memoryview | None = None,
     password: str | bytes | bytearray | None = None,
     password_hashing: PasswordHashing | None = None,

@@ -16,7 +16,7 @@ interface OpenOptions<S = Schema>
 
 필드는 모두 생략할 수 있습니다. 옵션 없이 `Database.open(path)`를 부르면 스키마가 없고 암호화하지 않은 데이터베이스를 만들거나 엽니다. `S`는 [스키마](../../api/node/schema.md)의 타입입니다. [`Database.open`](../../api/node/database.md)이 `schema` 옵션에서 추론해 마이그레이션 함수에 넘기며, 타입 정보만 담습니다.
 
-몇몇 옵션은 `Database` 하나가 아니라 파일에 딸립니다. 같은 프로세스에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기는데, `busyTimeout`, `cacheSize`, `upgradeFormat`, `passwordHashing`은 처음 연 핸들의 값을 그대로 씁니다. `pageSize`는 파일을 만들 때만 쓰입니다. `schema`는 핸들마다 열 때 준 것을 따로 쓰고, 암호화한 파일은 열 때마다 `key`나 `password`가 있어야 합니다.
+몇몇 옵션은 `Database` 하나가 아니라 파일에 딸립니다. 같은 프로세스에서 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기는데, `busyTimeout`, `cacheSize`, `maxUnsyncedPages`, `maxUnsyncedTime`, `upgradeFormat`, `passwordHashing`은 처음 연 핸들의 값을 그대로 씁니다. `pageSize`는 파일을 만들 때만 쓰입니다. `schema`는 핸들마다 열 때 준 것을 따로 쓰고, 암호화한 파일은 열 때마다 `key`나 `password`가 있어야 합니다.
 
 ```ts
 import { collection, Database, schema, t } from 'darudb';
@@ -38,6 +38,8 @@ const db = Database.open('notes.darudb', {
 | [`pageSize`](#pagesize) | `number` | `4096` | 새 파일의 페이지 크기, 바이트 단위 |
 | [`busyTimeout`](#busytimeout) | `number` | `5000` | 다른 쓰기를 기다리는 시간, 밀리초 단위 |
 | [`cacheSize`](#cachesize) | `number` | 128 MiB, 모바일은 32 MiB | 페이지 캐시가 쓸 수 있는 메모리, 바이트 단위 |
+| [`maxUnsyncedPages`](#maxunsyncedpages) | `number` | `16384` | 지연 커밋이 디스크에 기록되기 전에 쓸 수 있는 페이지 수 |
+| [`maxUnsyncedTime`](#maxunsyncedtime) | `number` | `1000` | 지연 커밋이 디스크에 기록되기를 기다릴 수 있는 시간, 밀리초 단위 |
 | [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | 예전 형식의 파일을 올릴지 여부 |
 | [`schema`](#schema) | `S` | 없음 | 데이터베이스가 담는 컬렉션 |
 | [`migrations`](#migrations) | `Migration<S>[]` | 없음 | 예전 스키마 버전을 이 버전으로 바꾸는 방법 |
@@ -76,6 +78,22 @@ cacheSize?: number;
 ```
 
 페이지 캐시가 쓸 수 있는 메모리를 바이트 단위로 정합니다. 0 이상의 정수여야 하고, 기본값은 128 MiB, 최대 256 MiB이고 iOS와 Android에서는 둘 다 32 MiB입니다. 최대보다 큰 값은 최대로 봅니다. 다른 값은 `INVALID_ARGUMENT`로 실패합니다. 캐시는 파일에서 읽어 검사와 복호화까지 마친 페이지를 담아 두므로, 같은 페이지를 다시 읽을 때는 읽기도 검사도 다시 하지 않습니다. 이 값과 관계없이 페이지를 적어도 16개는 담을 수 있고, 페이지를 읽는 만큼만 차므로 캐시보다 작은 데이터베이스가 캐시를 다 차지하는 일은 없습니다. 캐시에 다 들어가지 않는 데이터베이스는 캐시를 키우면 빨라지고, 메모리가 빠듯한 프로세스는 캐시를 줄여도 됩니다. 캐시는 페이지 말고도, 인덱스 없는 쿼리가 읽은 페이지의 레코드마다 필드가 어디 있는지를 기억해 두었다가 같은 필드를 검사하거나 정렬하는 다음 쿼리에 씁니다. 여기에 캐시 크기의 16분의 1까지 더 씁니다.
+
+### maxUnsyncedPages
+
+```ts
+maxUnsyncedPages?: number;
+```
+
+[지연 커밋](./write-options.md)이 몇 페이지를 쓰면 그중 하나를 디스크에 기록할지 정합니다. 0 이상의 정수여야 하고 기본값은 16384입니다. 다른 값은 `INVALID_ARGUMENT`로 실패합니다. 같은 페이지는 여러 번 써도 한 번으로 세고, 지연 커밋은 앞서 쓴 페이지를 다시 쓰므로, 같은 객체를 바꾸는 작은 커밋들은 같은 페이지를 한 번만 셉니다. 이 한도는 디스크에 기록할 때 써야 할 양과 정전 뒤에 복구가 검사할 양을 묶어 둡니다. 마지막 동기화 뒤 모든 프로세스의 지연 커밋을 세며, 프로세스마다 한도가 다르면 가장 엄격한 한도를 따릅니다.
+
+### maxUnsyncedTime
+
+```ts
+maxUnsyncedTime?: number;
+```
+
+지연 커밋이 디스크에 기록되지 않은 채 있을 수 있는 시간을 밀리초로 정합니다. 0부터 2^32 - 1까지의 정수여야 하고 기본값은 1000입니다. 다른 값은 `INVALID_ARGUMENT`로 실패합니다. 시간이 다 되면 엔진의 스레드가 [`sync`](../../api/node/database.md#sync)처럼 디스크에 기록하므로, 이 한도는 정전이 되돌릴 수 있는 양을 묶어 둡니다. 이 스레드는 지연 커밋이 기다리는 동안에만 있습니다.
 
 ### upgradeFormat
 

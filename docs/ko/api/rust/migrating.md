@@ -59,6 +59,14 @@ pub fn previous_version(&self) -> u64
 
 마이그레이션 전에 파일에 있던 스키마 버전입니다. 여러 버전에 걸친 마이그레이션이라면 모든 단계에서 같은 값입니다.
 
+### version
+
+```rust
+pub fn version(&self) -> u64
+```
+
+지금 실행 중인 단계의 스키마 버전입니다. 함수를 [`Migration::to`](./migration.md)로 등록할 때 준 버전이며, 여러 단계가 함께 쓰는 함수는 이 값으로 단계를 구분합니다.
+
 ### collection
 
 ```rust

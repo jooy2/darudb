@@ -338,6 +338,7 @@ db.close()
 - `pageSize`는 새 파일의 페이지 크기입니다. 4096부터 65536 사이의 2의 거듭제곱이며 기본값은 4096입니다.
 - `cacheSize`는 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. 기본값은 128 MiB, 최대 256 MiB이고 iOS와 Android에서는 둘 다 32 MiB입니다.
 - `busyTimeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 밀리초로 정합니다. 기본값은 5000입니다.
+- `maxUnsyncedPages`와 밀리초 단위의 `maxUnsyncedTime`은 지연 커밋이 동기화하지 않고 쌓아 둘 수 있는 양을 정합니다. [트랜잭션](./transactions.md)을 보세요.
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
@@ -354,6 +355,7 @@ db.close()
 - `pageSize`는 새 파일의 페이지 크기입니다. 4096부터 65536 사이의 2의 거듭제곱이며 기본값은 4096입니다.
 - `cacheSize`는 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. 기본값은 128 MiB, 최대 256 MiB이고 iOS와 Android에서는 둘 다 32 MiB입니다.
 - `busyTimeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 `Duration`으로 정합니다. 기본값은 5초입니다.
+- `maxUnsyncedPages`와 `Duration`인 `maxUnsyncedTime`은 지연 커밋이 동기화하지 않고 쌓아 둘 수 있는 양을 정합니다. [트랜잭션](./transactions.md)을 보세요.
 - `key`와 `password`, `passwordHashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgradeFormat: false`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.
@@ -370,6 +372,7 @@ db.close()
 - `page_size`는 새 파일의 페이지 크기입니다. 4096부터 65536 사이의 2의 거듭제곱이며 기본값은 4096입니다.
 - `cache_size`는 페이지 캐시가 쓸 메모리를 바이트 단위로 정합니다. 기본값은 128 MiB, 최대 256 MiB이고 iOS와 Android에서는 둘 다 32 MiB입니다.
 - `busy_timeout`은 쓰기가 다른 쓰기를 기다리다 `BUSY`로 실패하기까지의 시간을 초 단위로 정합니다. 기본값은 5입니다. `float`를 받으므로 `0.5`를 주면 0.5초입니다.
+- `max_unsynced_pages`와 초 단위의 `max_unsynced_time`은 지연 커밋이 동기화하지 않고 쌓아 둘 수 있는 양을 정합니다. [트랜잭션](./transactions.md)을 보세요.
 - `key`와 `password`, `password_hashing`은 새 파일을 암호화하거나 암호화한 파일을 엽니다. [암호화](./encryption.md)를 보세요.
 - `schema`와 `migrations`는 컬렉션과, 예전 스키마가 지금 스키마로 넘어오는 방법을 선언합니다. [컬렉션과 객체](./objects.md)와 [마이그레이션](./migrations.md)을 보세요.
 - `upgrade_format=False`를 주면 예전 형식 버전의 파일을 올리지 않고 그대로 둡니다. 그 버전만 읽는 이전 릴리스로 돌아갈 수도 있는 애플리케이션이 씁니다. [형식 버전](../engine/file-format.md#형식-버전)을 보세요.

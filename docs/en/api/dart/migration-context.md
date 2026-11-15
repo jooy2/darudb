@@ -56,6 +56,14 @@ int get previousVersion;
 
 The schema version the file held before the migration. It is the same in every step.
 
+### version
+
+```dart
+int get version;
+```
+
+The schema version of the step under way: the `version` of the [Migration](./migration.md) whose function is running. A function shared by several steps tells them apart by it.
+
 ## Methods
 
 ### collection

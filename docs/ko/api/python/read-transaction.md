@@ -35,6 +35,25 @@ def collection(self, collection: str) -> ReadCollection[Any]: ...
 
 클래스 `collection`의 컬렉션이나 그 이름의 컬렉션을 [ReadCollection](./read-collection.md)으로 돌려줍니다. 이 컬렉션의 객체는 클래스의 인스턴스입니다. 클래스로 가져오면 타입 검사기가 읽는 객체마다 타입을 압니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마의 컬렉션에 이름으로 접근하고, 객체는 파일에 저장된 이름을 키로 한 `dict`입니다. 스키마에 없는 클래스나 이름이거나, 스키마 없이 연 데이터베이스에 클래스를 주거나, 파일에 스키마가 없어서 데이터베이스에 스키마가 전혀 없으면 `INVALID_ARGUMENT`를 일으킵니다. 저장된 스키마를 읽을 수 없으면 `CORRUPTED`나 `UNSUPPORTED_FORMAT_VERSION`을 일으킵니다. 스키마 없이 연 데이터베이스에서는 이름을 여기서 찾아보지 않습니다. 파일의 스키마에 없는 이름은 그 컬렉션에 첫 작업을 할 때 드러나고, 그 작업이 `INVALID_ARGUMENT`를 일으킵니다. 이 핸들을 연 뒤에 다른 프로세스나 핸들이 파일을 마이그레이션했다면 컬렉션의 작업이 `SCHEMA_MISMATCH`로 실패하고, 새 스키마로 데이터베이스를 다시 열어야 합니다.
 
+## 속성
+
+### commit_id
+
+```python
+@property
+def commit_id(self) -> int
+```
+
+트랜잭션이 보는 커밋의 id입니다. 커밋할 때마다 커지기만 하므로, 앞선 트랜잭션이 본 값보다 크면 그사이에 이 프로세스나 다른 프로세스가 무언가를 커밋한 것입니다. 읽은 내용을 들고 있는 프로그램은 두 값을 비교해 다시 읽을지 정합니다. [WriteTransaction](./write-transaction.md)은 한 커밋을 보는 것이 아니어서, `commit_id`를 읽으면 `INVALID_ARGUMENT` 예외가 납니다.
+
+```python
+seen = 0
+
+with db.read() as txn:
+    changed = txn.commit_id != seen
+    seen = txn.commit_id
+```
+
 ## AsyncReadTransaction
 
 ```python
@@ -43,9 +62,11 @@ class AsyncReadTransaction:
     def collection(self, collection: type[T]) -> AsyncReadCollection[T]: ...
     @overload
     def collection(self, collection: str) -> AsyncReadCollection[Any]: ...
+    @property
+    def commit_id(self) -> int: ...
 ```
 
-`async with db.read_async()`의 읽기 트랜잭션으로, 블록이 끝날 때까지 커밋 하나를 봅니다. `collection`은 위와 같이 await 없이 동작하되 [AsyncReadCollection](./read-collection.md#asyncreadcollection)을 돌려줍니다. 이 컬렉션의 작업은 코루틴이며, 패키지의 스레드 풀에서 시작한 순서대로 하나씩 실행됩니다. 트랜잭션은 블록이 끝나고 블록에서 시작한 작업도 모두 끝나야 마무리되며, 그 뒤에 시작한 작업은 `CLOSED`를 일으킵니다.
+`async with db.read_async()`의 읽기 트랜잭션으로, 블록이 끝날 때까지 커밋 하나를 봅니다. `collection`은 위와 같이 await 없이 동작하되 [AsyncReadCollection](./read-collection.md#asyncreadcollection)을 돌려줍니다. 이 컬렉션의 작업은 코루틴이며, 패키지의 스레드 풀에서 시작한 순서대로 하나씩 실행됩니다. 트랜잭션은 블록이 끝나고 블록에서 시작한 작업도 모두 끝나야 마무리되며, 그 뒤에 시작한 작업은 `CLOSED`를 일으킵니다. `commit_id`는 위와 같고, `await` 없이 읽는 속성입니다.
 
 작업은 여느 코루틴처럼 await하거나 태스크가 실행할 때 실행됩니다. 한 번도 await하지 않은 작업은 실행되지 않습니다.
 

@@ -204,6 +204,6 @@ db = darudb.Database.open(
 
 여러 버전을 건너뛰면 버전 순서대로 차례로 실행합니다. 두 버전 뒤처진 파일은 두 단계를 모두 거치고, 이미 선언한 버전인 파일은 아무 단계도 거치지 않습니다.
 
-단계마다 실행하는 함수는 모두 선언한 스키마, 곧 가장 새 스키마 아래에서 돕니다. 엔진이 함수를 실행하기 전에 그 스키마를 먼저 저장하기 때문입니다. 그래서 버전 2의 함수도 컬렉션과 필드를 가장 새 버전의 이름으로 부르고, `previous`는 마이그레이션 전체가 시작되기 전의 객체를 그때 버전의 이름으로 읽습니다. 그 버전이 무엇이었는지는 <LangCode rust="Migrating::previous_version" node="previousVersion" dart="previousVersion" python="previous_version" />로 알 수 있습니다. 어느 버전에서 쓴 파일이든 열 수 있도록, 애플리케이션이 거쳐 온 모든 버전의 마이그레이션을 넘기세요.
+단계마다 실행하는 함수는 모두 선언한 스키마, 곧 가장 새 스키마 아래에서 돕니다. 엔진이 함수를 실행하기 전에 그 스키마를 먼저 저장하기 때문입니다. 그래서 버전 2의 함수도 컬렉션과 필드를 가장 새 버전의 이름으로 부르고, `previous`는 마이그레이션 전체가 시작되기 전의 객체를 그때 버전의 이름으로 읽습니다. 그 버전이 무엇이었는지는 <LangCode rust="Migrating::previous_version" node="previousVersion" dart="previousVersion" python="previous_version" />로 알 수 있습니다. 지금 어느 버전의 단계인지는 <LangCode rust="Migrating::version" node="version" dart="version" python="version" />으로 알 수 있습니다. 어느 버전에서 쓴 파일이든 열 수 있도록, 애플리케이션이 거쳐 온 모든 버전의 마이그레이션을 넘기세요.
 
 파일의 스키마 버전이 선언한 것보다 높으면 `SCHEMA_TOO_NEW`로 실패합니다. 애플리케이션은 자기보다 새 릴리스가 쓴 파일을 열 수 없습니다.

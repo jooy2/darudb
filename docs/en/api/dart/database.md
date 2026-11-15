@@ -31,6 +31,8 @@ static Database open(
   int? pageSize,
   Duration? busyTimeout,
   int? cacheSize,
+  int? maxUnsyncedPages,
+  Duration? maxUnsyncedTime,
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,
@@ -48,6 +50,8 @@ Opens the database at `path`, creating it if nothing exists there, and stores, c
 | `pageSize` | The page size of a new file: a power of two from 4096 to 65536, 4096 by default. An existing file keeps its own |
 | `busyTimeout` | How long a write waits for another process's writer before failing with `BUSY`: five seconds by default |
 | `cacheSize` | The memory the page cache may take, in bytes: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android |
+| `maxUnsyncedPages` | How many pages [deferred commits](../../types/dart/durability.md) may write before one of them is made durable anyway: 16384 by default |
+| `maxUnsyncedTime` | How long deferred commits may go without being made durable: one second by default |
 | `key` | A key of 32 bytes, which encrypts a new file and opens an encrypted one |
 | `password` | A password, which does what `key` does through a key derived with Argon2id |
 | `passwordHashing` | What deriving a key from a password costs, for a new file and for `setPassword`. See [PasswordHashing](../../types/dart/password-hashing.md) |
@@ -81,6 +85,8 @@ static Future<Database> openAsync(
   int? pageSize,
   Duration? busyTimeout,
   int? cacheSize,
+  int? maxUnsyncedPages,
+  Duration? maxUnsyncedTime,
   Uint8List? key,
   String? password,
   PasswordHashing? passwordHashing,

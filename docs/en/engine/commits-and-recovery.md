@@ -63,7 +63,7 @@ A deferred commit, <LangCode rust="commit_deferred" node="durability: 'deferred'
 
 The limits hold for the window, not for each process. Each deferred commit's record says when its window opened and how many pages the window has written, and a process that makes a deferred commit after another process's goes on counting from there. When processes set different limits, the window ends at the strictest of them. A process cannot tell which pages the others wrote, so a page written again by another process is counted twice, which only brings the barrier sooner. The opening time comes from the system clock, and a time a process cannot place, such as one later than now after the clock was set back, counts as a window already past its time limit.
 
-In Rust, `OpenOptions::max_unsynced_pages` and `OpenOptions::max_unsynced_time` change the limits; the Node.js, Dart and Python packages use the defaults. The page limit bounds what the closing barrier has to write and what recovery has to check after a power cut. The time limit bounds how much a power cut can undo.
+In Rust, `OpenOptions::max_unsynced_pages` and `OpenOptions::max_unsynced_time` change the limits; in Node.js and Dart, the options `maxUnsyncedPages` and `maxUnsyncedTime` of `Database.open`; in Python, `max_unsynced_pages` and `max_unsynced_time`. The page limit bounds what the closing barrier has to write and what recovery has to check after a power cut. The time limit bounds how much a power cut can undo.
 
 Deferred commits exist for applications that would rather lose their last few commits in a power cut than wait for the disk on every one of them.
 

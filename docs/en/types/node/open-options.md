@@ -16,7 +16,7 @@ interface OpenOptions<S = Schema>
 
 Every field is optional, and `Database.open(path)` without options creates or opens a plain database without a schema. `S` is the type of the [schema](../../api/node/schema.md), which [`Database.open`](../../api/node/database.md) infers from the `schema` option and passes on to the migration functions. It carries types only.
 
-Some options belong to the file rather than to one `Database`. A process that opens a file it already has open gets another handle to the same database, and `busyTimeout`, `cacheSize`, `upgradeFormat` and `passwordHashing` stay those of the first handle. `pageSize` matters only when the file is created. Each handle keeps the `schema` it was opened with, and an encrypted file needs its `key` or `password` on every open.
+Some options belong to the file rather than to one `Database`. A process that opens a file it already has open gets another handle to the same database, and `busyTimeout`, `cacheSize`, `maxUnsyncedPages`, `maxUnsyncedTime`, `upgradeFormat` and `passwordHashing` stay those of the first handle. `pageSize` matters only when the file is created. Each handle keeps the `schema` it was opened with, and an encrypted file needs its `key` or `password` on every open.
 
 ```ts
 import { collection, Database, schema, t } from 'darudb';
@@ -38,6 +38,8 @@ const db = Database.open('notes.darudb', {
 | [`pageSize`](#pagesize) | `number` | `4096` | The page size of a new file, in bytes |
 | [`busyTimeout`](#busytimeout) | `number` | `5000` | How long to wait for another writer, in milliseconds |
 | [`cacheSize`](#cachesize) | `number` | 128 MiB, or 32 MiB on a phone | How much memory the page cache may take, in bytes |
+| [`maxUnsyncedPages`](#maxunsyncedpages) | `number` | `16384` | How many pages deferred commits may write before one is made durable |
+| [`maxUnsyncedTime`](#maxunsyncedtime) | `number` | `1000` | How long deferred commits may wait to be made durable, in milliseconds |
 | [`upgradeFormat`](#upgradeformat) | `boolean` | `true` | Whether to raise a file in an older format |
 | [`schema`](#schema) | `S` | None | The collections the database holds |
 | [`migrations`](#migrations) | `Migration<S>[]` | None | How an older schema version becomes this one |
@@ -76,6 +78,22 @@ cacheSize?: number;
 ```
 
 How much memory the page cache may take, in bytes: a whole number from 0 up, 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android. More than the most is taken as the most. Any other value fails with `INVALID_ARGUMENT`. The cache keeps pages read from the file, already checked and decrypted, so that reading one again costs neither a read nor a check. It holds at least 16 pages whatever this says, and fills only as pages are read, so a database smaller than the cache never takes all of it. A larger cache speeds up a database that does not fit in it; a process short of memory can give it less. Beside the pages, it keeps where a field lies in each record of the pages a query without an index read, for the next query that tests or sorts by that field, in up to a sixteenth more than its size.
+
+### maxUnsyncedPages
+
+```ts
+maxUnsyncedPages?: number;
+```
+
+How many pages [deferred commits](./write-options.md) may write before one of them is made durable anyway: a whole number from 0 up, and 16384 by default. Any other value fails with `INVALID_ARGUMENT`. Each page counts once however often it is written, and deferred commits reuse the pages they wrote before, so small ones that change the same objects count the same pages once. The limit bounds what the flush that makes them durable has to write, and what recovery has to check after a power cut. It counts every process's deferred commits since the last sync, and when processes set different limits, the strictest holds.
+
+### maxUnsyncedTime
+
+```ts
+maxUnsyncedTime?: number;
+```
+
+How long, in milliseconds, deferred commits may go without being made durable: a whole number from 0 to 2^32 - 1, and 1000 by default. Any other value fails with `INVALID_ARGUMENT`. When the time is up, a thread of the engine makes them durable, as [`sync`](../../api/node/database.md#sync) would, so the limit bounds how much a power cut can undo. The thread exists only while deferred commits are waiting.
 
 ### upgradeFormat
 

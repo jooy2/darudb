@@ -338,6 +338,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `pageSize` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
 - `cacheSize` sets how much memory, in bytes, the page cache may take: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android.
 - `busyTimeout` sets how long, in milliseconds, a write waits for another writer before failing with `BUSY`: 5000 by default.
+- `maxUnsyncedPages` and `maxUnsyncedTime`, in milliseconds, limit how much deferred commits may leave unsynced. See [Transactions](./transactions.md).
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
@@ -354,6 +355,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `pageSize` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
 - `cacheSize` sets how much memory, in bytes, the page cache may take: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android.
 - `busyTimeout`, a `Duration`, sets how long a write waits for another writer before failing with `BUSY`: five seconds by default.
+- `maxUnsyncedPages` and `maxUnsyncedTime`, a `Duration`, limit how much deferred commits may leave unsynced. See [Transactions](./transactions.md).
 - `key`, `password` and `passwordHashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgradeFormat: false` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).
@@ -370,6 +372,7 @@ The collection has no primary key field, so the engine gives each object an `id`
 - `page_size` sets the page size of a new file: a power of two from 4096 to 65536, 4096 by default.
 - `cache_size` sets how much memory, in bytes, the page cache may take: 128 MiB by default and 256 MiB at most, or 32 MiB for both on iOS and Android.
 - `busy_timeout` sets how long, in seconds, a write waits for another writer before failing with `BUSY`: 5 by default. It takes a `float`, so `0.5` is half a second.
+- `max_unsynced_pages` and `max_unsynced_time`, in seconds, limit how much deferred commits may leave unsynced. See [Transactions](./transactions.md).
 - `key`, `password` and `password_hashing` encrypt a new file or open an encrypted one. See [Encryption](./encryption.md).
 - `schema` and `migrations` declare the collections and how an older schema becomes this one. See [Collections and objects](./objects.md) and [Migrations](./migrations.md).
 - `upgrade_format=False` keeps a file in an older format version as it is, for an application that may go back to a release that reads only that version. See [Format versions](../engine/file-format.md#format-versions).

@@ -147,6 +147,24 @@ Deferred commits become durable at the next sync commit, at <LangCode rust="Data
 
 :::
 
+::: lang node
+
+The options `maxUnsyncedTime`, in milliseconds, and `maxUnsyncedPages` of `Database.open` set how long a deferred commit may wait, 1000 by default, and how many pages the deferred commits may have written before the next commit syncs them, 16,384 by default. Both count every process's deferred commits since the last sync, not only this process's.
+
+:::
+
+::: lang dart
+
+The arguments `maxUnsyncedTime`, a `Duration`, and `maxUnsyncedPages` of `Database.open` set how long a deferred commit may wait, one second by default, and how many pages the deferred commits may have written before the next commit syncs them, 16,384 by default. Both count every process's deferred commits since the last sync, not only this process's.
+
+:::
+
+::: lang python
+
+The options `max_unsynced_time`, in seconds, and `max_unsynced_pages` of `Database.open` set how long a deferred commit may wait, 1 by default, and how many pages the deferred commits may have written before the next commit syncs them, 16,384 by default. Both count every process's deferred commits since the last sync, not only this process's.
+
+:::
+
 A sync commit costs one wait for the disk, which on most machines is the larger part of a small commit. Defer the commits whose loss in a power cut the application can live with, such as a stream of events, and sync the ones it cannot.
 
 ## The page cache

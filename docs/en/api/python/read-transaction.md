@@ -35,6 +35,25 @@ def collection(self, collection: str) -> ReadCollection[Any]: ...
 
 The collection of the class `collection`, or of that name, as a [ReadCollection](./read-collection.md) whose objects are instances of the class. Given the class, a type checker knows the type of every object it reads. A database opened without a schema reaches the collections of the file's own by name, and their objects are `dict`s by the names the file stores. It raises `INVALID_ARGUMENT` for a class or a name the schema does not have, for a class when the database was opened without a schema, and when the database has no schema at all, as when the file holds none; a stored schema that does not read raises `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`. In a database opened without a schema, a name is not looked up here: one the file's schema does not have is found by the first operation on the collection, which raises `INVALID_ARGUMENT`. If another process or handle has migrated the file since this handle opened it, an operation on the collection fails with `SCHEMA_MISMATCH`, and the database has to be opened again with the new schema.
 
+## Properties
+
+### commit_id
+
+```python
+@property
+def commit_id(self) -> int
+```
+
+The id of the commit the transaction sees. It only grows from one commit to the next, so a larger one than an earlier transaction saw says that something was committed in between, by this process or another. A program that keeps what it read compares the two to tell whether to read again. A [WriteTransaction](./write-transaction.md) sees no one commit, and its `commit_id` raises `INVALID_ARGUMENT`.
+
+```python
+seen = 0
+
+with db.read() as txn:
+    changed = txn.commit_id != seen
+    seen = txn.commit_id
+```
+
 ## AsyncReadTransaction
 
 ```python
@@ -43,9 +62,11 @@ class AsyncReadTransaction:
     def collection(self, collection: type[T]) -> AsyncReadCollection[T]: ...
     @overload
     def collection(self, collection: str) -> AsyncReadCollection[Any]: ...
+    @property
+    def commit_id(self) -> int: ...
 ```
 
-The read transaction of `async with db.read_async()`, which sees one commit until its block ends. `collection` works as above, without an `await`, and gives an [AsyncReadCollection](./read-collection.md#asyncreadcollection), whose operations are coroutines that run on the package's thread pool, one at a time, in the order they started. The transaction ends when the block ends, once every operation it started has finished; an operation started after that raises `CLOSED`.
+The read transaction of `async with db.read_async()`, which sees one commit until its block ends. `collection` works as above, without an `await`, and gives an [AsyncReadCollection](./read-collection.md#asyncreadcollection), whose operations are coroutines that run on the package's thread pool, one at a time, in the order they started. The transaction ends when the block ends, once every operation it started has finished; an operation started after that raises `CLOSED`. `commit_id` is as above, a property read without an `await`.
 
 An operation runs when it is awaited, or when a task runs it, as any coroutine does: one that is never awaited never runs.
 
