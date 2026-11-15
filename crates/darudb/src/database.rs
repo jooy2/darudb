@@ -136,6 +136,11 @@ impl Database {
     /// writes the new key block, and two that overwrite the old one in the
     /// other commit slots. When it returns, the old key or password no longer
     /// opens the file. A plain database fails with [`Error::InvalidArgument`].
+    ///
+    /// The first commit is what changes the key. If a later one fails, with
+    /// [`Error::Busy`] for one, the call fails although the new key opens
+    /// the file already, and the old one may still open it until the call is
+    /// made again and returns.
     pub fn set_key(&self, key: [u8; 32]) -> Result<()> {
         self.rekey(&Secret::Key(Zeroizing::new(key)))
     }

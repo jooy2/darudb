@@ -334,7 +334,16 @@ fn write_and_publish(
         // other handles. Either way the file has to be opened again.
         shared.fail_sync();
 
-        return Err(error);
+        // The outcome is unknown to the caller, as after a failed barrier,
+        // and the error says so: a plain I/O error would read as a commit
+        // that did not happen.
+        return Err(match error {
+            Error::Io { path, source } => Error::SyncFailed {
+                path,
+                source: Some(source),
+            },
+            other => other,
+        });
     }
 
     if let Some(window) = window {
@@ -344,7 +353,9 @@ fn write_and_publish(
 
         // A deferred commit never shortens the file: a power cut can take the
         // file back to the durable commit, which may count more pages.
-        if pager.file_len()? > needed {
+        // The commit is published: failing to read the file's length is no
+        // reason to report it as failed either.
+        if pager.file_len().is_ok_and(|len| len > needed) {
             // Only free pages lie past the new end. Failing to cut them off
             // costs space, nothing else, so the commit does not fail over it.
             let _ = pager.resize(record.page_count);

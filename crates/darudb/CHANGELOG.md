@@ -18,7 +18,7 @@
 - Opening a database that exists no longer writes and syncs a temporary file beside it first. Such an open failed with `IO` in a directory the process could not create a file in, or on a full disk, where the database itself was readable and writable; and a file with a password hashed the password twice, which took a reopen from 43 to 19 milliseconds on one machine.
 - A database that cannot be created because its temporary file cannot be written, on a full disk for one, no longer leaves that file behind.
 
-- `delete` with a key longer than the file's keys returns false, as for any key no object has. It failed with `INVALID_ARGUMENT` and left the write transaction able only to abort.
+- `delete` and `update` with a key longer than the file's keys return false, as for any key no object has. Both failed with `INVALID_ARGUMENT`, and the delete left the write transaction able only to abort.
 
 - `count` of a query whose filter holds an `AND` of no conditions inside an `OR` counts the objects the query finds. It counted only those the other terms of the `OR` found through an index, since the empty `AND` gave no keys. The Node.js builder makes such a filter from `and()` with no arguments.
 - In the query language, a field called `any` is read as a field before `IN`, `IS`, `BETWEEN`, `CONTAINS`, `STARTSWITH` and `ENDSWITH`, where the query failed to parse: `ANY` begins a test of linking objects only before a name and a dot.
@@ -36,6 +36,7 @@
 
 - Salvage rebuilds the indexes of a collection of large objects in batches of at most 32 MiB of records. A batch was 1,024 objects whatever their size, so a collection of objects of megabytes each took gigabytes of memory.
 - A typed read of a list reserves room for at most 256 elements before it has read them, as an untyped read does, rather than for as many as a damaged record counts.
+- A commit that fails while it writes the selector, after the barrier of a sync commit, fails with `SYNC_FAILED`, whose outcome is unknown, rather than with `IO`, which read as a commit that did not happen: recovery publishes such a commit when the file is opened again. A commit that is published no longer fails because the file's length could not be read afterwards.
 
 ## v1.5.0 (2026-11-01)
 

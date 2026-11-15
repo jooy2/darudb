@@ -172,6 +172,8 @@ When a sync fails, the operating system may already have dropped the pages it co
 - The process's handle to the file becomes unusable, and every later call on it fails with `SYNC_FAILED`. Closing every `Database` object for the file and opening it again starts over with what is on disk.
 - Other processes are unaffected. A sync commit is published only after its barrier succeeds, so they never saw it.
 
+A commit whose selector cannot be written fails the same way, with `SYNC_FAILED` and the handle unusable: after its barrier a sync commit is durable, and recovery publishes it when the file is opened again, so its outcome is not a failure the caller can act on as one.
+
 ## Aborting
 
 The writer throws away the transaction's pages. Any that were already written to disk sit at free positions that nothing reaches, so nothing on disk has to be undone, and the selector is not touched.
