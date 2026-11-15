@@ -177,6 +177,10 @@ class FieldRef:
     def __getitem__(self, name: str) -> FieldRef:
         return FieldRef((*self._path, name))
 
+    # With `__getitem__` and no `__iter__`, Python would iterate a field by
+    # asking for item 0, 1, 2 and so on, without end.
+    __iter__ = None
+
     def __repr__(self) -> str:
         return f"F.{'.'.join(self._path)}"
 
@@ -240,6 +244,9 @@ class _Fields:
 
     def __getitem__(self, name: str) -> FieldRef:
         return FieldRef((name,))
+
+    # As for a `FieldRef`: not iterable.
+    __iter__ = None
 
     def __repr__(self) -> str:
         return "F"

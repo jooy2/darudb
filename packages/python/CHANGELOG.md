@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- A list that holds itself, given as a value of a list field or as a query's value, is refused with `INVALID_ARGUMENT`: a list holds no list. Converting it went into the list without end and ended the process.
+- `F.tags`, and `F` itself, are not iterable. `list(F.tags)`, or `F.tag.is_in(F.tags)`, never ended.
+- A `default_factory` that gives another value each time it is called is refused with `INVALID_ARGUMENT` when the schema is made. The default is part of the stored schema, so the program's next run failed to open the file with `SCHEMA_MISMATCH`.
+- A dict written to a collection reached by name is read as it is when the write begins, so one that changes while its values are converted no longer raises a `PanicException`.
 - An `async with db.write_async()` block left in another task than the one that entered it gives the file back. Closing an asynchronous generator that was suspended inside such a block raised `ValueError` before the transaction ended, and every later asynchronous write, sync or close on the file was refused or waited for good.
 - A task made inside an asynchronous write, or inside a migration's function, may write to the file once that write is over. It was refused with `INVALID_ARGUMENT` for as long as it lived.
 - A `with db.write()` block that fails as it is entered, after its transaction began, ends the transaction and no longer leaves the file marked as held by the thread.

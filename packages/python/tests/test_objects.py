@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import darudb
-from darudb import DaruError
+from darudb import DaruError, F
 from models import Address, Blob, Post, User, open_db
 
 
@@ -391,3 +391,33 @@ def test_prepare_on_a_closed_database_is_closed(path: Path) -> None:
         db.prepare(User, "age > $0")
 
     assert error.value.code == "CLOSED"
+
+
+def test_a_list_that_holds_itself_is_refused(db: darudb.Database) -> None:
+    endless: list[object] = []
+
+    endless.append(endless)
+
+    with db.write() as txn:
+        users = txn.collection(User)
+
+        with pytest.raises(DaruError) as error:
+            users.find("name == $0", [endless])
+
+        assert error.value.code in ("INVALID_ARGUMENT", "INVALID_QUERY")
+
+        with pytest.raises(DaruError) as error:
+            users.insert(User(name="a", tags=endless))  # type: ignore[arg-type]
+
+        assert error.value.code == "INVALID_ARGUMENT"
+
+
+def test_a_field_reference_is_not_iterable() -> None:
+    with pytest.raises(TypeError):
+        list(F.tags)  # type: ignore[call-overload]
+
+    with pytest.raises(TypeError):
+        F.name.is_in(F.tags)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        iter(F)  # type: ignore[call-overload]

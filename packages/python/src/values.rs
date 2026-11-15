@@ -591,7 +591,11 @@ pub(crate) fn object_of(value: &Bound<'_, PyAny>, fields: &[darudb::Field]) -> P
     })?;
     let mut object = Object::new();
 
-    for (name, item) in dict.iter() {
+    // The items as they are now: converting a value may run Python code,
+    // and a dict that changes while it is walked ends the walk with a panic.
+    let items: Vec<_> = dict.iter().collect();
+
+    for (name, item) in items {
         let name = name.cast::<PyString>().map_err(|_| {
             invalid(
                 py,
@@ -660,6 +664,13 @@ pub(crate) fn is_bytes(value: &Bound<'_, PyAny>) -> bool {
 /// A Python value as the engine's, by its type alone: what a key, a query's
 /// value and a value of a scalar field are.
 pub(crate) fn plain(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    plain_in(value, false)
+}
+
+/// [`plain`], for a value that is an element of a list when `nested`. A list
+/// holds no list, so one found there is refused rather than gone into: a
+/// list that holds itself would be gone into without end.
+fn plain_in(value: &Bound<'_, PyAny>, nested: bool) -> PyResult<Value> {
     let py = value.py();
 
     if value.is_none() {
@@ -680,9 +691,13 @@ pub(crate) fn plain(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     } else if is_datetime(value)? {
         Ok(Value::Date(micros_of(value)?))
     } else if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
+        if nested {
+            return Err(invalid(py, "DaruDB cannot store a list inside a list"));
+        }
+
         value
             .try_iter()?
-            .map(|item| plain(&item?))
+            .map(|item| plain_in(&item?, true))
             .collect::<PyResult<_>>()
             .map(Value::List)
     } else {

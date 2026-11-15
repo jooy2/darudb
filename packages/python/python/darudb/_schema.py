@@ -612,6 +612,15 @@ def _resolve(cls: type) -> Resolved:
             factory = typing.cast(Callable[[], Any], item.default_factory)
             default = item.default if item.default is not MISSING else factory()
             mode = "default"
+
+            # The default is part of the schema the file stores, so one that
+            # differed the next time the program ran would be a change to the
+            # schema: a factory gives the same value each time it is called.
+            if item.default is MISSING and factory() != default:
+                raise invalid(
+                    f"{where} has a default_factory that gives another value each time it "
+                    "is called; a field's default is a constant"
+                )
         else:
             mode, default = "required", None
 

@@ -251,3 +251,18 @@ def test_values_outside_what_the_api_takes_are_daru_errors() -> None:
             darudb.param(index)  # type: ignore[arg-type]
 
         assert error.value.code == "INVALID_QUERY"
+
+
+def test_a_default_factory_that_changes_is_refused() -> None:
+    counter = iter(range(100))
+
+    with pytest.raises(DaruError) as error:
+
+        @darudb.collection("events")
+        class Event:
+            id: int | None = None
+            token: int = darudb.field(default_factory=lambda: next(counter))
+
+        darudb.Schema(1, [Event])
+
+    assert error.value.code == "INVALID_ARGUMENT"
