@@ -26,7 +26,7 @@ darudb.workspace = true
 # later version. A free-threaded interpreter, which the stable ABI does not
 # cover before 3.15, gets a wheel of its own, built for its version.
 # `MIT OR Apache-2.0`.
-pyo3 = { version = "0.29.3", features = ["abi3-py311"] }
+pyo3 = { version = "0.30.1", features = ["abi3-py311"] }
 # Wipes the copies of a key or a password the binding makes. Already in the
 # build through the engine; Apache-2.0 OR MIT.
 zeroize.workspace = true
