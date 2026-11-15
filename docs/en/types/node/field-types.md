@@ -60,7 +60,7 @@ How a field holds its value. Every type starts as `'required'`.
 
 - **`'required'`**: every object written has the field, and it is never null.
 - **`'optional'`**: the field may be null, and is null when it is left out. `optional()` makes it so.
-- **`'default'`**: the field is required, and holds its default when it is left out. `default(value)` makes it so.
+- **`'default'`**: the field is required, and holds its default when it is left out. `default(value)` makes it so. A field has one mode: `optional()` on a field with a default, and `default(value)` on an optional one, throw `INVALID_ARGUMENT`.
 
 ## FieldType
 

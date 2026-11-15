@@ -77,6 +77,12 @@ class FieldType {
       throw invalid('a primary key is required, never optional');
     }
 
+    if (this.spec.default !== undefined) {
+      throw invalid(
+        'a field with a default is required: left out or null, it holds the default, so it is never null'
+      );
+    }
+
     return new FieldType({ ...this.spec, optional: true });
   }
 
@@ -88,6 +94,12 @@ class FieldType {
 
     if (this.spec.primaryKey) {
       throw invalid('a primary key has no default: every object brings its own');
+    }
+
+    if (this.spec.optional) {
+      throw invalid(
+        'an optional field has no default: it is null when left out, and a field with a default is required'
+      );
     }
 
     return new FieldType({ ...this.spec, default: value });

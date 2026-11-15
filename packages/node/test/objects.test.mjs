@@ -1793,4 +1793,9 @@ describe('values at the edges', () => {
     await first;
     await db.closeAsync();
   });
+
+  it('refuse a field that is both optional and has a default', () => {
+    assertCode(() => t.string().optional().default('x'), 'INVALID_ARGUMENT');
+    assertCode(() => t.int().default(0).optional(), 'INVALID_ARGUMENT');
+  });
 });

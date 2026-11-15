@@ -60,7 +60,7 @@ type FieldMode = 'required' | 'optional' | 'default';
 
 - **`'required'`**: 쓰는 객체마다 이 필드가 있어야 하고, null이 되지 않습니다.
 - **`'optional'`**: null일 수 있고, 빠지면 null이 됩니다. `optional()`이 이 모드로 바꿉니다.
-- **`'default'`**: 필수지만, 빠지면 기본값이 들어갑니다. `default(value)`가 이 모드로 바꿉니다.
+- **`'default'`**: 필수지만, 빠지면 기본값이 들어갑니다. `default(value)`가 이 모드로 바꿉니다. 필드의 모드는 하나입니다. 기본값이 있는 필드에 `optional()`을 부르거나 선택 필드에 `default(value)`를 부르면 `INVALID_ARGUMENT` 예외가 납니다.
 
 ## FieldType
 

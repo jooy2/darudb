@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Breaking changes
+
+- A field cannot be both optional and have a default: `t.string().optional().default('x')` and `t.int().default(0).optional()` throw `INVALID_ARGUMENT`, as the Dart generator and the Python package refuse the same. Such a field never read as null, since a null written to it read back as the default. Declare it with `default` alone, which changes what the schema stores for the field, so raise the schema's version when a file was created with both.
+
 ### Added
 
 - The types `CollectionOptions`, `IndexDeclaration` and `IndexPath`, which `collection` takes its indexes in, are exported, so that code can name them.
