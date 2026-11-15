@@ -1,7 +1,7 @@
 ---
 title: 어노테이션
 order: 2
-counterpart: /api/rust/derive
+counterpart: [/api/rust/derive, /api/node/collection]
 ---
 
 # 어노테이션
@@ -78,10 +78,11 @@ final db = Database.open('app.darudb', schema: const Schema(1, [userSchema, post
 어노테이션을 붙인 클래스는 값입니다. 생성된 코드는 생성자로 객체를 만들고, 필드로 값을 읽습니다.
 
 - **필드는 모두 `final`이고**, 클래스에는 타입 매개변수가 없습니다.
-- **이름 없는 생성자가 모든 필드를 받습니다.** 이름 있는 매개변수든 위치 매개변수든 필드와 이름이 같아야 합니다. 저장하는 것은 클래스가 직접 선언한 인스턴스 필드뿐이고, getter와 static 필드, 상속한 필드는 저장하지 않습니다.
+- **이름 없는 생성자가 모든 필드를 받습니다.** 이름 있는 매개변수든 위치 매개변수든 필드와 이름이 같아야 합니다. 저장하는 것은 클래스가 직접 선언한 인스턴스 필드뿐이고, getter와 static 필드, 상속한 필드는 저장하지 않습니다. 생성자가 상속한 필드를 `super.field`로 받으면 거부합니다. 그 필드가 말없이 빠지기 때문이며, 필드는 클래스에 직접 선언해야 합니다.
 - **필드의 타입이 파일에서의 타입입니다.** `bool`, `int`, `double`, `String`, `Uint8List`, `DateTime`, 이들이나 링크, 내장 클래스의 `List`, 컬렉션을 가리키는 [Link](../../types/dart/link.md), `@Embedded()`를 붙인 클래스를 쓸 수 있습니다. 목록에는 null이 들어가지 않습니다. 전체 목록은 [필드 타입](../../types/dart/field-types.md)에 있습니다.
 - **null이 될 수 있으면 선택 필드입니다.** 그런 필드는 null일 수 있고, 레코드에 없으면 null이 됩니다. null이 될 수 없는 필드는 필수입니다.
 - **매개변수의 기본값이 필드의 기본값입니다.** 필드가 생기기 전에 쓴 레코드는 이 값을 읽습니다. 기본값은 파일에 저장할 수 있는 상수, 즉 `bool`, `int`, `double`, `String`이나 이들의 목록입니다. 기본값이 있는 필드는 필수이므로 null이 될 수 없습니다.
+- **필드 이름은 공개 이름이고, 생성되는 쿼리 클래스의 멤버와 겹치지 않습니다.** 생성된 코드가 모든 필드를 이름으로 부르므로 private 필드는 거부합니다. `path`, `isNull`, `isNotNull`, `equals`, `notEquals`, `isIn`, `set`, `where`, `sortBy`, `offset`, `limit`, `linkedFrom`이라는 필드도 거부합니다. 생성된 클래스가 상속하는 클래스에 이미 있는 이름이기 때문입니다. Dart 필드에는 다른 이름을 주고, 저장되는 이름은 `@Name('limit')`으로 유지합니다.
 
 이 중 하나라도 어기면 생성기는 클래스와 필드 이름을 담은 메시지를 내고 멈춥니다.
 
@@ -178,6 +179,6 @@ const Name(String name);
 | `UserLink` | `User`를 가리키는 링크의 필드 객체. `User`의 필드가 있어서, 쿼리가 링크를 거쳐 읽을 수 있습니다 |
 | `UserCopyWith` | `copyWith`가 있는 확장. 받은 필드만 바꾼 사본을 만듭니다 |
 
-`@Embedded()`를 붙인 클래스 `Address`에는 [EmbeddedSchema](../../types/dart/collection-schema.md#embeddedschema)인 `addressSchema`, 내장된 `Address`의 필드 객체인 `AddressFields`, 그리고 `AddressCopyWith`를 씁니다.
+`@Embedded()`를 붙인 클래스 `Address`에는 [EmbeddedSchema](../../types/dart/collection-schema.md#embeddedschema)인 `addressSchema`, 내장된 `Address`의 필드 객체인 `AddressFields`, `Address` 목록의 필드 객체인 `AddressListFields`, 그리고 `AddressCopyWith`를 씁니다.
 
 `copyWith`는 받지 않은 필드를 모두 그대로 두므로 필드를 null로 만들 수 없습니다. 그럴 때는 객체를 새로 만들거나 `update`에서 `set(null)`을 씁니다.

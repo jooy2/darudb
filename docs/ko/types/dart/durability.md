@@ -2,7 +2,7 @@
 title: Durability
 order: 1
 group: queries
-counterpart: /types/node/write-options
+counterpart: [/types/node/write-options, /api/rust/write-transaction]
 pageClass: reference-page
 ---
 

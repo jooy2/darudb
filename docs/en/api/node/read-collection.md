@@ -101,6 +101,8 @@ sum(path: DottedPath, ...query: QueryArguments<O>): number | bigint;
 
 The sum of a number field, or of a path through embedded objects and links such as `'order.total'`, over the objects a query finds, after its sort, offset and limit. The query comes after the field in any form `find` takes: built, as text with its parameters, or prepared with them; without one, every object. The sum is exact, and 0 when there is no value. A `t.bigint()` field sums to a `bigint`; an int field sums to a number, and a sum beyond 2^53 fails with `INVALID_ARGUMENT`, as reading such an int does. A field that holds no numbers, or several values, fails with `INVALID_QUERY`.
 
+The signatures of the aggregates use four types the package exports: `NumberFields<O>` is the names of `O`'s fields that hold numbers, `OrderedFields<O>` the names of those that hold numbers, strings, bytes or dates, `SumOf<T>` is `bigint` for a `t.bigint()` field and `number` for any other, and `QueryArguments<O>` is the query in one of the forms above, or nothing.
+
 ```ts
 users.sum('age', (q) => q.where('team', '==', 'north'));
 users.sum('age', 'age >= $0', [18]);

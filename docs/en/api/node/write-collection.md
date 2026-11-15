@@ -98,7 +98,7 @@ Deletes the object whose primary key is `key`, with its index entries, and retur
 deleteWhere(...query: RequiredQueryArguments<O>): number;
 ```
 
-Deletes every object a query finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The query is required, in any form `find` takes, so that deleting every object is never an accident: `(q) => q` finds them all. Without one it fails with `INVALID_ARGUMENT`.
+Deletes every object a query finds, after its sort, offset and limit, and returns how many there were, leaving out what a cascading link takes with them. The query is required, in any form `find` takes, so that deleting every object is never an accident: `(q) => q` finds them all. Without one it fails with `INVALID_ARGUMENT`. `RequiredQueryArguments<O>` is the query in one of those forms: `QueryArguments<O>` with the query required.
 
 ### updateWhere
 

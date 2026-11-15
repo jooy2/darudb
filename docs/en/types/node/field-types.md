@@ -2,6 +2,7 @@
 title: Field types
 order: 6
 group: objects
+counterpart: /types/rust/field-type
 pageClass: reference-page
 ---
 

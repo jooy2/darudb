@@ -98,7 +98,7 @@ fn main() -> Result<(), darudb::Error> {
 #[proc_macro_derive(Embedded, attributes(darudb))]
 ```
 
-이름 있는 필드를 가진 구조체에 [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype)과 [`FieldType`](../../types/rust/field-type.md)을 구현해, 객체나 다른 내장 객체의 필드가 그 구조체를 담을 수 있게 합니다. 필드는 [`Embedded::of`](./embedded.md#of)로 선언합니다. 내장 객체에는 키가 없으므로 필드에 `key`도 인덱스도 붙일 수 없습니다. 그 필드에 인덱스를 두려면 내장 객체를 담은 컬렉션의 구조체에 `#[darudb(index("address.city"))]`처럼 경로로 선언합니다. `Object`처럼 필드마다 상수를 선언하며, 내장 객체를 담은 필드에서 `User::HOME.then(Address::CITY)`처럼 경로를 이어 갈 때 씁니다.
+이름 있는 필드를 가진 구조체에 [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype), [`FieldType`](../../types/rust/field-type.md), `ElementType`을 구현해, 객체나 다른 내장 객체의 필드가 그 구조체를 하나로든 `Vec`으로든 담을 수 있게 합니다. 필드는 [`Embedded::of`](./embedded.md#of)로 선언합니다. 내장 객체에는 키가 없으므로 필드에 `key`도 인덱스도 붙일 수 없습니다. 그 필드에 인덱스를 두려면 내장 객체를 담은 컬렉션의 구조체에 `#[darudb(index("address.city"))]`처럼 경로로 선언합니다. `Object`처럼 필드마다 상수를 선언하며, 내장 객체를 담은 필드에서 `User::HOME.then(Address::CITY)`처럼 경로를 이어 갈 때 씁니다.
 
 ## 필드 속성
 

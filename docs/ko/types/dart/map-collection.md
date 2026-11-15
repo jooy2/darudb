@@ -2,7 +2,7 @@
 title: MapCollection
 order: 16
 group: objects
-counterpart: /types/node/stored-schema
+counterpart: [/types/node/stored-schema, /types/rust/field]
 pageClass: reference-page
 ---
 
@@ -14,7 +14,7 @@ pageClass: reference-page
 typedef MapCollection = CollectionSchema<Map<String, Object?>, MapQuery, Object>;
 ```
 
-스키마 없이 연 데이터베이스는 파일에 저장된 스키마를 쓰고, 그 스키마의 컬렉션마다 `MapCollection`을 만듭니다. [`Database.storedCollection`](../../api/dart/database.md#storedcollection)이 이름으로 하나를 돌려주고, [`Database.storedSchema`](../../api/dart/database.md#storedschema)가 전부를 나열합니다. `darudb_generator`가 쓰는 것과 같은 [CollectionSchema](./collection-schema.md)이므로 [`txn.collection`](../../api/dart/read-transaction.md#collection)에 그대로 넘기면 됩니다. 컬렉션은 [`FieldSpec`](./field-types.md)이 설명합니다. 필드마다 이름과 종류, null 허용 여부, 기본값, 인덱스, 기본 키인지가 들어 있고, `autoKey`가 켜져 있으면 자동 증가 `id`가 맨 앞에 옵니다.
+스키마 없이 연 데이터베이스는 파일에 저장된 스키마를 쓰고, 그 스키마의 컬렉션마다 `MapCollection`을 만듭니다. [`Database.storedCollection`](../../api/dart/database.md#storedcollection)이 이름으로 하나를 돌려주고, [`Database.storedSchema`](../../api/dart/database.md#storedschema)가 전부를 나열합니다. `darudb_generator`가 쓰는 것과 같은 [CollectionSchema](./collection-schema.md)이므로 [`txn.collection`](../../api/dart/read-transaction.md#collection)에 그대로 넘기면 됩니다. 컬렉션은 [`FieldSpec`](./collection-schema.md#fieldspec)이 설명합니다. 필드마다 이름과 종류, null 허용 여부, 기본값, 인덱스, 기본 키인지가 들어 있고, `autoKey`가 켜져 있으면 자동 증가 `id`가 맨 앞에 옵니다.
 
 읽은 객체는 컬렉션의 모든 필드를 담은 맵입니다. null인 필드는 null이고, 내장 객체는 다시 맵이며, 링크는 [Link](./link.md)입니다. 쓰는 객체도 맵입니다.
 

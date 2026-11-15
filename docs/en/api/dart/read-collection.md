@@ -132,10 +132,10 @@ How many objects a prepared query finds.
 V sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
 ```
 
-The sum of a number field, which `field` picks from the query builder, over the objects a query finds, after its sort, offset and limit: every object without one. The field may be one of an embedded object or of a linked object, `(q) => q.customer.age`. The sum is exact and has the field's type, an `int` for an `IntField` and a `double` for a `FloatField`, and is 0 when there is no value. A sum of ints outside the range of a 64-bit int fails with `INVALID_ARGUMENT`.
+The sum of a number field, which `field` picks from the query builder, over the objects a query finds, after its sort, offset and limit: every object without one. The field may be one of an embedded object or of a linked object, `(q) => q.author.age` in a collection of posts. The sum is exact and has the field's type, an `int` for an `IntField` and a `double` for a `FloatField`, and is 0 when there is no value. A sum of ints outside the range of a 64-bit int fails with `INVALID_ARGUMENT`.
 
 ```dart
-users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
+users.sum((q) => q.age, (q) => q.where(q.address.city.equals('Seoul')));
 ```
 
 ### min

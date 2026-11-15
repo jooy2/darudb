@@ -2,6 +2,7 @@
 title: PasswordHashing
 order: 5
 group: database
+counterpart: /api/rust/open-options
 pageClass: reference-page
 ---
 

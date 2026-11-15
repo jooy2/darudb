@@ -1,7 +1,7 @@
 ---
 title: BackupOptions
 order: 19
-counterpart: /types/node/backup-options
+counterpart: [/types/node/backup-options, /api/dart/database, /api/python/database]
 ---
 
 # BackupOptions

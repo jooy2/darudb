@@ -1,7 +1,7 @@
 ---
 title: QueryBuilder
 order: 10
-counterpart: [/api/rust/query, /api/node/query]
+counterpart: [/api/rust/query, /api/node/query, /api/python/query]
 ---
 
 # QueryBuilder
@@ -74,10 +74,10 @@ Condition linkedFrom<L, LQ extends QueryBuilder<L>>(
 ]);
 ```
 
-A condition that holds for an object some object of `schema`'s collection links to, through the link field `link` picks from that collection's query builder, and that meets `where`, a condition on that collection's typed fields, if it is given: one linking object has to meet it whole. `~` of it finds the objects nothing links to. The link may be a list of links, and has to link to the collection the query runs on, or the query fails with `INVALID_QUERY`. It is `ANY posts.author (year >= 2020)` in the [query language](../../guide/query-language.md#objects-that-link-here).
+A condition that holds for an object some object of `schema`'s collection links to, through the link field `link` picks from that collection's query builder, and that meets `where`, a condition on that collection's typed fields, if it is given: one linking object has to meet it whole. `~` of it finds the objects nothing links to. The link may be a list of links, and has to link to the collection the query runs on, or the query fails with `INVALID_QUERY`. The example is `ANY posts.author (slug STARTSWITH "2026-")` in the [query language](../../guide/query-language.md#objects-that-link-here).
 
 ```dart
 users.find((q) => q.where(
-  q.linkedFrom(postSchema, (p) => p.author, (p) => p.year.atLeast(2020)),
+  q.linkedFrom(postSchema, (p) => p.author, (p) => p.slug.startsWith('2026-')),
 ));
 ```

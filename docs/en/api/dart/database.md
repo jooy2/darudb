@@ -1,6 +1,7 @@
 ---
 title: Database
 order: 1
+counterpart: [/api/rust/database, /api/node/database, /api/python/database]
 ---
 
 # Database
@@ -178,7 +179,7 @@ The version of the schema the database works with: the declared one, or the file
 Schema? get storedSchema;
 ```
 
-The schema the database works with: the [Schema](./schema.md) it was opened with, or, for a database opened without one, the schema the file held when it opened, whose collections are [MapCollection](../../types/dart/map-collection.md)s. A program that opens a file it did not write learns its collections here, through the [`FieldSpec`](../../types/dart/field-types.md)s of each, which give every field's name, kind, whether it is optional, its default and its index, and reaches each with [`storedCollection`](#storedcollection). It is `null` when the file holds no schema, or one that does not read, which reaching a collection reports. It can still be read after `close`.
+The schema the database works with: the [Schema](./schema.md) it was opened with, or, for a database opened without one, the schema the file held when it opened, whose collections are [MapCollection](../../types/dart/map-collection.md)s. A program that opens a file it did not write learns its collections here, through the [`FieldSpec`](../../types/dart/collection-schema.md#fieldspec)s of each, which give every field's name, kind, whether it is optional, its default and its index, and reaches each with [`storedCollection`](#storedcollection). It is `null` when the file holds no schema, or one that does not read, which reaching a collection reports. It can still be read after `close`.
 
 ## Methods
 

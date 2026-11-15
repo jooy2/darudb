@@ -2,6 +2,7 @@
 title: SalvageOptions
 order: 14
 group: tools
+counterpart: [/api/rust/open-options, /api/dart/database, /api/python/database]
 pageClass: reference-page
 ---
 

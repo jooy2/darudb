@@ -30,7 +30,7 @@ abstract base class Field {
 | `@Embedded()` 클래스 `Address` | `Address`의 필드가 있는 `EmbeddedField<Address>`인 `AddressFields` |
 | `List<Address>` | `Address`의 필드로 원소마다 검사하는 `EmbeddedListField<Address>`인 `AddressListFields` |
 
-내장 객체나 링크가 가리키는 객체의 필드는 그것을 담은 필드를 거쳐 닿습니다. `q.address.city`처럼 쓰고, `q.team.city`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다. 목록과 null에 건 조건의 뜻은 [쿼리](../../guide/queries.md)에서 설명합니다.
+내장 객체나 링크가 가리키는 객체의 필드는 그것을 담은 필드를 거쳐 닿습니다. `q.address.city`처럼 쓰고, 글에 대한 쿼리에서 `q.author.name`처럼 쓰면 링크가 가리키는 객체를 검사합니다. 가리키는 객체가 없으면 null로 읽습니다. 목록과 null에 건 조건의 뜻은 [쿼리](../../guide/queries.md)에서 설명합니다.
 
 ```dart
 final found = db.read(
@@ -85,7 +85,7 @@ Condition isNotNull();
 
 ## 값 필드의 메서드
 
-`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`는 필드 타입 `V`의 값을 받습니다.
+`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`는 필드 타입 `V`의 값을 받습니다. 모두 `ValueField<V>`이며, 아래 메서드는 이 클래스의 것입니다.
 
 ### equals
 
@@ -121,7 +121,7 @@ Change set(V? value);
 
 ## 순서가 있는 필드의 메서드
 
-`IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`에는 순서가 있습니다. 숫자는 값으로, 문자열과 바이트는 바이트 순서로, 날짜는 `DateTime`의 시간대와 상관없이 시간 순서로 비교합니다.
+`IntField`, `FloatField`, `StringField`, `BytesField`, `DateField`에는 순서가 있습니다. 숫자는 값으로, 문자열과 바이트는 바이트 순서로, 날짜는 `DateTime`의 시간대와 상관없이 시간 순서로 비교합니다. 모두 `OrderedField<V>`이며, 이 클래스는 아래 메서드를 더한 `ValueField<V>`입니다.
 
 ### lessThan
 
@@ -244,6 +244,8 @@ Change set(E? value);
 ```
 
 내장 객체를 `value`로 통째로 바꾸거나 null로 만드는 변경입니다. 기본값이 있는 필수 필드에 null을 주면 기본값이 됩니다. 객체의 필드는 파일이 기록해 둔 자리에 쓰므로, 클래스가 파일과 다른 순서로 필드를 선언해도 필드마다 제자리에 들어갑니다.
+
+클래스 `E`의 `List`를 담는 필드 객체인 `EmbeddedListField<E>`에도 `Change set(List<E>? values)`가 따로 있습니다. 목록을 `values`로 통째로 바꾸거나 null로 만들며, 기본값이 있는 필수 필드에 null을 주면 기본값이 됩니다.
 
 ## 링크 필드의 메서드
 

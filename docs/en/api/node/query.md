@@ -15,7 +15,7 @@ A query has a filter, a sort, an offset and a limit, each optional. `find`, `fin
 
 `O` is the type of the objects the query finds. In the function form it is the collection's, so `where` and `sortBy` accept only its fields and values of their types. `new Query()` without a type takes any field and any value, and the engine checks them when the query runs, as it checks every dotted path. A query that does not fit the schema fails with `INVALID_QUERY` when it runs.
 
-The signatures use four types that the package declares for its own use: `FieldNames<O>` is the names of `O`'s fields, `DottedPath` is any string with a `.` in it, `ElementOf<T>` is a field's type without null, or the element type of a list, and `Operand<T>` is `T` or a [Param](./param.md) of a prepared query.
+The signatures use four types that the package declares for its own use: `FieldNames<O>` is the names of `O`'s fields, `DottedPath` is any string with a `.` in it, `ElementOf<T>` is a field's type without null, or the element type of a list, and `Operand<T>` is `T` or a [Param](./param.md) of a prepared query. The exported `Query` value has the type `QueryConstructor`, whose one member is the constructor `new Query<O>()`.
 
 ```ts
 import { Query } from 'darudb';
@@ -88,7 +88,7 @@ Keeps the objects that meet a condition, and every condition given to `where` be
 - **A field, an operator and a value.** The operators are the [Comparison](../../types/node/query-input.md) operators `==`, `!=`, `<`, `<=`, `>` and `>=`, then `between` with a pair `[low, high]`, `in` with an array, and `contains`, `startsWith` and `endsWith`. `== null` tests that the field is null, and `!= null` that it is not.
 - **A dotted path** in place of the field, through an embedded object or a link, such as `address.city` or `team.city`. TypeScript does not check it; the engine does.
 - **A condition** from [conditions](./conditions.md), or a function that receives the conditions typed for the collection and returns one. This is the form for `or`, `not`, `isNull` and nested groups.
-- **Options** after the value of the first two forms, a `WhereOptions`: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.
+- **Options** after the value of the first two forms, a `WhereOptions`, an object whose one field, `ignoreCase`, is optional: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.
 
 An operator that is not one of these, or a `between` without a pair, fails with `INVALID_QUERY`.
 

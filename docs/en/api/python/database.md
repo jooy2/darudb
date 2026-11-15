@@ -1,6 +1,7 @@
 ---
 title: Database
 order: 1
+counterpart: [/api/rust/database, /api/node/database]
 ---
 
 # Database
@@ -15,7 +16,7 @@ There is no constructor: `Database.open` and `Database.open_async` return one, a
 
 A `Database` works until `close` or `close_async` has closed it. After that `path`, `schema`, `schema_version` and `is_open` can still be read, and every member that uses the file raises a [DaruError](../../types/python/error.md) with the code `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with. Some options belong to the file rather than to one handle: `busy_timeout`, `cache_size`, `upgrade_format` and `password_hashing` stay those of the first handle.
 
-The native module releases the GIL for everything the engine does, so other threads run while one waits for the disk or for another writer. A database can be used from several threads at once, and a transaction from any thread, one call at a time. Every method that uses the file has a twin for `asyncio` whose name ends in `_async`, which does the engine's work on a thread pool the package keeps, of at most `min(32, os.cpu_count() + 4)` threads, so that an event loop never waits for the disk or for another process's writer. [Asynchronous API](../../guide/async.md) explains how the two kinds of call share a file.
+The native module releases the GIL for everything the engine does, so other threads run while one waits for the disk or for another writer. A database can be used from several threads at once, and a transaction from any thread, one call at a time. Every method that uses the file has a twin for `asyncio` whose name ends in `_async`, except `prepare`, which reads at most the file's schema and has none, which does the engine's work on a thread pool the package keeps, of at most `min(32, os.cpu_count() + 4)` threads, so that an event loop never waits for the disk or for another process's writer. [Asynchronous API](../../guide/async.md) explains how the two kinds of call share a file.
 
 ## Class methods
 
@@ -236,7 +237,7 @@ def prepare(self, collection: type[T] | str, query: Query | Condition | str) -> 
 
 Prepares a query once on `collection`, given as its class or its name, so that each run gives only the values of its parameters. The query is text in the query language with `$0`, `$1` and on, or a [Query](./query.md) or a [condition](./conditions.md) built with [param](./param.md) in place of values. The [Prepared](../../types/python/prepared.md) query holds no database or transaction, so it runs in any transaction on that collection, synchronous or asynchronous.
 
-A database opened without a schema prepares a query on a collection of the file's own, given by its name. It fails with `INVALID_ARGUMENT` for a collection the schema does not have, and when the database has no schema at all, with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION` when the schema the file holds does not read, with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed. A field the collection does not have is found when the query runs.
+A database opened without a schema prepares a query on a collection of the file's own, given by its name. It fails with `INVALID_ARGUMENT` for a collection the declared schema does not have, and when the database has no schema at all, with `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION` when the schema the file holds does not read, with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed. A field the collection does not have is found when the query runs, and so is a name the file's schema does not have, in a database opened without a schema.
 
 ```python
 from darudb import F, param

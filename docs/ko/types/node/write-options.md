@@ -2,6 +2,7 @@
 title: WriteOptions
 order: 2
 group: queries
+counterpart: /api/rust/write-transaction
 pageClass: reference-page
 ---
 
@@ -16,11 +17,11 @@ interface WriteOptions
 [`write`와 `writeAsync`](../../api/node/database.md)가 트랜잭션 함수 다음 인자로 받습니다. 옵션이 없으면 커밋은 디스크를 기다립니다. 두 가지 커밋은 [트랜잭션](../../guide/transactions.md)에서 자세히 설명합니다.
 
 ```ts
-db.write((txn) => txn.collection('events').insert({ kind: 'click', at: Date.now() }), {
+db.write((txn) => txn.collection('users').insert({ name: 'Alice' }), {
   durability: 'deferred'
 });
 
-// 나중에, 이벤트가 정전에도 남아야 할 때:
+// 나중에, 사용자가 정전에도 남아야 할 때:
 db.sync();
 ```
 

@@ -15,7 +15,7 @@ interface Query<O = Record<string, unknown>>
 
 `O`는 쿼리가 찾는 객체의 타입입니다. 함수로 쿼리를 줄 때는 컬렉션의 객체 타입이므로, `where`와 `sortBy`는 그 컬렉션의 필드와 필드 타입의 값만 받습니다. 타입 없이 `new Query()`로 만든 쿼리는 어떤 필드와 값이든 받습니다. 이런 필드와 값은 점으로 이은 경로와 마찬가지로 쿼리를 실행할 때 엔진이 검사합니다. 스키마에 맞지 않는 쿼리는 실행할 때 `INVALID_QUERY`로 실패합니다.
 
-시그니처에는 패키지가 내부에서 쓰는 타입 네 가지가 나옵니다. `FieldNames<O>`는 `O`의 필드 이름이고, `DottedPath`는 `.`이 들어간 문자열입니다. `ElementOf<T>`는 필드 타입에서 null을 뺀 타입이며, 목록이면 원소 타입입니다. `Operand<T>`는 `T`이거나, 준비한 쿼리의 매개변수인 [Param](./param.md)입니다.
+시그니처에는 패키지가 내부에서 쓰는 타입 네 가지가 나옵니다. `FieldNames<O>`는 `O`의 필드 이름이고, `DottedPath`는 `.`이 들어간 문자열입니다. `ElementOf<T>`는 필드 타입에서 null을 뺀 타입이며, 목록이면 원소 타입입니다. `Operand<T>`는 `T`이거나, 준비한 쿼리의 매개변수인 [Param](./param.md)입니다. 패키지가 내보내는 `Query` 값의 타입은 `QueryConstructor`이고, 멤버는 생성자 `new Query<O>()` 하나입니다.
 
 ```ts
 import { Query } from 'darudb';
@@ -88,7 +88,7 @@ where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<
 - **필드, 연산자, 값.** 연산자는 [Comparison](../../types/node/query-input.md)에 있는 `==`, `!=`, `<`, `<=`, `>`, `>=`와, 쌍 `[low, high]`를 받는 `between`, 배열을 받는 `in`, 그리고 `contains`, `startsWith`, `endsWith`입니다. `== null`은 필드가 null인지, `!= null`은 null이 아닌지 검사합니다.
 - **점으로 이은 경로.** 필드 대신 `address.city`나 `team.city`처럼 내장 객체나 링크를 지나는 경로를 씁니다. TypeScript는 경로를 검사하지 않고 엔진이 검사합니다.
 - **조건.** [conditions](./conditions.md)로 만든 조건이나, 컬렉션에 맞게 타입이 정해진 조건을 받아 조건 하나를 돌려주는 함수입니다. `or`, `not`, `isNull`, 중첩된 묶음은 이 형태로 씁니다.
-- **옵션**은 앞의 두 형태에서 값 뒤에 `WhereOptions`로 줍니다. `{ ignoreCase: true }`를 주면 `==`, `!=`, `in`, `contains`, `startsWith`, `endsWith` 검사가 [`conditions.ignoreCase`](./conditions.md#ignorecase)처럼 대소문자를 무시하고 문자열을 비교합니다.
+- **옵션**은 앞의 두 형태에서 값 뒤에 `WhereOptions`로 줍니다. 생략할 수 있는 필드 `ignoreCase` 하나만 있는 객체입니다. `{ ignoreCase: true }`를 주면 `==`, `!=`, `in`, `contains`, `startsWith`, `endsWith` 검사가 [`conditions.ignoreCase`](./conditions.md#ignorecase)처럼 대소문자를 무시하고 문자열을 비교합니다.
 
 이 밖의 연산자나 쌍이 아닌 `between` 값은 `INVALID_QUERY`로 실패합니다.
 

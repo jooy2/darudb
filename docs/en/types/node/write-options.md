@@ -2,6 +2,7 @@
 title: WriteOptions
 order: 2
 group: queries
+counterpart: /api/rust/write-transaction
 pageClass: reference-page
 ---
 
@@ -16,11 +17,11 @@ interface WriteOptions
 [`write` and `writeAsync`](../../api/node/database.md) take it after the transaction's function. Without it, a commit waits for the disk. [Transactions](../../guide/transactions.md) explains the two kinds of commit at length.
 
 ```ts
-db.write((txn) => txn.collection('events').insert({ kind: 'click', at: Date.now() }), {
+db.write((txn) => txn.collection('users').insert({ name: 'Alice' }), {
   durability: 'deferred'
 });
 
-// Later, when the events have to survive a power cut:
+// Later, when the users have to survive a power cut:
 db.sync();
 ```
 

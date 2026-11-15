@@ -2,6 +2,7 @@
 title: Prepared
 order: 6
 group: queries
+counterpart: /api/rust/query
 pageClass: reference-page
 ---
 
@@ -31,7 +32,7 @@ with db.read() as txn:
     users.find(in_ages, 18, 30)
 ```
 
-- `prepare` fails with `INVALID_ARGUMENT` for a collection the schema does not have, with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed.
+- `prepare` fails with `INVALID_ARGUMENT` for a collection the declared schema does not have (in a database opened without a schema, a name the file's schema lacks is found when the query runs), with `INVALID_QUERY` for text that does not parse, and with `CLOSED` after the database is closed.
 - A run fails with `INVALID_QUERY` on another collection, when it leaves a parameter without a value, and when a field or a value of the query does not fit the schema.
 
 ## Properties

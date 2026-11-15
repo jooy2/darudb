@@ -2,7 +2,7 @@
 title: MapCollection
 order: 16
 group: objects
-counterpart: /types/node/stored-schema
+counterpart: [/types/node/stored-schema, /types/rust/field]
 pageClass: reference-page
 ---
 
@@ -14,7 +14,7 @@ pageClass: reference-page
 typedef MapCollection = CollectionSchema<Map<String, Object?>, MapQuery, Object>;
 ```
 
-A database opened without a schema works with the one the file holds, and makes a `MapCollection` for each of its collections from it: [`Database.storedCollection`](../../api/dart/database.md#storedcollection) gives one by name, and [`Database.storedSchema`](../../api/dart/database.md#storedschema) lists them all. It is a [CollectionSchema](./collection-schema.md) like the one `darudb_generator` writes, so [`txn.collection`](../../api/dart/read-transaction.md#collection) takes it, and its [`FieldSpec`](./field-types.md)s describe the collection: each field's name and kind, whether it is optional, its default and its index, and which is the primary key, with the auto-increment `id` first when `autoKey` is set.
+A database opened without a schema works with the one the file holds, and makes a `MapCollection` for each of its collections from it: [`Database.storedCollection`](../../api/dart/database.md#storedcollection) gives one by name, and [`Database.storedSchema`](../../api/dart/database.md#storedschema) lists them all. It is a [CollectionSchema](./collection-schema.md) like the one `darudb_generator` writes, so [`txn.collection`](../../api/dart/read-transaction.md#collection) takes it, and its [`FieldSpec`](./collection-schema.md#fieldspec)s describe the collection: each field's name and kind, whether it is optional, its default and its index, and which is the primary key, with the auto-increment `id` first when `autoKey` is set.
 
 An object read is a map with every field of the collection, null where a field is null, an embedded object a map of its own, and a link a [Link](./link.md). An object written is a map too:
 

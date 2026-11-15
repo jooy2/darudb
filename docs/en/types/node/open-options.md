@@ -2,7 +2,7 @@
 title: OpenOptions
 order: 1
 group: database
-counterpart: /api/rust/open-options
+counterpart: [/api/rust/open-options, /api/dart/database, /api/python/database]
 pageClass: reference-page
 ---
 

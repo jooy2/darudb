@@ -2,6 +2,7 @@
 title: Prepared
 order: 9
 group: queries
+counterpart: /api/rust/query
 pageClass: reference-page
 ---
 
@@ -16,7 +17,7 @@ interface Prepared<O> {
 }
 ```
 
-[`Database.prepare`](../../api/node/database.md) makes one, from text in the query language with `$0`, `$1` and on, or from a query built with [`param`](../../api/node/param.md) in place of the values that change. Nothing else makes one. `find`, `findOne` and `count` take it with the values of its parameters as [QueryParameters](./query-input.md#queryparameters).
+[`Database.prepare`](../../api/node/database.md) makes one, from text in the query language with `$0`, `$1` and on, or from a query built with [`param`](../../api/node/param.md) in place of the values that change. Nothing else makes one. `find`, `findOne`, `count`, the aggregates, `deleteWhere` and `updateWhere` take it with the values of its parameters as [QueryParameters](./query-input.md#queryparameters).
 
 `O` is the type of the objects the query finds, so the type checker refuses a prepared query on a collection of another type. `[objects]` is the property that carries `O`: only the type checker knows it, and it never exists at run time.
 

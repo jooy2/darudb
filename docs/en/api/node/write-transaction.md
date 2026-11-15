@@ -1,6 +1,7 @@
 ---
 title: WriteTransaction
 order: 6
+counterpart: /api/rust/write-transaction
 ---
 
 # WriteTransaction

@@ -2,6 +2,7 @@
 title: 필드 타입
 order: 6
 group: objects
+counterpart: /types/rust/field-type
 pageClass: reference-page
 ---
 

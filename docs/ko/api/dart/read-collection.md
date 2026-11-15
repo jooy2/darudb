@@ -132,10 +132,10 @@ int countPrepared(Prepared<T> prepared, [List<Object?> parameters = const []]);
 V sum<V extends num>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
 ```
 
-쿼리가 찾은 객체에서 `field`가 쿼리 빌더에서 고른 숫자 필드의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상이고, 쿼리가 없으면 모든 객체가 대상입니다. 필드는 `(q) => q.customer.age`처럼 내장 객체나 링크한 객체의 필드여도 됩니다. 합계는 정확하며 필드의 타입을 따릅니다. `IntField`는 `int`, `FloatField`는 `double`이고, 값이 없으면 0입니다. 정수 합계가 64비트 정수 범위를 넘으면 `INVALID_ARGUMENT`로 실패합니다.
+쿼리가 찾은 객체에서 `field`가 쿼리 빌더에서 고른 숫자 필드의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상이고, 쿼리가 없으면 모든 객체가 대상입니다. 필드는 내장 객체나 링크한 객체의 필드여도 되며, 글 컬렉션에서는 `(q) => q.author.age`처럼 씁니다. 합계는 정확하며 필드의 타입을 따릅니다. `IntField`는 `int`, `FloatField`는 `double`이고, 값이 없으면 0입니다. 정수 합계가 64비트 정수 범위를 넘으면 `INVALID_ARGUMENT`로 실패합니다.
 
 ```dart
-users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
+users.sum((q) => q.age, (q) => q.where(q.address.city.equals('Seoul')));
 ```
 
 ### min

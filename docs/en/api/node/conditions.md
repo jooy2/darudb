@@ -1,7 +1,7 @@
 ---
 title: conditions
 order: 10
-counterpart: /api/rust/filter
+counterpart: [/api/rust/filter, /api/python/conditions]
 ---
 
 # conditions
@@ -202,8 +202,8 @@ linked(
 ): Condition;
 ```
 
-Holds for an object that some object of `collection` links to through its link field `link`, a name or a dotted path, to the collection the query runs on, and that meets `condition` on `collection`'s fields, if it is given: one linking object has to meet it whole. `not` of it finds the objects nothing links to. The link may be a list of links. The engine checks the collection, the link and the condition, and fails with `INVALID_QUERY` where they do not fit. It is `ANY posts.author (year >= 2020)` in the [query language](../../guide/query-language.md#objects-that-link-here).
+Holds for an object that some object of `collection` links to through its link field `link`, a name or a dotted path, to the collection the query runs on, and that meets `condition` on `collection`'s fields, if it is given: one linking object has to meet it whole. `not` of it finds the objects nothing links to. The link may be a list of links. The engine checks the collection, the link and the condition, and fails with `INVALID_QUERY` where they do not fit. The example finds the teams that a user of 18 or older belongs to, which is `ANY users.team (age >= 18)` in the [query language](../../guide/query-language.md#objects-that-link-here).
 
 ```ts
-users.find((q) => q.where((c) => c.linked('posts', 'author', (p) => p.ge('year', 2020))));
+teams.find((q) => q.where((c) => c.linked('users', 'team', (u) => u.ge('age', 18))));
 ```

@@ -172,7 +172,7 @@ def field(
 def index(*fields: Any, unique: bool = False) -> Index: ...
 ```
 
-`@collection(indexes=[...])`에 넣을 인덱스를 `fields`에 차례대로 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 속성 이름이거나, `"address.city"`처럼 내장 객체를 따라 이름을 이은 경로이거나, `F.address.city` 같은 [F](./conditions.md) 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다.
+`@collection(indexes=[...])`에 넣을 인덱스를 `fields`에 차례대로 둡니다. 인덱스 항목은 첫 필드로 정렬되고, 값이 같으면 둘째 필드로, 그다음은 셋째 필드로 정렬됩니다. 각 필드는 속성 이름이거나, `"address.city"`처럼 내장 객체를 따라 이름을 이은 경로이거나, `F.address.city` 같은 [F](./conditions.md) 경로입니다. 인덱스 하나에 한 개에서 여덟 개까지 줄 수 있습니다. 돌려주는 값은 `Index`이며, 준 그대로의 필드인 `fields`와 `unique` 두 속성이 있습니다.
 
 ```python
 from datetime import datetime

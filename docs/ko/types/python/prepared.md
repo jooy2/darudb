@@ -2,6 +2,7 @@
 title: Prepared
 order: 6
 group: queries
+counterpart: /api/rust/query
 pageClass: reference-page
 ---
 
@@ -31,7 +32,7 @@ with db.read() as txn:
     users.find(in_ages, 18, 30)
 ```
 
-- `prepare`는 스키마에 없는 컬렉션이면 `INVALID_ARGUMENT`, 해석할 수 없는 문자열이면 `INVALID_QUERY`, 데이터베이스를 닫은 뒤라면 `CLOSED`로 실패합니다.
+- `prepare`는 선언한 스키마에 없는 컬렉션이면 `INVALID_ARGUMENT`(스키마 없이 연 데이터베이스에서는 파일의 스키마에 없는 이름이 쿼리를 실행할 때 드러납니다), 해석할 수 없는 문자열이면 `INVALID_QUERY`, 데이터베이스를 닫은 뒤라면 `CLOSED`로 실패합니다.
 - 다른 컬렉션에서 실행하거나, 값을 받지 못한 매개변수가 있거나, 쿼리의 필드나 값이 스키마와 맞지 않으면 실행할 때 `INVALID_QUERY`로 실패합니다.
 
 ## 속성

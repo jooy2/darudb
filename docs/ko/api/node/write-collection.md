@@ -98,7 +98,7 @@ delete(key: Key): boolean;
 deleteWhere(...query: RequiredQueryArguments<O>): number;
 ```
 
-쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 연쇄 삭제로 함께 지워진 객체는 세지 않습니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 됩니다. 모든 객체를 지우려면 `(q) => q`를 줍니다. 쿼리가 없으면 `INVALID_ARGUMENT`로 실패합니다.
+쿼리가 정렬, 오프셋, 개수 제한을 거쳐 찾은 객체를 모두 지우고, 지운 개수를 돌려줍니다. 연쇄 삭제로 함께 지워진 객체는 세지 않습니다. 실수로 모든 객체를 지우는 일이 없도록 쿼리는 꼭 줘야 하며, `find`가 받는 어떤 형태로든 됩니다. 모든 객체를 지우려면 `(q) => q`를 줍니다. 쿼리가 없으면 `INVALID_ARGUMENT`로 실패합니다. `RequiredQueryArguments<O>`는 그 형태 중 하나로 준 쿼리이며, 쿼리를 꼭 줘야 하는 `QueryArguments<O>`입니다.
 
 ### updateWhere
 

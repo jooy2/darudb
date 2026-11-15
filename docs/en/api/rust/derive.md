@@ -98,7 +98,7 @@ Implements [`CollectionType`](../../types/rust/collection-type.md) for a struct 
 #[proc_macro_derive(Embedded, attributes(darudb))]
 ```
 
-Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype) and [`FieldType`](../../types/rust/field-type.md) for a struct with named fields, so that a field of an object, or of another embedded object, can hold it. [`Embedded::of`](./embedded.md#of) declares its fields. An embedded object has no key, so its fields take neither `key` nor an index; the struct of the collection that holds it indexes them by their paths, as `#[darudb(index("address.city"))]` does. It declares a constant for each field as `Object` does, which a path from the field holding the embedded object goes on to: `User::HOME.then(Address::CITY)`.
+Implements [`EmbeddedType`](../../types/rust/collection-type.md#embeddedtype), [`FieldType`](../../types/rust/field-type.md) and `ElementType` for a struct with named fields, so that a field of an object, or of another embedded object, can hold it, alone or in a `Vec`. [`Embedded::of`](./embedded.md#of) declares its fields. An embedded object has no key, so its fields take neither `key` nor an index; the struct of the collection that holds it indexes them by their paths, as `#[darudb(index("address.city"))]` does. It declares a constant for each field as `Object` does, which a path from the field holding the embedded object goes on to: `User::HOME.then(Address::CITY)`.
 
 ## Field attributes
 

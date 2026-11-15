@@ -2,6 +2,7 @@
 title: Prepared
 order: 9
 group: queries
+counterpart: /api/rust/query
 pageClass: reference-page
 ---
 
@@ -16,7 +17,7 @@ interface Prepared<O> {
 }
 ```
 
-[`Database.prepare`](../../api/node/database.md)가 만듭니다. `$0`, `$1` 같은 매개변수가 든 쿼리 언어 문자열로 만들 수도 있고, 바뀌는 값 자리에 [`param`](../../api/node/param.md)을 넣어 만든 쿼리로 만들 수도 있습니다. 다른 방법으로는 만들 수 없습니다. `find`, `findOne`, `count`가 이 쿼리와 함께 매개변수의 값을 [QueryParameters](./query-input.md#queryparameters)로 받습니다.
+[`Database.prepare`](../../api/node/database.md)가 만듭니다. `$0`, `$1` 같은 매개변수가 든 쿼리 언어 문자열로 만들 수도 있고, 바뀌는 값 자리에 [`param`](../../api/node/param.md)을 넣어 만든 쿼리로 만들 수도 있습니다. 다른 방법으로는 만들 수 없습니다. `find`, `findOne`, `count`, 집계, `deleteWhere`, `updateWhere`가 이 쿼리와 함께 매개변수의 값을 [QueryParameters](./query-input.md#queryparameters)로 받습니다.
 
 `O`는 쿼리가 찾는 객체의 타입이어서, 타입 검사기는 객체 타입이 다른 컬렉션에서 이 쿼리를 쓰지 못하게 합니다. `[objects]`는 `O`를 실어 나르는 속성으로, 타입 검사기만 알고 실행 중에는 없습니다.
 

@@ -172,7 +172,7 @@ The name the file stores the field under, when it is not the attribute's. Querie
 def index(*fields: Any, unique: bool = False) -> Index: ...
 ```
 
-An index on `fields`, in order, for `@collection(indexes=[...])`. Its entries sort by the first field, then by the second, and so on. Each field is an attribute's name, a path of names through embedded objects such as `"address.city"`, or an [F](./conditions.md) path such as `F.address.city`, and an index has one to eight of them.
+An index on `fields`, in order, for `@collection(indexes=[...])`. Its entries sort by the first field, then by the second, and so on. Each field is an attribute's name, a path of names through embedded objects such as `"address.city"`, or an [F](./conditions.md) path such as `F.address.city`, and an index has one to eight of them. What it returns is an `Index`, a value with two attributes: `fields`, the fields as they were given, and `unique`.
 
 ```python
 from datetime import datetime

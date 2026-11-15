@@ -2,6 +2,7 @@
 title: Prepared
 order: 6
 group: queries
+counterpart: /api/rust/query
 pageClass: reference-page
 ---
 

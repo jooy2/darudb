@@ -1,6 +1,7 @@
 ---
 title: Database
 order: 1
+counterpart: [/api/rust/database, /api/node/database, /api/python/database]
 ---
 
 # Database
@@ -178,7 +179,7 @@ int? get schemaVersion;
 Schema? get storedSchema;
 ```
 
-데이터베이스가 쓰는 스키마입니다. 열 때 준 [Schema](./schema.md)이거나, 스키마 없이 열었으면 열 때 파일에 저장돼 있던 스키마이며, 이때 컬렉션은 [MapCollection](../../types/dart/map-collection.md)입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션을 알아냅니다. 각 컬렉션의 [`FieldSpec`](../../types/dart/field-types.md)에 필드마다 이름과 종류, null 허용 여부, 기본값, 인덱스가 있고, 각 컬렉션에는 [`storedCollection`](#storedcollection)으로 접근합니다. 파일에 스키마가 없거나 저장된 스키마를 읽을 수 없으면 `null`이고, 읽을 수 없는 경우는 컬렉션에 접근할 때 알려 줍니다. `close` 뒤에도 읽을 수 있습니다.
+데이터베이스가 쓰는 스키마입니다. 열 때 준 [Schema](./schema.md)이거나, 스키마 없이 열었으면 열 때 파일에 저장돼 있던 스키마이며, 이때 컬렉션은 [MapCollection](../../types/dart/map-collection.md)입니다. 직접 쓰지 않은 파일을 여는 프로그램은 여기서 컬렉션을 알아냅니다. 각 컬렉션의 [`FieldSpec`](../../types/dart/collection-schema.md#fieldspec)에 필드마다 이름과 종류, null 허용 여부, 기본값, 인덱스가 있고, 각 컬렉션에는 [`storedCollection`](#storedcollection)으로 접근합니다. 파일에 스키마가 없거나 저장된 스키마를 읽을 수 없으면 `null`이고, 읽을 수 없는 경우는 컬렉션에 접근할 때 알려 줍니다. `close` 뒤에도 읽을 수 있습니다.
 
 ## 메서드
 

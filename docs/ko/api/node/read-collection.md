@@ -101,6 +101,8 @@ sum(path: DottedPath, ...query: QueryArguments<O>): number | bigint;
 
 쿼리가 찾은 객체에서 숫자 필드, 또는 `'order.total'`처럼 내장 객체와 링크를 거치는 경로의 합계를 구합니다. 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상입니다. 쿼리는 필드 뒤에 `find`가 받는 어떤 형태로든 줍니다. 빌더로 만든 쿼리, 매개변수와 함께 주는 문자열, 매개변수와 함께 주는 준비된 쿼리 모두 됩니다. 쿼리가 없으면 모든 객체가 대상입니다. 합계는 정확하며, 값이 없으면 0입니다. `t.bigint()` 필드의 합계는 `bigint`입니다. 정수 필드의 합계는 숫자이고, 2^53을 넘으면 그런 정수를 읽을 때처럼 `INVALID_ARGUMENT`로 실패합니다. 숫자를 담지 않거나 값을 여럿 담은 필드는 `INVALID_QUERY`로 실패합니다.
 
+집계의 시그니처에는 패키지가 내보내는 타입 네 가지가 나옵니다. `NumberFields<O>`는 `O`의 필드 중 숫자를 담는 필드의 이름이고, `OrderedFields<O>`는 숫자, 문자열, 바이트, 날짜를 담는 필드의 이름입니다. `SumOf<T>`는 `t.bigint()` 필드면 `bigint`, 그 밖에는 `number`이며, `QueryArguments<O>`는 위의 형태 중 하나로 준 쿼리이거나 쿼리가 없는 경우입니다.
+
 ```ts
 users.sum('age', (q) => q.where('team', '==', 'north'));
 users.sum('age', 'age >= $0', [18]);

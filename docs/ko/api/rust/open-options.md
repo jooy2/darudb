@@ -1,7 +1,7 @@
 ---
 title: OpenOptions
 order: 2
-counterpart: /types/node/open-options
+counterpart: [/types/node/open-options, /api/dart/database, /api/python/database]
 ---
 
 # OpenOptions

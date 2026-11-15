@@ -1,6 +1,7 @@
 ---
 title: WriteTransaction
 order: 4
+counterpart: [/api/dart/write-transaction, /api/python/write-transaction]
 ---
 
 # WriteTransaction

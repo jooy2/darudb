@@ -51,7 +51,7 @@ The objects a query finds, in its order. A query takes one of these forms, which
 - **Text** in the [query language](./query.md#the-query-language), where `$0`, `$1` and on take the values of `parameters` in order. The package keeps the last 256 texts it has parsed, for every database of the process, so a text that runs again is not parsed again.
 - **A [Prepared](../../types/python/prepared.md) query** that `Database.prepare` made on this collection.
 
-`parameters` come after the query, as positional arguments: `find("age >= $0", 18)`. A built query with [param](./param.md) in place of values takes them the same way, prepared or not. A query that has no parameters ignores the values it is given.
+`parameters` come after the query, as positional arguments: `find("age >= $0", 18)`. A built query with [param](./param.md) in place of values takes them the same way, prepared or not. A query that has no parameters ignores the values it is given, once each has been converted: one that is no value a query compares with, such as a naive `datetime` or a list, still fails with `INVALID_QUERY`.
 
 A query that does not fit fails with `INVALID_QUERY`: a field the collection does not have, a value of another type, text that does not parse, a query prepared on another collection, a parameter without a value, or something that is not a query at all.
 

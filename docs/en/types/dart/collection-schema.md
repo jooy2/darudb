@@ -159,6 +159,6 @@ What values a field holds, one class for each kind:
 The functions the generator writes, `_$writeUser` and `_$readUser` above, write and read an object a field at a time through these two classes.
 
 - **`FieldSink`** takes each field's value by slot: `boolean`, `int64`, `float`, `string`, `bytes`, `date`, `link`, `list`, `object` and `objectList`, each of which takes null for a field left out.
-- **`FieldSource`** walks a record field by field. `next` moves to the next field and `slot` says which it is; `int64`, `string` and the others read its value, and the `OrNull` form of each reads one that may be null. A field the record leaves out comes with its default, or null, so a record written before a field existed still reads. A record that does not fit its layout fails with `CORRUPTED`.
+- **`FieldSource`** walks a record field by field. `next` moves to the next field, `slot` says which it is, and `isNull` whether it holds no value. `boolean`, `int64`, `float`, `string`, `bytes`, `date`, `link`, `list`, `linkList`, `object` and `objectList` read its value, and the `OrNull` form of each, `linkListOrNull` and `objectListOrNull` among them, reads one that may be null. A field the record leaves out comes with its default, or null, so a record written before a field existed still reads. A record that does not fit its layout fails with `CORRUPTED`.
 
 Neither is meant for code other than the generated functions and hand-written ones in their form.

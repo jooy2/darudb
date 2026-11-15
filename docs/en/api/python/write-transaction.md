@@ -36,7 +36,7 @@ def collection(self, collection: type[T]) -> WriteCollection[T]: ...
 def collection(self, collection: str) -> WriteCollection[Any]: ...
 ```
 
-The collection of the class `collection`, or of that name, as a [WriteCollection](./write-collection.md), which reads the transaction's own changes and makes more. A database opened without a schema reaches the collections of the file's own by name, and writes their objects as `dict`s by the names the file stores, each value converted for its field's type as through a class: a float field takes an `int`. It raises `INVALID_ARGUMENT` for a class or a name the schema does not have, for a class when the database was opened without a schema, and when the database has no schema at all; a stored schema that does not read raises `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`.
+The collection of the class `collection`, or of that name, as a [WriteCollection](./write-collection.md), which reads the transaction's own changes and makes more. A database opened without a schema reaches the collections of the file's own by name, and writes their objects as `dict`s by the names the file stores, each value converted for its field's type as through a class: a float field takes an `int`. It raises `INVALID_ARGUMENT` for a class or a name the schema does not have, for a class when the database was opened without a schema, and when the database has no schema at all; a stored schema that does not read raises `CORRUPTED` or `UNSUPPORTED_FORMAT_VERSION`. In a database opened without a schema, a name is not looked up here: one the file's schema does not have is found by the first operation on the collection, which raises `INVALID_ARGUMENT`.
 
 ## AsyncWriteTransaction
 

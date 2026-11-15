@@ -117,7 +117,7 @@ int updateWherePrepared(List<Change> Function(Q q) changes, Prepared<T> prepared
 쿼리가 찾은 모든 객체에 [`update`](#update)가 한 객체에 하듯 `changes`가 주는 필드를 설정하고, 쿼리가 찾은 객체 수를 돌려줍니다. 전부 되거나 전혀 안 됩니다. 다른 객체가 가진 유니크 값 때문에 `DUPLICATE_KEY`로, 또는 너무 긴 인덱스 항목 때문에 `INVALID_ARGUMENT`로 한 객체가 거부되면, 앞서 바뀐 객체를 되돌리고 그 오류를 던집니다. 변경으로 기본 키를 설정할 수는 없습니다.
 
 ```dart
-users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+users.updateWhere((q) => [q.age.set(0)], (q) => q.where(q.age.lessThan(0)));
 ```
 
 ## AsyncWriteCollection

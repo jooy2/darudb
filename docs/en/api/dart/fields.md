@@ -30,7 +30,7 @@ The query builder `darudb_generator` writes has a getter for each field of the c
 | An `@Embedded()` class `Address` | `AddressFields`, an `EmbeddedField<Address>` with `Address`'s fields |
 | `List<Address>` | `AddressListFields`, an `EmbeddedListField<Address>` with `Address`'s fields, which test each element |
 
-A field of an embedded object or of a linked object is reached through the field that holds it: `q.address.city`, or `q.team.city` to test the linked object. A link to an object that is not there reads as null. [Queries](../../guide/queries.md) explains what each condition means for lists and for null.
+A field of an embedded object or of a linked object is reached through the field that holds it: `q.address.city`, or `q.author.name` in a query on posts to test the linked object. A link to an object that is not there reads as null. [Queries](../../guide/queries.md) explains what each condition means for lists and for null.
 
 ```dart
 final found = db.read(
@@ -85,7 +85,7 @@ Holds when the field is not null.
 
 ## Methods of value fields
 
-`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` take values of their field's type, `V`.
+`BoolField`, `IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` take values of their field's type, `V`. Each is a `ValueField<V>`, the class that has these methods.
 
 ### equals
 
@@ -121,7 +121,7 @@ The change that sets the field to `value`. Null makes an optional field null, an
 
 ## Methods of ordered fields
 
-`IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` have an order: numbers by value, strings and bytes by their bytes, and dates in time order, whatever zone a `DateTime` is in.
+`IntField`, `FloatField`, `StringField`, `BytesField` and `DateField` have an order: numbers by value, strings and bytes by their bytes, and dates in time order, whatever zone a `DateTime` is in. Each is an `OrderedField<V>`, a `ValueField<V>` with these methods as well.
 
 ### lessThan
 
@@ -244,6 +244,8 @@ Change set(E? value);
 ```
 
 The change that replaces the embedded object whole with `value`, or makes it null. Null gives a required field with a default its default. The object is written with its fields where the file keeps them, so a class whose fields are declared in another order than the file's still writes each to its own.
+
+An `EmbeddedListField<E>`, the field object of a `List` of the class `E`, has a `set` of its own, `Change set(List<E>? values)`, which replaces the list whole with `values` or makes it null, where null gives a required field with a default its default.
 
 ## Methods of link fields
 

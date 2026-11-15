@@ -1,6 +1,7 @@
 ---
 title: Query
 order: 13
+counterpart: [/api/node/query, /api/python/query]
 ---
 
 # Query

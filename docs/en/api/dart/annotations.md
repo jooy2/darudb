@@ -1,7 +1,7 @@
 ---
 title: Annotations
 order: 2
-counterpart: /api/rust/derive
+counterpart: [/api/rust/derive, /api/node/collection]
 ---
 
 # Annotations
@@ -78,10 +78,11 @@ final db = Database.open('app.darudb', schema: const Schema(1, [userSchema, post
 An annotated class is a value, which the generated code builds with its constructor and reads through its fields:
 
 - **Every field is `final`**, and the class has no type parameters.
-- **The unnamed constructor takes every field**, by name or by position, as a parameter of the same name. The fields are the instance fields the class declares itself: a getter, a static field and an inherited field are not stored.
+- **The unnamed constructor takes every field**, by name or by position, as a parameter of the same name. The fields are the instance fields the class declares itself: a getter, a static field and an inherited field are not stored. A constructor that takes an inherited field as `super.field` is refused, since that field would be left out without a word: declare the field in the class itself.
 - **A field's type is its type in the file**: `bool`, `int`, `double`, `String`, `Uint8List`, `DateTime`, a `List` of those, of links or of embedded classes, a [Link](../../types/dart/link.md) to a collection, or a class annotated `@Embedded()`. A list holds no null. [Field types](../../types/dart/field-types.md) has the whole list.
 - **Nullable means optional.** A nullable field may be null, and is null when a record leaves it out. A field that is not nullable is required.
 - **A parameter's default is the field's default**, which a record written before the field existed reads as. It is a constant the file can store: a `bool`, an `int`, a `double`, a `String`, or a list of them. A field with a default is required, so it is not nullable.
+- **A field's name is public, and not a member of the generated query classes.** A private field is refused, since the generated code names every field. So is a field named `path`, `isNull`, `isNotNull`, `equals`, `notEquals`, `isIn`, `set`, `where`, `sortBy`, `offset`, `limit` or `linkedFrom`, which the classes the generated ones extend already have: give the Dart field another name, and keep the stored one with `@Name('limit')`.
 
 The generator stops with a message naming the class and the field when one of these does not hold.
 
@@ -178,6 +179,6 @@ For a class `User` annotated `@Collection()`:
 | `UserLink` | The field object of a link to a `User`, with `User`'s fields, which a query reads through the link |
 | `UserCopyWith` | An extension with `copyWith`, which copies an object with the fields it is given changed |
 
-For a class `Address` annotated `@Embedded()`, it writes `addressSchema`, an [EmbeddedSchema](../../types/dart/collection-schema.md#embeddedschema), `AddressFields`, the field object of an embedded `Address`, and `AddressCopyWith`.
+For a class `Address` annotated `@Embedded()`, it writes `addressSchema`, an [EmbeddedSchema](../../types/dart/collection-schema.md#embeddedschema), `AddressFields`, the field object of an embedded `Address`, `AddressListFields`, the field object of a list of them, and `AddressCopyWith`.
 
 `copyWith` keeps every field it is not given, so it cannot make a field null: construct the object for that, or use `update` with `set(null)`.

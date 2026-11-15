@@ -14,7 +14,7 @@ final class MigrationContext
 
 When `Database.open` finds the file at an older schema version, it migrates the file in one write transaction. It applies every step's renames and the changes the engine makes by itself, then calls the `run` function of each [Migration](./migration.md) between the two versions, in version order, with a `MigrationContext`. If a function throws, nothing of the migration is kept, the file keeps its old schema and data, and `open` throws the same error. [Migrations](../../guide/migrations.md) explains what the engine changes by itself and what needs a function.
 
-Its calls are synchronous, through `Database.openAsync` too, where the function itself may be asynchronous. The migration holds the file's writer until it commits, so nothing a call waits for is another writer of the file; a function should not write to the same file through another handle, which would wait for the migration. The context and its collections can be used only while the migration runs; afterwards every call throws `CLOSED`.
+Its calls are synchronous, through `Database.openAsync` too, where the function itself may be asynchronous. The migration holds the file's writer until it commits, so nothing a call waits for is another writer of the file; a function should not write to the same file through another handle, which would wait for the migration. The context and its collections can be used only while the migration runs; afterwards every call on a collection throws `CLOSED`, and `collection` itself throws `INVALID_ARGUMENT`.
 
 ```dart
 final db = Database.open(

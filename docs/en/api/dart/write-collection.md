@@ -117,7 +117,7 @@ int updateWherePrepared(List<Change> Function(Q q) changes, Prepared<T> prepared
 Sets the fields `changes` gives in every object a query finds, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it are put back, and the call throws that error. The changes cannot set the primary key.
 
 ```dart
-users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
+users.updateWhere((q) => [q.age.set(0)], (q) => q.where(q.age.lessThan(0)));
 ```
 
 ## AsyncWriteCollection

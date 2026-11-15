@@ -2,6 +2,7 @@
 title: StoredSchema
 order: 13
 group: objects
+counterpart: [/types/rust/field, /types/dart/map-collection]
 pageClass: reference-page
 ---
 

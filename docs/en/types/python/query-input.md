@@ -48,7 +48,7 @@ The values of a query's parameters, in order, as positional arguments after the 
 - An aware `datetime` is a date. A naive one fails with `INVALID_QUERY`.
 - `None` is allowed only where the parameter is compared with `==` or `!=`, which then test whether the field is `None`. Anywhere else it fails with `INVALID_QUERY`.
 
-A run that leaves a parameter without a value fails with `INVALID_QUERY`, and so does a value of another type than its field's, or one that is not a single value, such as a list. Values given to a query without parameters are ignored.
+A run that leaves a parameter without a value fails with `INVALID_QUERY`, and so does a value of another type than its field's, or one that is not a single value, such as a list. Values given to a query without parameters are ignored once each has been converted, so one that does not convert, such as a naive `datetime` or a list, still fails with `INVALID_QUERY`.
 
 ```python
 users.find_one("email == $0", None)  # a user without an email

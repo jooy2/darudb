@@ -2,6 +2,7 @@
 title: BackupOptions
 order: 15
 group: tools
+counterpart: [/api/rust/backup-options, /api/dart/database, /api/python/database]
 pageClass: reference-page
 ---
 
