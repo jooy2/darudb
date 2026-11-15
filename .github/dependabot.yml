@@ -1,0 +1,61 @@
+# Updates to dependencies, proposed once a month as one pull request for each
+# ecosystem and folder, so that they are reviewed together rather than one
+# by one. Security updates come as soon as an advisory is published.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      crates:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /packages/node
+    schedule:
+      interval: monthly
+    groups:
+      packages:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: monthly
+    groups:
+      packages:
+        patterns: ['*']
+
+  - package-ecosystem: pub
+    directory: /packages/dart/darudb
+    schedule:
+      interval: monthly
+    groups:
+      packages:
+        patterns: ['*']
+
+  - package-ecosystem: pub
+    directory: /packages/dart/darudb_generator
+    schedule:
+      interval: monthly
+    groups:
+      packages:
+        patterns: ['*']
+
+  - package-ecosystem: pip
+    directory: /packages/python
+    schedule:
+      interval: monthly
+    groups:
+      packages:
+        patterns: ['*']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']

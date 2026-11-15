@@ -1,0 +1,58 @@
+name: run-audit
+
+# Checks the dependencies the packages ship with against the advisory
+# databases: once a week, since an advisory appears without anything here
+# changing, and whenever a lock file changes.
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  pull_request:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - packages/node/package-lock.json
+      - docs/package-lock.json
+      - .github/workflows/run-audit.yml
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - packages/node/package-lock.json
+      - docs/package-lock.json
+      - .github/workflows/run-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo:
+    runs-on: ubuntu-latest
+    name: Rust crates
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Every crate in `Cargo.lock`: the engine's, and those of the Node.js,
+      # Dart and Python bindings, which are members of the same workspace.
+      - run: cargo audit
+
+  npm:
+    runs-on: ubuntu-latest
+    name: npm packages of ${{ matrix.folder }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        folder: [packages/node, docs]
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # Reads the lock file alone: nothing is installed, and no script runs.
+      - run: npm audit --audit-level=high
+        working-directory: ${{ matrix.folder }}
