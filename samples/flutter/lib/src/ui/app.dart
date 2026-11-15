@@ -1,5 +1,11 @@
 // The app: Plass's providers for toasts and confirmations, the backdrop its
 // glass needs, and the one screen.
+// TODO: move to `package:material_ui/material_ui.dart`. Flutter 3.47
+// deprecated this library for that package, which needs Flutter 3.47 and
+// Dart 3.13, above this sample's minimum of Flutter 3.41, Plass UI's own.
+// Until the sample's minimum rises, the deprecation is ignored here, since
+// the analysis fails on any hint.
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:plass_ui/plass_ui.dart';
 
