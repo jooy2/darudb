@@ -30,6 +30,9 @@ final class Info extends Struct {
 
   @Uint8()
   external int encrypted;
+
+  @Uint8()
+  external int readOnly;
 }
 
 /// An open database.

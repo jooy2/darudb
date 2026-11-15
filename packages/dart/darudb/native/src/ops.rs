@@ -300,6 +300,9 @@ fn open_options(record: &[u8]) -> Result<darudb::OpenOptions> {
             10 => {
                 options.upgrade_format(value.bool()?);
             }
+            14 => {
+                options.read_only(value.bool()?);
+            }
             12 => {
                 options.max_unsynced_pages(
                     u64::try_from(value.int()?)

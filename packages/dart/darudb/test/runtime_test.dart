@@ -530,6 +530,47 @@ void main() {
     );
   });
 
+  test('a read-only database reads, and refuses what would write', () async {
+    DaruException? missing;
+
+    try {
+      Database.open('${directory.path}/missing.darudb', readOnly: true);
+    } on DaruException catch (error) {
+      missing = error;
+    }
+
+    expect(missing?.code, 'NOT_FOUND');
+    expect(File('${directory.path}/missing.darudb').existsSync(), isFalse);
+
+    db.write((txn) => txn.collection(userSchema).insert(const User(name: 'a')));
+
+    final reader = Database.open(
+      '${directory.path}/app.darudb',
+      schema: const Schema(1, [userSchema]),
+      readOnly: true,
+    );
+    final refused = throwsA(
+      isA<DaruException>().having((e) => e.code, 'code', 'READ_ONLY'),
+    );
+
+    expect(reader.isReadOnly, isTrue);
+    expect(db.isReadOnly, isFalse);
+    expect(reader.read((txn) => txn.collection(userSchema).count()), 1);
+    expect(() => reader.write((txn) {}), refused);
+    expect(reader.compact, refused);
+    expect(reader.upgradeFormat, refused);
+    await expectLater(reader.writeAsync((txn) async {}), refused);
+    reader.sync();
+
+    // The handle beside it writes, and this one reads what it commits.
+    db.write((txn) => txn.collection(userSchema).insert(const User(name: 'b')));
+    expect(
+      await reader.readAsync((txn) => txn.collection(userSchema).count()),
+      2,
+    );
+    reader.close();
+  });
+
   test('a closed database refuses calls with CLOSED', () {
     db.close();
     expect(

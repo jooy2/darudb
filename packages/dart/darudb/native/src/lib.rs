@@ -58,6 +58,8 @@ pub struct Info {
     pub format_version: u32,
     /// 1 if the file is encrypted, and 0 otherwise.
     pub encrypted: u8,
+    /// 1 if the database was opened read-only, and 0 otherwise.
+    pub read_only: u8,
 }
 
 /// A failure as Dart gets it: the engine's error code, unchanged, and its
@@ -391,6 +393,7 @@ pub unsafe extern "C" fn darudb_database_info(database: *const Database, info: *
                 page_size: database.page_size(),
                 format_version: database.format_version(),
                 encrypted: u8::from(database.is_encrypted()),
+                read_only: u8::from(database.is_read_only()),
             })
         })?;
 

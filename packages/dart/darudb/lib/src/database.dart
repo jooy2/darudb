@@ -347,6 +347,7 @@ Uint8List _options({
   required PasswordHashing? passwordHashing,
   required List<Migration> migrations,
   bool upgradeFormat = true,
+  bool readOnly = false,
   bool plain = false,
 }) {
   if (key != null && password != null) {
@@ -421,6 +422,7 @@ Uint8List _options({
         },
       ),
     if (!upgradeFormat) (10, (Writer w) => w.byte(Tag.falseValue)),
+    if (readOnly) (14, (Writer w) => w.byte(Tag.trueValue)),
     // A backup's alone: an open refuses it as an option it does not know.
     if (plain) (11, (Writer w) => w.byte(Tag.trueValue)),
     if (migrations.isNotEmpty)
@@ -622,6 +624,14 @@ final class Database implements Finalizable {
   /// between. A [key] of 32 bytes or a [password] encrypts a new database,
   /// and opens an encrypted one.
   ///
+  /// With `readOnly`, nothing done through the database changes the file:
+  /// it reads, checks and backs up, while `write`, `compact`,
+  /// `upgradeFormat`, `setKey`, `setPassword` and their `Future` forms fail
+  /// with `READ_ONLY`, as does a [schema] the file does not hold already.
+  /// Nothing is created, and a file that needs recovery, left by a process
+  /// that died, is refused with `READ_ONLY` until it has been opened once
+  /// without it. The process still needs write access to the file.
+  ///
   /// Deferred commits are made durable once they have written
   /// `maxUnsyncedPages` pages, 16384 by default, or once `maxUnsyncedTime`
   /// has passed, one second by default.
@@ -649,6 +659,7 @@ final class Database implements Finalizable {
     String? password,
     PasswordHashing? passwordHashing,
     bool upgradeFormat = true,
+    bool readOnly = false,
   }) {
     final options = _options(
       create: create,
@@ -663,6 +674,7 @@ final class Database implements Finalizable {
       passwordHashing: passwordHashing,
       migrations: migrations,
       upgradeFormat: upgradeFormat,
+      readOnly: readOnly,
     );
     final pathBytes = utf8.encode(path);
     final loaded = _io.load(pathBytes, options);
@@ -750,6 +762,7 @@ final class Database implements Finalizable {
     String? password,
     PasswordHashing? passwordHashing,
     bool upgradeFormat = true,
+    bool readOnly = false,
   }) async => _openAsync(
     path,
     schema,
@@ -767,6 +780,7 @@ final class Database implements Finalizable {
       passwordHashing: passwordHashing,
       migrations: migrations,
       upgradeFormat: upgradeFormat,
+      readOnly: readOnly,
     ),
   );
 
@@ -854,6 +868,9 @@ final class Database implements Finalizable {
   /// The file format version recorded in the file: 6, which this package
   /// writes, or 5 for a file that opening did not raise.
   int get formatVersion => _info().formatVersion;
+
+  /// Whether the database was opened read-only, with `readOnly`.
+  bool get isReadOnly => _info().readOnly != 0;
 
   /// Whether the file is encrypted.
   bool get isEncrypted => _info().encrypted != 0;
