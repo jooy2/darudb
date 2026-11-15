@@ -152,9 +152,42 @@ List<_Field> _fieldsOf(ClassElement element, {required bool embedded}) {
   };
   final fields = <_Field>[];
 
+  // A field the class inherits is not one of its own, so it would be left
+  // out of the schema without a word, and read back as its default.
+  for (final parameter in constructor.formalParameters) {
+    if (parameter.isSuperFormal) {
+      throw InvalidGenerationSourceError(
+        '`${element.name}` takes `super.${parameter.name}`, a field of the '
+        'class it extends, which is not stored: declare the field in '
+        '`${element.name}` itself.',
+        element: parameter,
+      );
+    }
+  }
+
   for (final field in element.fields) {
     if (field.isStatic || !field.isOriginDeclaration) {
       continue;
+    }
+
+    final fieldName = field.name ?? '';
+
+    if (fieldName.startsWith('_')) {
+      throw InvalidGenerationSourceError(
+        '`${element.name}.$fieldName` is private; a field of a stored class '
+        'is public, since the generated code names it.',
+        element: field,
+      );
+    }
+
+    if (_reservedNames.contains(fieldName)) {
+      throw InvalidGenerationSourceError(
+        '`${element.name}.$fieldName` has the name of a member of the query '
+        'classes the generator makes, so the generated code would not '
+        'compile: give the Dart field another name, and keep the stored '
+        "one with `@Name('$fieldName')`.",
+        element: field,
+      );
     }
 
     if (!field.isFinal) {
@@ -539,6 +572,24 @@ String _construct(
 
   return '$className(${arguments.join(', ')})';
 }
+
+/// The names a field cannot have: the members of the classes the generated
+/// query classes extend, `QueryBuilder`, `LinkField`, `EmbeddedField` and
+/// `EmbeddedListField`, which a getter of the same name would clash with.
+const _reservedNames = {
+  'path',
+  'isNull',
+  'isNotNull',
+  'equals',
+  'notEquals',
+  'isIn',
+  'set',
+  'where',
+  'sortBy',
+  'offset',
+  'limit',
+  'linkedFrom',
+};
 
 /// The query fields of [fields]: getters at the root, or under a path for an
 /// embedded object or a link's target.

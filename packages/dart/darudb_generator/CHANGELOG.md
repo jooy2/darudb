@@ -4,6 +4,12 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- A field whose name is a member of the query classes the generated code extends, `path`, `limit`, `offset`, `where`, `sortBy`, `linkedFrom`, `set`, `equals`, `notEquals`, `isIn`, `isNull` or `isNotNull`, is a build error that says to rename the Dart field and keep the stored name with `@Name`. The generated code did not compile.
+- A private field is a build error, where the generated `copyWith` did not compile.
+- A constructor that takes `super.field`, a field of the class the annotated one extends, is a build error. Such a field was left out of the schema without a word, never stored, and read back as its default.
+
 ## v1.5.0 (2026-11-01)
 
 ### Added

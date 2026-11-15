@@ -386,4 +386,55 @@ class Note {
 }
 ''', 'does not take `text`');
   });
+
+  test('a field named as a member of the query classes is refused', () async {
+    await refused('''
+@Collection()
+class Doc {
+  const Doc({this.id, required this.path});
+
+  final int? id;
+  final String path;
+}
+''', 'has the name of a member of the query classes');
+    await refused('''
+@Collection()
+class Page {
+  const Page({this.id, this.limit = 0});
+
+  final int? id;
+  final int limit;
+}
+''', "@Name('limit')");
+  });
+
+  test('a private field is refused', () async {
+    await refused('''
+@Collection()
+class Note {
+  const Note({this.id, String text = ''}) : _text = text;
+
+  final int? id;
+  final String _text;
+}
+''', 'is private');
+  });
+
+  test('a field of the class it extends is refused', () async {
+    await refused('''
+class Stamped {
+  const Stamped({this.createdAt});
+
+  final DateTime? createdAt;
+}
+
+@Collection()
+class Note extends Stamped {
+  const Note({this.id, required this.text, super.createdAt});
+
+  final int? id;
+  final String text;
+}
+''', 'a field of the class it extends');
+  });
 }
