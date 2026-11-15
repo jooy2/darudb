@@ -215,6 +215,15 @@ fn objects_read_back_as_they_were_written() {
     let people = read.collection_of::<Person>().unwrap();
 
     assert_eq!(
+        people
+            .get_many([9, 1])
+            .unwrap()
+            .iter()
+            .map(|person| person.as_ref().and_then(|person| person.id))
+            .collect::<Vec<_>>(),
+        [None, Some(1)]
+    );
+    assert_eq!(
         people.get(1).unwrap(),
         Some(Person {
             id: Some(1),

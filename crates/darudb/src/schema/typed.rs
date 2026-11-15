@@ -1697,6 +1697,20 @@ impl<'a, T: CollectionType> TypedReader<'a, T> {
         Ok(found)
     }
 
+    /// The objects whose primary keys are `keys`, in the order of the keys:
+    /// `None` where no object has a key, and an object once for each time
+    /// its key is given.
+    ///
+    /// # Errors
+    ///
+    /// As [`get`](Self::get) fails.
+    pub fn get_many<K: Into<Value>>(
+        &self,
+        keys: impl IntoIterator<Item = K>,
+    ) -> Result<Vec<Option<T>>> {
+        keys.into_iter().map(|key| self.get(key)).collect()
+    }
+
     /// Every object, in primary key order.
     ///
     /// # Errors
@@ -2072,6 +2086,20 @@ impl<'a, T: CollectionType> TypedWriter<'a, T> {
         })?;
 
         Ok(found)
+    }
+
+    /// The objects whose primary keys are `keys`, in the order of the keys:
+    /// `None` where no object has a key, and an object once for each time
+    /// its key is given.
+    ///
+    /// # Errors
+    ///
+    /// As [`get`](Self::get) fails.
+    pub fn get_many<K: Into<Value>>(
+        &self,
+        keys: impl IntoIterator<Item = K>,
+    ) -> Result<Vec<Option<T>>> {
+        keys.into_iter().map(|key| self.get(key)).collect()
     }
 
     /// Every object, in primary key order, with this transaction's changes.

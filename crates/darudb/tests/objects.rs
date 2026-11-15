@@ -2022,3 +2022,51 @@ fn a_read_only_handle_takes_the_schema_the_file_holds_and_no_other() {
     // The file is as it was: the first schema still opens it.
     open(Some(v1())).unwrap();
 }
+
+/// Several keys read in one call come back in the keys' order, with nothing
+/// where no object has a key.
+#[test]
+fn several_keys_are_read_in_their_order() {
+    let dir = TestDir::new();
+
+    with_data(&dir);
+
+    let db = open(&dir, v1(), &[]).unwrap();
+    let read = db.begin_read().unwrap();
+    let users = read.collection("users").unwrap();
+    let names = |keys: &[i64]| -> Vec<Option<String>> {
+        users
+            .get_many(keys.iter().copied())
+            .unwrap()
+            .into_iter()
+            .map(|user| user.and_then(|user| user.get("name")?.as_str().map(str::to_owned)))
+            .collect()
+    };
+
+    assert_eq!(
+        names(&[2, 9, 1, 2]),
+        [
+            Some("Bob".to_owned()),
+            None,
+            Some("Alice".to_owned()),
+            Some("Bob".to_owned())
+        ]
+    );
+    assert_eq!(names(&[]), Vec::<Option<String>>::new());
+    // A key of another type than the collection's is refused, as for `get`.
+    assert_eq!(code(users.get_many(["a"])), "INVALID_ARGUMENT");
+
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+
+    users.delete(1).unwrap();
+    assert_eq!(
+        users
+            .get_many([1, 2])
+            .unwrap()
+            .iter()
+            .map(Option::is_some)
+            .collect::<Vec<_>>(),
+        [false, true]
+    );
+}

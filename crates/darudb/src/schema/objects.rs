@@ -1069,6 +1069,19 @@ impl<'a> CollectionReader<'a> {
         )
     }
 
+    /// The objects whose primary keys are `keys`, in the order of the keys:
+    /// `None` where no object has a key, and an object once for each time
+    /// its key is given.
+    ///
+    /// It is one [`get`](Self::get) a key, in one call: what a caller with a
+    /// list of keys would write as a loop.
+    pub fn get_many<K: Into<Value>>(
+        &self,
+        keys: impl IntoIterator<Item = K>,
+    ) -> Result<Vec<Option<Object>>> {
+        keys.into_iter().map(|key| self.get(key)).collect()
+    }
+
     /// The record of the object whose primary key is `key`, as the file holds
     /// it, for a language binding that decodes records itself; see
     /// [`get_record`](CollectionWriter::get_record).
@@ -1541,6 +1554,19 @@ impl<'a> CollectionWriter<'a> {
             self.schema.order(self.position),
             &key.into(),
         )
+    }
+
+    /// The objects whose primary keys are `keys`, in the order of the keys:
+    /// `None` where no object has a key, and an object once for each time
+    /// its key is given.
+    ///
+    /// It is one [`get`](Self::get) a key, in one call: what a caller with a
+    /// list of keys would write as a loop.
+    pub fn get_many<K: Into<Value>>(
+        &self,
+        keys: impl IntoIterator<Item = K>,
+    ) -> Result<Vec<Option<Object>>> {
+        keys.into_iter().map(|key| self.get(key)).collect()
     }
 
     /// The record of the object whose primary key is `key`, as the file holds
