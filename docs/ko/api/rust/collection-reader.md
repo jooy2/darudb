@@ -107,7 +107,7 @@ pub fn sum(&self, query: &Query, field: &str) -> Result<Value>
 pub fn min(&self, query: &Query, field: &str) -> Result<Value>
 ```
 
-`query`가 찾은 객체에서 정수, 실수, 문자열, 바이트 필드인 `field`의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `Value::Null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+`query`가 찾은 객체에서 정수, 실수, 문자열, 바이트, 날짜 필드인 `field`의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `Value::Null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
 
 ### max
 

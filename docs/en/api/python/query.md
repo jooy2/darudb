@@ -91,8 +91,8 @@ with db.read() as txn:
 ```
 
 - **Order.** A filter comes first, then `SORT BY` with fields separated by commas, each ascending unless `DESC` follows it, then `LIMIT` and `OFFSET`. Each part may be left out.
-- **Conditions.** `field == value`, with `!=`, `<`, `<=`, `>` and `>=` too; `field BETWEEN a AND b`; `field IN [a, b]`; `field CONTAINS value`, `STARTSWITH` and `ENDSWITH`; `field IS NULL` and `field IS NOT NULL`. They join with `AND`, `OR`, `NOT` and parentheses, and `AND` binds tighter than `OR`. A field may be a dotted path.
-- **Values.** An int has no point, and a float has one or an exponent; either may start with `-`. Strings are in double quotes, with the escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. The other values are `true`, `false` and `null`.
+- **Conditions.** `field == value`, with `!=`, `<`, `<=`, `>` and `>=` too; `field BETWEEN a AND b`; `field IN [a, b]`; `field CONTAINS value`, `STARTSWITH` and `ENDSWITH`; `field IS NULL` and `field IS NOT NULL`. `IGNORE CASE` after a condition of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` compares strings without regard to case, and `ANY collection.link`, with a filter of that collection in parentheses after it if one is wanted, holds for an object that an object of `collection` links to. They join with `AND`, `OR`, `NOT` and parentheses, and `AND` binds tighter than `OR`. A field may be a dotted path.
+- **Values.** An int has no point, and a float has one or an exponent; either may start with `-`. Strings are in double quotes, with the escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. The other values are `true`, `false`, `null`, and a date, `DATE "2026-10-30T12:00:00Z"`.
 - **Parameters.** `$0`, `$1` and on take the values passed after the text, in order. A value that comes from outside the program belongs in a parameter, never in the text.
 - **Names.** Keywords are case-insensitive. A field named like a keyword, such as `limit`, goes in backticks where a path starts.
 - **Errors.** Text that does not parse fails with `INVALID_QUERY`, and the message names the character, counted from 1, where it went wrong. Parentheses and `NOT` nest at most 48 levels deep.

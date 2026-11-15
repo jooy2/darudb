@@ -64,7 +64,7 @@ pub struct ValueWriter<'a>
 Writes one value of a record: a field's, an element of a list, or the key of a link. Each method takes the writer, so a value is written once.
 
 - `null()`: no value, so an optional field is left out. An element of a list fails with `INVALID_ARGUMENT`.
-- `bool(value)`, `int(value)`, `float(value)`, `string(&str)`, `bytes(&[u8])`.
+- `bool(value)`, `int(value)`, `float(value)`, `string(&str)`, `bytes(&[u8])`, and `date(micros)` with microseconds since 1970 UTC.
 - `list(&[T])` for an [`ElementType`](#elementtype), `object(&E)` for an embedded object, and `link(&K)` with the key of the object linked to.
 
 ## ValueReader
@@ -76,7 +76,7 @@ pub struct ValueReader<'a>
 One value of a record, borrowed from it. A field the record leaves out reads as its default, or as null.
 
 - `is_null()`.
-- `bool()`, `int()`, `float()`, `str()` and `bytes()`, the last two borrowed from the record.
+- `bool()`, `int()`, `float()`, `date()`, which gives microseconds since 1970 UTC, and `str()` and `bytes()`, borrowed from the record.
 - `list::<T>()`, `object::<E>()` and `link::<K>()`.
 
 A value of another type than the method's, or text that is not UTF-8, fails with `CORRUPTED`.

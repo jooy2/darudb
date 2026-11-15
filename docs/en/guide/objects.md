@@ -350,8 +350,6 @@ These hold in every language:
 - A refused write changes nothing, and the transaction can go on and commit.
 - Objects read back are plain values that outlive the transaction. Every field of the schema is there: a left-out field holds its default, or null.
 
-::: lang rust
-
 ## Change the objects a query finds
 
 A write transaction deletes, or updates, every object a query finds in one call, after the query's sort, offset and limit, and returns how many objects the query found. The query is always given, so that changing every object is never an accident.
@@ -364,17 +362,17 @@ use darudb::{Database, Filter, Object, Query};
 fn tidy(db: &Database) -> Result<(), darudb::Error> {
     let mut txn = db.begin_write()?;
     let mut users = txn.collection("users")?;
-    let minors = Query::new().filter(Filter::lt("age", 18));
+    let negative = Query::new().filter(Filter::lt("age", 0));
 
-    let updated = users.update_where(&minors, Object::new().with("active", false))?;
-    let deleted = users.delete_where(&Query::new().filter(Filter::eq("active", false)).limit(100))?;
+    let updated = users.update_where(&negative, Object::new().with("age", 0))?;
+    let deleted = users.delete_where(&Query::new().filter(Filter::gt("age", 120)).limit(100))?;
 
     println!("{updated} updated, {deleted} deleted");
     txn.commit()
 }
 ```
 
-A typed collection takes the fields through the type: `people.change_where(&minors).set(Person::ACTIVE, false).apply()`.
+A typed collection takes the fields through the type: `people.change_where(&negative).set(Person::AGE, 0).apply()`.
 
 :::
 
@@ -384,8 +382,8 @@ A typed collection takes the fields through the type: `people.change_where(&mino
 db.write((txn) => {
   const users = txn.collection('users');
 
-  users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
-  users.deleteWhere('active == $0 LIMIT 100', [false]);
+  users.updateWhere({ age: 0 }, (q) => q.where('age', '<', 0));
+  users.deleteWhere('age > $0 LIMIT 100', [120]);
 });
 ```
 
@@ -399,8 +397,8 @@ db.write((txn) => {
 db.write((txn) {
   final users = txn.collection(userSchema);
 
-  users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
-  users.deleteWhereText(r'active == $0 LIMIT 100', [false]);
+  users.updateWhere((q) => [q.age.set(0)], (q) => q.where(q.age.lessThan(0)));
+  users.deleteWhereText(r'age > $0 LIMIT 100', [120]);
 });
 ```
 
@@ -414,8 +412,8 @@ db.write((txn) {
 with db.write() as txn:
     users = txn.collection(User)
 
-    users.update_where(F.age < 18, active=False)
-    users.delete_where("active == $0 LIMIT 100", False)
+    users.update_where(F.age < 0, age=0)
+    users.delete_where("age > $0 LIMIT 100", 120)
 ```
 
 `update_where` takes the query, its parameters after it, and the changes by name, as `update` takes them. `Query()` finds every object.
@@ -506,6 +504,8 @@ class Post:
 - **A link can still name nothing.** A cascade is not a check. Writing a link to an object that does not exist is allowed as ever, and the object that holds it stays until something else deletes it.
 - **Changing it.** Adding or removing a cascade raises the schema version and rewrites no object. A migration's function deletes under the schema the migration moves to, so a cascade it adds works there.
 - **Object format.** A file with a cascading link is in [object format 2](../engine/bindings.md#object-formats), which earlier releases do not open. Keeping a file in its format, with the option that turns upgrades off, refuses a schema that adds one.
+
+::: lang rust
 
 ## Objects as Rust types
 

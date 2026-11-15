@@ -13,7 +13,7 @@ pageClass: reference-page
 interface PasswordHashing
 ```
 
-[OpenOptions](./open-options.md#passwordhashing)의 `passwordHashing` 필드가 세 필드를 모두 갖춘 값을 받습니다. 메모리와 반복을 늘리면 공격자가 비밀번호를 맞히는 데 시간이 더 들지만, 데이터베이스를 여는 데도 그만큼 더 걸립니다. 기본값은 요즘 컴퓨터에서 수십 밀리초가 걸리고, 모바일 앱 확장의 메모리 한도 안에 들어갑니다.
+[OpenOptions](./open-options.md#passwordhashing)의 `passwordHashing` 필드가 세 필드를 모두 갖춘 값을 받습니다. [BackupOptions](./backup-options.md)의 같은 필드도 백업 사본의 비밀번호에 쓸 값을 받습니다. 메모리와 반복을 늘리면 공격자가 비밀번호를 맞히는 데 시간이 더 들지만, 데이터베이스를 여는 데도 그만큼 더 걸립니다. 기본값은 요즘 컴퓨터에서 수십 밀리초가 걸리고, 모바일 앱 확장의 메모리 한도 안에 들어갑니다.
 
 ```ts
 import { Database } from 'darudb';
@@ -37,6 +37,7 @@ const db = Database.open('secret.darudb', {
 ## 적용되는 때
 
 - **`password`로 새 데이터베이스를 만들 때.** 파일은 키와 함께 이 비용을 기록합니다.
+- **사본에 `password`를 주는 백업.** 사본은 `BackupOptions`로 준 비용이나 기본 비용을 기록합니다.
 - **`setPassword`와 `setPasswordAsync`.** 새 비밀번호는 이 프로세스가 파일을 열 때 이 옵션으로 준 비용으로 해시합니다. 파일을 여러 번 열었다면 처음 연 핸들의 비용이고, 파일은 그때부터 이 비용을 기록합니다. 옵션을 주지 않았다면 파일에 전에 어떤 비용이 기록돼 있었든 기본 비용을 씁니다.
 - **파일을 열 때는 적용되지 않습니다.** 암호화한 파일은 파일에 기록된 비용으로 엽니다. 그래서 애플리케이션의 새 릴리스에서 비용을 올려도 예전에 만든 파일은 그대로 열립니다. [`Database.salvage`](../../api/node/database.md)도 마찬가지여서 비용을 받지 않습니다.
 

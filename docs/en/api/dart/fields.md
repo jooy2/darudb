@@ -212,7 +212,7 @@ Holds when an element equals one of `values`.
 ### anyStartsWith
 
 ```dart
-Condition anyStartsWith(String text);
+Condition anyStartsWith(String text, {bool ignoreCase = false});
 ```
 
 Of `StringListField` only: holds when an element starts with `text`.
@@ -220,7 +220,7 @@ Of `StringListField` only: holds when an element starts with `text`.
 ### anyEndsWith
 
 ```dart
-Condition anyEndsWith(String text);
+Condition anyEndsWith(String text, {bool ignoreCase = false});
 ```
 
 Of `StringListField` only: holds when an element ends with `text`.

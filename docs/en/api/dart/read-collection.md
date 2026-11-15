@@ -78,7 +78,7 @@ How many objects a query finds, after its offset and within its limit. Without a
 List<T> findText(String text, [List<Object?> parameters = const []]);
 ```
 
-The objects that `text`, a query in the [query language](../../guide/queries.md#write-a-query-as-text), finds, where `$0`, `$1` and on take the values of `parameters` in order: `bool`, `int`, `double`, `String`, `Uint8List` or [Link](../../types/dart/link.md) values. The package keeps up to 256 texts once it has parsed them, so a text that runs again is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
+The objects that `text`, a query in the [query language](../../guide/queries.md#write-a-query-as-text), finds, where `$0`, `$1` and on take the values of `parameters` in order: `bool`, `int`, `double`, `String`, `Uint8List`, `DateTime` or [Link](../../types/dart/link.md) values. The package keeps up to 256 texts once it has parsed them, so a text that runs again is not parsed again. A raw string, `r'...'`, keeps Dart from reading `$0` as interpolation.
 
 It fails with `INVALID_QUERY` for text that does not parse, a field the collection does not have, a value of another type, or a parameter without a value.
 
@@ -144,7 +144,7 @@ users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
 V? min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
 ```
 
-The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+The least value of a number, string, bytes or date field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
 
 ### max
 

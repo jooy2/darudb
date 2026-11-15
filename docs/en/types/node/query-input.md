@@ -30,7 +30,7 @@ const adults = db.read((txn) =>
 ## QueryValue
 
 ```ts
-type QueryValue = boolean | number | bigint | string | Uint8Array;
+type QueryValue = boolean | number | bigint | string | Uint8Array | Date;
 ```
 
 A value a condition compares with, or a parameter's value. Its JavaScript type decides the value's type:
@@ -38,6 +38,7 @@ A value a condition compares with, or a parameter's value. Its JavaScript type d
 - A `number` that is a whole number within `Number.MAX_SAFE_INTEGER` is an int, and any other number is a float. An int field compares only with an int and a float field with any number, so `2.5` against an int field fails with `INVALID_QUERY`.
 - A `bigint` is an int. One beyond 64 bits fails with `INVALID_QUERY`.
 - A `boolean`, a `string` and a `Uint8Array` compare with fields of those types, and a link compares with a value of the linked collection's key type.
+- A `Date` compares with a date field, and with nothing else.
 
 A list or an object is never a value. A condition on a list field compares with one element, and holds when it holds for any element. A value whose type does not fit its field fails with `INVALID_QUERY` when the query runs.
 

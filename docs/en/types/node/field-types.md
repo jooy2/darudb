@@ -125,7 +125,7 @@ interface EmbeddedType<T, I, M extends FieldMode = 'required'> extends Typed<T, 
 }
 ```
 
-An embedded object, with fields of its own, which `t.object(fields)` makes. It has no primary key and no collection, and is read and written whole with the object that holds it. Its only modifier is `optional()`: it has no default, since its fields have their own, and no index. A field inside it cannot be indexed or be a key either, which fails with `INVALID_ARGUMENT` when the database opens, and a list cannot hold embedded objects. A query reaches its fields with a path such as `address.city`.
+An embedded object, with fields of its own, which `t.object(fields)` makes. It has no primary key and no collection, and is read and written whole with the object that holds it. Its only modifier is `optional()`: it has no default, since its fields have their own, and no index. A field inside it takes no `index()`, `unique()` or `primaryKey()` either, which fails with `INVALID_ARGUMENT` when the database opens: an index on such a field is declared by its path, `address.city`, in the `indexes` of [`collection`](../../api/node/collection.md). A list of embedded objects is `t.list(t.object(...))`, an `EmbeddedListType`. A query reaches its fields with a path such as `address.city`.
 
 `T` is [EmbeddedOf](./object-types.md#embeddedof) of its fields, and `I` is [EmbeddedInputOf](./object-types.md#embeddedinputof).
 

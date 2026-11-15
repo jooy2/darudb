@@ -381,7 +381,7 @@ Future<void> moveFromSqlite(String from, String path) async {
     return;
   }
 
-  // 충돌로 중간에 끊긴 복사는 처음부터 다시 합니다.
+  // 크래시로 중간에 끊긴 복사는 처음부터 다시 합니다.
   if (part.existsSync()) {
     part.deleteSync();
   }

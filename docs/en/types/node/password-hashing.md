@@ -13,7 +13,7 @@ pageClass: reference-page
 interface PasswordHashing
 ```
 
-The `passwordHashing` field of [OpenOptions](./open-options.md#passwordhashing) takes one, with all three fields. More memory and more iterations make guessing a password slower for an attacker, and opening the database slower for everyone. The default takes tens of milliseconds on a current computer and fits the memory limits of a mobile app extension.
+The `passwordHashing` field of [OpenOptions](./open-options.md#passwordhashing) takes one, with all three fields, and so does that of [BackupOptions](./backup-options.md), for the password of a backup's copy. More memory and more iterations make guessing a password slower for an attacker, and opening the database slower for everyone. The default takes tens of milliseconds on a current computer and fits the memory limits of a mobile app extension.
 
 ```ts
 import { Database } from 'darudb';
@@ -37,6 +37,7 @@ Each field is a whole number. A value outside its range, or a `passwordHashing` 
 ## When it applies
 
 - **A new database created with a `password`.** The file records this cost beside the key.
+- **A backup whose copy gets a `password`.** The copy records the cost its `BackupOptions` give, or the default.
 - **`setPassword` and `setPasswordAsync`.** The new password is hashed at the cost this option gave when the process opened the file, the first handle's if it opened the file more than once, and the file records that cost from then on. Without the option, that is the default cost, whatever the file recorded before.
 - **Never when a file is opened.** Opening an encrypted file takes the cost the file records, so raising the cost in a new release of an application still opens the files it made before. [`Database.salvage`](../../api/node/database.md) does the same, and takes no cost.
 

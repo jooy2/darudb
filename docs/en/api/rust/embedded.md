@@ -13,7 +13,7 @@ counterpart: /api/node/t
 pub struct Embedded
 ```
 
-`Embedded::new` starts one, each method adds a field and returns it, and [`Type::object`](../../types/rust/type.md) makes it the type of a field. Its fields follow the rules of a [`Collection`](./collection.md)'s, and may hold links, lists of scalars and other embedded objects. An embedded object has no primary key and no index of its own, but a query reaches its fields with a path such as `address.city`.
+`Embedded::new` starts one, each method adds a field and returns it, and [`Type::object`](../../types/rust/type.md) makes it the type of a field. Its fields follow the rules of a [`Collection`](./collection.md)'s, and may hold links, lists of scalars, of links and of embedded objects, and other embedded objects. An embedded object has no primary key and no index of its own, but a query reaches its fields with a path such as `address.city`.
 
 A field whose type is an embedded object is declared with `field` or `optional`. It cannot have a default; its fields have theirs. [`CollectionWriter::update`](./collection-writer.md#update) replaces an embedded object whole.
 

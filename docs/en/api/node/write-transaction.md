@@ -48,7 +48,7 @@ interface AsyncWriteTransaction<S> {
 
 The write transaction of `Database.writeAsync`. Its function may be asynchronous. The transaction commits when the function resolves, once every operation it called has settled, and aborts when the function rejects. `collection` works as above and gives an [AsyncWriteCollection](./write-collection.md#asyncwritecollection), whose operations run on the thread pool in the order they were called, whether or not each was awaited.
 
-An operation that fails rejects its own promise and changes nothing, and the transaction still commits the rest when the function resolves. A function that must not commit after a failure lets the rejection reach its own result, by awaiting the operation. Inside the function, `write`, `writeAsync`, `sync`, `close`, `compact`, `setKey` and `setPassword` on the same file, and their twins, are refused with `INVALID_ARGUMENT`.
+An operation that fails rejects its own promise and changes nothing, and the transaction still commits the rest when the function resolves. A function that must not commit after a failure lets the rejection reach its own result, by awaiting the operation. Inside the function, `write`, `writeAsync`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey` and `setPassword` on the same file, and their twins, are refused with `INVALID_ARGUMENT`.
 
 ```ts
 const carol = await db.writeAsync(async (txn) => {

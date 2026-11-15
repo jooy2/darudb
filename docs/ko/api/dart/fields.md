@@ -212,7 +212,7 @@ Condition containsAny(List<E> values);
 ### anyStartsWith
 
 ```dart
-Condition anyStartsWith(String text);
+Condition anyStartsWith(String text, {bool ignoreCase = false});
 ```
 
 `StringListField`에만 있습니다. 원소 하나라도 `text`로 시작할 때 참입니다.
@@ -220,7 +220,7 @@ Condition anyStartsWith(String text);
 ### anyEndsWith
 
 ```dart
-Condition anyEndsWith(String text);
+Condition anyEndsWith(String text, {bool ignoreCase = false});
 ```
 
 `StringListField`에만 있습니다. 원소 하나라도 `text`로 끝날 때 참입니다.

@@ -113,7 +113,7 @@ min<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNulla
 min(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
 ```
 
-쿼리가 찾은 객체에서 숫자, 문자열, 바이트 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+쿼리가 찾은 객체에서 숫자, 문자열, 바이트, 날짜 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
 
 ### max
 

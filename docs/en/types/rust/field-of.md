@@ -70,9 +70,9 @@ Each method makes a [`Filter`](../../api/rust/filter.md) on the field, the one i
 
 | Method | For a field of type | Filter |
 | --- | --- | --- |
-| `eq(value)`, `ne(value)` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `Link<T>`, and `Option` of one | [`Filter::eq`](../../api/rust/filter.md#eq), [`Filter::ne`](../../api/rust/filter.md#ne) |
+| `eq(value)`, `ne(value)` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`, and `Option` of one | [`Filter::eq`](../../api/rust/filter.md#eq), [`Filter::ne`](../../api/rust/filter.md#ne) |
 | `is_in(values)` | the same | [`Filter::is_in`](../../api/rust/filter.md#is-in) |
-| `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`, and `Option` of one | [`Filter::lt`](../../api/rust/filter.md#lt) and the others |
+| `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, and `Option` of one | [`Filter::lt`](../../api/rust/filter.md#lt) and the others |
 | `between(low, high)` | the same | [`Filter::between`](../../api/rust/filter.md#between) |
 | `contains(text)`, `starts_with(text)`, `ends_with(text)` | `String`, `Option<String>` | [`Filter::contains`](../../api/rust/filter.md#contains) and the others |
 | `contains(element)` | `Vec<E>` | [`Filter::contains`](../../api/rust/filter.md#contains) on a list |
@@ -91,7 +91,7 @@ where
     V: NestedType,
 ```
 
-The path from this field on to `next`, a field of the embedded object it holds, or of the object it links to: `User::HOME.then(Address::CITY)`, `Post::AUTHOR.then(User::NAME)`. [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded) declares the constants of an embedded object.
+The path from this field on to `next`, a field of the embedded object it holds, of each embedded object of the list it holds, or of the object it links to: `User::HOME.then(Address::CITY)`, `Post::AUTHOR.then(User::NAME)`. [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded) declares the constants of an embedded object.
 
 ## PathOf
 

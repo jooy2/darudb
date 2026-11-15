@@ -113,7 +113,7 @@ min<K extends OrderedFields<O>>(field: K, ...query: QueryArguments<O>): NonNulla
 min(path: DottedPath, ...query: QueryArguments<O>): QueryValue | null;
 ```
 
-The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+The least value of a number, string, bytes or date field over the objects a query finds, in the order a sort gives, or `null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
 
 ### max
 

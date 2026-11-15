@@ -78,7 +78,7 @@ int count([QueryBuilder<T> Function(Q q)? query]);
 List<T> findText(String text, [List<Object?> parameters = const []]);
 ```
 
-[쿼리 언어](../../guide/queries.md#문자열로-쿼리-쓰기)로 쓴 `text`가 찾은 객체를 돌려줍니다. `$0`, `$1` 같은 매개변수에는 `parameters`의 값이 차례로 들어가며, 값은 `bool`, `int`, `double`, `String`, `Uint8List`, [Link](../../types/dart/link.md)입니다. 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다시 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
+[쿼리 언어](../../guide/queries.md#문자열로-쿼리-쓰기)로 쓴 `text`가 찾은 객체를 돌려줍니다. `$0`, `$1` 같은 매개변수에는 `parameters`의 값이 차례로 들어가며, 값은 `bool`, `int`, `double`, `String`, `Uint8List`, `DateTime`, [Link](../../types/dart/link.md)입니다. 패키지는 한 번 해석한 문자열을 256개까지 기억해 두므로, 같은 문자열을 다시 실행할 때는 해석을 건너뜁니다. `r'...'`처럼 원시 문자열로 써야 Dart가 `$0`을 문자열 보간으로 읽지 않습니다.
 
 해석할 수 없는 문자열, 컬렉션에 없는 필드, 타입이 다른 값, 값이 없는 매개변수는 `INVALID_QUERY`로 실패합니다.
 
@@ -144,7 +144,7 @@ users.sum((q) => q.age, (q) => q.where(q.team.city.equals('Seoul')));
 V? min<V extends Object>(OrderedField<V> Function(Q q) field, [QueryBuilder<T> Function(Q q)? query]);
 ```
 
-쿼리가 찾은 객체에서 숫자, 문자열, 바이트 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
+쿼리가 찾은 객체에서 숫자, 문자열, 바이트, 날짜 필드의 최솟값을 정렬과 같은 순서로 구합니다. 값이 없으면 `null`입니다. 필터에서 검사할 조건이 남아 있지 않고 필드에 인덱스가 있으면, 객체를 읽지 않고 인덱스의 첫 항목에서 읽습니다.
 
 ### max
 

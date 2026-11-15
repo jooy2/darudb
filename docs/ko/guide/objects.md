@@ -350,8 +350,6 @@ with db.read() as txn:
 - 거부된 쓰기는 아무것도 바꾸지 않으므로, 트랜잭션은 계속 쓰다가 커밋해도 됩니다.
 - 읽어 온 객체는 트랜잭션이 끝나도 남는 평범한 값입니다. 스키마의 필드가 모두 들어 있고, 빠진 필드에는 기본값이나 null이 들어갑니다.
 
-::: lang rust
-
 ## 쿼리가 찾은 객체 바꾸기
 
 쓰기 트랜잭션은 쿼리가 찾은 객체를 한 번의 호출로 모두 지우거나 고칩니다. 쿼리의 정렬, 오프셋, 개수 제한을 거친 뒤의 객체가 대상이며, 쿼리가 찾은 객체 수를 돌려줍니다. 실수로 모든 객체를 바꾸는 일이 없도록 쿼리는 언제나 줘야 합니다.
@@ -364,17 +362,17 @@ use darudb::{Database, Filter, Object, Query};
 fn tidy(db: &Database) -> Result<(), darudb::Error> {
     let mut txn = db.begin_write()?;
     let mut users = txn.collection("users")?;
-    let minors = Query::new().filter(Filter::lt("age", 18));
+    let negative = Query::new().filter(Filter::lt("age", 0));
 
-    let updated = users.update_where(&minors, Object::new().with("active", false))?;
-    let deleted = users.delete_where(&Query::new().filter(Filter::eq("active", false)).limit(100))?;
+    let updated = users.update_where(&negative, Object::new().with("age", 0))?;
+    let deleted = users.delete_where(&Query::new().filter(Filter::gt("age", 120)).limit(100))?;
 
     println!("{updated} updated, {deleted} deleted");
     txn.commit()
 }
 ```
 
-타입이 있는 컬렉션은 필드를 타입으로 지정합니다. `people.change_where(&minors).set(Person::ACTIVE, false).apply()`처럼 씁니다.
+타입이 있는 컬렉션은 필드를 타입으로 지정합니다. `people.change_where(&negative).set(Person::AGE, 0).apply()`처럼 씁니다.
 
 :::
 
@@ -384,8 +382,8 @@ fn tidy(db: &Database) -> Result<(), darudb::Error> {
 db.write((txn) => {
   const users = txn.collection('users');
 
-  users.updateWhere({ active: false }, (q) => q.where('age', '<', 18));
-  users.deleteWhere('active == $0 LIMIT 100', [false]);
+  users.updateWhere({ age: 0 }, (q) => q.where('age', '<', 0));
+  users.deleteWhere('age > $0 LIMIT 100', [120]);
 });
 ```
 
@@ -399,8 +397,8 @@ db.write((txn) => {
 db.write((txn) {
   final users = txn.collection(userSchema);
 
-  users.updateWhere((q) => [q.active.set(false)], (q) => q.where(q.age.lessThan(18)));
-  users.deleteWhereText(r'active == $0 LIMIT 100', [false]);
+  users.updateWhere((q) => [q.age.set(0)], (q) => q.where(q.age.lessThan(0)));
+  users.deleteWhereText(r'age > $0 LIMIT 100', [120]);
 });
 ```
 
@@ -414,8 +412,8 @@ db.write((txn) {
 with db.write() as txn:
     users = txn.collection(User)
 
-    users.update_where(F.age < 18, active=False)
-    users.delete_where("active == $0 LIMIT 100", False)
+    users.update_where(F.age < 0, age=0)
+    users.delete_where("age > $0 LIMIT 100", 120)
 ```
 
 `update_where`는 쿼리와 그 뒤의 매개변수를 받고, `update`처럼 변경을 이름으로 받습니다. `Query()`는 모든 객체를 찾습니다.
@@ -506,6 +504,8 @@ class Post:
 - **링크가 없는 객체를 가리킬 수는 있습니다.** 연쇄 삭제는 검사가 아닙니다. 없는 객체를 가리키는 링크를 쓰는 일은 전처럼 허용되고, 그 링크를 가진 객체는 다른 이유로 지워질 때까지 남습니다.
 - **나중에 바꾸기.** 연쇄 삭제를 더하거나 빼려면 스키마 버전을 올리며, 객체는 다시 쓰지 않습니다. 마이그레이션 함수의 삭제는 옮겨 가는 스키마를 따르므로, 그 마이그레이션에서 더한 연쇄 삭제도 함수 안에서 동작합니다.
 - **객체 형식.** 연쇄 삭제 링크가 있는 파일은 [객체 형식 2](../engine/bindings.md#객체-형식)이고, 이전 릴리스는 이 파일을 열지 못합니다. 업그레이드를 끄는 옵션으로 파일의 형식을 유지하면, 연쇄 삭제를 더하는 스키마는 거부됩니다.
+
+::: lang rust
 
 ## 객체를 Rust 타입으로
 

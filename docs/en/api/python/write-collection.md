@@ -112,8 +112,8 @@ def update_where(self, query: QueryInput, /, *parameters: object, **changes: obj
 Sets the fields `changes` names in every object a query finds, as [`update`](#update) sets them in one, and returns how many objects the query found. All or nothing: when an object refuses its change, with `DUPLICATE_KEY` for a unique value another object holds or `INVALID_ARGUMENT` for an index entry too long, the objects changed before it are put back, and the call raises that error. The changes cannot set the primary key.
 
 ```python
-users.update_where(F.age < 18, active=False)
-users.update_where("age >= $0", 18, active=True)
+users.update_where(F.age < 18, tags=["minor"])
+users.update_where("age >= $0", 18, tags=[])
 ```
 
 ## AsyncWriteCollection

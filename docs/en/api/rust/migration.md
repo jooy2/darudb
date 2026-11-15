@@ -59,7 +59,7 @@ fn main() -> darudb::Result<()> {
 }
 ```
 
-A migration names collections and fields as the schema before it named them, and applies its changes in this order whatever order they were given in: field renames, replaced fields, deleted collections, then collection renames. So `rename_field`, `replace_field` and `delete_collection` take a collection's old name even when the same migration renames it. Naming a collection or field the schema before it does not have, or renaming one to a name that is taken, fails `open` with `INVALID_ARGUMENT`, and so do two migrations to one version.
+A migration names collections and fields as the schema before it named them, and applies its changes in this order whatever order they were given in: field renames, replaced fields, deleted collections, then collection renames. So `rename_field`, `replace_field` and `delete_collection` take a collection's old name even when the same migration renames it. Naming a collection or field the schema before it does not have, or renaming one to a name that is taken, fails `open` with `INVALID_ARGUMENT`, and so do two migrations to one version among the steps the file needs. A file that is new, or already at the declared version, runs no migration and checks none.
 
 ## Associated functions
 

@@ -80,12 +80,16 @@ Each condition of [`Filter`](./filter.md) has a form in the text:
 | `f IN [v, w]`                            | `is_in`                                |
 | `f CONTAINS v`, `STARTSWITH`, `ENDSWITH` | `contains`, `starts_with`, `ends_with` |
 | `f IS NULL`, `f IS NOT NULL`             | `is_null`, `is_not_null`               |
+| `f == v IGNORE CASE`                     | `ignore_case`                          |
+| `ANY c.link`, `ANY c.link (a)`           | `linked`, `linked_where`               |
 | `a AND b`, `a OR b`, `NOT a`, `(a)`      | `and`, `or`, `!`                       |
 
+- **Ignoring case.** `IGNORE CASE` follows a condition of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH`, and makes it compare strings without regard to case.
+- **Linking objects.** `ANY posts.author` holds for an object that an object of `posts` links to through `author`, and `ANY posts.author (year > 2020)` for one that a post meeting the filter in parentheses links to.
 - **Precedence.** `NOT` binds tightest, then `AND`, then `OR`; parentheses group.
 - **Sorting.** `SORT BY f DESC, g` sorts by several paths, each ascending unless `DESC` follows it. `LIMIT` and `OFFSET` take a number that is not negative.
 - **Names.** A field is a word, a path joins names with `.`, and a name that is a keyword or not a plain word goes in backticks, such as `` `limit` ``. Keywords are case-insensitive.
-- **Values.** Integers, numbers with a point or an exponent, which are floats, strings in double quotes, `true`, `false` and `null`. A string escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. Bytes have no literal and are given as a parameter.
+- **Values.** Integers, numbers with a point or an exponent, which are floats, strings in double quotes, `true`, `false`, `null`, and a date as `DATE "2026-10-30T12:00:00Z"`, RFC 3339 text with `Z` or an offset, or a day alone for its midnight in UTC. A string escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. Bytes have no literal and are given as a parameter.
 - **Parameters.** `$0`, `$1` and on take the values passed with the text. A value that comes from outside the application belongs in a parameter, never in the text.
 
 ### prepare

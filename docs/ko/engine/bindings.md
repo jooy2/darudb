@@ -155,17 +155,23 @@ value   = tag payload
 ```rust
 use darudb::{QueryRequest, ReadTransaction};
 
-/// What a query in IR finds: the records, or how many there are.
+/// What a query in IR finds: the records, how many there are, or an
+/// aggregate of them, as a tagged value.
 enum Found {
     Records(Vec<Vec<u8>>),
     Count(u64),
+    Aggregate(Vec<u8>),
 }
 
 fn run(txn: &ReadTransaction, ir: &[u8]) -> darudb::Result<Found> {
     let request = QueryRequest::decode(ir)?;
     let collection = txn.collection(&request.collection)?;
 
-    if request.count {
+    if let Some((function, path)) = &request.aggregate {
+        let value = collection.aggregate(&request.query, *function, path)?;
+
+        Ok(Found::Aggregate(darudb::__binding::tagged(&value)))
+    } else if request.count {
         collection.count(&request.query).map(Found::Count)
     } else {
         collection.query_records(&request.query).map(Found::Records)
@@ -211,7 +217,7 @@ fn run(txn: &ReadTransaction, ir: &[u8]) -> darudb::Result<Found> {
 Python 패키지 `packages/python`은 API인 Python 코드와, 그 아래에서 PyO3와 maturin으로 `packages/python/src`를 빌드한 네이티브 모듈 `darudb._native`로 이뤄집니다. 이 패키지도 파일에 관해서는 아무것도 정하지 않지만, 다른 바인딩이 엔진에 바이트를 넘기는 곳에서 크레이트의 타입을 넘깁니다.
 
 - **스키마.** `_schema.py`가 데코레이터를 붙인 클래스에서 필드와 타입, 기본값을 읽으면, 네이티브 모듈이 크레이트의 빌더로 엔진의 [`Schema`](../api/rust/schema.md)와 [`Migration`](../api/rust/migration.md)을 만듭니다. 스키마 레코드는 인코딩하지 않습니다. 엔진은 파일을 열 때 스키마를 검사하고, 마이그레이션은 위에서처럼 `open_migrating`으로 실행합니다. 마이그레이션 함수는 옛 객체를 `previous_record`가 아니라 [`Migrating`](../api/rust/migrating.md)의 `previous`로 읽으며, 결과는 `Object`입니다.
-- **객체.** 네이티브 모듈은 Python 객체마다 필드를 파일에 저장된 이름으로 담은 엔진의 동적 [`Object`](../types/rust/object.md)로 바꾸고, `insert`나 `put`, `update`로 씁니다. 이 호출들이 객체를 이름으로 스키마와 대조합니다. 읽은 객체는 `Object`로 돌아오고, 모듈이 클래스의 `__init__`을 부르지 않고 그 클래스의 인스턴스로 만듭니다. 묶음은 하나라도 쓰기 전에 통째로 변환되고, 호출 한 번에 경계를 넘습니다.
+- **객체.** 읽을 때는 `get_record_with`와 `query_records_with`로 엔진에서 레코드를 복사해 오고, 네이티브 모듈이 레코드마다 클래스의 `__init__`을 부르지 않고 그 클래스의 인스턴스로 바로 읽습니다. 이때 쓰는 `Shape`는 클래스의 필드가 파일에 저장된 이름으로 엔진이 만듭니다. 필드가 모두 스칼라인 클래스의 객체는 쓸 때도 같은 방식입니다. 모듈이 속성을 읽고, 엔진이 클래스의 `Shape`로 레코드를 인코딩하며, 타입이 있는 쓰기와 같은 검사를 합니다. 목록이나 내장 객체, 링크가 있는 객체와 필드와 타입이 다른 값을 가진 객체는, 필드를 파일에 저장된 이름으로 담은 엔진의 동적 [`Object`](../types/rust/object.md)로 바꿔 `insert`나 `put`, `update`로 씁니다. 이 호출들이 객체를 이름으로 스키마와 대조합니다. 묶음은 하나라도 쓰기 전에 통째로 변환되고, 호출 한 번에 경계를 넘습니다.
 - **쿼리.** `_query.py`는 `F`로 만든 쿼리를 중첩된 튜플로 적고, 속성마다 파일에 저장된 이름으로 바꿉니다. 네이티브 모듈이 이를 위의 IR로 쓰고 `QueryRequest::decode`로 읽으므로, Python에서 만든 쿼리는 다른 모든 언어에서 같은 쿼리와 뜻이 같습니다. 문자열은 `Query::prepare`로 넘기고, 실행할 때마다 `Query::bind`로 매개변수를 묶습니다.
 - **스레드.** 엔진 호출마다 `Python::detach`로 GIL을 놓고, 핸들마다 엔진 객체를 뮤텍스로 보호합니다. 그래서 어느 스레드에서든 핸들을 쓸 수 있고, 모듈은 GIL 없이 도는 Python에서도 안전하다고 선언합니다. 비동기 API는 패키지의 스레드 풀에서 호출을 실행합니다.
 - **오류**는 `darudb.DaruError`이며 엔진의 코드를 그대로 담습니다. 엔진이 담을 수 없는 Python 값도 `INVALID_ARGUMENT`이므로, 호출하는 쪽은 한 종류의 오류로 모든 거부를 잡을 수 있습니다.

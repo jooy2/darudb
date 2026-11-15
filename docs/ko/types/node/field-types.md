@@ -125,7 +125,7 @@ interface EmbeddedType<T, I, M extends FieldMode = 'required'> extends Typed<T, 
 }
 ```
 
-필드가 따로 있는 내장 객체로, `t.object(fields)`가 만듭니다. 기본 키도 컬렉션도 없고, 담고 있는 객체와 함께 통째로 읽고 씁니다. 수식 메서드는 `optional()` 하나뿐입니다. 필드마다 기본값이 따로 있으므로 내장 객체 자체의 기본값은 없고, 인덱스도 없습니다. 안에 든 필드에 인덱스를 두거나 키로 삼아도 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패하고, 리스트는 내장 객체를 담을 수 없습니다. 쿼리에서는 `address.city` 같은 경로로 내장 객체의 필드에 닿습니다.
+필드가 따로 있는 내장 객체로, `t.object(fields)`가 만듭니다. 기본 키도 컬렉션도 없고, 담고 있는 객체와 함께 통째로 읽고 씁니다. 수식 메서드는 `optional()` 하나뿐입니다. 필드마다 기본값이 따로 있으므로 내장 객체 자체의 기본값은 없고, 인덱스도 없습니다. 안에 든 필드에 `index()`, `unique()`, `primaryKey()`를 붙여도 데이터베이스를 열 때 `INVALID_ARGUMENT`로 실패합니다. 이런 필드의 인덱스는 [`collection`](../../api/node/collection.md)의 `indexes`에 `address.city` 같은 경로로 선언합니다. 내장 객체의 리스트는 `t.list(t.object(...))`로 만드는 `EmbeddedListType`입니다. 쿼리에서는 `address.city` 같은 경로로 내장 객체의 필드에 닿습니다.
 
 `T`는 필드의 [EmbeddedOf](./object-types.md#embeddedof)이고, `I`는 [EmbeddedInputOf](./object-types.md#embeddedinputof)입니다.
 

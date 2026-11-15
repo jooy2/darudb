@@ -37,12 +37,14 @@ A condition on the primary key or on an indexed field, joined to the rest of the
 where<K extends FieldNames<O>>(
   field: K,
   op: '==' | '!=',
-  value: Operand<ElementOf<O[K]> | null>
+  value: Operand<ElementOf<O[K]> | null>,
+  options?: WhereOptions
 ): Query<O>;
 where<K extends FieldNames<O>>(
   field: K,
   op: Comparison,
-  value: Operand<ElementOf<O[K]>>
+  value: Operand<ElementOf<O[K]>>,
+  options?: WhereOptions
 ): Query<O>;
 where<K extends FieldNames<O>>(
   field: K,
@@ -52,33 +54,41 @@ where<K extends FieldNames<O>>(
 where<K extends FieldNames<O>>(
   field: K,
   op: 'in',
-  value: readonly Operand<ElementOf<O[K]>>[]
+  value: readonly Operand<ElementOf<O[K]>>[],
+  options?: WhereOptions
 ): Query<O>;
 where<K extends FieldNames<O>>(
   field: K,
   op: 'contains' | 'startsWith' | 'endsWith',
-  value: Operand<ElementOf<O[K]>>
+  value: Operand<ElementOf<O[K]>>,
+  options?: WhereOptions
 ): Query<O>;
 where(
   path: DottedPath,
   op: Comparison | 'contains' | 'startsWith' | 'endsWith',
-  value: Operand<QueryValue | null>
+  value: Operand<QueryValue | null>,
+  options?: WhereOptions
 ): Query<O>;
 where(
   path: DottedPath,
   op: 'between',
   value: readonly [Operand<QueryValue>, Operand<QueryValue>]
 ): Query<O>;
-where(path: DottedPath, op: 'in', value: readonly Operand<QueryValue>[]): Query<O>;
+where(
+  path: DottedPath,
+  op: 'in',
+  value: readonly Operand<QueryValue>[],
+  options?: WhereOptions
+): Query<O>;
 where(condition: Condition | ((conditions: Conditions<O>) => Condition)): Query<O>;
 ```
 
-Keeps the objects that meet a condition, and every condition given to `where` before: each call is joined to the earlier ones with `and`. The condition takes one of three forms.
+Keeps the objects that meet a condition, and every condition given to `where` before: each call is joined to the earlier ones with `and`. The condition takes one of three forms, the first two with options after the value.
 
 - **A field, an operator and a value.** The operators are the [Comparison](../../types/node/query-input.md) operators `==`, `!=`, `<`, `<=`, `>` and `>=`, then `between` with a pair `[low, high]`, `in` with an array, and `contains`, `startsWith` and `endsWith`. `== null` tests that the field is null, and `!= null` that it is not.
 - **A dotted path** in place of the field, through an embedded object or a link, such as `address.city` or `team.city`. TypeScript does not check it; the engine does.
 - **A condition** from [conditions](./conditions.md), or a function that receives the conditions typed for the collection and returns one. This is the form for `or`, `not`, `isNull` and nested groups.
-- **Options** after the value: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.
+- **Options** after the value of the first two forms, a `WhereOptions`: `{ ignoreCase: true }` makes a test of `==`, `!=`, `in`, `contains`, `startsWith` or `endsWith` compare strings ignoring case, as [`conditions.ignoreCase`](./conditions.md#ignorecase) does.
 
 An operator that is not one of these, or a `between` without a pair, fails with `INVALID_QUERY`.
 
@@ -130,8 +140,8 @@ db.read((txn) =>
 ```
 
 - **Order.** A filter comes first, then `SORT BY` with fields separated by commas, each ascending unless `DESC` follows it, then `LIMIT` and `OFFSET`. Each part may be left out.
-- **Conditions.** `field == value`, with `!=`, `<`, `<=`, `>` and `>=` too; `field BETWEEN a AND b`; `field IN [a, b]`; `field CONTAINS value`, `STARTSWITH` and `ENDSWITH`; `field IS NULL` and `field IS NOT NULL`. They join with `AND`, `OR`, `NOT` and parentheses, and `AND` binds tighter than `OR`. A field may be a dotted path.
-- **Values.** An int has no point, and a float has one or an exponent; either may start with `-`. Strings are in double quotes, with the escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. The other values are `true`, `false` and `null`.
+- **Conditions.** `field == value`, with `!=`, `<`, `<=`, `>` and `>=` too; `field BETWEEN a AND b`; `field IN [a, b]`; `field CONTAINS value`, `STARTSWITH` and `ENDSWITH`; `field IS NULL` and `field IS NOT NULL`. `IGNORE CASE` after a condition of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` compares strings without regard to case, and `ANY collection.link`, with a filter of that collection in parentheses after it if one is wanted, holds for an object that an object of `collection` links to. They join with `AND`, `OR`, `NOT` and parentheses, and `AND` binds tighter than `OR`. A field may be a dotted path.
+- **Values.** An int has no point, and a float has one or an exponent; either may start with `-`. Strings are in double quotes, with the escapes `\"`, `\\`, `\n`, `\t` and `\u{...}`. The other values are `true`, `false`, `null`, and a date, `DATE "2026-10-30T12:00:00Z"`.
 - **Parameters.** `$0`, `$1` and on take the values passed with the text, in order. A value that comes from outside the program belongs in a parameter, never in the text.
 - **Names.** Keywords are case-insensitive. A field named like a keyword, such as `limit`, goes in backticks where a path starts.
 - **Errors.** Text that does not parse fails with `INVALID_QUERY`, and the message names the character, counted from 1, where it went wrong. Parentheses and `NOT` nest at most 48 levels deep.

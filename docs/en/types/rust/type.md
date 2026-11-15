@@ -53,7 +53,7 @@ fn schema() -> Schema {
 | `String`           | UTF-8 text                                           |
 | `Bytes`            | Any bytes                                            |
 | `Link(String)`     | The primary key of an object in the named collection |
-| `List(Box<Type>)`  | A list of values of a scalar type or of links        |
+| `List(Box<Type>)`  | A list of scalars, of links or of embedded objects   |
 | `Object(Embedded)` | An embedded object with fields of its own            |
 | `Date`             | An instant, in microseconds since 1970 UTC           |
 

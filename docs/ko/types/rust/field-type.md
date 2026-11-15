@@ -64,7 +64,7 @@ pub struct ValueWriter<'a>
 레코드의 값 하나를 씁니다. 필드의 값, 목록의 요소, 링크의 키가 모두 여기로 쓰입니다. 메서드마다 라이터를 가져가므로 값은 한 번만 씁니다.
 
 - `null()`: 값이 없으므로 선택 필드를 레코드에서 뺍니다. 목록의 요소에 쓰면 `INVALID_ARGUMENT`로 실패합니다.
-- `bool(value)`, `int(value)`, `float(value)`, `string(&str)`, `bytes(&[u8])`.
+- `bool(value)`, `int(value)`, `float(value)`, `string(&str)`, `bytes(&[u8])`, 그리고 1970년 UTC부터의 마이크로초를 받는 `date(micros)`.
 - [`ElementType`](#elementtype)의 목록은 `list(&[T])`, 내장 객체는 `object(&E)`, 링크는 가리키는 객체의 키로 `link(&K)`를 씁니다.
 
 ## ValueReader
@@ -76,7 +76,7 @@ pub struct ValueReader<'a>
 레코드에서 빌려 온 값 하나입니다. 레코드에 없는 필드는 기본값이나 null로 읽힙니다.
 
 - `is_null()`.
-- `bool()`, `int()`, `float()`, `str()`, `bytes()`. 마지막 둘은 레코드에서 빌려 옵니다.
+- `bool()`, `int()`, `float()`, 1970년 UTC부터의 마이크로초를 돌려주는 `date()`, 그리고 `str()`과 `bytes()`. 마지막 둘은 레코드에서 빌려 옵니다.
 - `list::<T>()`, `object::<E>()`, `link::<K>()`.
 
 메서드와 타입이 다른 값이나 UTF-8이 아닌 텍스트는 `CORRUPTED`로 실패합니다.

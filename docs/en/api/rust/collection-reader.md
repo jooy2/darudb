@@ -107,7 +107,7 @@ The sum of `field`, an int or float field or a path to one through embedded obje
 pub fn min(&self, query: &Query, field: &str) -> Result<Value>
 ```
 
-The least value of `field`, an int, float, string or bytes field, over the objects `query` finds, in the order a sort gives, or `Value::Null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+The least value of `field`, an int, float, string, bytes or date field, over the objects `query` finds, in the order a sort gives, or `Value::Null` when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
 
 ### max
 

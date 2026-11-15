@@ -80,12 +80,16 @@ fn main() -> darudb::Result<()> {
 | `f IN [v, w]`                            | `is_in`                                |
 | `f CONTAINS v`, `STARTSWITH`, `ENDSWITH` | `contains`, `starts_with`, `ends_with` |
 | `f IS NULL`, `f IS NOT NULL`             | `is_null`, `is_not_null`               |
+| `f == v IGNORE CASE`                     | `ignore_case`                          |
+| `ANY c.link`, `ANY c.link (a)`           | `linked`, `linked_where`               |
 | `a AND b`, `a OR b`, `NOT a`, `(a)`      | `and`, `or`, `!`                       |
 
+- **대소문자 무시.** `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH` 조건 뒤에 `IGNORE CASE`를 붙이면 문자열을 대소문자와 상관없이 비교합니다.
+- **링크하는 객체.** `ANY posts.author`는 `posts`의 객체가 `author`로 가리키는 객체에서 참입니다. `ANY posts.author (year > 2020)`은 괄호 안의 필터에 맞는 글이 가리키는 객체에서 참입니다.
 - **우선순위.** `NOT`이 가장 먼저 묶이고, 그다음이 `AND`, 마지막이 `OR`입니다. 괄호로 묶을 수 있습니다.
 - **정렬.** `SORT BY f DESC, g`처럼 경로 여러 개로 정렬합니다. 뒤에 `DESC`가 없으면 오름차순입니다. `LIMIT`과 `OFFSET`에는 음수가 아닌 정수를 씁니다.
 - **이름.** 필드는 단어로 쓰고, 경로는 이름을 `.`으로 잇습니다. `` `limit` ``처럼 키워드와 같거나 평범한 단어가 아닌 이름은 백틱으로 감쌉니다. 키워드는 대소문자를 가리지 않습니다.
-- **값.** 정수, 소수점이나 지수가 있는 실수, 큰따옴표로 감싼 문자열, `true`, `false`, `null`을 씁니다. 문자열 안에서는 `\"`, `\\`, `\n`, `\t`, `\u{...}`로 이스케이프합니다. 바이트에는 리터럴이 없으므로 매개변수로 넘깁니다.
+- **값.** 정수, 소수점이나 지수가 있는 실수, 큰따옴표로 감싼 문자열, `true`, `false`, `null`을 씁니다. 날짜는 `DATE "2026-10-30T12:00:00Z"`처럼 `Z`나 UTC와의 차이를 붙인 RFC 3339 문자열로 쓰고, 날짜만 쓰면 그날 UTC 자정입니다. 문자열 안에서는 `\"`, `\\`, `\n`, `\t`, `\u{...}`로 이스케이프합니다. 바이트에는 리터럴이 없으므로 매개변수로 넘깁니다.
 - **매개변수.** `$0`, `$1` 같은 매개변수에는 문자열과 함께 넘긴 값이 순서대로 들어갑니다. 애플리케이션 바깥에서 들어온 값은 문자열에 끼워 넣지 말고 매개변수로 넘기세요.
 
 ### prepare

@@ -30,7 +30,7 @@ const adults = db.read((txn) =>
 ## QueryValue
 
 ```ts
-type QueryValue = boolean | number | bigint | string | Uint8Array;
+type QueryValue = boolean | number | bigint | string | Uint8Array | Date;
 ```
 
 조건이 비교하는 값이나 매개변수의 값입니다. 값의 타입은 JavaScript 타입이 정합니다.
@@ -38,6 +38,7 @@ type QueryValue = boolean | number | bigint | string | Uint8Array;
 - `Number.MAX_SAFE_INTEGER` 안의 정수인 `number`는 정수이고, 나머지 number는 부동소수점 수입니다. 정수 필드는 정수와만 비교하고 부동소수점 필드는 어떤 number와도 비교하므로, 정수 필드를 `2.5`와 비교하면 `INVALID_QUERY`로 실패합니다.
 - `bigint`는 정수입니다. 64비트를 넘으면 `INVALID_QUERY`로 실패합니다.
 - `boolean`, `string`, `Uint8Array`는 같은 타입의 필드와 비교하고, 링크는 대상 컬렉션의 키 타입의 값과 비교합니다.
+- `Date`는 날짜 필드와만 비교합니다.
 
 리스트나 객체는 값이 될 수 없습니다. 리스트 필드에 건 조건은 원소 하나와 비교하며, 어느 원소에서든 맞으면 참입니다. 필드와 타입이 맞지 않는 값은 쿼리를 실행할 때 `INVALID_QUERY`로 실패합니다.
 

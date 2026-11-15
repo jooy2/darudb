@@ -72,10 +72,10 @@ An index of a collection: the fields it is on, in order, each a name or a path s
 
 ```ts
 type StoredType =
-  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' }
+  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' | 'date' }
   | { readonly kind: 'link'; readonly collection: string }
   | { readonly kind: 'list'; readonly element: StoredType }
   | { readonly kind: 'object'; readonly fields: readonly StoredField[] };
 ```
 
-A field's type, which `kind` names. A link names the collection whose primary key it holds, a list the type of its elements, a scalar type or a link, and an embedded object its fields. An int field is `int` whether it was declared with `t.int()` or `t.bigint()`, since the file stores one type of int, so a database opened without a schema reads its values as numbers up to 2^53 and as `bigint`s beyond.
+A field's type, which `kind` names. A link names the collection whose primary key it holds, a list the type of its elements, a scalar type, a link or an embedded object, and an embedded object its fields. An int field is `int` whether it was declared with `t.int()` or `t.bigint()`, since the file stores one type of int, so a database opened without a schema reads its values as numbers up to 2^53 and as `bigint`s beyond.

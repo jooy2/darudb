@@ -155,17 +155,23 @@ A value in an expression may instead be a parameter: an embedded object whose fi
 ```rust
 use darudb::{QueryRequest, ReadTransaction};
 
-/// What a query in IR finds: the records, or how many there are.
+/// What a query in IR finds: the records, how many there are, or an
+/// aggregate of them, as a tagged value.
 enum Found {
     Records(Vec<Vec<u8>>),
     Count(u64),
+    Aggregate(Vec<u8>),
 }
 
 fn run(txn: &ReadTransaction, ir: &[u8]) -> darudb::Result<Found> {
     let request = QueryRequest::decode(ir)?;
     let collection = txn.collection(&request.collection)?;
 
-    if request.count {
+    if let Some((function, path)) = &request.aggregate {
+        let value = collection.aggregate(&request.query, *function, path)?;
+
+        Ok(Found::Aggregate(darudb::__binding::tagged(&value)))
+    } else if request.count {
         collection.count(&request.query).map(Found::Count)
     } else {
         collection.query_records(&request.query).map(Found::Records)
@@ -211,7 +217,7 @@ Between the two, the native layer in `packages/node/src/lib.rs` converts argumen
 The Python package, `packages/python`, is Python code that is the API, over a native module, `darudb._native`, built from `packages/python/src` with PyO3 and maturin. It decides nothing about the file either, but where the other bindings hand the engine bytes, it hands the engine the crate's own types:
 
 - **Schema.** `_schema.py` reads the decorated classes into fields, types and defaults, and the native module builds the engine's [`Schema`](../api/rust/schema.md) and [`Migration`](../api/rust/migration.md)s from them with the crate's builders, rather than encoding a schema record. The engine checks the schema when the file is opened, and a migration runs through `open_migrating` as above. A migration function reads an old object with [`Migrating`](../api/rust/migrating.md)'s `previous`, as an `Object`, rather than with `previous_record`.
-- **Objects.** The native module turns each Python object into the engine's dynamic [`Object`](../types/rust/object.md), each field under the name the file stores, and writes it with `insert`, `put` or `update`, which check it against the schema by name. An object read comes back as an `Object`, which the module makes into an instance of the class without calling its `__init__`. A batch is converted whole before any of it is written, and crosses in one call.
+- **Objects.** A read copies the records out of the engine, with `get_record_with` and `query_records_with`, and the native module reads each straight into an instance of the class, without calling its `__init__`, through a shape the engine makes from the names the file stores the class's fields under. An object of a class whose fields all hold scalars is written the same way: the module reads its attributes, and the engine encodes the record through the class's shape, with the checks a typed write makes. An object with a list, an embedded object or a link, or with a value of another type than its field's, is turned into the engine's dynamic [`Object`](../types/rust/object.md), each field under the name the file stores, and written with `insert`, `put` or `update`, which check it against the schema by name. A batch is converted whole before any of it is written, and crosses in one call.
 - **Queries.** `_query.py` records a query built with `F` as nested tuples, with each attribute turned into the name the file stores. The native module writes them as the IR above and reads it with `QueryRequest::decode`, so a query built in Python means what the same query means in every other language. Text goes to `Query::prepare`, and each run binds its parameters with `Query::bind`.
 - **Threads.** Every engine call releases the GIL, through `Python::detach`, and each handle keeps its engine object behind a mutex, so any thread may use it and the module declares itself safe for free-threaded Python. The asynchronous API runs the calls on a thread pool of the package.
 - **Errors** are `darudb.DaruError`, with the engine's code unchanged. A Python value the engine cannot hold is `INVALID_ARGUMENT`, so that a caller catches one kind of error for every refusal.

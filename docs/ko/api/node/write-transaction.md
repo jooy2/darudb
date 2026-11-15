@@ -48,7 +48,7 @@ interface AsyncWriteTransaction<S> {
 
 `Database.writeAsync`의 쓰기 트랜잭션입니다. 함수는 비동기여도 됩니다. 함수의 promise가 이행되고 함수가 부른 작업이 모두 끝나면 커밋하고, promise가 거부되면 취소합니다. `collection`은 위와 같이 동작하되 [AsyncWriteCollection](./write-collection.md#asyncwritecollection)을 돌려줍니다. 이 컬렉션의 작업은 await 여부와 관계없이 부른 순서대로 스레드 풀에서 실행됩니다.
 
-실패한 작업은 자기 promise를 거부하고 아무것도 바꾸지 않습니다. 함수의 promise가 이행되면 트랜잭션은 나머지를 그대로 커밋합니다. 실패한 뒤에 커밋하면 안 되는 함수라면 그 작업을 await해서 거부가 함수의 결과까지 올라가게 하세요. 함수 안에서 같은 파일에 `write`, `writeAsync`, `sync`, `close`, `compact`, `setKey`, `setPassword`나 그 짝 메서드를 부르면 `INVALID_ARGUMENT`로 거부됩니다.
+실패한 작업은 자기 promise를 거부하고 아무것도 바꾸지 않습니다. 함수의 promise가 이행되면 트랜잭션은 나머지를 그대로 커밋합니다. 실패한 뒤에 커밋하면 안 되는 함수라면 그 작업을 await해서 거부가 함수의 결과까지 올라가게 하세요. 함수 안에서 같은 파일에 `write`, `writeAsync`, `sync`, `close`, `compact`, `upgradeFormat`, `setKey`, `setPassword`나 그 짝 메서드를 부르면 `INVALID_ARGUMENT`로 거부됩니다.
 
 ```ts
 const carol = await db.writeAsync(async (txn) => {

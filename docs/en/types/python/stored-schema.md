@@ -70,10 +70,10 @@ An index of a collection: the fields it is on, in order, each a stored name or a
 ```python
 @dataclass(frozen=True)
 class StoredType:
-    kind: Literal["bool", "int", "float", "string", "bytes", "link", "list", "object"]
+    kind: Literal["bool", "int", "float", "string", "bytes", "date", "link", "list", "object"]
     collection: str | None = None
     element: StoredType | None = None
     fields: tuple[StoredField, ...] = ()
 ```
 
-A field's type, which `kind` names. A link names the `collection` whose primary key it holds, a list the type of its `element`, a scalar type or a link, and an embedded object its `fields`.
+A field's type, which `kind` names. A link names the `collection` whose primary key it holds, a list the type of its `element`, a scalar type, a link or an embedded object, and an embedded object its `fields`.

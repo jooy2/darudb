@@ -107,7 +107,7 @@ users.sum(F.age, "age >= $0", 18)
 def min(self, field: str | FieldRef, query: QueryInput = None, /, *parameters: object) -> Any: ...
 ```
 
-The least value of a number, string or bytes field over the objects a query finds, in the order a sort gives, or None when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
+The least value of a number, string, bytes or date field over the objects a query finds, in the order a sort gives, or None when there is none. With nothing of the filter left to test, a field with an index is read from the index's first entry rather than from the objects.
 
 ### max
 

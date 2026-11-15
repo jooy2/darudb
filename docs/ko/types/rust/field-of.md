@@ -70,9 +70,9 @@ pub const fn name(self) -> &'static str
 
 | 메서드 | 필드 타입 | 필터 |
 | --- | --- | --- |
-| `eq(value)`, `ne(value)` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `Link<T>`와 그 `Option` | [`Filter::eq`](../../api/rust/filter.md#eq), [`Filter::ne`](../../api/rust/filter.md#ne) |
+| `eq(value)`, `ne(value)` | `bool`, `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`, `Link<T>`와 그 `Option` | [`Filter::eq`](../../api/rust/filter.md#eq), [`Filter::ne`](../../api/rust/filter.md#ne) |
 | `is_in(values)` | 위와 같음 | [`Filter::is_in`](../../api/rust/filter.md#is-in) |
-| `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`와 그 `Option` | [`Filter::lt`](../../api/rust/filter.md#lt) 등 |
+| `lt`, `le`, `gt`, `ge` | `i64`, `f64`, `String`, `Vec<u8>`, `SystemTime`과 그 `Option` | [`Filter::lt`](../../api/rust/filter.md#lt) 등 |
 | `between(low, high)` | 위와 같음 | [`Filter::between`](../../api/rust/filter.md#between) |
 | `contains(text)`, `starts_with(text)`, `ends_with(text)` | `String`, `Option<String>` | [`Filter::contains`](../../api/rust/filter.md#contains) 등 |
 | `contains(element)` | `Vec<E>` | 목록에 쓴 [`Filter::contains`](../../api/rust/filter.md#contains) |
@@ -91,7 +91,7 @@ where
     V: NestedType,
 ```
 
-이 필드에서 `next`로 이어지는 경로입니다. `next`는 이 필드가 담은 내장 객체나 이 필드가 가리키는 객체의 필드입니다. `User::HOME.then(Address::CITY)`, `Post::AUTHOR.then(User::NAME)`처럼 씁니다. 내장 객체의 상수는 [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded)가 선언합니다.
+이 필드에서 `next`로 이어지는 경로입니다. `next`는 이 필드가 담은 내장 객체, 이 필드가 담은 목록의 내장 객체 하나하나, 또는 이 필드가 가리키는 객체의 필드입니다. `User::HOME.then(Address::CITY)`, `Post::AUTHOR.then(User::NAME)`처럼 씁니다. 내장 객체의 상수는 [`#[derive(Embedded)]`](../../api/rust/derive.md#embedded)가 선언합니다.
 
 ## PathOf
 

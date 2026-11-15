@@ -70,10 +70,10 @@ class StoredIndex:
 ```python
 @dataclass(frozen=True)
 class StoredType:
-    kind: Literal["bool", "int", "float", "string", "bytes", "link", "list", "object"]
+    kind: Literal["bool", "int", "float", "string", "bytes", "date", "link", "list", "object"]
     collection: str | None = None
     element: StoredType | None = None
     fields: tuple[StoredField, ...] = ()
 ```
 
-필드의 타입이며, `kind`가 종류를 나타냅니다. 링크는 기본 키를 담는 대상 `collection`을, 목록은 원소의 타입인 `element`를, 내장 객체는 자기 `fields`를 함께 담습니다. 목록의 원소는 스칼라 타입이나 링크입니다.
+필드의 타입이며, `kind`가 종류를 나타냅니다. 링크는 기본 키를 담는 대상 `collection`을, 목록은 원소의 타입인 `element`를, 내장 객체는 자기 `fields`를 함께 담습니다. 목록의 원소는 스칼라 타입이나 링크, 내장 객체입니다.

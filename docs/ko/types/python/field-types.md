@@ -25,7 +25,7 @@ pageClass: reference-page
 | 그런 클래스의 `list[E]` | 내장 객체의 목록 | 인스턴스를 담은 반복할 수 있는 값 | 인스턴스의 `list` |
 | 위 타입에 `\| None`을 붙인 것 | 같은 타입의 선택 필드 | 같은 값이나 `None` | 같은 값이나 `None` |
 
-필드와 타입이 다른 값은 객체를 쓸 때 `INVALID_ARGUMENT`로 실패합니다. 그 밖의 어노테이션은 [Schema](../../api/python/schema.md)를 만들 때 `INVALID_ARGUMENT`로 실패합니다. `dict`, 원소 타입이 없는 `list`, 두 타입의 유니언 타입, 목록의 목록이나 내장 객체의 목록, 원소가 `None`일 수 있는 목록이 그 예입니다.
+필드와 타입이 다른 값은 객체를 쓸 때 `INVALID_ARGUMENT`로 실패합니다. 그 밖의 어노테이션은 [Schema](../../api/python/schema.md)를 만들 때 `INVALID_ARGUMENT`로 실패합니다. `dict`, 원소 타입이 없는 `list`, 두 타입의 유니언 타입, 목록의 목록, 원소가 `None`일 수 있는 목록이 그 예입니다.
 
 ```python
 import darudb
@@ -58,7 +58,7 @@ class User:
 - **선택**: `email: str | None = None`처럼 `X | None`이나 `Optional[X]`로 어노테이션한 필드입니다. `None`일 수 있고, 필드가 생기기 전에 쓴 레코드는 `None`으로 읽습니다.
 - **기본값**: `age: int = 0`처럼 `| None`이 아니고 기본값이 있는 필드입니다. 필수이며, 필드가 생기기 전에 쓴 레코드는 기본값으로 읽습니다. 이 필드에 `None`을 쓰면 기본값이 저장됩니다.
 
-기본값은 파일에 저장할 수 있는 상수여야 합니다. `bool`, `int`, `float`, `str`, `bytes`나 이들의 목록입니다. `float` 필드의 `int` 기본값은 `float`로 저장됩니다. 선택 필드의 기본값은 `None`뿐입니다.
+기본값은 파일에 저장할 수 있는 상수여야 합니다. `bool`, `int`, `float`, `str`, `bytes`, 시간대가 있는 `datetime`이나 이들의 목록입니다. `float` 필드의 `int` 기본값은 `float`로 저장됩니다. 선택 필드의 기본값은 `None`뿐입니다.
 
 ## 값
 

@@ -11,7 +11,7 @@ order: 1
 interface Database<S extends Schema<any> = Schema>
 ```
 
-There is no constructor: `Database.open` and `Database.openAsync` return one, and calling `new Database()` throws. The static methods below belong to the `Database` value, whose type is `DatabaseOpener`. `S` is the [schema](./schema.md) the database was opened with. It carries the names of the collections and the types of their objects into every transaction, and nothing at run time. A database opened without a schema has no collections.
+There is no constructor: `Database.open` and `Database.openAsync` return one, and calling `new Database()` throws. The static methods below belong to the `Database` value, whose type is `DatabaseOpener`. `S` is the [schema](./schema.md) the database was opened with. It carries the names of the collections and the types of their objects into every transaction, and nothing at run time. A database opened without a schema works with the one the file holds, which [`storedSchema`](#storedschema) reads, and reaches its collections by name; it has none only when the file holds no schema.
 
 A `Database` works until `close` or `closeAsync` is called. After that only `path` and `isOpen` can be read, `close` and `closeAsync` do nothing, and every other member throws `CLOSED`. Opening a file that the process already has open gives another handle to the same database, with the same page cache, and each handle keeps the schema it was opened with.
 

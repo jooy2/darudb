@@ -151,14 +151,14 @@ sealed class Kind
 | `BytesKind()`          | 임의의 바이트. `Uint8List`로 다룹니다                 |
 | `DateKind()`           | 마이크로초 단위의 시각. UTC의 `DateTime`으로 다룹니다 |
 | `LinkKind(collection)` | 이름이 `collection`인 컬렉션에 있는 객체의 기본 키    |
-| `ListKind(element)`    | 스칼라 값이나 링크의 목록                             |
+| `ListKind(element)`    | 스칼라 값이나 링크, 내장 객체의 목록                  |
 | `ObjectKind(embedded)` | 내장 객체. 필드는 `EmbeddedSchema`가 선언합니다       |
 
 ## FieldSink와 FieldSource
 
 생성기가 쓰는 함수, 위의 `_$writeUser`와 `_$readUser`는 이 두 클래스로 객체를 필드 하나씩 쓰고 읽습니다.
 
-- **`FieldSink`는** 슬롯마다 필드 값을 받습니다. `boolean`, `int64`, `float`, `string`, `bytes`, `date`, `link`, `list`, `object`가 있고, 모두 레코드에서 뺄 필드를 null로 받습니다.
+- **`FieldSink`는** 슬롯마다 필드 값을 받습니다. `boolean`, `int64`, `float`, `string`, `bytes`, `date`, `link`, `list`, `object`, `objectList`가 있고, 모두 레코드에서 뺄 필드를 null로 받습니다.
 - **`FieldSource`는** 레코드를 필드 하나씩 훑습니다. `next`로 다음 필드로 가고 `slot`으로 어느 필드인지 봅니다. 값은 `int64`, `string` 같은 메서드로 읽고, null일 수 있는 값은 각 메서드의 `OrNull` 형태로 읽습니다. 레코드에 없는 필드는 기본값이나 null로 오므로, 필드가 생기기 전에 쓴 레코드도 읽힙니다. 레이아웃과 맞지 않는 레코드는 `CORRUPTED`로 실패합니다.
 
 둘 다 생성된 함수와, 그와 같은 모양으로 직접 쓴 함수에서만 쓰라고 있는 클래스입니다.

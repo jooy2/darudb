@@ -72,10 +72,10 @@ interface StoredIndex {
 
 ```ts
 type StoredType =
-  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' }
+  | { readonly kind: 'bool' | 'int' | 'float' | 'string' | 'bytes' | 'date' }
   | { readonly kind: 'link'; readonly collection: string }
   | { readonly kind: 'list'; readonly element: StoredType }
   | { readonly kind: 'object'; readonly fields: readonly StoredField[] };
 ```
 
-필드의 타입이며, `kind`가 종류를 나타냅니다. 링크는 기본 키를 담는 대상 컬렉션을, 목록은 원소의 타입을, 내장 객체는 자기 필드를 함께 담습니다. 목록의 원소는 스칼라 타입이나 링크입니다. 파일은 int 타입을 하나만 저장하므로 `t.int()`로 선언했든 `t.bigint()`로 선언했든 int 필드는 `int`입니다. 그래서 스키마 없이 연 데이터베이스는 그 값을 2^53까지는 number로, 그보다 크면 `bigint`로 읽습니다.
+필드의 타입이며, `kind`가 종류를 나타냅니다. 링크는 기본 키를 담는 대상 컬렉션을, 목록은 원소의 타입을, 내장 객체는 자기 필드를 함께 담습니다. 목록의 원소는 스칼라 타입이나 링크, 내장 객체입니다. 파일은 int 타입을 하나만 저장하므로 `t.int()`로 선언했든 `t.bigint()`로 선언했든 int 필드는 `int`입니다. 그래서 스키마 없이 연 데이터베이스는 그 값을 2^53까지는 number로, 그보다 크면 `bigint`로 읽습니다.

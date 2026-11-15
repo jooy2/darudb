@@ -13,7 +13,7 @@ counterpart: /api/node/t
 pub struct Embedded
 ```
 
-`Embedded::new`로 시작하고, 메서드마다 필드를 하나 더해 돌려주며, [`Type::object`](../../types/rust/type.md)로 필드의 타입으로 씁니다. 필드 규칙은 [`Collection`](./collection.md)의 필드와 같고, 링크와 스칼라의 목록, 다른 내장 객체도 필드로 가질 수 있습니다. 내장 객체에는 기본 키도 인덱스도 없지만, 쿼리는 `address.city` 같은 경로로 그 필드에 닿습니다.
+`Embedded::new`로 시작하고, 메서드마다 필드를 하나 더해 돌려주며, [`Type::object`](../../types/rust/type.md)로 필드의 타입으로 씁니다. 필드 규칙은 [`Collection`](./collection.md)의 필드와 같고, 링크, 스칼라나 링크나 내장 객체의 목록, 다른 내장 객체도 필드로 가질 수 있습니다. 내장 객체에는 기본 키도 인덱스도 없지만, 쿼리는 `address.city` 같은 경로로 그 필드에 닿습니다.
 
 타입이 내장 객체인 필드는 `field`나 `optional`로 선언합니다. 이 필드 자체에는 기본값을 줄 수 없고, 기본값은 내장 객체의 필드마다 줍니다. [`CollectionWriter::update`](./collection-writer.md#update)는 내장 객체를 통째로 바꿉니다.
 

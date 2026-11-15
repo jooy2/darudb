@@ -131,7 +131,15 @@ pub fn as_list(&self) -> Option<&[Value]>
 
 값이 `List`이면 그 원소를 돌려줍니다.
 
-#### as_date
+### as_object
+
+```rust
+pub fn as_object(&self) -> Option<&Object>
+```
+
+값이 `Object`이면 그 내장 객체를 돌려줍니다.
+
+### as_date
 
 ```rust
 pub fn as_date(&self) -> Option<i64>
@@ -154,14 +162,6 @@ impl TryFrom<SystemTime> for Value
 ```
 
 시각을 마이크로초 단위로 내림한 날짜입니다. 그래서 1970년 이전의 시각에 마이크로초보다 작은 부분이 있으면 바로 앞 마이크로초가 됩니다. 1970년에서 약 29만 2천 년보다 먼 시각은 `INVALID_ARGUMENT`로 실패합니다. `Value::try_from(SystemTime::now())?`처럼 씁니다.
-
-## as_object
-
-```rust
-pub fn as_object(&self) -> Option<&Object>
-```
-
-값이 `Object`이면 그 내장 객체를 돌려줍니다.
 
 ## 변환
 

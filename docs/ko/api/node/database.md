@@ -11,7 +11,7 @@ order: 1
 interface Database<S extends Schema<any> = Schema>
 ```
 
-생성자는 없습니다. `Database.open`이나 `Database.openAsync`가 만들어 돌려주고, `new Database()`를 부르면 예외가 납니다. 아래 정적 메서드는 `Database` 값에 있으며, 이 값의 타입은 `DatabaseOpener`입니다. `S`는 데이터베이스를 열 때 준 [스키마](./schema.md)입니다. 컬렉션 이름과 객체의 타입을 모든 트랜잭션에 전할 뿐, 실행할 때는 아무 역할도 하지 않습니다. 스키마 없이 연 데이터베이스에는 컬렉션이 없습니다.
+생성자는 없습니다. `Database.open`이나 `Database.openAsync`가 만들어 돌려주고, `new Database()`를 부르면 예외가 납니다. 아래 정적 메서드는 `Database` 값에 있으며, 이 값의 타입은 `DatabaseOpener`입니다. `S`는 데이터베이스를 열 때 준 [스키마](./schema.md)입니다. 컬렉션 이름과 객체의 타입을 모든 트랜잭션에 전할 뿐, 실행할 때는 아무 역할도 하지 않습니다. 스키마 없이 연 데이터베이스는 파일에 저장된 스키마를 쓰고, 그 스키마는 [`storedSchema`](#storedschema)로 읽으며 컬렉션에는 이름으로 접근합니다. 파일에 스키마가 없을 때만 컬렉션이 없습니다.
 
 `close`나 `closeAsync`를 부르기 전까지 쓸 수 있습니다. 닫은 뒤에는 `path`와 `isOpen`만 읽을 수 있고, `close`와 `closeAsync`는 아무 일도 하지 않으며, 나머지는 모두 `CLOSED`를 던집니다. 프로세스가 이미 연 파일을 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다.
 

@@ -25,7 +25,7 @@ A field's annotation decides what the field holds in the file, which Python valu
 | `list[E]` of such a class | A list of embedded objects | Any iterable of instances | `list` of instances |
 | Any of these `\| None` | The same, optional | The same, or `None` | The same, or `None` |
 
-A value of another type than its field's fails with `INVALID_ARGUMENT` when the object is written. Any other annotation fails with `INVALID_ARGUMENT` when the [Schema](../../api/python/schema.md) is made: a `dict`, a `list` without its element type, a union of two types, a list of lists or of embedded objects, and a list whose elements may be `None`.
+A value of another type than its field's fails with `INVALID_ARGUMENT` when the object is written. Any other annotation fails with `INVALID_ARGUMENT` when the [Schema](../../api/python/schema.md) is made: a `dict`, a `list` without its element type, a union of two types, a list of lists, and a list whose elements may be `None`.
 
 ```python
 import darudb
@@ -58,7 +58,7 @@ class User:
 - **Optional**: a field annotated `X | None`, or `Optional[X]`, such as `email: str | None = None`. It may be `None`, and a record written before the field existed reads it as `None`.
 - **Default**: a field that is not `| None` and has a default, such as `age: int = 0`. It is required, and a record written before the field existed reads it as the default. `None` written in it stores the default as well.
 
-A default is a constant the file can store: a `bool`, an `int`, a `float`, a `str`, `bytes`, or a list of them. An `int` default of a `float` field is stored as a `float`. An optional field's only default is `None`.
+A default is a constant the file can store: a `bool`, an `int`, a `float`, a `str`, `bytes`, an aware `datetime`, or a list of them. An `int` default of a `float` field is stored as a `float`. An optional field's only default is `None`.
 
 ## Values
 

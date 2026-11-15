@@ -13,7 +13,7 @@ final class Database implements Finalizable
 
 생성자는 없습니다. `Database.open`이나 `Database.openAsync`가 만들어 돌려줍니다. [스키마](./schema.md)를 주고 열면 `darudb_generator`가 클래스마다 써 준 상수로 컬렉션에 접근합니다. `userSchema`가 그런 상수입니다. 스키마 없이 열면 파일에 저장된 스키마를 씁니다. 이때는 [`storedCollection`](#storedcollection)이 각 컬렉션을 [MapCollection](../../types/dart/map-collection.md)으로 돌려주는데, 객체는 파일에 저장된 이름을 키로 한 맵입니다. 어떤 컬렉션이 있는지는 [`storedSchema`](#storedschema)가 알려 줍니다. 파일에 저장된 스키마도 없으면 컬렉션이 없습니다.
 
-`close`나 `closeAsync`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에는 `path`와 `isOpen`, `schemaVersion`만 읽을 수 있고, `close`와 `closeAsync`는 아무 일도 하지 않으며, 나머지는 모두 코드가 `CLOSED`인 [DaruException](../../types/dart/error.md)을 던집니다. 프로세스가 이미 연 파일을 이 isolate에서든 다른 isolate에서든 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다. 닫지 않은 핸들은 가비지 컬렉터가 거둘 때 닫히지만, 그 시점에 기대면 안 됩니다.
+`close`나 `closeAsync`로 닫기 전까지 쓸 수 있습니다. 닫은 뒤에는 `path`와 `isOpen`, `schemaVersion`, `storedSchema`만 읽을 수 있고, `close`와 `closeAsync`는 아무 일도 하지 않으며, 나머지는 모두 코드가 `CLOSED`인 [DaruException](../../types/dart/error.md)을 던집니다. 프로세스가 이미 연 파일을 이 isolate에서든 다른 isolate에서든 다시 열면 같은 데이터베이스의 핸들이 하나 더 생기고, 페이지 캐시도 함께 씁니다. 스키마는 핸들마다 열 때 받은 것을 계속 씁니다. 닫지 않은 핸들은 가비지 컬렉터가 거둘 때 닫히지만, 그 시점에 기대면 안 됩니다.
 
 호출은 모두 부른 isolate에서 실행되고 엔진이 반환할 때까지 그 isolate를 붙잡습니다. 그래서 다른 쓰기를 기다리는 쓰기나 디스크를 기다리는 동기 커밋은 Flutter 앱의 UI isolate도 붙잡습니다. 파일에 접근하는 메서드에는 이름이 `Async`로 끝나는 짝이 있고, 짝 메서드는 엔진의 일을 패키지의 네이티브 라이브러리가 가진 스레드에서 하고 `Future`를 돌려줍니다. 두 방식이 한 파일을 어떻게 함께 쓰는지는 [비동기 API](../../guide/async.md)에서 설명합니다.
 
