@@ -13,6 +13,8 @@ license = "MIT AND Unicode-3.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# The fuzz targets are a workspace of their own, for the repository alone.
+exclude = ["fuzz"]
 
 [dependencies]
 # XXH3-128, the check of a plain page. MIT, and with these features it pulls in
@@ -83,6 +85,8 @@ darudb-derive.workspace = true
 all-features = true
 
 [lints.rust]
+# `cargo fuzz` sets `fuzzing` for the targets in `fuzz/`.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 # The engine is safe Rust, with one exception: `sys/` makes the operating
 # system's calls that the standard library does not offer, such as byte-range
 # locks, and allows `unsafe` for itself alone. Any other module that uses it

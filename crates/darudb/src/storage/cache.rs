@@ -112,6 +112,13 @@ impl<V: Weigh> Cache<V> {
 
     /// The cached copy of page `page` with check `check`, if there is one.
     pub(crate) fn get(&self, page: u64, check: &Check) -> Option<Arc<V>> {
+        // In a fuzzing build every page has the same check, which no longer
+        // tells a page from an older one of its number: nothing is found
+        // here, and every page is read from the file.
+        if cfg!(fuzzing) {
+            return None;
+        }
+
         self.lock().entries.get(&(page, *check)).cloned()
     }
 
@@ -119,6 +126,10 @@ impl<V: Weigh> Cache<V> {
     /// there is one, for a caller that means to change it: one that nothing
     /// else holds is then the caller's to change, with no copy made.
     pub(crate) fn take(&self, page: u64, check: &Check) -> Option<Arc<V>> {
+        if cfg!(fuzzing) {
+            return None;
+        }
+
         let mut inner = self.lock();
         let taken = inner.entries.remove(&(page, *check))?;
 

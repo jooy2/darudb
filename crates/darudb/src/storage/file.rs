@@ -76,6 +76,11 @@ impl DbFile {
     /// `fsync` there only reaches the drive's cache, which a power cut
     /// empties. On Windows it is `FlushFileBuffers`.
     pub(crate) fn sync_data(&self) -> io::Result<()> {
+        // A fuzzing build waits for no disk: its files live for one input.
+        if cfg!(fuzzing) {
+            return Ok(());
+        }
+
         self.file.sync_data()
     }
 
@@ -119,6 +124,10 @@ impl super::FileIo for DbFile {
 /// points to. Windows journals the directory change itself and offers no
 /// portable way to sync a directory, so there this does nothing.
 pub(crate) fn sync_parent_dir(path: &Path) -> io::Result<()> {
+    if cfg!(fuzzing) {
+        return Ok(());
+    }
+
     #[cfg(unix)]
     {
         let parent = match path.parent() {

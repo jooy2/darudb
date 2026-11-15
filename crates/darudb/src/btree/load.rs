@@ -181,6 +181,12 @@ impl Load for Loader {
     }
 
     fn marks(&self, pointer: &Pointer, kind: u64) -> Option<Arc<[u16]>> {
+        // As for the page cache: in a fuzzing build a check does not tell
+        // one page from another.
+        if cfg!(fuzzing) {
+            return None;
+        }
+
         self.lock_marks()
             .entries
             .get(&(pointer.page, pointer.check, kind))

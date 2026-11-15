@@ -20,6 +20,23 @@ impl Check {
 
     /// The XXH3-128 hash of `parts`, concatenated in order.
     pub(crate) fn of(parts: &[&[u8]]) -> Check {
+        // A fuzzing build (`fuzz/`) gives everything one check, so that a
+        // page the fuzzer changed still passes for the page its parent
+        // names, and the code past the checks sees it: what a file whose
+        // author worked the hashes out again does to a plain file.
+        #[cfg(fuzzing)]
+        {
+            let _ = parts;
+
+            return Check([0xA5; CHECK_LEN]);
+        }
+
+        #[cfg(not(fuzzing))]
+        Self::hash(parts)
+    }
+
+    #[cfg_attr(fuzzing, allow(dead_code))]
+    fn hash(parts: &[&[u8]]) -> Check {
         // The default seed and secret, which `XxHash3_128::new` puts on the
         // heap: hashing a page took a quarter longer with the allocation.
         let mut hasher = RawHasher::new(SecretBuffer::default());
