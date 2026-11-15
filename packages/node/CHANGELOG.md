@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- `updateWhere` changes the objects its own query finds when a getter of the changes runs a query. The getter's query was encoded over the update's, so the update changed the objects of the getter's query instead.
+
 ## v1.5.0 (2026-11-01)
 
 ### Breaking changes

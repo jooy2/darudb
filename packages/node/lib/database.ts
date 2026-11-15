@@ -299,7 +299,9 @@ class WriteCollection extends ReadCollection {
    */
   updateWhere(changes: unknown, query: QueryInput, parameters?: unknown): number {
     const layout = this[LAYOUT];
-    const ir = irOf(layout.name, required(query), parameters, false, false, true);
+    // The IR is a copy, not a view of the buffer queries are encoded in: a
+    // getter of `changes` may run a query, which is encoded there too.
+    const ir = irOf(layout.name, required(query), parameters, false);
     const length = lendChanges(layout, changes);
 
     return native.updateWhere(this[TXN], ir, recordBytes(), length);

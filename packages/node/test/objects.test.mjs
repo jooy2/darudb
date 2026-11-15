@@ -576,6 +576,21 @@ describe('objects', () => {
         }),
         true
       );
+      // A getter that runs a query while the changes of an update by query
+      // are being encoded, after the update's own query.
+      assert.equal(
+        teams.updateWhere(
+          {
+            get city() {
+              teams.find((q) => q.where('name', '==', 'north'));
+
+              return 'Daegu';
+            }
+          },
+          (q) => q.where('name', '==', 'south')
+        ),
+        1
+      );
     });
 
     db.read((txn) => {
