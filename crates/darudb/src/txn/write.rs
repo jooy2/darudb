@@ -126,8 +126,6 @@ pub(crate) fn kept<T>(mut buffer: Vec<T>) -> Vec<T> {
 /// If an operation fails, the transaction can no longer commit.
 #[derive(Debug)]
 pub struct WriteTransaction {
-    pub(super) shared: Arc<Shared>,
-    pub(super) _writer: WriterGuard,
     pub(super) header: Header,
     /// The durable commit: its slot is never written, its pages never reused.
     pub(super) durable: CommitRecord,
@@ -174,6 +172,15 @@ pub struct WriteTransaction {
     pub(super) schema_checked: AtomicBool,
     /// The object layer's buffers, between the objects it stores.
     pub(super) spare: Spare,
+    /// The instance and the writer's turn, declared last, so that they are
+    /// dropped last. A transaction may hold the last reference to the
+    /// instance, whose drop tells the registry that the file is closed, and
+    /// `space` holds the file open through the pager: dropped after the
+    /// instance, it would leave the file open while another thread opens it
+    /// anew, and closing a file's descriptor releases every lock the process
+    /// holds on the file.
+    pub(super) shared: Arc<Shared>,
+    pub(super) _writer: WriterGuard,
 }
 
 impl WriteTransaction {

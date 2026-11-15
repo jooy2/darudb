@@ -888,10 +888,26 @@ impl Shared {
         self.check_owner()?;
         self.check_usable()?;
 
+        // The window as it is before the selector is read: a deferred commit
+        // of another thread may set the selector's bit and extend the window
+        // after the read, and that window is not this call's to close.
+        let seen = lock(&self.unsynced)
+            .window
+            .as_ref()
+            .map(|window| window.last);
         let bytes = self.pager.read_header(SELECTOR_OFFSET + 1)?;
 
         if Selector::decode(bytes[SELECTOR_OFFSET]).is_ok_and(|selector| !selector.unsynced) {
-            self.close_window();
+            let mut unsynced = lock(&self.unsynced);
+
+            if unsynced.window.as_ref().map(|window| window.last) == seen {
+                unsynced.window = None;
+                unsynced.foreign = None;
+
+                if let Some(flusher) = &unsynced.flusher {
+                    flusher.unpark();
+                }
+            }
 
             return Ok(());
         }

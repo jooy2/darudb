@@ -23,6 +23,11 @@
 
 - A schema whose embedded objects nest too deeply for its own record to be read back, about twenty levels, is refused with `INVALID_ARGUMENT` when the file is opened with it. It was stored, and every later open of the file failed with `CORRUPTED`.
 
+- A backup or a salvage that fails while copying its file into place, on a file system with neither links nor a rename that never replaces a file, leaves nothing at the destination. Half a file stayed there, and the next attempt failed because the path was taken.
+
+- `Database::sync` on one thread no longer forgets the unsynced window a deferred commit on another thread opens at the same moment, which left that commit without its time limit until the next commit, sync or close.
+- A write transaction that outlives every `Database` of its file closes the file before the process counts it as closed. Another thread opening the file at that moment could otherwise lose its locks when the transaction's descriptor closed.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
