@@ -1315,8 +1315,9 @@ type Objects = BTreeMap<i64, crate::Object>;
 fn object_schema(version: u64) -> crate::Schema {
     use crate::{Collection, Embedded, Schema, Type};
 
-    // Beside the indexes on one field, one of two fields and one on a field
-    // inside an embedded object and another, kept in step through every cut.
+    // Beside the indexes on one field, one of two fields, one on a field
+    // inside an embedded object and another, and text indexes on a list and
+    // inside the embedded object, kept in step through every cut.
     let items = Collection::new("items")
         .optional("name", Type::String)
         .with_default("rank", Type::Int, 0)
@@ -1330,7 +1331,9 @@ fn object_schema(version: u64) -> crate::Schema {
         .index("rank")
         .index("tags")
         .index_on(["rank", "name"])
-        .index_on(["place.city", "rank"]);
+        .index_on(["place.city", "rank"])
+        .text_index("tags")
+        .text_index("place.city");
     // Objects that go with the item they link to, so that a delete changes
     // several trees of two collections in one commit.
     let parts = Collection::new("parts")
@@ -1454,7 +1457,7 @@ fn random_item(rng: &mut Rng, page_size: usize) -> crate::Object {
 
     if rng.below(2) == 0 {
         let tags: Vec<crate::Value> = (0..rng.below(3))
-            .map(|_| ["x", "y", "z"][rng.index(3)].into())
+            .map(|_| ["x one", "y two", "Z ONE"][rng.index(3)].into())
             .collect();
 
         item.set("tags", tags);
