@@ -118,6 +118,19 @@ pub(crate) fn open(
         });
     }
     let encoded = plan.to.encode();
+
+    // What is stored has to read back, or the file would open once and never
+    // again: a schema whose embedded objects nest deeper than a record may
+    // encodes, and does not decode.
+    if let Err(reason) = StoredSchema::decode(&encoded) {
+        return Err(Error::InvalidArgument {
+            message: format!(
+                "the schema cannot be stored: {}",
+                reason.unwrap_or("it is in an object format this build does not read")
+            ),
+        });
+    }
+
     let schema = Arc::new(OpenSchema::new(plan.to, encoded));
 
     // Stored first, so that the migration functions read and write objects

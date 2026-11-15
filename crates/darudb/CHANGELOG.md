@@ -21,6 +21,8 @@
 
 - A leaf whose overflow reference gives a value of 4 GiB or more, or a run that ends past the last page a file can have, is `CORRUPTED`, and reading a large value reserves at most 16 MiB before its pages have passed their checks. A crafted plain file could make a read, a check or a salvage reserve terabytes, which ends the process where the system refuses the memory.
 
+- A schema whose embedded objects nest too deeply for its own record to be read back, about twenty levels, is refused with `INVALID_ARGUMENT` when the file is opened with it. It was stored, and every later open of the file failed with `CORRUPTED`.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.

@@ -1956,3 +1956,26 @@ fn a_delete_by_a_key_too_long_for_the_file_finds_nothing() {
     txn.commit().unwrap();
     assert_eq!(objects(&db, "notes").len(), 1);
 }
+
+/// A schema nested deeper than its own record may nest is refused before it
+/// is stored, rather than stored once and never read again.
+#[test]
+fn a_schema_nested_too_deeply_to_be_read_back_is_refused() {
+    use darudb::Embedded;
+
+    let dir = TestDir::new();
+    let nested = |levels: usize| {
+        let mut kind = Type::String;
+
+        for _ in 0..levels {
+            kind = Type::object(Embedded::new().field("f", kind));
+        }
+
+        Schema::new(1).collection(Collection::new("deep").optional("root", kind))
+    };
+
+    assert_eq!(code(open(&dir, nested(40), &[])), "INVALID_ARGUMENT");
+    // Nothing was stored, so a schema that fits opens the file, twice.
+    open(&dir, nested(8), &[]).unwrap().close().unwrap();
+    open(&dir, nested(8), &[]).unwrap().close().unwrap();
+}
