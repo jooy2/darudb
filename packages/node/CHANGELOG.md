@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- The default of a `t.bigint()` field reads as a `bigint` in an object written before the field was there, where it read as a number, and a default beyond 2^53 can be declared, where the schema was refused with `INVALID_ARGUMENT`.
 - A string that begins with U+FEFF reads back whole. The character was dropped when the string was read, so an object whose string primary key began with it was inserted a second time when it was written back with `put`.
 - `updateWhere` changes the objects its own query finds when a getter of the changes runs a query. The getter's query was encoded over the update's, so the update changed the objects of the getter's query instead.
 

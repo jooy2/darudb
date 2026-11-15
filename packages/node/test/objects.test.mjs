@@ -1626,4 +1626,44 @@ describe('values at the edges', () => {
       assert.equal(notes.get('﻿first').body, 'y');
     });
   });
+
+  it('read the default of a `t.bigint()` field as a bigint, whatever its size', (context) => {
+    const path = tempPath(context);
+    const before = Database.open(path, {
+      schema: schema(1, { users: collection({ name: t.string() }) })
+    });
+
+    before.write((txn) => txn.collection('users').insert({ name: 'a' }));
+    before.close();
+
+    const db = Database.open(path, {
+      schema: schema(2, {
+        users: collection({
+          name: t.string(),
+          small: t.bigint().default(5n),
+          large: t.bigint().default(2n ** 60n),
+          many: t.list(t.bigint()).default([])
+        })
+      })
+    });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const users = txn.collection('users');
+
+      users.insert({ name: 'b' });
+
+      // The first object was written before the fields were there.
+      for (const key of [1, 2]) {
+        assert.deepEqual(users.get(key), {
+          id: key,
+          name: key === 1 ? 'a' : 'b',
+          small: 5n,
+          large: 2n ** 60n,
+          many: []
+        });
+      }
+    });
+  });
 });

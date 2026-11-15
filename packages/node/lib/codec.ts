@@ -1302,16 +1302,25 @@ function readValue(reader: Reader, kind: Kind, depth: number): unknown {
 /** An int read as a number, or a `bigint` beyond 2^53, as keys are. */
 const ANY_INT: IntKind = Object.freeze({ type: 'int', anyInt: true });
 
-/** A default as a field reads it, a fresh copy of a list or bytes. */
-function defaultOf(field: FieldLayout): unknown {
-  const value = field.default;
-
+/**
+ * A default as a field of `kind` reads it: a fresh copy of a list, a date or
+ * bytes, so that changing what one object read changes no other, and a
+ * `bigint` for a field declared with `t.bigint()`, which the stored schema
+ * holds as it holds any int.
+ */
+function defaultOf(value: unknown, kind: Kind): unknown {
   if (Array.isArray(value)) {
-    return value.slice();
+    const element = kind.type === 'list' ? kind.element : kind;
+
+    return value.map((item) => defaultOf(item, element));
   }
 
   if (value instanceof Date) {
     return new Date(value.getTime());
+  }
+
+  if (typeof value === 'number' && kind.type === 'int' && kind.big) {
+    return BigInt(value);
   }
 
   return value instanceof Uint8Array ? value.slice() : value;
@@ -1404,7 +1413,7 @@ function readFields(
 /** The value of a field a record lacks: its default, or null if it may be. */
 function missing(field: FieldLayout, lenient: boolean): unknown {
   if (field.default !== undefined) {
-    return defaultOf(field);
+    return defaultOf(field.default, field.kind);
   }
 
   if (field.optional || lenient) {
@@ -2294,6 +2303,9 @@ function kindOfSpec(spec: Spec, ids: Map<string, number>): Kind {
       throw invalid('a link has no default: it would name an object');
     case 'object':
       throw invalid('an embedded object has no default: its fields have their own');
+    case 'int':
+      // A default of a field declared with `t.bigint()` may lie beyond 2^53.
+      return spec.big ? { type: 'int', big: true } : { type: 'int' };
     default:
       return { type: spec.type };
   }
