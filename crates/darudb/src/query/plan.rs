@@ -360,10 +360,15 @@ fn plan_parts<'s>(
                 .map(|(_, term)| term)
                 .collect();
 
-            if rest.is_empty() {
-                (None, true)
-            } else {
-                (Some(Cond::And(rest)), false)
+            let mut rest = rest;
+
+            match rest.as_slice() {
+                [] => (None, true),
+                // One term left stands alone, so that a walk tests it as it
+                // tests a filter of one term, without the `AND` around it.
+                // Its position among the terms left is still the first.
+                [only] if !matches!(only, Cond::And(_)) => (rest.pop(), false),
+                _ => (Some(Cond::And(rest)), false),
             }
         }
         Some(cond) if consumed == [0] && !matches!(cond, Cond::And(_)) => (None, true),
@@ -1126,7 +1131,17 @@ impl Candidate<'_, '_> {
     /// range, and within each, the primary key before a unique index before
     /// another.
     fn rank(&self) -> (u8, Source) {
-        let lookup = match (self.lookup, self.source) {
+        // A unique index holds one object for a value, but any number for
+        // null, and in any index null is the value most objects are likely
+        // to share: looking a null up ranks with looking several values up
+        // in an index that is not unique, after an equality on a value.
+        let nulls = self.values.iter().any(|value| value.is_null());
+        let source = match self.source {
+            Source::Unique if nulls => Source::Index,
+            source => source,
+        };
+        let lookup = match (self.lookup, source) {
+            (Lookup::Equal | Lookup::Several, Source::Index) if nulls => 3,
             (Lookup::Equal, Source::Key | Source::Unique) => 0,
             (Lookup::Several, Source::Key | Source::Unique) => 1,
             (Lookup::Equal, Source::Index) => 2,
@@ -1134,7 +1149,7 @@ impl Candidate<'_, '_> {
             (Lookup::Range, _) => 4,
         };
 
-        (lookup, self.source)
+        (lookup, source)
     }
 }
 

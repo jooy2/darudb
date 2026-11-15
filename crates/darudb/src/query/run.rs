@@ -1668,6 +1668,34 @@ pub(crate) fn aggregate(
 
     let mut fold = Fold::new(function, &path.leaf);
 
+    // A sum or a mean of a field with an index, of every object or of those
+    // in ranges of that index, reads the values from the index's entries,
+    // which are a fraction of the records' size: no record is read.
+    if let Some((index, field, ranges)) = index_alone(plan, path) {
+        let tree = index_tree(index.id);
+
+        for range in ranges.iter() {
+            source
+                .range_in(&tree, as_ref(&range.0), as_ref(&range.1), false)?
+                .for_each(&mut |entry, stored| {
+                    let (value, _) = entry_parts(source, index, entry, stored)?;
+
+                    // Nulls are left out.
+                    if value.first() != Some(&key::NULL) {
+                        let (value, _) = key::decode(value).map_err(|reason| {
+                            source.corrupted(format!("an entry of index {}: {reason}", index.id))
+                        })?;
+
+                        fold.add(ValueRef::Value(&key::of_kind(value, &field.kind)));
+                    }
+
+                    Ok(false)
+                })?;
+        }
+
+        return fold.finish(names);
+    }
+
     if plan.offset == 0 && plan.limit.is_none() {
         // Every object found counts, whatever its order, so the objects are
         // neither gathered nor sorted: each is read as the walk finds it.
@@ -1714,43 +1742,26 @@ fn extreme_in_index(
         Aggregate::Max => true,
         _ => return Ok(None),
     };
-    let Some(field) = path.direct.filter(|_| !path.many && path.steps.len() == 1) else {
+    let Some((index, field, ranges)) = index_alone(plan, path) else {
         return Ok(None);
     };
-
-    if plan.offset != 0 || plan.limit.is_some() || plan.filter.is_some() {
-        return Ok(None);
-    }
-
-    let whole;
-    let (index, ranges): (&IndexDef, &[Range]) = match &plan.access {
-        Access::Index { index, ranges, .. } if index.is_on(field.id) => (index, ranges),
-        Access::Records {
-            range: (Bound::Unbounded, Bound::Unbounded),
-            ..
-        } if !plan.exact => {
-            let Some(index) = plan
-                .collection
-                .indexes
-                .iter()
-                .find(|index| index.is_on(field.id))
-            else {
-                return Ok(None);
-            };
-
-            whole = [(Bound::Unbounded, Bound::Unbounded)];
-            (index, &whole)
-        }
-        _ => return Ok(None),
-    };
+    let ranges = ranges.as_ref();
     let tree = index_tree(index.id);
     let mut found = None;
 
+    // Nulls sort first. The least value is the first entry after them, so
+    // a walk from the start begins past them rather than read each.
+    let past_nulls = [key::NULL + 1];
+
     for at in 0..ranges.len() {
         let range = &ranges[in_order(at, ranges.len(), backward)];
+        let low = match (&range.0, backward) {
+            (Bound::Unbounded, false) => Bound::Included(&past_nulls[..]),
+            (low, _) => as_ref(low),
+        };
 
         source
-            .range_in(&tree, as_ref(&range.0), as_ref(&range.1), backward)?
+            .range_in(&tree, low, as_ref(&range.1), backward)?
             .for_each(&mut |entry, stored| {
                 let (value, _) = entry_parts(source, index, entry, stored)?;
 
@@ -1774,6 +1785,48 @@ fn extreme_in_index(
     }
 
     Ok(Some(found.unwrap_or(Value::Null)))
+}
+
+/// The index that alone holds the values at `path` of the objects `plan`
+/// finds, with the field and the ranges of the index to read: the path is a
+/// field of the collection itself with an index, the query has no offset and
+/// no limit, and nothing of its filter is left to test, the access being a
+/// walk of every record, or of ranges of that index. `None` when no index
+/// says it alone.
+fn index_alone<'p>(
+    plan: &'p Plan<'_>,
+    path: &Resolved<'p>,
+) -> Option<(&'p IndexDef, &'p FieldDef, Cow<'p, [Range]>)> {
+    let field = path
+        .direct
+        .filter(|_| !path.many && path.steps.len() == 1)?;
+
+    if plan.offset != 0 || plan.limit.is_some() || plan.filter.is_some() {
+        return None;
+    }
+
+    match &plan.access {
+        Access::Index { index, ranges, .. } if index.is_on(field.id) => {
+            Some((index, field, Cow::Borrowed(ranges.as_slice())))
+        }
+        Access::Records {
+            range: (Bound::Unbounded, Bound::Unbounded),
+            ..
+        } if !plan.exact => {
+            let index = plan
+                .collection
+                .indexes
+                .iter()
+                .find(|index| index.is_on(field.id))?;
+
+            Some((
+                index,
+                field,
+                Cow::Owned(vec![(Bound::Unbounded, Bound::Unbounded)]),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// An aggregate as it is worked out, one value at a time.
@@ -2108,7 +2161,14 @@ fn strategy<'p, 's>(
                 ranges,
                 values: true,
                 ..
-            } => index.unique && ranges.len() <= 16,
+            } => {
+                // Any number of objects hold a null, in a unique index too.
+                let nulls = ranges.iter().any(
+                    |range| matches!(&range.0, Bound::Included(low) if low.as_slice() == [key::NULL]),
+                );
+
+                index.unique && ranges.len() <= 16 && !nulls
+            }
             _ => false,
         };
 

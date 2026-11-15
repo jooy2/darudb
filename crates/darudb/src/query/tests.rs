@@ -2273,3 +2273,54 @@ fn a_unique_index_of_several_fields_refuses_the_same_values_unless_one_is_null()
     drop(people);
     check_indexes(&txn, &open.schema).unwrap();
 }
+
+/// A null is looked up in a unique index as in any other: any number of
+/// objects hold one, so an equality on another index narrows more.
+#[test]
+fn a_null_in_a_unique_index_is_not_taken_for_one_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+
+    assert_eq!(
+        planned_index(&db, "handle IS NULL AND team == \"north\"").0,
+        Some(vec!["team".to_owned()])
+    );
+    // A value of the unique index is still one object.
+    assert_eq!(
+        planned_index(&db, "handle == \"ace\" AND team == \"north\"").0,
+        Some(vec!["handle".to_owned()])
+    );
+    assert_eq!(
+        find(&db, Query::parse("handle IS NULL", &[]).unwrap()),
+        [2, 4]
+    );
+}
+
+/// A sum, a mean and the least value of a field with an index are read from
+/// the index, and are what the objects give: nulls left out, and a range of
+/// the index for a filter on the field.
+#[test]
+fn aggregates_read_from_an_index_are_those_of_the_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(&dir);
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+    let every = Query::new();
+    let high = Query::new().filter(Filter::ge("score", 3));
+    let scores: Vec<i64> = players
+        .query(&every)
+        .unwrap()
+        .iter()
+        .filter_map(|player| player.get("score").and_then(Value::as_int))
+        .collect();
+
+    assert_eq!(
+        players.sum(&every, "score").unwrap(),
+        Value::Int(scores.iter().sum())
+    );
+    assert_eq!(players.sum(&high, "score").unwrap(), Value::Int(6));
+    assert_eq!(players.avg(&high, "score").unwrap(), Value::Float(3.0));
+    // Two players have no handle, whose nulls come first in the index.
+    assert_eq!(players.min(&every, "handle").unwrap(), Value::from("a\0b"));
+    assert_eq!(players.max(&every, "handle").unwrap(), Value::from("ace"));
+}
