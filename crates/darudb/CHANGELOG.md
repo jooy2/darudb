@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Changed
+
+- The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
+
 ### Fixed
 
 - A removal no longer leaves a branch of a tree larger than its page. When a removal left a leaf small and it did not fit into its neighbour, the entries of the two were shared out again, and the key between them in their parent could become longer than the one it replaced, without the parent being split. In a tree whose keys differ in length, such as a collection with a string primary key or an index on a string, a commit then wrote a damaged branch page and returned success, and the tree below that page read as `CORRUPTED` from the next time the page was read from the file. A file damaged this way is recovered with salvage.
@@ -32,10 +36,6 @@
 
 - Salvage rebuilds the indexes of a collection of large objects in batches of at most 32 MiB of records. A batch was 1,024 objects whatever their size, so a collection of objects of megabytes each took gigabytes of memory.
 - A typed read of a list reserves room for at most 256 elements before it has read them, as an untyped read does, rather than for as many as a damaged record counts.
-
-### Changed
-
-- The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
 
 ## v1.5.0 (2026-11-01)
 

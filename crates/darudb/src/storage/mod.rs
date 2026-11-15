@@ -3,7 +3,7 @@
 //! The layers above ask for pages and for barriers; this module is where those
 //! requests meet the operating system. Every page is verified against its
 //! expected check here, so nothing above this layer ever sees one that has not
-//! been. Page encryption will live here as well.
+//! been. Pages are encrypted and decrypted here as well, in the pager.
 //!
 //! The file is never mapped into memory. Another process can change a mapped
 //! file under a live reference, which safe Rust cannot express, and mapping

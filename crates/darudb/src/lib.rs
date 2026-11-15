@@ -6,8 +6,10 @@
 //! one language reads the same from another.
 //!
 //! The storage kernel stores named trees of byte keys and byte values, in
-//! transactions. A commit is durable when it returns, and a file opened after
-//! a crash or a power cut holds the last commit that returned. A database
+//! transactions. A commit is durable when it returns, unless it is a deferred
+//! one ([`WriteTransaction::commit_deferred`]), which the next barrier makes
+//! durable; a file opened after a crash or a power cut holds the last durable
+//! commit. A database
 //! created with a key or a password ([`OpenOptions::key`],
 //! [`OpenOptions::password`]) is encrypted and authenticated, every page of
 //! it. Several processes may have one file open at once: one writes at a
@@ -41,15 +43,19 @@
 //! - `format`: what the bytes of a file mean. Pure functions over bytes, with
 //!   no I/O, so every rule about the layout can be tested without a disk.
 //! - `crypto`: encrypting pages and wrapping the data key, also without I/O.
+//! - `sys`: the operating system's calls the standard library lacks, and the
+//!   one module with `unsafe` code.
 //! - `storage`: how bytes reach the disk: positional reads and writes, pages
 //!   verified against their checks, the page cache.
 //! - `btree`: copy-on-write B+trees over those pages.
 //! - `space`: which pages a write transaction may use, and which it gives back.
+//! - `lock`: coordination between processes, through file range locks.
 //! - `instance` and `txn`: the shared state of an open file, transactions, the
 //!   commit and recovery.
 //! - `schema` and `query`: the object layer, collections, objects, indexes,
 //!   migrations and queries, kept in the kernel's trees. Its encodings are in
 //!   `format::object`.
+//! - `tools`: the integrity check, salvage, backup and compaction.
 //! - [`Database`], [`OpenOptions`] and [`Error`]: the public surface.
 //!
 //! `design/` at the repository root specifies the file format and the commit

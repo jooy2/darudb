@@ -1,11 +1,12 @@
 //! Compaction: the file made smaller in place, while other handles and
 //! processes go on using it (`design/tools.md`, "Compaction").
 //!
-//! First every tree whose pages inserts left part empty is written again
-//! full, one write transaction a tree (`btree::repack`). Then a write
-//! transaction moves every page the file's tail holds into the lowest free
-//! pages, which is where the allocator takes pages from anyway, and the
-//! commits after it reclaim the tail and cut it off. It is nothing but write
+//! First a write transaction moves every page the file's tail holds into the
+//! lowest free pages, which is where the allocator takes pages from anyway,
+//! and the commits after it reclaim the tail and cut it off. Then every tree
+//! whose pages inserts left part empty is written again full, one write
+//! transaction a tree (`btree::repack`), and the tail is moved once more for
+//! the pages that freed. It is nothing but write
 //! transactions: the copy-on-write that keeps any commit safe keeps these
 //! safe too, and a process that dies in the middle leaves the file at one of
 //! their commits.

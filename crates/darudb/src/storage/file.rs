@@ -2,8 +2,8 @@
 //!
 //! Positional I/O (`pread` and `pwrite` on Unix, `ReadFile` and `WriteFile`
 //! with an offset on Windows) names the offset in every call, so the engine
-//! never depends on a shared file cursor. That is what will let several
-//! threads read different pages through one handle without taking a lock.
+//! never depends on a shared file cursor. That is what lets several threads
+//! read different pages through one handle without taking a lock.
 
 use std::fs::{self, File};
 use std::io;

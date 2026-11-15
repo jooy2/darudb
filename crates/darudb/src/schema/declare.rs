@@ -26,7 +26,7 @@ pub enum Type {
     Bytes,
     /// A link to an object of the named collection: its primary key.
     Link(String),
-    /// A list of values of a scalar type or links.
+    /// A list of values of a scalar type, of links, or of embedded objects.
     List(Box<Type>),
     /// An embedded object with fields of its own.
     Object(Embedded),
@@ -42,7 +42,8 @@ impl Type {
         Type::Link(collection.into())
     }
 
-    /// A list of values of `element`, which is a scalar type or a link.
+    /// A list of values of `element`, which is a scalar type, a link or an
+    /// embedded object.
     pub fn list(element: Type) -> Self {
         Type::List(Box::new(element))
     }

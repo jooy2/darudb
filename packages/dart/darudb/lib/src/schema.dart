@@ -65,7 +65,6 @@ final class BytesKind extends Kind {
   int get code => 5;
 }
 
-/// A link to an object of the collection [collection]: its primary key.
 /// An instant, a [DateTime], kept to the microsecond. A file with one is in
 /// object format 2.
 final class DateKind extends Kind {
@@ -75,6 +74,7 @@ final class DateKind extends Kind {
   int get code => 9;
 }
 
+/// A link to an object of the collection [collection]: its primary key.
 final class LinkKind extends Kind {
   const LinkKind(this.collection);
 

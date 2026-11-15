@@ -9,6 +9,8 @@
 //!   and [`Migrating`], which migration functions get.
 //! - `objects`: reading and writing objects, and keeping every index in step
 //!   with the objects in the same transaction.
+//! - `typed`: objects as Rust types, which records are read straight into
+//!   and written from, and what the derive macros implement.
 //!
 //! The encodings of keys, records and the stored schema are in
 //! `format::object`, below the kernel, since they are functions over bytes.

@@ -3,7 +3,7 @@
 //!
 //! In a plain file a check is an XXH3-128 hash, with seed 0, stored as a
 //! little-endian 128-bit integer. In an encrypted file a page's check is its
-//! authentication tag instead; that arrives with encryption.
+//! authentication tag instead, which `crypto::page` makes.
 
 use twox_hash::xxhash3_128::{RawHasher, SecretBuffer};
 

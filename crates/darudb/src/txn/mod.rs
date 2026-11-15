@@ -6,7 +6,7 @@
 //! `design/commits-and-recovery.md` is the specification.
 //!
 //! The storage kernel stores named trees of byte keys and byte values. The
-//! object and query layers of phase 4 build on these.
+//! object and query layers, `schema` and `query`, build on these.
 
 mod commit;
 mod read;
