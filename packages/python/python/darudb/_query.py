@@ -290,6 +290,10 @@ def aggregate_path(field: str | FieldRef, resolved: Resolved, schema: Schema | N
     return _Translator(resolved, schema).path(path)
 
 
+#: The most collections and schemas one query keeps its compiled form for.
+_MOST_COMPILED = 8
+
+
 class Query:
     """What to find, in what order, and how many.
 
@@ -359,6 +363,12 @@ class Query:
         compiled = self._compiled.get((resolved.cls, resolved.name, schema))
 
         if compiled is None:
+            # A query kept for the life of a program meets a new schema
+            # object each time the program makes one to open a file, and
+            # would keep every one of them alive.
+            if len(self._compiled) >= _MOST_COMPILED:
+                self._compiled.clear()
+
             translate = _Translator(resolved, schema)
             compiled = _native.compile_query(
                 resolved.name,

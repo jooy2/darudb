@@ -196,6 +196,35 @@ def refuse_on_loop(file_key: FileKey, what: str) -> None:
         )
 
 
+async def _to_the_end(work: Callable[[], R]) -> R:
+    """``work`` on the pool, waited for even when the task that awaits it is
+    cancelled, which is then cancelled once ``work`` has ended.
+
+    A call into the engine cannot be stopped half way. Left running on the
+    pool while the transaction went on to its end, it would hold the
+    transaction, and ending the transaction would wait for it on the event
+    loop's own thread.
+    """
+    future = asyncio.ensure_future(run(work))
+    cancelled = False
+
+    while True:
+        try:
+            result = await asyncio.shield(future)
+        except asyncio.CancelledError:
+            if future.done():
+                raise
+
+            cancelled = True
+        else:
+            break
+
+    if cancelled:
+        raise asyncio.CancelledError
+
+    return result
+
+
 async def after_writes(db: Database, work: Callable[[], R]) -> R:
     """``work`` on the pool, in its turn after this process's writes on the file."""
     hold = _Hold(db._file_key)
@@ -219,7 +248,7 @@ class _Ordered:
 
     async def call(self, work: Callable[..., R], *args: Any) -> R:
         async with self._lock:
-            return await run(partial(work, *args))
+            return await _to_the_end(partial(work, *args))
 
 
 class AsyncReadCollection(Generic[T]):
@@ -596,7 +625,7 @@ class AsyncWriteScope:
             await txn._drain()
 
             if kind is None:
-                await run(partial(txn._native.commit, self._deferred))
+                await _to_the_end(partial(txn._native.commit, self._deferred))
             else:
                 txn._native.end()
         except BaseException:

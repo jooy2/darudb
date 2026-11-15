@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- A call of an asynchronous transaction that is cancelled while it runs, by `asyncio.wait_for` for one, ends before the cancellation is raised, and so does a commit. The transaction went on while the call still ran on the pool, and leaving the block then waited for it on the event loop's thread, which stopped the loop for as long as the call took. What a cancelled call did is part of the transaction, and a cancelled commit has committed.
+- A `Query` object kept for the life of a program no longer keeps every `Schema` it ran under alive: it holds its compiled form for at most eight collections and schemas.
 - A list that holds itself, given as a value of a list field or as a query's value, is refused with `INVALID_ARGUMENT`: a list holds no list. Converting it went into the list without end and ended the process.
 - `F.tags`, and `F` itself, are not iterable. `list(F.tags)`, or `F.tag.is_in(F.tags)`, never ended.
 - A `default_factory` that gives another value each time it is called is refused with `INVALID_ARGUMENT` when the schema is made. The default is part of the stored schema, so the program's next run failed to open the file with `SCHEMA_MISMATCH`.

@@ -372,3 +372,17 @@ def test_a_query_with_a_float_compares_with_an_int_field(db: darudb.Database) ->
 
         assert names(users.find(F.rating == 3)) == ["Carol"]
         assert names(users.find(F.rating >= 3.0)) == ["Alice", "Carol"]
+
+
+def test_a_query_does_not_keep_every_schema_it_ran_under(path: Path) -> None:
+    kept = darudb.Query().limit(1)
+
+    for _ in range(40):
+        db = darudb.Database.open(path, schema=darudb.Schema(1, [User, Post]))
+
+        with db.read() as txn:
+            txn.collection(User).find(kept)
+
+        db.close()
+
+    assert len(kept._compiled) <= 8

@@ -308,3 +308,26 @@ def test_a_write_block_left_in_another_task_gives_the_file_back(path: Path) -> N
                 assert await txn.collection(User).count() == 1
 
     run(main())
+
+
+def test_a_cancelled_call_ends_before_the_transaction_goes_on(path: Path) -> None:
+    async def main() -> None:
+        async with await darudb.Database.open_async(path, schema=SCHEMA) as db:
+            async with db.write_async() as txn:
+                users = txn.collection(User)
+
+                await users.insert_many([User(name=f"u{n}") for n in range(2000)])
+
+                # Cancelled while it runs on the pool: the call still ends,
+                # and what it did is part of the transaction.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(
+                        users.insert_many([User(name=f"v{n}") for n in range(20000)]), 0.0001
+                    )
+
+                assert await users.count() == 22000
+
+            async with db.read_async() as read:
+                assert await read.collection(User).count() == 22000
+
+    run(main())
