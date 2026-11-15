@@ -157,6 +157,14 @@ function keyOf(key: unknown): Key {
     );
   }
 
+  // The native layer would turn an unpaired surrogate into U+FFFD, and look
+  // up or delete the object of another key.
+  if (typeof key === 'string' && !key.isWellFormed()) {
+    throw invalid(
+      `the key ${JSON.stringify(key)} holds an unpaired surrogate, which UTF-8 cannot hold`
+    );
+  }
+
   return key;
 }
 

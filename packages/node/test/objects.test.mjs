@@ -1726,4 +1726,71 @@ describe('values at the edges', () => {
       stops: [{ city: 'Busan', zip: null }]
     });
   });
+
+  it('write an embedded object that has no fields', (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, { things: collection({ meta: t.object({}) }) })
+    });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const things = txn.collection('things');
+
+      things.insert({ meta: {} });
+      assert.deepEqual(things.find(), [{ id: 1, meta: {} }]);
+      assertCode(() => things.insert({ meta: { extra: 1 } }), 'INVALID_ARGUMENT');
+    });
+  });
+
+  it('refuse a string key with an unpaired surrogate', (context) => {
+    const db = Database.open(tempPath(context), {
+      schema: schema(1, { notes: collection({ title: t.string().primaryKey() }) })
+    });
+
+    context.after(() => db.close());
+
+    db.write((txn) => {
+      const notes = txn.collection('notes');
+
+      notes.insert({ title: 'x\ufffd' });
+      assertCode(() => notes.get('x\ud800'), 'INVALID_ARGUMENT');
+      assertCode(() => notes.delete('x\ud800'), 'INVALID_ARGUMENT');
+      assert.equal(notes.count(), 1);
+    });
+  });
+
+  it('refuse options that are not whole numbers in range', async (context) => {
+    const path = tempPath(context);
+
+    for (const busyTimeout of [-1, Infinity, Number.NaN, 1.5, '5', 2 ** 32]) {
+      assertCode(() => Database.open(path, { busyTimeout }), 'INVALID_ARGUMENT');
+    }
+
+    assertCode(() => Database.open(path, { pageSize: 4096.5 }), 'INVALID_ARGUMENT');
+    await assert.rejects(Database.openAsync(path, { busyTimeout: -1 }), {
+      code: 'INVALID_ARGUMENT'
+    });
+    Database.open(path, { busyTimeout: 0, pageSize: 8192 }).close();
+  });
+
+  it('finish a second `closeAsync` only once the database is closed', async (context) => {
+    const db = await Database.openAsync(tempPath(context), {
+      schema: schema(1, { users: collection({ name: t.string() }) })
+    });
+
+    await db.writeAsync((txn) => txn.collection('users').insert({ name: 'a' }), {
+      durability: 'deferred'
+    });
+
+    let closed = false;
+    const first = db.closeAsync().then(() => {
+      closed = true;
+    });
+
+    await db.closeAsync();
+    assert.equal(closed, true);
+    await first;
+    await db.closeAsync();
+  });
 });

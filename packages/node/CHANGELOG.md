@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- An object with an embedded object that has no fields, `t.object({})`, is written, where every write of one threw a `SyntaxError`.
+- `get`, `delete`, `update` and the other calls that take a primary key refuse a string with an unpaired surrogate with `INVALID_ARGUMENT`, as a write of such a string is refused. The key was looked up with U+FFFD in the surrogate's place, which is another key.
+- `busyTimeout` and `pageSize` are checked as whole numbers from 0 to 2^32 - 1 before they reach the engine, and anything else fails with `INVALID_ARGUMENT`. A `busyTimeout` of -1 became about 49 days, `Infinity` and `NaN` became 0, and a fraction was cut off.
+- A `closeAsync` called while another one is closing the database resolves when that one does, rather than at once with the file still open.
 - `previous` in a migration reads an object the migration has rewritten when one of its embedded objects lost a required field: the field reads as null, as a field of the object itself does, where the call failed with `CORRUPTED`.
 - The default of a `t.bigint()` field reads as a `bigint` in an object written before the field was there, where it read as a number, and a default beyond 2^53 can be declared, where the schema was refused with `INVALID_ARGUMENT`.
 - A string that begins with U+FEFF reads back whole. The character was dropped when the string was read, so an object whose string primary key began with it was inserted a second time when it was written back with `put`.

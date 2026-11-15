@@ -943,7 +943,8 @@ function encoderOf(fields: Layout): Encoder | null {
     // names the object inherits, which are skipped as `Object.keys` skips
     // them.
     '  for (const name in object) {',
-    `    switch (name) { ${names.map((name) => `case ${name}:`).join(' ')} break;`,
+    // A layout with no fields, as an embedded object may be, has no case.
+    `    switch (name) { ${names.length > 0 ? `${names.map((name) => `case ${name}:`).join(' ')} break;` : ''}`,
     '      default: if (hasOwn(object, name)) unknownField(where, name); }',
     '  }',
     // The count of fields, one byte, is filled in once they are written.

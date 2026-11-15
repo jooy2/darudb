@@ -442,6 +442,8 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
     throw invalid('`cacheSize` is a whole number of bytes from 0 up');
   }
 
+  checkWhole(pageSize, '`pageSize` is a whole number of bytes');
+  checkWhole(busyTimeout, '`busyTimeout` is a whole number of milliseconds from 0 up');
   checkPasswordHashing(passwordHashing);
 
   const passed = {
@@ -457,6 +459,20 @@ function nativeOptions(options: OpenOptions<never>): native.NativeOptions {
 
   // Last, so that nothing above throws with the copies not yet wiped.
   return { ...passed, ...secretOf(options) };
+}
+
+/**
+ * Refuses an option the native layer reads as an unsigned 32-bit number that
+ * is not one: left to the conversion, -1 would become some 49 days and
+ * `Infinity` zero.
+ */
+function checkWhole(value: unknown, message: string): void {
+  if (
+    value !== undefined &&
+    (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 0xffffffff)
+  ) {
+    throw invalid(message);
+  }
 }
 
 /** Refuses a `passwordHashing` option that is not three whole numbers. */
@@ -507,6 +523,8 @@ function fileKeyOf(path: string): string {
 /** An open database. Created with `Database.open` or `Database.openAsync`. */
 class Database {
   #native: native.NativeDatabase | null;
+  /** The `closeAsync` under way, if one is. */
+  #closing: Promise<void> | null = null;
   #path: string;
   #layout: SchemaLayout | NoSchema;
   #file: string;
@@ -1073,23 +1091,44 @@ class Database {
    * `close` on the thread pool, after this process's writes on the file.
    * The database is closed to new work at once.
    */
-  async closeAsync(): Promise<void> {
-    if (this.#native !== null) {
-      const database = this.#native;
-      // Taken before the database closes to new work, so that a call from
-      // inside a write's function is refused with the database still open.
-      const turning = turn(this.#file);
+  closeAsync(): Promise<void> {
+    // A call while the database is closing waits for that close, so that
+    // whoever awaits it finds the file closed.
+    if (this.#closing !== null) {
+      return this.#closing;
+    }
 
-      this.#native = null;
+    if (this.#native === null) {
+      return Promise.resolve();
+    }
 
+    const database = this.#native;
+    let turning: ReturnType<typeof turn>;
+
+    // Taken before the database closes to new work, so that a call from
+    // inside a write's function is refused with the database still open.
+    try {
+      turning = turn(this.#file);
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
+
+    this.#native = null;
+
+    const closing = (async () => {
       const release = await turning;
 
       try {
         settle(await database.closeAsync());
       } finally {
         release();
+        this.#closing = null;
       }
-    }
+    })();
+
+    this.#closing = closing;
+
+    return closing;
   }
 
   #database(): native.NativeDatabase {
@@ -1147,6 +1186,8 @@ interface SalvageOptions extends Secret {
 
 /** What `salvage` and `salvageAsync` pass to the native layer, checked. */
 function salvageOptionsOf(options: SalvageOptions): native.NativeSalvageOptions {
+  checkWhole(options.busyTimeout, '`busyTimeout` is a whole number of milliseconds from 0 up');
+
   return { busyTimeout: options.busyTimeout, ...secretOf(options) };
 }
 
