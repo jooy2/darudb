@@ -2161,3 +2161,111 @@ fn indexes_that_cannot_be_kept_are_refused_when_declared() {
         None
     );
 }
+
+/// An index of several fields may be on the auto-increment key, whose number
+/// the object does not hold when it is inserted without one.
+#[test]
+fn an_index_on_the_auto_increment_key_holds_the_number_an_insert_assigns() {
+    let dir = tempfile::tempdir().unwrap();
+    let schema = Schema::new(1).collection(
+        Collection::new("posts")
+            .field("author", Type::String)
+            .index_on(["author", "id"]),
+    );
+    let db = OpenOptions::new()
+        .schema(schema)
+        .open(dir.path().join("objects.darudb"))
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut posts = txn.collection("posts").unwrap();
+
+    for author in ["a", "b", "a"] {
+        posts.insert(Object::new().with("author", author)).unwrap();
+    }
+
+    // One with a null where its key goes, and one that brings its key.
+    posts
+        .insert(Object::new().with("author", "a").with("id", Value::Null))
+        .unwrap();
+    posts
+        .insert(Object::new().with("author", "a").with("id", 9))
+        .unwrap();
+    check_indexes(&txn as &dyn Source, &txn.schema().unwrap().schema).unwrap();
+
+    let mut posts = txn.collection("posts").unwrap();
+
+    assert!(posts.delete(1).unwrap());
+    assert!(posts.update(3, Object::new().with("author", "c")).unwrap());
+    check_indexes(&txn as &dyn Source, &txn.schema().unwrap().schema).unwrap();
+    txn.commit().unwrap();
+    assert!(db.check().unwrap().is_ok());
+
+    let read = db.begin_read().unwrap();
+    let by_author = crate::Query::new().filter(crate::Filter::eq("author", "a"));
+
+    assert_eq!(
+        read.collection("posts").unwrap().count(&by_author).unwrap(),
+        2
+    );
+}
+
+/// A binding may declare a field optional and with a default. Such a field
+/// is left out of a record that holds a null in it and reads as its default,
+/// so its index entries are the default's.
+#[test]
+fn an_optional_field_with_a_default_is_indexed_as_it_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let declared = Schema::new(1).collection(
+        Collection::new("users")
+            .field("name", Type::String)
+            .with_default("nick", Type::String, "x")
+            .index("nick")
+            .index_on(["nick", "name"]),
+    );
+    // The builder makes a field with a default required: the schema as a
+    // binding encodes it, with the field made optional.
+    let encoded = {
+        let db = OpenOptions::new()
+            .schema(declared)
+            .open(dir.path().join("declared.darudb"))
+            .unwrap();
+        let read = db.begin_read().unwrap();
+        let mut stored = read.schema().unwrap().schema.clone();
+
+        for field in &mut stored.collections[0].fields.list {
+            field.optional |= field.name == "nick";
+        }
+
+        stored.encode()
+    };
+    let db = OpenOptions::new()
+        .schema(Schema::decode(&encoded).unwrap())
+        .open(dir.path().join("objects.darudb"))
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+    let mut users = txn.collection("users").unwrap();
+
+    users.insert(Object::new().with("name", "a")).unwrap();
+    users
+        .insert(Object::new().with("name", "b").with("nick", Value::Null))
+        .unwrap();
+    users
+        .insert(Object::new().with("name", "c").with("nick", "y"))
+        .unwrap();
+    check_indexes(&txn as &dyn Source, &txn.schema().unwrap().schema).unwrap();
+
+    let by_nick = crate::Query::new().filter(crate::Filter::eq("nick", "x"));
+    let mut users = txn.collection("users").unwrap();
+
+    assert_eq!(users.count(&by_nick).unwrap(), 2);
+    assert_eq!(
+        users.get(2).unwrap().unwrap().get("nick"),
+        Some(&Value::from("x"))
+    );
+    assert!(users.delete(1).unwrap());
+    assert!(users.update(2, Object::new().with("nick", "z")).unwrap());
+    check_indexes(&txn as &dyn Source, &txn.schema().unwrap().schema).unwrap();
+    assert_eq!(txn.collection("users").unwrap().count(&by_nick).unwrap(), 0);
+    txn.commit().unwrap();
+    assert!(db.check().unwrap().is_ok());
+}

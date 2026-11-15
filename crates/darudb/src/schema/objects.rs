@@ -619,12 +619,11 @@ fn component_values(
     let field = fields
         .by_id(*id)
         .ok_or_else(|| internal("an index is on a field its collection does not have"))?;
+    // A field the object leaves out, or holds a null in, is not in its
+    // record, and reads as its default whether it is optional or not.
     let value = match object.and_then(|object| object.get(&field.name)) {
-        None | Some(Value::Null) if !field.optional => {
-            field.default.as_ref().unwrap_or(&Value::Null)
-        }
+        None | Some(Value::Null) => field.default.as_ref().unwrap_or(&Value::Null),
         Some(value) => value,
-        None => &Value::Null,
     };
 
     if rest.is_empty() {
@@ -705,14 +704,12 @@ fn found_entries(
     found: Option<&Value>,
     key: &[u8],
 ) -> Result<()> {
-    // The value the object is stored with: a required field left out holds
-    // its default, as the record does.
+    // The value the object reads back with: a field left out, or holding a
+    // null, is not in the record, and reads as its default whether it is
+    // optional or not.
     let value = match found {
-        None | Some(Value::Null) if !field.optional => {
-            field.default.as_ref().unwrap_or(&Value::Null)
-        }
+        None | Some(Value::Null) => field.default.as_ref().unwrap_or(&Value::Null),
         Some(value) => value,
-        None => &Value::Null,
     };
 
     value_entries(entries, position, index, value, key)
@@ -955,7 +952,8 @@ fn placed_entries(
 
             codec::field_value(found, &field.kind).map_err(internal)?
         }
-        None => Value::Null,
+        // A field the record leaves out reads as its default.
+        None => field.default.clone().unwrap_or(Value::Null),
     };
 
     value_entries(entries, index_position, index, &value, key)
@@ -2150,6 +2148,24 @@ impl<'a> CollectionWriter<'a> {
             message: format!("an object of `{}`: {message}", collection.name),
         })?;
 
+        // An index of several fields, or inside an embedded object, reads
+        // the object, which lacks the number an auto-increment just
+        // assigned: such an index may be on the key too.
+        let numbered;
+        let general = collection
+            .indexes
+            .iter()
+            .any(|index| index.field().is_none());
+        let indexed = if general && matches!(numbering, Numbering::Raised(_)) {
+            numbered = object.clone().with(
+                collection.fields.list[key_position].name.clone(),
+                key_value.clone(),
+            );
+            &numbered
+        } else {
+            &object
+        };
+
         for (position, index) in collection.indexes.iter().enumerate() {
             let Some(field) = index.field() else {
                 general_entries(
@@ -2157,7 +2173,7 @@ impl<'a> CollectionWriter<'a> {
                     position,
                     index,
                     &collection.fields,
-                    &object,
+                    indexed,
                     &key,
                 )?;
 

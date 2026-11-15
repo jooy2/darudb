@@ -8,6 +8,9 @@
 
 - A removal no longer leaves a branch of a tree larger than its page. When a removal left a leaf small and it did not fit into its neighbour, the entries of the two were shared out again, and the key between them in their parent could become longer than the one it replaced, without the parent being split. In a tree whose keys differ in length, such as a collection with a string primary key or an index on a string, a commit then wrote a damaged branch page and returned success, and the tree below that page read as `CORRUPTED` from the next time the page was read from the file. A file damaged this way is recovered with salvage.
 
+- An index on several fields that includes an auto-increment `id` holds the number an insert assigns. An object inserted without its `id` through `Object`, or through a binding into a collection with a list, an embedded object or a link, got an entry with a null in place of the number, which stayed behind when the object was deleted or updated: `check` reported it, and a query through the index failed with `CORRUPTED` once the object was gone.
+- A field a binding declares both optional and with a default is indexed as it reads. A null written to such a field reads back as the default, but its index entry was a null, so a query for the default through the index missed the object, and the entry stayed behind when the object was deleted.
+
 ### Changed
 
 - The crate's `license` is `MIT AND Unicode-3.0` rather than `MIT`, since the table that ignoring case reads is generated from Unicode's data, under the licence in `LICENSE-UNICODE`.
