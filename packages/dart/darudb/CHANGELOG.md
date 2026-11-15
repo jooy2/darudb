@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- A transaction of the `Future` API whose isolate goes away before it ends, because the isolate was killed or a Flutter app restarted hot while its function was waiting, is freed with the isolate. A write transaction left that way held the file's writer for as long as the process lived, and every later write in the process failed with `BUSY`.
 - A call of the `Future` API refused before it reaches the library, as `syncAsync` on a closed database is, no longer keeps the isolate alive: a program that made one did not exit when `main` returned.
 - Calls of the `Future` API made at the same moment each get a thread while fewer than 64 are busy. Two calls made before an idle thread woke shared that thread, so the second waited for the first, for the busy timeout when the first was a write waiting for the writer the second belonged to.
 - A default of a list of floats written with whole numbers, `const [1, 2]`, is stored as floats, as a float field's own default is. The database failed to open with `INVALID_ARGUMENT`.

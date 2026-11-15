@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:darudb/darudb.dart';
 import 'package:test/test.dart';
@@ -349,6 +350,31 @@ void main() {
     await expectLater(db.syncAsync(), failsWith('CLOSED'));
   });
 
+  test('an isolate killed inside a write gives the writer back', () async {
+    final inside = ReceivePort();
+    final gone = ReceivePort();
+    final worker = await Isolate.spawn(_writeForGood, (path, inside.sendPort));
+
+    worker.addOnExitListener(gone.sendPort);
+    await inside.first;
+    worker.kill(priority: Isolate.immediate);
+    await gone.first;
+
+    // The transaction the isolate left is freed with it, not kept for as
+    // long as the process lives.
+    final db = await Database.openAsync(
+      path,
+      schema: const Schema(1, [userSchema]),
+      busyTimeout: const Duration(seconds: 2),
+    );
+
+    await db.writeAsync(
+      (txn) => txn.collection(userSchema).insert(const User(name: 'b')),
+    );
+    expect(await db.readAsync((txn) => txn.collection(userSchema).count()), 1);
+    await db.closeAsync();
+  });
+
   test(
     'what a write function started may write once the write is over',
     () async {
@@ -374,4 +400,20 @@ void main() {
       await db.closeAsync();
     },
   );
+}
+
+/// Opens the database at the path given and stays inside a write for good,
+/// saying so once it is there.
+Future<void> _writeForGood((String, SendPort) message) async {
+  final (path, inside) = message;
+  final db = await Database.openAsync(
+    path,
+    schema: const Schema(1, [userSchema]),
+  );
+
+  await db.writeAsync((txn) async {
+    await txn.collection(userSchema).insert(const User(name: 'a'));
+    inside.send(null);
+    await Completer<void>().future;
+  });
 }

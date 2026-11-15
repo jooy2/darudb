@@ -298,6 +298,13 @@ final _nameFinalizer = NativeFinalizer(
   ).cast(),
 );
 
+/// Frees a transaction whose isolate went away before it ended.
+final _transactionFinalizer = NativeFinalizer(
+  Native.addressOf<NativeFunction<Void Function(Pointer<NativeTransaction>)>>(
+    darudb_txn_free,
+  ).cast(),
+);
+
 final _preparedFinalizer = NativeFinalizer(
   Native.addressOf<NativeFunction<Void Function(Pointer<NativePrepared>)>>(
     darudb_prepared_free,
@@ -1414,12 +1421,25 @@ final class Prepared<T> implements Finalizable {
 }
 
 /// A read transaction: one commit, as it was when the transaction began.
-base class ReadTransaction {
+base class ReadTransaction implements Finalizable {
   ReadTransaction._(this._handle, this._database) {
     _database?._transactions += 1;
   }
 
   Pointer<NativeTransaction> _handle;
+  bool _guarded = false;
+
+  /// Has the library free the transaction if the isolate goes away before
+  /// the transaction ends, as it does when it is killed or a Flutter app
+  /// restarts hot while a `Future` transaction's function is waiting: a
+  /// write transaction left open would hold the file's writer for as long
+  /// as the process lives. A synchronous transaction ends before the
+  /// isolate can go, and does without the finalizer's cost.
+  void _guard() {
+    _guarded = true;
+    _transactionFinalizer.attach(this, _handle.cast(), detach: this);
+  }
+
   final Database? _database;
   Map<Object, _Collection>? _collections;
 
@@ -1440,6 +1460,11 @@ base class ReadTransaction {
 
     if (handle != nullptr) {
       _handle = nullptr;
+
+      if (_guarded) {
+        _transactionFinalizer.detach(this);
+      }
+
       darudb_txn_free(handle);
       _database?._transactionEnded();
     }

@@ -907,7 +907,7 @@ Future<R> _readAsync<R>(
   _check(darudb_begin_read(database._live(), _io.transaction));
 
   final txn = AsyncReadTransaction._(
-    ReadTransaction._(_io.transaction.value, database),
+    ReadTransaction._(_io.transaction.value, database).._guard(),
   );
 
   try {
@@ -928,7 +928,7 @@ Future<R> _writeAsync<R>(
     (id, callback) => darudb_begin_write_async(database._live(), id, callback),
   );
   final txn = AsyncWriteTransaction._(
-    WriteTransaction._(begun.pointer<NativeTransaction>(), database),
+    WriteTransaction._(begun.pointer<NativeTransaction>(), database).._guard(),
   );
 
   try {
