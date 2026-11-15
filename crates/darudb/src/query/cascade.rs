@@ -229,7 +229,6 @@ impl<T: CollectionType> TypedWriter<'_, T> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::format::object::schema::OBJECT_FORMAT;
     use crate::format::object::{Object, Value};
     use crate::schema::objects::check_indexes;
     use crate::schema::{Collection, Migration, Schema, Type};
@@ -837,7 +836,7 @@ mod tests {
             .open(&path)
             .unwrap();
 
-        assert_eq!(object_format(&db), OBJECT_FORMAT);
+        assert_eq!(object_format(&db), 2);
         assert_eq!(ids(&db, "users"), [2, 3]);
         assert_eq!(ids(&db, "posts"), [2, 3]);
 
@@ -857,7 +856,7 @@ mod tests {
         txn.collection("users").unwrap().delete(3).unwrap();
         txn.commit().unwrap();
 
-        assert_eq!(object_format(&db), OBJECT_FORMAT);
+        assert_eq!(object_format(&db), 2);
         assert_eq!(ids(&db, "posts"), [3], "the link no longer cascades");
         check(&db);
     }

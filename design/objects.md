@@ -133,7 +133,7 @@ The stored schema is a record too, of this shape, where every `object` is itself
 
 | Record | Field | Value |
 | --- | --- | --- |
-| Schema | 1 | `int`: the object layer's format, 1 or 2 ([Object formats](#object-formats)) |
+| Schema | 1 | `int`: the object layer's format, 1, 2 or 3 ([Object formats](#object-formats)) |
 |  | 2 | `int`: the schema version |
 |  | 3 | `list(object)`: the collections |
 |  | 4 | `int`: the next collection id |
@@ -160,6 +160,7 @@ The stored schema is a record too, of this shape, where every `object` is itself
 |  | 2 | `int`: its field's id, for an index on one field of the collection itself |
 |  | 3 | `bool`: whether it is unique |
 |  | 4 | `list(object)`: its components, for any other index, each with field 1, a `list(int)`: the ids along its path |
+|  | 5 | `bool`: true for a [text index](#text-indexes), and absent otherwise |
 
 A stored schema that does not decode, or whose ids repeat or point nowhere, is `CORRUPTED`. Field 1 lets a later layout change be told apart; a build refuses a format it does not know with `UNSUPPORTED_FORMAT_VERSION`.
 
@@ -171,10 +172,11 @@ A build that knows an object format reads every one before it. A build that does
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1      | The first released format                                                                                                                        |
 | 2      | The `date` type, tag `0x0B`; lists of embedded objects; indexes that are not on one field of the collection; [cascading links](#cascading-links) |
+| 3      | [Text indexes](#text-indexes)                                                                                                                    |
 
-- **A schema is stored in the lowest format that holds what it declares**, so a schema that declares nothing of format 2 stays in format 1, byte for byte, and every release still opens the file. A record of format 1 that declares a date is `CORRUPTED`.
+- **A schema is stored in the lowest format that holds what it declares**, so a schema that declares nothing of format 2 stays in format 1, byte for byte, and every release still opens the file, and one that declares no text index stays below format 3. A record of format 1 that declares a date is `CORRUPTED`.
 - **The format is never lowered.** A later version of the schema that no longer declares a date keeps format 2, since records still hold dates, which a build of format 1 could not step over.
-- **`upgrade_format(false)`** keeps a file in the object format it has, as it keeps the file format: a schema that would raise it is refused with `INVALID_ARGUMENT`, which names the option, and the file is left as it was. A file already in format 2 opens as it is.
+- **`upgrade_format(false)`** keeps a file in the object format it has, as it keeps the file format: a schema that would raise it is refused with `INVALID_ARGUMENT`, which names the option, and the file is left as it was. A file already in a higher format opens as it is.
 - **Salvage** in a build that does not know the stored schema's format fails with `UNSUPPORTED_FORMAT_VERSION`, and writes nothing, rather than dropping every object as unreadable. A build that does know it salvages the file.
 
 ## Indexes
@@ -189,6 +191,22 @@ An index is on one to eight **components**, in order, each a field of the collec
 - **Format.** An index on one field of the collection itself is stored as format 1 stores it; any other needs [object format 2](#object-formats).
 
 An indexed value's entry has to fit in the kernel's key length, together with the primary key. A string or bytes value too long for that is refused with `INVALID_ARGUMENT` when the object is written.
+
+### Text indexes
+
+A text index is on one component, a string or a list of strings, along a path any index of one component may take. It holds the **terms** of the text rather than the text: an entry for each different term of the string, or of every string of the list together, whose key is the term's encoding as a string followed by the encoded primary key, and whose value is empty. A null, and a text without a term, give no entry. It is never unique, and a field may have one beside an index on its values. Only a [search for words](#searching-for-words) reads it; nothing that reads an index by its field's values takes it for one.
+
+The terms of a text:
+
+- **A word** is a run of characters that are letters, digits or marks: `Alphabetic` in Unicode's `DerivedCoreProperties.txt`, or of the general category `Nd`, `Mn`, `Mc` or `Me`. Every other character separates words, the apostrophe and the underscore among them. A word's term is its characters, each folded by the simple case folding a test that [ignores case](#the-filter) uses, and no more than the first 64 of them: a longer word is known by its first 64 characters, in an index and in a search alike, so that every term fits in a key.
+- **Han, hiragana and katakana**, the scripts of `Scripts.txt` that are written without spaces between words, and the two prolonged sound marks they share, U+30FC and U+FF70, make no words. A run of them gives each two characters that stand side by side as a term, and its last character alone as one more, so that `東京都` gives `東京`, `京都` and `都`. A word and such a run end each other.
+- **Nothing else is done to a text.** It is not normalized, so a letter with a combining mark and the same letter precomposed are different terms; no word is left out as too common; and no word is reduced to a stem.
+
+The tables of which character is which are made from the same version of Unicode as the folding's (18.0.0), by `scripts/word_chars.py`, and are the engine's own rather than the standard library's, whose version is the compiler's: the terms an index holds have to be the terms every build looks for. A table of a later version would make a character that was a separator a letter, so it needs the text indexes built again, which is a new object format.
+
+- **Writing.** A write of an object adds, changes and removes the entries of its terms as it does any index's entries. An object with a long text has an entry for each different term of it, which makes a text index the most expensive index to keep.
+- **Format.** A text index needs [object format 3](#object-formats): a build that does not know it would write objects without their terms. Field 5 of its record is written only when true, so every other index keeps its bytes, and a text index always lists its component in field 4; one stored with field 2, that is unique, or that is on anything but one string or list of strings is `CORRUPTED`.
+- **Why terms in the index's own tree.** A term with the primary key after it is an entry of the same shape as any index's, so commits, recovery, the integrity check, salvage and compaction treat a text index as they treat every index, and a search is a walk of a range of keys. The alternative, a list of keys stored under each term, would make a common term's value long, and every write of an object that holds it rewrite that value.
 
 ## Writing objects
 
@@ -248,12 +266,25 @@ A query returns the objects, counts them, or works out an [aggregate](#aggregate
 | `path IN [v, ...]` | The field equals one of the values |
 | `path CONTAINS s` | A string field contains `s`, or a list field contains the element `s` |
 | `path STARTSWITH s`, `ENDSWITH s` | A string field starts or ends with `s` |
+| `path MATCHES s` | A string field has every word of the search `s`, or a string of a list field does |
 | `path IS NULL`, `IS NOT NULL` | The field is null, or is not |
 | `a AND b`, `a OR b`, `NOT a` | As in logic |
 | `ANY C.link`, `ANY C.link (f)` | Some object of `C` whose `link` names this object meets `f` |
 
 - **`ANY`** tests the objects of another collection, or of this one, that link to an object: `ANY posts.author (year > 2020)` holds for a user whom some post with that year names as its author, and `ANY posts.author` for one whom any post names. The path after the collection is a link field of its objects, a to-one link or a list of links, through embedded objects if need be, to the collection the query runs on; anything else is `INVALID_QUERY`, as a filter on fields `C` lacks is. One linking object has to meet the whole filter, and `NOT ANY` finds the objects nothing links to. The linking objects are found once for each query, by their own plan with their indexes, and their links gathered into a set of the keys they name; each object tested is looked for in it, and a selective `ANY` is a part of the [sets of keys](#sets-of-keys) whose objects alone are read. A link to an object that is not there names no object, and a count leaves it out. The filter inside nests on from the depth of the `ANY`, toward the same limit.
 - **Ignoring case.** A test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` may ignore case. It then compares strings by Unicode's simple case folding: each character folds as `CaseFolding.txt`, statuses C and S, of the Unicode version the build's table was made from (18.0.0) says, and two strings match when they fold alike. A character folds to one character, so `ß` stays `ß` and `ẞ` folds to it, but neither matches `ss`, and the Turkic `İ` folds to itself. Such a test holds of a string field or a list of strings, through links and embedded objects as any test does; on another field it is `INVALID_QUERY`. No index answers it, so the objects it tests are read; a string that is not UTF-8, which only damage makes, meets none.
+
+#### Searching for words
+
+`path MATCHES s` holds when the text at `path` has every word of `s`, wherever and in whatever order: `body MATCHES "quick fox"` for a text with both words.
+
+- **The words of a search** are read from `s` as the [terms of a text](#text-indexes) are, so they are compared ignoring case and by their first 64 characters. A word followed at once by `*` is the start of a word: `data*` holds for a text with a word that begins so, `database` among them. A `*` anywhere else separates words, as any other character that is no letter does.
+- **Han, hiragana and katakana** are searched by the pairs of the run: `東京都` holds for a text with `東京` and `京都` in it, wherever they stand, and one such character alone, such as `京`, for a text with that character anywhere in a run. A `*` after such a run changes nothing.
+- **A search without a word**, an empty string or one of punctuation alone, holds for no object.
+- **It holds of a string field or a list of strings**, through links and embedded objects as any test does; on another field, or with a value that is not a string, it is `INVALID_QUERY`, and so is `IGNORE CASE` after it. A list holds when one of its strings has every word, and a null field never does. A string that is not UTF-8, which only damage makes, has no words.
+- **A text index answers it** as a part of the [sets of keys](#sets-of-keys): for each word the entries of its term, or the range of the terms that start with it, and the objects every word names, the longest word's first. Through a to-one link at the start of the path, the linked collection's text index answers it together with an index on the link field. The index does not say which string of a list holds a term, so a search for several words in a list, or through a list of embedded objects, takes the objects that have every term from the index and tests each, where a search for one word is answered by the index alone. No access path is made of it, and it gives no order.
+- **Without a text index** every object the rest of the query leaves is read and its text split into terms, so the answer is the same and the cost is the collection's.
+- **No ranking.** A search gives the objects that hold, in the query's order: nothing says which text matches best, and nothing tests that words stand next to each other. `CONTAINS` tests an exact run of characters.
 
 - **A path** names a field, and follows embedded objects and links with `.`: `address.city`, `author.name`. A path through a to-one link reads the linked object, and holds as null if there is none. A path has at most 32 names, since one through a link back into its own collection could otherwise go on without end.
 - **A path to a list**, or through a to-many link, holds when it holds for any element: `tags == "red"` for an object with a red tag. An empty list has no element, so nothing holds for it but `IS NOT NULL`: `IS NULL` holds when the list itself is null. `CONTAINS` on a list compares elements for equality, and `STARTSWITH` and `ENDSWITH` on a list of strings hold when an element does.
@@ -286,8 +317,8 @@ An expression is an object: field 1 is its operator, field 2 the path it tests a
 | `!=`     | 5    | path, one value    | `STARTSWITH` | 13   | path, one value  |
 | `<`      | 6    | path, one value    | `ENDSWITH`   | 14   | path, one value  |
 | `<=`     | 7    | path, one value    | `IS NULL`    | 15   | path             |
-|          |      |                    | `ANY`        | 16   | see above        |
-| `>`      | 8    | path, one value    |              |      |                  |
+| `>`      | 8    | path, one value    | `ANY`        | 16   | see above        |
+|          |      |                    | `MATCHES`    | 17   | path, one value  |
 
 `IS NOT NULL` is `NOT` over `IS NULL`. An `AND` inside an `AND`, and an `OR` inside an `OR`, flatten when the IR is read, as they do when a query is built. An IR that does not decode, uses an unknown operator, or leaves out what its operator uses, is `INVALID_QUERY`.
 
@@ -308,6 +339,7 @@ condition   = path compare value [ case ]
             | path "BETWEEN" value "AND" value
             | path "IN" "[" [ value { "," value } ] "]" [ case ]
             | path ( "CONTAINS" | "STARTSWITH" | "ENDSWITH" ) value [ case ]
+            | path "MATCHES" value
             | path "IS" [ "NOT" ] "NULL"
 case        = "IGNORE" "CASE"
 compare     = "==" | "!=" | "<" | "<=" | ">" | ">="
@@ -319,6 +351,7 @@ date        = "DATE" string
 - **`ANY`** followed by a name starts a test of the objects that link to an object; anywhere else it is a name, so a field may be called `any`.
 - **`DATE`** followed by a string is a date: RFC 3339 text, a date and a time with seconds, up to six digits of a second, and `Z` or an offset from UTC, such as `DATE "2026-10-30T21:00:00+09:00"`, or a date alone, `DATE "2026-10-30"`, its midnight in UTC. Years run from 0000 to 9999, and a leap second is refused, since a date counts every day as 86,400 seconds. Text that names no such time is `INVALID_QUERY`. Anywhere else `DATE` is a name.
 - **`IGNORE CASE`** after a test of `==`, `!=`, `IN`, `CONTAINS`, `STARTSWITH` or `ENDSWITH` makes it ignore case; after any other condition it is `INVALID_QUERY`. The two words are read so only there, so they are not keywords, and a field may be called `ignore` or `case` without backticks.
+- **`MATCHES`** is read as an operator only after a path, in any case, so it is not a keyword, and a field may be called `matches` without backticks.
 - **Keywords** are case-insensitive: `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `CONTAINS`, `STARTSWITH`, `ENDSWITH`, `IS`, `NULL`, `TRUE`, `FALSE`, `SORT`, `BY`, `ASC`, `DESC`, `LIMIT` and `OFFSET`.
 - **A name** is letters, digits and `_`, not starting with a digit, or any text in backticks. Where a path starts, a keyword is a keyword, so a field with a keyword's name goes in backticks there; after a `.`, every word is a name.
 - **Strings** are in double quotes, with `\"`, `\\`, `\n`, `\t` and `\u{...}` escapes. An **int** has no point and a **float** has one or an exponent, and either may start with `-`.
@@ -370,6 +403,7 @@ The access path answers one term of the filter, and every other term is tested o
 
 - **A test of a field of the collection** that its index or the primary key answers, as in step 1: the keys of the entries in the test's ranges, or of the records that hold the keys an equality or an `IN` names.
 - **A test through a link field that has an index**, such as `author.country == "kr"`, of a part of the linked collection: the keys that part gathers in the linked collection, then the objects whose link names one of them, through the link field's index. Each named key is looked up in the index, unless that would take more lookups than the index has entries, and then the index is walked once. An `IS NULL` through a link is not such a part, since a link to an object that is not there reads as null and no index entry says so.
+- **A [search for words](#searching-for-words)** of a field with a text index.
 - **An `AND` or an `OR`** whose every term is a part. A `NOT` is never one.
 
 Before it reads an object, a run weighs three ways, by counting the entries in each part's ranges a leaf at a time, no further than eight times the access path's own count:
@@ -449,4 +483,4 @@ Phase 4 ends with benchmarks against established embedded databases at the same 
 
 ## Not in v1
 
-Indexes through a link, collation and ordering that ignores case, full-text search, joins beyond following links and testing the objects that link, and time zones and calendar arithmetic on dates.
+Indexes through a link, collation and ordering that ignores case, ranking the results of a search for words, searching for a phrase, stemming and normalizing text, joins beyond following links and testing the objects that link, and time zones and calendar arithmetic on dates.

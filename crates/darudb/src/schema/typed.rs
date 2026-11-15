@@ -2200,6 +2200,11 @@ pub mod derive {
         collection.cascade(name)
     }
 
+    /// `collection` with a text index on its field `name`.
+    pub fn text_index(collection: Collection, name: &str) -> Collection {
+        collection.text_index_of(name)
+    }
+
     /// `collection` with field `name` of type `T` added, optional if `T` is,
     /// with `default` if it has one.
     pub fn field<T: FieldType>(

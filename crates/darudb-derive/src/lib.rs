@@ -77,13 +77,19 @@ use syn::{Data, DeriveInput, Expr, Fields, Ident, LitStr, Type, parse_macro_inpu
 /// `#[darudb(index(last, first))]` on the struct declares an index on several
 /// fields, named as the struct names them, and `#[darudb(unique(...))]` a
 /// unique one; a string in their place is a path the collection stores, such
-/// as `"address.city"`, a field inside an embedded object. Field attributes:
+/// as `"address.city"`, a field inside an embedded object.
+/// `#[darudb(text_index("address.note"))]` declares a text index on such a
+/// path, as `Collection::text_index` does. Field attributes:
 ///
 /// - `#[darudb(key)]`: the field is the primary key, of type `i64`,
 ///   `String` or `Vec<u8>`. Without one, the collection is keyed by an
 ///   auto-increment, which needs a field `id: Option<i64>`.
 /// - `#[darudb(index)]`, `#[darudb(unique)]`: an index on the field, unique
 ///   or not.
+/// - `#[darudb(text_index)]`, on a `String`, a `Vec<String>` or an `Option`
+///   of either: a text index on the field, which a search for words reads,
+///   as `Collection::text_index` declares. The field may have an `index`
+///   too.
 /// - `#[darudb(cascade)]`, on a `Link<T>` or an `Option<Link<T>>` of the
 ///   struct itself: deleting the object the link names deletes this object
 ///   too, as `Collection::cascade` declares. Any other field type does not
@@ -201,8 +207,17 @@ struct Field {
     key: bool,
     index: bool,
     unique: bool,
+    text_index: bool,
     cascade: bool,
     default: Option<Expr>,
+}
+
+/// What an index the struct attribute declares is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexKind {
+    Plain,
+    Unique,
+    Text,
 }
 
 /// The struct's name, its collection's name, and its fields.
@@ -211,8 +226,8 @@ struct Shape {
     collection: String,
     fields: Vec<Field>,
     /// The indexes the struct attribute declares: each component's path in
-    /// the collection, and whether the index is unique.
-    indexes: Vec<(Vec<String>, bool)>,
+    /// the collection, and what the index is.
+    indexes: Vec<(Vec<String>, IndexKind)>,
 }
 
 /// A component of an index the struct attribute declares: a field of the
@@ -251,7 +266,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
     };
 
     let mut collection = None;
-    let mut declared: Vec<(Vec<Component>, bool, proc_macro2::Span)> = Vec::new();
+    let mut declared: Vec<(Vec<Component>, IndexKind, proc_macro2::Span)> = Vec::new();
 
     for attribute in &input.attrs {
         if !attribute.path().is_ident("darudb") {
@@ -263,8 +278,17 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                 collection = Some(meta.value()?.parse::<LitStr>()?.value());
 
                 Ok(())
-            } else if meta.path.is_ident("index") || meta.path.is_ident("unique") {
-                let unique = meta.path.is_ident("unique");
+            } else if meta.path.is_ident("index")
+                || meta.path.is_ident("unique")
+                || meta.path.is_ident("text_index")
+            {
+                let unique = if meta.path.is_ident("unique") {
+                    IndexKind::Unique
+                } else if meta.path.is_ident("text_index") {
+                    IndexKind::Text
+                } else {
+                    IndexKind::Plain
+                };
                 let content;
                 let mut components = Vec::new();
 
@@ -289,7 +313,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                 Ok(())
             } else {
                 Err(meta.error(
-                    "unknown attribute; the struct takes `collection = \"name\"`, `index(...)` and `unique(...)`",
+                    "unknown attribute; the struct takes `collection = \"name\"`, `index(...)`, `unique(...)` and `text_index(...)`",
                 ))
             }
         })?;
@@ -309,6 +333,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
             key: false,
             index: false,
             unique: false,
+            text_index: false,
             cascade: false,
             default: None,
         };
@@ -325,6 +350,8 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                     parsed.index = true;
                 } else if meta.path.is_ident("unique") {
                     parsed.unique = true;
+                } else if meta.path.is_ident("text_index") {
+                    parsed.text_index = true;
                 } else if meta.path.is_ident("cascade") {
                     parsed.cascade = true;
                 } else if meta.path.is_ident("rename") {
@@ -333,7 +360,7 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
                     parsed.default = Some(meta.value()?.parse::<Expr>()?);
                 } else {
                     return Err(meta.error(
-                        "unknown attribute; a field takes `key`, `index`, `unique`, `cascade`, `rename = \"name\"` and `default = value`",
+                        "unknown attribute; a field takes `key`, `index`, `unique`, `text_index`, `cascade`, `rename = \"name\"` and `default = value`",
                     ));
                 }
 
@@ -356,6 +383,10 @@ fn shape(input: &DeriveInput, what: &str) -> syn::Result<Shape> {
     for (components, unique, span) in declared {
         if components.is_empty() {
             return Err(syn::Error::new(span, "an index is on one field at least"));
+        }
+
+        if unique == IndexKind::Text && components.len() != 1 {
+            return Err(syn::Error::new(span, "a text index is on one field"));
         }
 
         let paths = components
@@ -476,7 +507,8 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
         ),
     };
 
-    if let Some(id) = auto.filter(|id| id.index || id.unique || id.cascade || id.default.is_some())
+    if let Some(id) = auto
+        .filter(|id| id.index || id.unique || id.text_index || id.cascade || id.default.is_some())
     {
         return Err(syn::Error::new_spanned(
             &id.ident,
@@ -518,12 +550,19 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
             None
         }
     });
-    let composites = shape.indexes.iter().map(|(paths, unique)| {
-        if *unique {
-            quote! { let collection = collection.unique_on([#(#paths),*]); }
-        } else {
-            quote! { let collection = collection.index_on([#(#paths),*]); }
-        }
+    // A field's name is one name of a path, whatever characters it has.
+    let texts = declared
+        .iter()
+        .filter(|field| field.text_index)
+        .map(|field| {
+            let name = &field.name;
+
+            quote! { let collection = ::darudb::__derive::text_index(collection, #name); }
+        });
+    let composites = shape.indexes.iter().map(|(paths, kind)| match kind {
+        IndexKind::Unique => quote! { let collection = collection.unique_on([#(#paths),*]); },
+        IndexKind::Plain => quote! { let collection = collection.index_on([#(#paths),*]); },
+        IndexKind::Text => quote! { let collection = collection.text_index(#(#paths),*); },
     });
     let cascades = declared.iter().filter(|field| field.cascade).map(|field| {
         let ty = &field.ty;
@@ -572,6 +611,7 @@ fn object(input: &DeriveInput) -> syn::Result<Tokens> {
                 let collection = ::darudb::Collection::new(<Self as ::darudb::CollectionType>::COLLECTION);
                 #(#declarations)*
                 #(#indexes)*
+                #(#texts)*
                 #(#composites)*
                 #(#cascades)*
                 collection
@@ -618,7 +658,7 @@ fn embedded(input: &DeriveInput) -> syn::Result<Tokens> {
     if let Some(field) = shape
         .fields
         .iter()
-        .find(|field| field.key || field.index || field.unique)
+        .find(|field| field.key || field.index || field.unique || field.text_index)
     {
         return Err(syn::Error::new_spanned(
             &field.ident,

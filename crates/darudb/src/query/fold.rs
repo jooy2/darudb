@@ -13,20 +13,7 @@ use std::cell::RefCell;
 
 use memchr::memmem::Finder;
 
-use super::fold_table::FOLDS;
-
-/// The character `c` folds to.
-#[inline]
-pub(crate) fn fold(c: char) -> char {
-    if c.is_ascii() {
-        return c.to_ascii_lowercase();
-    }
-
-    match FOLDS.binary_search_by_key(&c, |&(from, _)| from) {
-        Ok(at) => FOLDS[at].1,
-        Err(_) => c,
-    }
-}
+pub(crate) use crate::format::object::text::fold;
 
 /// `text`, folded.
 pub(crate) fn folded(text: &str) -> String {
@@ -97,6 +84,7 @@ impl Search {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::object::fold_table::FOLDS;
 
     #[test]
     fn the_table_is_sorted_and_folds_each_character_one_way() {

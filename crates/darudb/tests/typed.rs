@@ -1503,3 +1503,120 @@ struct Comment {
 fn an_embedded_type_that_holds_itself_is_named_when_it_is_declared() {
     let _ = darudb::Embedded::of::<Comment>();
 }
+
+#[derive(darudb_derive::Embedded, Debug, Clone, PartialEq)]
+struct Margin {
+    note: Option<String>,
+}
+
+#[derive(darudb_derive::Object, Debug, Clone, PartialEq)]
+#[darudb(collection = "articles")]
+#[darudb(text_index("margin.note"))]
+struct Article {
+    id: Option<i64>,
+    #[darudb(index, text_index)]
+    title: String,
+    #[darudb(text_index, rename = "text")]
+    body: Option<String>,
+    #[darudb(text_index)]
+    tags: Vec<String>,
+    margin: Option<Margin>,
+}
+
+#[test]
+fn a_derived_type_declares_text_indexes_and_searches_them() {
+    let dir = TestDir::new();
+    let declared = Collection::of::<Article>();
+
+    assert_eq!(
+        declared
+            .indexes()
+            .iter()
+            .map(|index| (
+                index.fields().collect::<Vec<_>>().join(","),
+                index.is_text()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("title".to_owned(), false),
+            ("title".to_owned(), true),
+            ("text".to_owned(), true),
+            ("tags".to_owned(), true),
+            ("margin.note".to_owned(), true),
+        ]
+    );
+    assert_eq!(
+        declared,
+        Collection::new("articles")
+            .field("title", Type::String)
+            .optional("text", Type::String)
+            .field("tags", Type::list(Type::String))
+            .optional(
+                "margin",
+                Type::object(darudb::Embedded::new().optional("note", Type::String))
+            )
+            .index("title")
+            .text_index("title")
+            .text_index("text")
+            .text_index("tags")
+            .text_index("margin.note")
+    );
+
+    let db = open(&dir, Schema::new(1).collection(declared));
+    let article = |title: &str, body: &str, tags: &[&str], note: Option<&str>| Article {
+        id: None,
+        title: title.to_owned(),
+        body: Some(body.to_owned()),
+        tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        margin: Some(Margin {
+            note: note.map(str::to_owned),
+        }),
+    };
+    let mut txn = db.begin_write().unwrap();
+    let mut articles = txn.collection_of::<Article>().unwrap();
+
+    articles
+        .insert(&article(
+            "Quick Start",
+            "Open a database and write.",
+            &["guide", "getting started"],
+            Some("checked twice"),
+        ))
+        .unwrap();
+    articles
+        .insert(&article(
+            "Queries",
+            "Write a query quickly.",
+            &["guide"],
+            None,
+        ))
+        .unwrap();
+    txn.commit().unwrap();
+
+    let read = db.begin_read().unwrap();
+    let articles = read.collection_of::<Article>().unwrap();
+    let found = |filter: Filter| {
+        articles
+            .query(&Query::new().filter(filter))
+            .unwrap()
+            .into_iter()
+            .map(|article| article.id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(found(Article::TITLE.matches("quick")), [1]);
+    assert_eq!(found(Article::BODY.matches("write quick*")), [2]);
+    assert_eq!(found(Article::BODY.matches("WRITE")), [1, 2]);
+    assert_eq!(found(Article::TAGS.matches("guide")), [1, 2]);
+    assert_eq!(found(Article::TAGS.matches("getting started")), [1]);
+    assert_eq!(
+        found(Article::TAGS.matches("guide started")),
+        Vec::<i64>::new()
+    );
+    assert_eq!(
+        found(Article::MARGIN.then(Margin::NOTE).matches("twice")),
+        [1]
+    );
+    assert_eq!(found(Filter::matches("text", "database")), [1]);
+    assert!(db.check().unwrap().is_ok());
+}

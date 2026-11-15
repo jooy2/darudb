@@ -173,6 +173,8 @@ pub struct Index {
     /// field.
     pub(crate) components: Vec<Vec<String>>,
     pub(crate) unique: bool,
+    /// Whether it is a text index ([`Collection::text_index`]).
+    pub(crate) text: bool,
 }
 
 impl Index {
@@ -186,6 +188,12 @@ impl Index {
     /// may hold a null in one of them.
     pub fn is_unique(&self) -> bool {
         self.unique
+    }
+
+    /// Whether the index is a text index, which holds the words of a string
+    /// field or of a list of strings, for a search for words to read.
+    pub fn is_text(&self) -> bool {
+        self.text
     }
 
     /// The components' paths, joined by `.`, for a message.
@@ -280,6 +288,7 @@ impl Collection {
         self.indexes.push(Index {
             components: vec![vec![name.into()]],
             unique: false,
+            text: false,
         });
         self
     }
@@ -291,6 +300,7 @@ impl Collection {
         self.indexes.push(Index {
             components: vec![vec![name.into()]],
             unique: true,
+            text: false,
         });
         self
     }
@@ -309,6 +319,7 @@ impl Collection {
         self.indexes.push(Index {
             components: components(paths),
             unique: false,
+            text: false,
         });
         self
     }
@@ -321,6 +332,44 @@ impl Collection {
         self.indexes.push(Index {
             components: components(paths),
             unique: true,
+            text: false,
+        });
+        self
+    }
+
+    /// Gives the string field `path`, or the list of strings, a text index:
+    /// an entry for each word of the text, which a search for words reads
+    /// ([`Filter::matches`](crate::Filter::matches), `MATCHES` in the query
+    /// language) rather than every object. The path is a field's name, or
+    /// names joined by `.` through embedded objects, such as `address.note`.
+    ///
+    /// A word is a run of letters, digits and marks, compared ignoring
+    /// case and by its first 64 characters. Chinese characters, hiragana
+    /// and katakana, written without spaces between words, are indexed two
+    /// at a time. The field may have another index too, on its values.
+    ///
+    /// Every write of an object with such an index writes an entry for
+    /// each different word of the field, so a long text costs more to
+    /// write than any other field. A file with a text index is in object
+    /// format 3, which releases before text indexes refuse to open.
+    #[must_use]
+    pub fn text_index(mut self, path: impl Into<String>) -> Self {
+        self.indexes.push(Index {
+            components: components([path.into()]),
+            unique: false,
+            text: true,
+        });
+        self
+    }
+
+    /// A text index on the field `name` of the collection itself, whose name
+    /// is taken whole, as [`index`](Self::index) takes one, where
+    /// [`text_index`](Self::text_index) reads a `.` in it as a path.
+    pub(crate) fn text_index_of(mut self, name: &str) -> Self {
+        self.indexes.push(Index {
+            components: vec![vec![name.to_owned()]],
+            unique: false,
+            text: true,
         });
         self
     }
@@ -524,6 +573,7 @@ impl Schema {
                     Ok(Index {
                         components,
                         unique: index.unique,
+                        text: index.text,
                     })
                 })
                 .collect::<Result<_>>()?;
@@ -624,9 +674,13 @@ impl Schema {
                     self.validate_component(name, &fields, path, count)?;
                 }
 
+                if index.text {
+                    self.validate_text(name, &fields, index)?;
+                }
+
                 if collection.indexes[..position]
                     .iter()
-                    .any(|other| other.components == index.components)
+                    .any(|other| other.components == index.components && other.text == index.text)
                 {
                     return invalid(format!("`{name}` indexes `{}` twice", index.text()));
                 }
@@ -690,6 +744,51 @@ impl Schema {
         }
 
         Ok(())
+    }
+
+    /// Refuses a text index of `owner`, whose fields are `fields`, that is
+    /// unique, on several fields, or on anything but a string or a list of
+    /// strings. Its path was checked as a component of any index is.
+    fn validate_text(&self, owner: &str, fields: &[Field], index: &Index) -> Result<()> {
+        let text = index.text();
+
+        let [path] = index.components.as_slice() else {
+            return invalid(format!(
+                "`{owner}` has a text index on `{text}`; a text index is on one field"
+            ));
+        };
+
+        if index.unique {
+            return invalid(format!(
+                "`{owner}` has a unique text index on `{text}`; a text index holds words, which are not unique"
+            ));
+        }
+
+        let mut fields = fields;
+        let mut leaf = None;
+
+        for name in path {
+            let Some(field) = fields.iter().find(|field| field.name == *name) else {
+                break;
+            };
+            let kind = match &field.kind {
+                Type::List(element) => element.as_ref(),
+                kind => kind,
+            };
+
+            if let Type::Object(embedded) = kind {
+                fields = &embedded.fields;
+            }
+
+            leaf = Some(kind);
+        }
+
+        match leaf {
+            Some(Type::String) => Ok(()),
+            _ => invalid(format!(
+                "`{owner}` has a text index on `{text}`, which is not a string or a list of strings"
+            )),
+        }
     }
 
     fn validate_fields(&self, owner: &str, fields: &[Field]) -> Result<()> {

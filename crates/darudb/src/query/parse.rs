@@ -512,6 +512,9 @@ impl Parser<'_> {
                 "CONTAINS" => Op::Contains,
                 "STARTSWITH" => Op::StartsWith,
                 "ENDSWITH" => Op::EndsWith,
+                // Read so only here, after a path, so it is no keyword and
+                // a field may be called `matches`.
+                "MATCHES" => Op::Matches,
                 _ => return Err(self.expected("a comparison")),
             },
             _ => return Err(self.expected("a comparison")),

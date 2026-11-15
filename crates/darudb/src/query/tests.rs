@@ -23,7 +23,8 @@ fn schema() -> Schema {
             Collection::new("teams")
                 .primary_key("name", Type::String)
                 .optional("city", Type::String)
-                .index("city"),
+                .index("city")
+                .text_index("city"),
         )
         .collection(
             Collection::new("players")
@@ -53,6 +54,10 @@ fn schema() -> Schema {
                             .optional("n", Type::Int),
                     )),
                 )
+                .optional("bio", Type::String)
+                .optional("lines", Type::list(Type::String))
+                // Searched for words with no index.
+                .optional("motto", Type::String)
                 .index("score")
                 .index("rating")
                 .unique("handle")
@@ -67,7 +72,15 @@ fn schema() -> Schema {
                 .unique_on(["handle", "active"])
                 .index_on(["active", "born", "rating"])
                 .index_on(["address.city"])
-                .index_on(["visits.city"]),
+                .index_on(["visits.city"])
+                // Text indexes: on a string, on a list of strings, beside
+                // another index of the same field, inside an embedded object
+                // and through a list of them.
+                .text_index("bio")
+                .text_index("lines")
+                .text_index("tags")
+                .text_index("address.city")
+                .text_index("visits.city"),
         )
 }
 
@@ -86,6 +99,41 @@ const HANDLES: [&str; 10] = [
 const TAGS: [&str; 4] = ["red", "blue", "green", "re"];
 const TEAMS: [&str; 3] = ["north", "south", "gone"];
 const CITIES: [&str; 3] = ["Seoul", "Busan", "Seo"];
+const TEXTS: [&str; 9] = [
+    "The quick brown fox",
+    "QUICK foxes; quiet fox!",
+    "fox",
+    "",
+    "빠른 검색을 한다",
+    "東京都に住む",
+    "京都 Fox, 2020年",
+    "Seoul is quick",
+    "?!",
+];
+/// Searches for words: some that the texts and the cities hold, some of
+/// several words, starts of words, and some without a word.
+const SEARCHES: [&str; 20] = [
+    "fox",
+    "quick fox",
+    "fox QUICK the",
+    "fo*",
+    "qui* fox",
+    "foxes quiet",
+    "검색*",
+    "검색",
+    "東京",
+    "京",
+    "都*",
+    "東京 fox",
+    "",
+    "* ?",
+    "x*",
+    "seoul",
+    "seo*",
+    "S*",
+    "busan seoul",
+    "red re*",
+];
 const RATINGS: [f64; 7] = [-1.0, -0.0, 0.0, 0.5, 2.0, f64::INFINITY, f64::NAN];
 /// Microseconds from 1970: before it, at it, and after it.
 const DATES: [i64; 5] = [-86_400_000_001, -1, 0, 1, 1_793_361_600_000_000];
@@ -156,6 +204,22 @@ fn player(rng: &mut Rng) -> Object {
     }
 
     if rng.below(3) > 0 {
+        object.set("bio", pick(rng, &TEXTS));
+    }
+
+    if rng.below(2) == 0 {
+        let lines: Vec<Value> = (0..rng.below(4))
+            .map(|_| pick(rng, &TEXTS).into())
+            .collect();
+
+        object.set("lines", lines);
+    }
+
+    if rng.below(2) == 0 {
+        object.set("motto", pick(rng, &TEXTS));
+    }
+
+    if rng.below(3) > 0 {
         object.set("born", Value::Date(pick(rng, &DATES)));
     }
 
@@ -195,6 +259,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
         "rating" => pick(rng, &[-1.0, -0.0, 0.5, 1.0, f64::INFINITY, f64::NAN]).into(),
         "handle" => pick(rng, &["ace", "bea", "be", "", "a", "a\0", "z", "acek", "É"]).into(),
         "tags" => pick(rng, &TAGS).into(),
+        "bio" | "lines" | "motto" => pick(rng, &TEXTS).into(),
         "team" => pick(rng, &TEAMS).into(),
         "team.city" | "address.city" => pick(rng, &["Seoul", "Busan", "Seo", "S", "x"]).into(),
         "active" => (rng.below(2) == 1).into(),
@@ -210,7 +275,7 @@ fn value(rng: &mut Rng, path: &str) -> Value {
     }
 }
 
-const PATHS: [&str; 17] = [
+const PATHS: [&str; 20] = [
     "id",
     "score",
     "rating",
@@ -228,17 +293,33 @@ const PATHS: [&str; 17] = [
     "seen",
     "visits.city",
     "visits.n",
+    "bio",
+    "lines",
+    "motto",
 ];
 
 fn is_string(path: &str) -> bool {
     matches!(
         path,
-        "handle" | "tags" | "team" | "team.city" | "address.city" | "visits.city"
-    )
+        "handle"
+            | "tags"
+            | "team.city"
+            | "address.city"
+            | "visits.city"
+            | "bio"
+            | "lines"
+            | "motto"
+    ) || path == "team"
 }
 
 fn test(rng: &mut Rng) -> Filter {
     let path = pick(rng, &PATHS);
+
+    // A search for words, of every field that holds text, and now and then
+    // of one that does not, which is refused.
+    if (is_string(path) && rng.below(3) == 0) || rng.below(40) == 0 {
+        return Filter::matches(path, pick(rng, &SEARCHES));
+    }
 
     // A test of strings ignores case a third of the time, with its values in
     // capitals or not, so that some find what only ignoring case finds.
@@ -2323,4 +2404,181 @@ fn aggregates_read_from_an_index_are_those_of_the_objects() {
     // Two players have no handle, whose nulls come first in the index.
     assert_eq!(players.min(&every, "handle").unwrap(), Value::from("a\0b"));
     assert_eq!(players.max(&every, "handle").unwrap(), Value::from("ace"));
+}
+
+/// How a query in the language `text` is planned for `players`: whether a
+/// part of its filter comes from an index, and whether that part only
+/// narrows.
+fn planned_parts(db: &Database, text: &str) -> (bool, bool) {
+    let read = db.begin_read().unwrap();
+    let players = read.collection("players").unwrap();
+    let (_, schema, collection) = players.parts();
+    let query = Query::parse(text, &[]).unwrap();
+    let planned = plan::plan(schema, collection, query.ir(), &[]).unwrap();
+
+    (!planned.parts.is_empty(), planned.narrowing != 0)
+}
+
+#[test]
+fn searches_for_words_follow_the_documented_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = OpenOptions::new()
+        .schema(schema())
+        .open(dir.path().join("query.darudb"))
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    txn.collection("teams")
+        .unwrap()
+        .insert(
+            Object::new()
+                .with("name", "north")
+                .with("city", "New Seoul"),
+        )
+        .unwrap();
+
+    let mut players = txn.collection("players").unwrap();
+
+    for object in [
+        Object::new()
+            .with("bio", "The QUICK brown fox.")
+            .with("motto", "Quick and quiet")
+            .with(
+                "lines",
+                vec![Value::from("red fox"), Value::from("blue bird")],
+            )
+            .with("team", "north"),
+        Object::new()
+            .with("bio", "A slow fox, quickly.")
+            .with("lines", vec![Value::from("red bird")]),
+        Object::new()
+            .with("bio", "빠른 검색을 한다")
+            .with("lines", Vec::<Value>::new()),
+        Object::new()
+            .with("bio", "東京都に住む")
+            .with("motto", "quick"),
+        Object::new().with("bio", "?!"),
+        Object::new(),
+    ] {
+        players.insert(object).unwrap();
+    }
+
+    txn.commit().unwrap();
+
+    let parsed = |text: &str| {
+        let read = db.begin_read().unwrap();
+        let players = read.collection("players").unwrap();
+        let query = Query::parse(text, &[])?;
+        let found = players.query(&query).map(|objects| ids(&objects))?;
+
+        assert_eq!(players.count(&query)?, found.len() as u64, "{text}");
+
+        Ok::<_, crate::Error>(found)
+    };
+    let found = |text: &str| parsed(text).unwrap();
+    let none = Vec::<i64>::new();
+
+    // Every word, in any order and any case; a word is whole unless a star
+    // follows it.
+    assert_eq!(found(r#"bio MATCHES "fox""#), [1, 2]);
+    assert_eq!(found(r#"bio MATCHES "FOX quick""#), [1]);
+    assert_eq!(found(r#"bio matches "quick* fox""#), [1, 2]);
+    assert_eq!(found(r#"bio MATCHES "qui""#), none);
+    assert_eq!(found(r#"bio MATCHES "fox cat""#), none);
+    assert_eq!(found(r#"bio MATCHES "the.fox!""#), [1]);
+    // A search without a word finds nothing. A null field meets no search,
+    // so `NOT` holds for it.
+    assert_eq!(found(r#"bio MATCHES """#), none);
+    assert_eq!(found(r#"bio MATCHES "* ?!""#), none);
+    assert_eq!(found(r#"NOT bio MATCHES "fox""#), [3, 4, 5, 6]);
+    // Hangul by the words between spaces, and the scripts without spaces by
+    // two characters, or one.
+    assert_eq!(found(r#"bio MATCHES "검색""#), none);
+    assert_eq!(found(r#"bio MATCHES "검색*""#), [3]);
+    assert_eq!(found(r#"bio MATCHES "검색을 빠른""#), [3]);
+    assert_eq!(found(r#"bio MATCHES "東京""#), [4]);
+    assert_eq!(found(r#"bio MATCHES "京都に""#), [4]);
+    assert_eq!(found(r#"bio MATCHES "む""#), [4]);
+    assert_eq!(found(r#"bio MATCHES "住""#), [4]);
+    assert_eq!(found(r#"bio MATCHES "大阪""#), none);
+    // A list: one string has every word.
+    assert_eq!(found(r#"lines MATCHES "red""#), [1, 2]);
+    assert_eq!(found(r#"lines MATCHES "red bird""#), [2]);
+    assert_eq!(found(r#"lines MATCHES "bird bl*""#), [1]);
+    // With other terms, with `OR`, and through a link.
+    assert_eq!(found(r#"bio MATCHES "fox" AND id > 1"#), [2]);
+    assert_eq!(
+        found(r#"bio MATCHES "東京" OR lines MATCHES "red bird""#),
+        [2, 4]
+    );
+    assert_eq!(found(r#"team.city MATCHES "seoul""#), [1]);
+    assert_eq!(found(r#"team.city MATCHES "new se*""#), [1]);
+    assert_eq!(found(r#"bio MATCHES "fox" SORT BY id DESC LIMIT 1"#), [2]);
+    // A field without a text index is read and searched.
+    assert_eq!(found(r#"motto MATCHES "quick""#), [1, 4]);
+    assert_eq!(found(r#"motto MATCHES "qui* and""#), [1]);
+    // A value passed with the call.
+    let read = db.begin_read().unwrap();
+    let query = Query::parse("bio MATCHES $0", &["slow FOX".into()]).unwrap();
+
+    assert_eq!(
+        ids(&read.collection("players").unwrap().query(&query).unwrap()),
+        [2]
+    );
+    drop(read);
+
+    // A field called `matches` needs no backticks.
+    assert!(
+        parsed("matches == 1")
+            .unwrap_err()
+            .to_string()
+            .contains("`matches`")
+    );
+
+    for (text, reason) in [
+        (r#"score MATCHES "1""#, "searches strings for words"),
+        (r#"note MATCHES "x""#, "searches strings for words"),
+        (r#"team MATCHES "north""#, "searches strings for words"),
+        ("bio MATCHES 1", "tests strings"),
+        ("bio MATCHES null", "tests strings"),
+        (r#"bio MATCHES "x" IGNORE CASE"#, "`IGNORE CASE` follows"),
+    ] {
+        let refused = parsed(text).unwrap_err();
+
+        assert_eq!(refused.code(), "INVALID_QUERY", "{text}");
+        assert!(refused.to_string().contains(reason), "{text}: {refused}");
+    }
+
+    // A text index answers a search alone, but for several words in a list,
+    // where it narrows; a field without one is left to the walk.
+    assert_eq!(
+        planned_parts(&db, r#"bio MATCHES "quick fox""#),
+        (true, false)
+    );
+    assert_eq!(planned_parts(&db, r#"lines MATCHES "red""#), (true, false));
+    assert_eq!(
+        planned_parts(&db, r#"lines MATCHES "red bird""#),
+        (true, true)
+    );
+    assert_eq!(
+        planned_parts(&db, r#"visits.city MATCHES "a b""#),
+        (true, true)
+    );
+    assert_eq!(
+        planned_parts(&db, r#"address.city MATCHES "a b""#),
+        (true, false)
+    );
+    assert_eq!(
+        planned_parts(&db, r#"team.city MATCHES "a b""#),
+        (true, false)
+    );
+    assert_eq!(
+        planned_parts(&db, r#"motto MATCHES "quick""#),
+        (false, false)
+    );
+    // An index on the field's values is not one of its words.
+    assert_eq!(
+        planned_parts(&db, r#"handle MATCHES "ace""#),
+        (false, false)
+    );
 }

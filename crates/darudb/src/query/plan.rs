@@ -30,6 +30,7 @@ use crate::format::object::key;
 use crate::format::object::schema::{
     CollectionDef, FieldDef, Fields, IndexDef, Kind, StoredSchema, path_fields,
 };
+use crate::format::object::text;
 
 /// How many names a path may have. A path through a link back into its own
 /// collection could otherwise go on for as long as the text does, and reading
@@ -147,6 +148,8 @@ pub(crate) enum Test<'s> {
     StartsWithFold(String),
     /// `ENDSWITH` ignoring case.
     EndsWithFold(String),
+    /// `MATCHES`: a search for words, made once for the query.
+    Matches(Box<text::Search>),
 }
 
 /// A filter, resolved against the schema.
@@ -262,6 +265,11 @@ pub(crate) struct Plan<'s> {
     /// The terms of `filter` that indexes answer alone, by their position
     /// among its terms, a filter that is not an `AND` being its only term.
     pub(crate) parts: Vec<(usize, Part<'s>)>,
+    /// The terms among `parts`, by a bit for each position, whose part
+    /// holds every object that meets the term and others too, so that an
+    /// object of the part is still tested: a search for several words in a
+    /// list, whose index does not say which element holds a word.
+    pub(crate) narrowing: u64,
     /// What the access answers of the query's filter, as a part, when it
     /// answers a term: a run that walks something else gathers it instead.
     pub(crate) access_part: Option<Part<'s>>,
@@ -328,12 +336,23 @@ fn plan_parts<'s>(
     let (access, consumed, ordered) = choose(collection, filter.as_ref(), &sort);
     // The parts of the terms the access leaves, by their positions in what
     // is left of the filter.
+    let mut narrowing = 0u64;
     let parts = terms_of(filter.as_ref())
         .iter()
         .enumerate()
         .filter(|(position, _)| !consumed.contains(position))
         .enumerate()
-        .filter_map(|(left, (_, term))| part(collection, term, 0).map(|part| (left, part)))
+        .filter_map(|(left, (_, term))| {
+            part(collection, term, 0)
+                .or_else(|| {
+                    let found = narrowing_part(collection, term).filter(|_| left < 64)?;
+
+                    narrowing |= 1 << left;
+
+                    Some(found)
+                })
+                .map(|part| (left, part))
+        })
         .collect();
     let access_part = (!consumed.is_empty())
         .then(|| access_part(&access))
@@ -386,6 +405,7 @@ fn plan_parts<'s>(
         ordered,
         exact,
         parts,
+        narrowing,
         access_part,
         sort_walk,
     })
@@ -420,6 +440,17 @@ fn part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>, depth: usize) -> Opt
     }
 
     match cond {
+        Cond::Test {
+            path,
+            test: Test::Matches(search),
+        } => {
+            // A search for one word holds for an element when the object
+            // has the word's term; a search for more holds only when one
+            // element has them all, which the index does not say.
+            let alone = !path.many || search.words().len() <= 1;
+
+            text_part(collection, &path.steps, search.words()).filter(|_| alone)
+        }
         Cond::Test { path, test } => path_part(collection, &path.steps, &path.leaf, test),
         // An `AND` of nothing holds for every object, which no set of keys
         // from an index is: as a part it would be the empty set.
@@ -437,6 +468,92 @@ fn part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>, depth: usize) -> Opt
         Cond::Not(_) => None,
         Cond::Linked(linked) => Some(Part::Backlinked(Rc::clone(linked))),
     }
+}
+
+/// The part that holds every object meeting `cond` and others too, when
+/// `cond` is a search for words that no part answers alone but a text index
+/// narrows.
+fn narrowing_part<'s>(collection: &'s CollectionDef, cond: &Cond<'s>) -> Option<Part<'s>> {
+    match cond {
+        Cond::Test {
+            path,
+            test: Test::Matches(search),
+        } => text_part(collection, &path.steps, search.words()),
+        _ => None,
+    }
+}
+
+/// The objects of `collection` whose text at `steps` has a term for each of
+/// `words`, when a text index is on that path, or on the rest of it in the
+/// collection a to-one link at its start names, which has to have an index
+/// of its own: for each word the entries of its term, or of the terms that
+/// start with it, and the objects every word names.
+fn text_part<'s>(
+    collection: &'s CollectionDef,
+    steps: &[Step<'s>],
+    words: &text::Words,
+) -> Option<Part<'s>> {
+    if let [Step::Field(name), Step::Follow(target), rest @ ..] = steps {
+        let field = collection.fields.by_name(name)?;
+        let index = collection
+            .indexes
+            .iter()
+            .find(|index| index.is_on(field.id))?;
+        let inner = text_part(target, rest, words)?;
+
+        return Some(Part::Linked {
+            index,
+            target,
+            inner: Box::new(inner),
+        });
+    }
+
+    let index = collection
+        .indexes
+        .iter()
+        .filter(|index| index.text)
+        .find(|index| {
+            index
+                .components
+                .first()
+                .and_then(|path| steps_of(&collection.fields, path))
+                .is_some_and(|of| same_steps(steps, &of))
+        })?;
+    let exact = words.exact().iter().map(|term| {
+        let bytes = encoded(&Value::String(term.clone()));
+        let end = after(&bytes);
+
+        (term.len(), (Bound::Included(bytes), end))
+    });
+    let starts = words.prefixes().iter().map(|prefix| {
+        let bytes = key::string_prefix(prefix);
+        let end = after(&bytes);
+
+        // A start names the objects of every term it begins, which are more
+        // than a whole word of its length names.
+        (prefix.len() / 2, (Bound::Included(bytes), end))
+    });
+    let mut ranges: Vec<(usize, Range)> = exact.chain(starts).collect();
+
+    // The longest words first: a long word is in fewer texts than a short
+    // one more often than not, and the first part's objects are the ones
+    // the others are looked up for.
+    ranges.sort_by_key(|(length, _)| std::cmp::Reverse(*length));
+
+    let mut parts: Vec<Part<'s>> = ranges
+        .into_iter()
+        .map(|(_, range)| Part::Index {
+            index,
+            ranges: vec![range],
+        })
+        .collect();
+
+    Some(match parts.len() {
+        // A search without a word finds nothing.
+        0 => Part::Keys(Vec::new()),
+        1 => parts.remove(0),
+        _ => Part::And(parts),
+    })
 }
 
 /// The part a test of the values at `steps` from an object of `collection`
@@ -560,6 +677,7 @@ pub(crate) fn scan<'s>(
         ordered: false,
         exact: false,
         parts: Vec::new(),
+        narrowing: 0,
         access_part: None,
         sort_walk: None,
     })
@@ -994,6 +1112,26 @@ fn test<'s>(
 
     let value = |at: usize| operands.get(at);
 
+    if op == Op::Matches {
+        if path.leaf != Kind::String || path.link.is_some() {
+            return Err(invalid(format!(
+                "`MATCHES` searches strings for words, and `{}` holds {}",
+                text(),
+                path.leaf.describe()
+            )));
+        }
+
+        return match operands.len() {
+            1 => Ok(Test::Matches(Box::new(text::Search::new(text::Words::of(
+                string(value(0)?)?,
+            ))))),
+            _ => Err(invalid(format!(
+                "`MATCHES` on `{}` has the wrong number of values",
+                text()
+            ))),
+        };
+    }
+
     if op.folds() {
         if path.leaf != Kind::String || path.link.is_some() {
             return Err(invalid(format!(
@@ -1390,7 +1528,7 @@ fn general<'s>(
     collection
         .indexes
         .iter()
-        .filter(|index| index.field().is_none())
+        .filter(|index| index.field().is_none() && !index.text)
         .filter_map(|index| through(collection, index, terms, sort))
         .min_by_key(|found| found.rank)
 }

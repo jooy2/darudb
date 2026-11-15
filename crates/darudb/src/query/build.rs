@@ -159,6 +159,22 @@ impl Filter {
         Self::test(Op::EndsWith, field, vec![value.into()])
     }
 
+    /// A string field has every word of `search`, or one string of a list
+    /// does: `Filter::matches("body", "quick fox")` finds a text with both
+    /// words, anywhere and in any order. Words are compared ignoring case,
+    /// and a word followed by `*` is the start of a word: `"data*"` finds
+    /// `database`. A search without a word finds nothing.
+    ///
+    /// A text index on the field
+    /// ([`Collection::text_index`](crate::Collection::text_index)) answers
+    /// it without reading the objects; without one, every object the rest
+    /// of the query leaves is read and searched. A field that holds no
+    /// strings fails with [`Error::InvalidQuery`](crate::Error::InvalidQuery)
+    /// when the query runs.
+    pub fn matches(field: &str, search: impl Into<Value>) -> Self {
+        Self::test(Op::Matches, field, vec![search.into()])
+    }
+
     /// The field is null.
     pub fn is_null(field: &str) -> Self {
         Self::test(Op::IsNull, field, Vec::new())

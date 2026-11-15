@@ -1,4 +1,4 @@
-"""Writes `src/query/fold_table.rs`, the simple case folding of Unicode, from
+"""Writes `src/format/object/fold_table.rs`, the simple case folding of Unicode, from
 the Unicode Character Database's `CaseFolding.txt`.
 
 A comparison that ignores case folds each character of both strings and
@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "src" / "query" / "fold_table.rs"
+OUT = Path(__file__).resolve().parent.parent / "src" / "format" / "object" / "fold_table.rs"
 
 
 def main() -> None:

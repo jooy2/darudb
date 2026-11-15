@@ -420,6 +420,22 @@ macro_rules! conditions {
             pub fn ends_with(self, text: impl Into<String>) -> Filter {
                 Filter::at(Op::EndsWith, self.path(), vec![Value::String(text.into())])
             }
+
+            /// The string has every word of `search`, as
+            /// [`Filter::matches`] has it.
+            #[must_use]
+            pub fn matches(self, search: impl Into<String>) -> Filter {
+                Filter::at(Op::Matches, self.path(), vec![Value::String(search.into())])
+            }
+        }
+
+        impl<T, E: TextType + ElementType> $name<T, Vec<E>> {
+            /// One string of the list has every word of `search`, as
+            /// [`Filter::matches`] has it.
+            #[must_use]
+            pub fn matches(self, search: impl Into<String>) -> Filter {
+                Filter::at(Op::Matches, self.path(), vec![Value::String(search.into())])
+            }
         }
 
         impl<T, E: ComparableType + ElementType> $name<T, Vec<E>> {

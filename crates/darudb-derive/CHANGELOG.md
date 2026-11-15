@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Added
+
+- `#[darudb(text_index)]` on a `String` or `Vec<String>` field, optional or not, and `#[darudb(text_index("margin.note"))]` on the struct for a path through embedded objects, declare a text index, as `Collection::text_index` does.
+
 ### Fixed
 
 - A type with `#[derive(Embedded)]` that holds itself, in a `Vec` or through another embedded type, panics with the type's name when its schema is declared, where it ran the thread out of stack.

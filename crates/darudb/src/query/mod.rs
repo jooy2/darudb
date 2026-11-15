@@ -17,7 +17,7 @@
 //!   objects that cascading links take with them.
 //! - `date`: dates as the query language writes them.
 //! - `fold`: comparing strings ignoring case, by Unicode's simple case
-//!   folding, whose table `fold_table` is generated from Unicode's data.
+//!   folding, which `format::object::text` folds a character by.
 //! - `typed`: conditions, sorts and aggregates that name their fields
 //!   through a type's field constants.
 //!
@@ -30,7 +30,6 @@ mod cascade;
 mod change;
 mod date;
 mod fold;
-mod fold_table;
 pub(crate) mod ir;
 mod keys;
 mod parse;

@@ -23,11 +23,16 @@ fn schema() -> Schema {
                 .optional("tags", Type::list(Type::String))
                 .optional("team", Type::link("teams"))
                 .optional("friends", Type::list(Type::link("players")))
+                .optional("bio", Type::String)
                 .index("score")
                 .unique("handle")
                 .index("tags")
                 .index("team")
-                .index("friends"),
+                .index("friends")
+                // Text indexes: one beside the index of the same list, and
+                // one on a string.
+                .text_index("tags")
+                .text_index("bio"),
         )
 }
 
@@ -72,6 +77,23 @@ fn player(rng: &mut Rng) -> Object {
         object.set("friends", friends);
     }
 
+    if rng.below(2) > 0 {
+        object.set(
+            "bio",
+            pick(
+                rng,
+                &[
+                    "The quick brown fox",
+                    "quick QUICK Quick",
+                    "",
+                    "東京都に住む",
+                    "빠른 검색",
+                    "fox",
+                ],
+            ),
+        );
+    }
+
     object
 }
 
@@ -111,7 +133,7 @@ fn random_writes_keep_every_index_in_step_with_the_objects() {
 
                         changes.remove("id");
 
-                        for field in ["score", "handle", "tags", "team", "friends"] {
+                        for field in ["score", "handle", "tags", "team", "friends", "bio"] {
                             if rng.below(6) == 0 {
                                 changes.set(field, Value::Null);
                             }
@@ -197,7 +219,8 @@ fn an_index_built_by_a_migration_matches_one_kept_all_along() {
                 .optional("handle", Type::String)
                 .optional("tags", Type::list(Type::String))
                 .optional("team", Type::link("teams"))
-                .optional("friends", Type::list(Type::link("players"))),
+                .optional("friends", Type::list(Type::link("players")))
+                .optional("bio", Type::String),
         );
     let db = OpenOptions::new().schema(bare).open(&path).unwrap();
     let mut rng = Rng::new(99);
@@ -2267,5 +2290,248 @@ fn an_optional_field_with_a_default_is_indexed_as_it_reads() {
     check_indexes(&txn as &dyn Source, &txn.schema().unwrap().schema).unwrap();
     assert_eq!(txn.collection("users").unwrap().count(&by_nick).unwrap(), 0);
     txn.commit().unwrap();
+    assert!(db.check().unwrap().is_ok());
+}
+
+/// The entries of the text index `index` of `db`: each term with the id of
+/// its object.
+fn text_entries(db: &Database, index: u64) -> Vec<(String, i64)> {
+    use crate::format::object::key;
+
+    let read = db.begin_read().unwrap();
+
+    read.range_in::<Vec<u8>>(
+        &index_tree(index),
+        &(Bound::<Vec<u8>>::Unbounded, Bound::<Vec<u8>>::Unbounded),
+        false,
+    )
+    .unwrap()
+    .map(|entry| {
+        let (entry, value) = entry.unwrap();
+        let (term, taken) = key::decode(&entry).unwrap();
+        let (id, rest) = key::decode(&entry[taken..]).unwrap();
+
+        assert!(value.is_empty());
+        assert_eq!(taken + rest, entry.len());
+
+        (term.as_str().unwrap().to_owned(), id.as_int().unwrap())
+    })
+    .collect()
+}
+
+fn notes(version: u64, text: bool) -> Schema {
+    let notes = Collection::new("notes")
+        .optional("body", Type::String)
+        .optional("tags", Type::list(Type::String));
+
+    Schema::new(version).collection(if text {
+        notes.text_index("body").text_index("tags")
+    } else {
+        notes
+    })
+}
+
+/// A text index holds an entry for each different term of its field, once
+/// for each object, and none for a null or a text without a word; a change
+/// of the text takes out the terms that went and adds the ones that came.
+#[test]
+fn a_text_index_holds_each_term_of_its_objects_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = OpenOptions::new()
+        .schema(notes(1, true))
+        .open(dir.path().join("objects.darudb"))
+        .unwrap();
+    let entries = |index: u64| {
+        text_entries(&db, index)
+            .iter()
+            .map(|(term, id)| format!("{term}:{id}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut txn = db.begin_write().unwrap();
+    let mut notes = txn.collection("notes").unwrap();
+
+    notes
+        .insert(
+            Object::new()
+                .with("body", "The fox; the FOX!")
+                .with("tags", vec![Value::from("Red fox"), Value::from("red")]),
+        )
+        .unwrap();
+    notes
+        .insert(Object::new().with("body", "東京 fox"))
+        .unwrap();
+    notes.insert(Object::new().with("body", "?!")).unwrap();
+    notes.insert(Object::new()).unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(entries(1), "fox:1 fox:2 the:1 京:2 東京:2");
+    assert_eq!(entries(2), "fox:1 red:1");
+
+    let mut txn = db.begin_write().unwrap();
+    let mut notes = txn.collection("notes").unwrap();
+
+    notes
+        .update(
+            1,
+            Object::new()
+                .with("body", "a fox")
+                .with("tags", Value::Null),
+        )
+        .unwrap();
+    notes.delete(2).unwrap();
+    notes
+        .put(
+            Object::new()
+                .with("id", 3)
+                .with("tags", vec![Value::from("x")]),
+        )
+        .unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(entries(1), "a:1 fox:1");
+    assert_eq!(entries(2), "x:3");
+    assert_eq!(object_format(&db), 3);
+    assert!(db.check().unwrap().is_ok());
+}
+
+/// A text index is on one string field or one list of strings, and a field
+/// may have one beside another index.
+#[test]
+fn a_text_index_is_declared_on_text_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let open = |collection: Collection| {
+        OpenOptions::new()
+            .schema(Schema::new(1).collection(collection))
+            .open(dir.path().join("objects.darudb"))
+    };
+    let notes = || {
+        Collection::new("notes")
+            .optional("body", Type::String)
+            .optional("count", Type::Int)
+            .optional("counts", Type::list(Type::Int))
+            .optional("owner", Type::link("notes"))
+            .optional(
+                "meta",
+                Type::object(Embedded::new().optional("note", Type::String)),
+            )
+    };
+
+    for (collection, reason) in [
+        (notes().text_index("count"), "not a string"),
+        (notes().text_index("counts"), "not a string"),
+        (notes().text_index("owner"), "not a string"),
+        (notes().text_index("meta"), "embedded object"),
+        (notes().text_index("missing"), "does not have"),
+        (notes().text_index("owner.body"), "goes on past"),
+        (
+            notes().text_index("body").text_index("body"),
+            "indexes `body` twice",
+        ),
+    ] {
+        let refused = open(collection).err().unwrap();
+
+        assert_eq!(refused.code(), "INVALID_ARGUMENT", "{refused}");
+        assert!(refused.to_string().contains(reason), "{refused}");
+    }
+
+    let db = open(
+        notes()
+            .index("body")
+            .text_index("body")
+            .text_index("meta.note"),
+    )
+    .unwrap();
+    let schema = db.stored_schema().unwrap();
+    let indexes = schema.collections()[0].indexes();
+
+    assert_eq!(
+        indexes
+            .iter()
+            .map(|index| (
+                index.fields().collect::<Vec<_>>().join(","),
+                index.is_text()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("body".to_owned(), false),
+            ("body".to_owned(), true),
+            ("meta.note".to_owned(), true)
+        ]
+    );
+}
+
+/// The first text index a schema declares raises the file to object format
+/// 3 and is built from the objects there; a later version without it drops
+/// the index and keeps the format; and a file kept from upgrading refuses
+/// one.
+#[test]
+fn a_text_index_added_by_a_migration_is_built_and_raises_the_object_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("objects.darudb");
+    let db = OpenOptions::new()
+        .schema(notes(1, false))
+        .open(&path)
+        .unwrap();
+    let mut txn = db.begin_write().unwrap();
+
+    for body in ["quick fox", "slow fox", "quick quick"] {
+        txn.collection("notes")
+            .unwrap()
+            .insert(Object::new().with("body", body))
+            .unwrap();
+    }
+
+    txn.commit().unwrap();
+    assert_eq!(object_format(&db), 1);
+    drop(db);
+
+    let mut kept = OpenOptions::new();
+
+    kept.schema(notes(2, true)).upgrade_format(false);
+
+    let refused = kept.open(&path).err().unwrap();
+
+    assert_eq!(refused.code(), "INVALID_ARGUMENT");
+    assert!(refused.to_string().contains("upgrade_format"), "{refused}");
+
+    let db = OpenOptions::new()
+        .schema(notes(2, true))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(object_format(&db), 3);
+    assert_eq!(
+        text_entries(&db, 1),
+        [
+            ("fox".to_owned(), 1),
+            ("fox".to_owned(), 2),
+            ("quick".to_owned(), 1),
+            ("quick".to_owned(), 3),
+            ("slow".to_owned(), 2)
+        ]
+    );
+
+    let read = db.begin_read().unwrap();
+
+    check_indexes(&read as &dyn Source, &read.schema().unwrap().schema).unwrap();
+    drop(read);
+    drop(db);
+
+    let db = OpenOptions::new()
+        .schema(notes(3, false))
+        .open(&path)
+        .unwrap();
+
+    assert_eq!(object_format(&db), 3);
+    assert!(
+        !db.begin_read()
+            .unwrap()
+            .tree_names_in()
+            .unwrap()
+            .iter()
+            .any(|name| name.as_str() == &*index_tree(1)),
+        "the index is dropped"
+    );
     assert!(db.check().unwrap().is_ok());
 }

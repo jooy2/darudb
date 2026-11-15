@@ -22,6 +22,7 @@ use crate::format::object::names::{META, SCHEMA_KEY, records};
 use crate::format::object::schema::{
     CollectionDef, FieldDef, Fields, IndexDef, Kind, OpenSchema, StoredSchema, path_fields,
 };
+use crate::format::object::text;
 use crate::format::object::{Object, Value};
 use crate::txn::{EntryBuffers, Range, ReadTransaction, Seeker, Spare, WriteTransaction, kept};
 
@@ -846,6 +847,10 @@ fn value_entries(
     value: &Value,
     key: &[u8],
 ) -> Result<()> {
+    if index.text {
+        return text_entries(entries, position, value, key);
+    }
+
     // A list gives an entry for each of its values, once each and in order;
     // any other value gives one.
     let Value::List(elements) = value else {
@@ -865,6 +870,47 @@ fn value_entries(
     for entry in keys {
         entries.push(position, entry.len(), |bytes| {
             bytes.extend_from_slice(&entry);
+
+            Ok(())
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Adds the entries of the text index at `position` for an object whose
+/// value of the indexed field is `value` and whose primary key encodes as
+/// `key`: one for each term of the string, or of every string of a list,
+/// once each and in order, and none for a null (`design/objects.md`, "Text
+/// indexes").
+fn text_entries(entries: &mut IndexKeys, position: usize, value: &Value, key: &[u8]) -> Result<()> {
+    let mut found = BTreeSet::new();
+    let mut add = |string: &str| {
+        text::terms(string, |term| {
+            if !found.contains(term) {
+                found.insert(term.to_owned());
+            }
+
+            true
+        });
+    };
+
+    match value {
+        Value::String(string) => add(string),
+        Value::List(elements) => {
+            for element in elements {
+                if let Value::String(string) = element {
+                    add(string);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for term in found {
+        entries.push(position, term.len() + 3 + key.len(), |entry| {
+            key::encode_field(FieldRef::String(term.as_bytes()), entry).map_err(internal)?;
+            entry.extend_from_slice(key);
 
             Ok(())
         })?;

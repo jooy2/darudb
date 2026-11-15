@@ -354,7 +354,10 @@ fn merge_collection(
                 .all(|path| same_defaults(&existing.fields, &fields, path));
 
             existing.indexes.iter().find(|index| {
-                index.components == components && index.unique == declared.unique && same_defaults
+                index.components == components
+                    && index.unique == declared.unique
+                    && index.text == declared.text
+                    && same_defaults
             })
         });
 
@@ -365,6 +368,7 @@ fn merge_collection(
                     id: *next_index,
                     components,
                     unique: declared.unique,
+                    text: declared.text,
                 };
 
                 *next_index += 1;

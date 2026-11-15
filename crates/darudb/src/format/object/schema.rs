@@ -12,8 +12,8 @@ use super::value::Value;
 /// The newest object layer's format this build reads and writes, field 1 of
 /// the stored schema. Format 2 adds the date type, lists of embedded
 /// objects, indexes on several fields or on a field inside an embedded
-/// object, and cascading links.
-pub(crate) const OBJECT_FORMAT: i64 = 2;
+/// object, and cascading links, and format 3 text indexes.
+pub(crate) const OBJECT_FORMAT: i64 = 3;
 
 /// The oldest object format this build reads: the one every release before
 /// format 2 wrote, which a schema that declares nothing newer keeps, so that
@@ -134,13 +134,26 @@ pub(crate) struct IndexDef {
     pub(crate) id: u64,
     pub(crate) components: Vec<Vec<u64>>,
     pub(crate) unique: bool,
+    /// Whether the index is a text index: on one component, a string or a
+    /// list of strings, with an entry for each term of the text rather
+    /// than one for the value, which only a search for words reads. Object
+    /// format 3.
+    pub(crate) text: bool,
 }
 
 impl IndexDef {
     /// The field of the collection itself the index is on, for an index of
     /// one component on a top-level field, which format 1 has and which
     /// keeps the fast paths of one field.
+    ///
+    /// A text index has no such field: its entries are terms, not the
+    /// field's values, so nothing that reads an index by its field's values
+    /// may take it for one.
     pub(crate) fn field(&self) -> Option<u64> {
+        if self.text {
+            return None;
+        }
+
         match self.components.as_slice() {
             [path] => match path.as_slice() {
                 [field] => Some(*field),
@@ -213,6 +226,19 @@ pub(crate) fn indexable(steps: &[&FieldDef], components: usize) -> bool {
     };
 
     leaf_ok && lists <= 1 && (lists == 0 || components == 1)
+}
+
+/// Whether a text index may be on `path`, which reaches the fields `steps`:
+/// a path an index of one component may go along, to a string or a list of
+/// strings.
+pub(crate) fn searchable(steps: &[&FieldDef]) -> bool {
+    let text = steps.last().is_some_and(|leaf| match &leaf.kind {
+        Kind::String => true,
+        Kind::List(element) => **element == Kind::String,
+        _ => false,
+    });
+
+    text && indexable(steps, 1)
 }
 
 /// A collection, as the file knows it.
@@ -439,10 +465,10 @@ impl StoredSchema {
             .map(|field| field.kind.clone())
     }
 
-    /// The lowest object format that holds what the schema declares: 2 for
-    /// a date or a list of embedded objects anywhere in it, an index that is
-    /// not on one field of its collection, or a cascading link, and 1
-    /// otherwise.
+    /// The lowest object format that holds what the schema declares: 3 for
+    /// a text index, 2 for a date or a list of embedded objects anywhere in
+    /// it, an index that is not on one field of its collection, or a
+    /// cascading link, and 1 otherwise.
     pub(crate) fn needs(&self) -> i64 {
         fn needs_kind(kind: &Kind) -> i64 {
             match kind {
@@ -471,7 +497,13 @@ impl StoredSchema {
                     .iter()
                     .all(|index| index.field().is_some())
                     && collection.fields.list.iter().all(|field| !field.cascade);
-                let declared = if plain { OLDEST_OBJECT_FORMAT } else { 2 };
+                let declared = if collection.indexes.iter().any(|index| index.text) {
+                    3
+                } else if plain {
+                    OLDEST_OBJECT_FORMAT
+                } else {
+                    2
+                };
 
                 needs_fields(&collection.fields).max(declared)
             })
@@ -581,9 +613,18 @@ impl StoredSchema {
                     return Err("an index has no components, or too many");
                 }
 
+                if index.text && (index.unique || count != 1) {
+                    return Err("a text index is unique, or on several fields");
+                }
+
                 for component in &index.components {
-                    let fits = path_fields(&collection.fields, component)
-                        .is_some_and(|steps| indexable(&steps, count));
+                    let fits = path_fields(&collection.fields, component).is_some_and(|steps| {
+                        if index.text {
+                            searchable(&steps)
+                        } else {
+                            indexable(&steps, count)
+                        }
+                    });
 
                     if !fits {
                         return Err("an index is on a field that cannot have one");
@@ -678,27 +719,39 @@ fn encode_collection(collection: &CollectionDef) -> Raw {
                                 (2, int(field)),
                                 (3, Raw::Bool(index.unique)),
                             ],
-                            None => vec![
-                                (1, int(index.id)),
-                                (3, Raw::Bool(index.unique)),
-                                (
-                                    4,
-                                    Raw::List(
-                                        index
-                                            .components
-                                            .iter()
-                                            .map(|path| {
-                                                Raw::Object(vec![(
-                                                    1,
-                                                    Raw::List(
-                                                        path.iter().map(|id| int(*id)).collect(),
-                                                    ),
-                                                )])
-                                            })
-                                            .collect(),
+                            None => {
+                                let mut fields = vec![
+                                    (1, int(index.id)),
+                                    (3, Raw::Bool(index.unique)),
+                                    (
+                                        4,
+                                        Raw::List(
+                                            index
+                                                .components
+                                                .iter()
+                                                .map(|path| {
+                                                    Raw::Object(vec![(
+                                                        1,
+                                                        Raw::List(
+                                                            path.iter()
+                                                                .map(|id| int(*id))
+                                                                .collect(),
+                                                        ),
+                                                    )])
+                                                })
+                                                .collect(),
+                                        ),
                                     ),
-                                ),
-                            ],
+                                ];
+
+                                // Written only when true, so that every
+                                // other index keeps its bytes.
+                                if index.text {
+                                    fields.push((5, Raw::Bool(true)));
+                                }
+
+                                fields
+                            }
                         })
                     })
                     .collect(),
@@ -883,10 +936,23 @@ fn decode_collection(raw: &Raw) -> Result<CollectionDef, &'static str> {
                     Err(_) => vec![vec![index.count(2)?]],
                 };
 
+                let text = match index.get(5) {
+                    Ok(Raw::Bool(text)) => *text,
+                    Ok(_) => return Err("the schema holds a field of the wrong type"),
+                    Err(_) => false,
+                };
+
+                // A text index lists its component, as any index that is
+                // not on a field's values does.
+                if text && index.get(2).is_ok() {
+                    return Err("a text index is stored as an index on a field");
+                }
+
                 Ok(IndexDef {
                     id: index.count(1)?,
                     components,
                     unique: index.bool(3)?,
+                    text,
                 })
             })
             .collect::<Result<_, &'static str>>()?,
@@ -992,6 +1058,7 @@ mod tests {
                         id: 2,
                         components: vec![vec![3]],
                         unique: false,
+                        text: false,
                     }],
                 },
                 CollectionDef {
@@ -1024,6 +1091,7 @@ mod tests {
                         id: 5,
                         components: vec![vec![2]],
                         unique: true,
+                        text: false,
                     }],
                 },
             ],
@@ -1207,11 +1275,13 @@ mod tests {
                 id: 5,
                 components: vec![vec![1], vec![2]],
                 unique: false,
+                text: false,
             },
             IndexDef {
                 id: 6,
                 components: vec![vec![2], vec![1]],
                 unique: false,
+                text: false,
             },
         ];
         schema.next_index = 7;
@@ -1225,6 +1295,7 @@ mod tests {
             id: 7,
             components: vec![vec![2]],
             unique: false,
+            text: false,
         });
         schema.next_index = 8;
 

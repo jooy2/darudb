@@ -573,6 +573,7 @@ fn passes(test: &Test, value: ValueRef<'_>) -> bool {
         Test::EndsWithFold(folded) => {
             text_of(value).is_some_and(|text| fold::ends_with(text, folded))
         }
+        Test::Matches(search) => text_of(value).is_some_and(|text| search.found_in(text)),
     }
 }
 
@@ -2242,9 +2243,11 @@ fn strategy<'p, 's>(
     // A run that leaves the access gathers what the access answered, chosen
     // or not, since the filter no longer holds those terms.
     let access_left = left.into_iter().find(|weighed| weighed.position.is_none());
+    // A part that only narrows leaves its term to be tested.
     let skip = chosen
         .iter()
         .filter_map(|weighed| weighed.position)
+        .filter(|position| !skipped(plan.narrowing, *position))
         .fold(0u64, |skip, position| skip | 1 << position);
     let tested = plan
         .filter

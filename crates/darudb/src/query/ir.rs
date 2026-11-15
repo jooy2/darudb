@@ -31,6 +31,9 @@ pub(crate) enum Op {
     StartsWith,
     EndsWith,
     IsNull,
+    /// A string has every word of a search (`design/objects.md`,
+    /// "Searching for words").
+    Matches,
     EqFold,
     NeFold,
     InFold,
@@ -53,6 +56,7 @@ impl Op {
             Op::Contains => 12,
             Op::StartsWith => 13,
             Op::EndsWith => 14,
+            Op::Matches => 17,
             _ => 15,
         }
     }
@@ -71,6 +75,7 @@ impl Op {
             13 => Op::StartsWith,
             14 => Op::EndsWith,
             15 => Op::IsNull,
+            17 => Op::Matches,
             _ => return None,
         })
     }
@@ -133,6 +138,7 @@ impl Op {
             Op::Contains => "CONTAINS",
             Op::StartsWith => "STARTSWITH",
             Op::EndsWith => "ENDSWITH",
+            Op::Matches => "MATCHES",
             _ => "IS NULL",
         }
     }
