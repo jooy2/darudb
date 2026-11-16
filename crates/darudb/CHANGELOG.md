@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Breaking changes
+
+- The crate needs Rust 1.87 or later, where it needed 1.85. The ciphers depend on `ctutils`, whose versions before 0.4.4 could compile a constant-time mask into a branch (RUSTSEC-2026-0385), and the versions without that need Rust 1.87. With an older compiler, Cargo kept choosing `ctutils` 0.4.2. An application that has a `Cargo.lock` takes the fix with `cargo update -p ctutils`.
+
 ## v1.6.0 (2026-11-15)
 
 ### Added

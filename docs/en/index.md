@@ -426,7 +426,7 @@ The installers are on the [releases page](https://github.com/jooy2/darudb-studio
 Add the package for your language. The getting-started page opens in it, with its commands and its code.
 
 <StartCards :cards="[
-  { id: 'rust', note: 'Rust 1.85 or later. The derive feature reads and writes your structs directly.', install: 'cargo add darudb --features derive', link: '/guide/getting-started' },
+  { id: 'rust', note: 'Rust 1.87 or later. The derive feature reads and writes your structs directly.', install: 'cargo add darudb --features derive', link: '/guide/getting-started' },
   { id: 'node', note: 'Node.js 20 or later, typed for TypeScript, with the engine prebuilt for every platform it supports.', install: 'npm install darudb', link: '/guide/getting-started' },
   { id: 'dart', note: 'Dart 3.10 or Flutter 3.38.1 or later. The build hook fetches the engine prebuilt for each target.', install: 'dart pub add darudb dev:darudb_generator dev:build_runner', link: '/guide/getting-started' },
   { id: 'python', note: 'CPython 3.11 or later, free-threaded 3.14 included, with wheels for Linux, macOS and Windows.', install: 'pip install darudb', link: '/guide/getting-started' }

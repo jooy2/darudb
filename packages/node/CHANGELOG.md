@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Fixed
+
+- The addon is built with `ctutils` 0.4.8, a crate the ciphers depend on, whose versions before 0.4.4 could compile a constant-time mask into a branch (RUSTSEC-2026-0385).
+
 ## v1.6.0 (2026-11-15)
 
 ### Breaking changes

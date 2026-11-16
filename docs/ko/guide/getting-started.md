@@ -11,7 +11,7 @@ order: 2
 
 ::: lang rust
 
-- [rustup](https://rustup.rs)으로 설치한 **Rust 1.85 이상**.
+- [rustup](https://rustup.rs)으로 설치한 **Rust 1.87 이상**.
 
 :::
 

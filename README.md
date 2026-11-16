@@ -29,7 +29,7 @@ These are the goals the design is built around, in order of priority. They are g
 
 | Package                                                            | Registry                                                                 | Requires                    | Status   |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------ | --------------------------- | -------- |
-| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.85 or later          | Released |
+| [`crates/darudb`](crates/darudb)                                   | [crates.io: `darudb`](https://crates.io/crates/darudb)                   | Rust 1.87 or later          | Released |
 | [`packages/node`](packages/node)                                   | [npm: `darudb`](https://www.npmjs.com/package/darudb)                    | Node.js 20 or later         | Released |
 | [`packages/dart/darudb`](packages/dart/darudb)                     | [pub.dev: `darudb`](https://pub.dev/packages/darudb)                     | Dart 3.10 or Flutter 3.38.1 | Released |
 | [`packages/dart/darudb_generator`](packages/dart/darudb_generator) | [pub.dev: `darudb_generator`](https://pub.dev/packages/darudb_generator) | Dart 3.10 or Flutter 3.38.1 | Released |

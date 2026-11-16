@@ -426,7 +426,7 @@ Rust 크레이트에 비동기 API가 따로 없다는 점만 빼면, 모든 패
 쓰는 언어의 패키지를 추가하세요. 시작하기 페이지가 그 언어의 명령과 코드로 열립니다.
 
 <StartCards :cards="[
-  { id: 'rust', note: 'Rust 1.85 이상. derive 기능을 켜면 구조체를 그대로 읽고 씁니다.', install: 'cargo add darudb --features derive', link: '/ko/guide/getting-started' },
+  { id: 'rust', note: 'Rust 1.87 이상. derive 기능을 켜면 구조체를 그대로 읽고 씁니다.', install: 'cargo add darudb --features derive', link: '/ko/guide/getting-started' },
   { id: 'node', note: 'Node.js 20 이상. TypeScript 타입이 함께 오고, 지원하는 모든 플랫폼용 엔진이 미리 빌드돼 있습니다.', install: 'npm install darudb', link: '/ko/guide/getting-started' },
   { id: 'dart', note: 'Dart 3.10 또는 Flutter 3.38.1 이상. 빌드 훅이 대상마다 미리 빌드한 엔진을 내려받습니다.', install: 'dart pub add darudb dev:darudb_generator dev:build_runner', link: '/ko/guide/getting-started' },
   { id: 'python', note: 'CPython 3.11 이상, 프리 스레드 3.14 포함. Linux와 macOS, Windows용 휠이 있습니다.', install: 'pip install darudb', link: '/ko/guide/getting-started' }

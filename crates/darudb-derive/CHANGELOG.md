@@ -4,6 +4,10 @@
 
 ## vNext (2026--)
 
+### Breaking changes
+
+- The crate needs Rust 1.87 or later, where it needed 1.85, as the `darudb` crate does from this version.
+
 ## v1.6.0 (2026-11-15)
 
 ### Added

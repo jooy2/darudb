@@ -181,7 +181,7 @@ Opening it without a password fails with the code `KEY_REQUIRED`, and with the w
 
 ## Requirements
 
-Rust 1.85 or later, on a Unix-like system or Windows.
+Rust 1.87 or later, on a Unix-like system or Windows.
 
 ## License
 

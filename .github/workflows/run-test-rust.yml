@@ -45,11 +45,11 @@ jobs:
     # and never by a consumer's compiler.
     steps:
       - uses: actions/checkout@v5
-      - name: Install Rust 1.85
-        run: rustup toolchain install 1.85 --profile minimal
+      - name: Install Rust 1.87
+        run: rustup toolchain install 1.87 --profile minimal
       - uses: Swatinem/rust-cache@v2
-      - name: Test the engine with Rust 1.85
-        run: cargo +1.85 test -p darudb --all-features
+      - name: Test the engine with Rust 1.87
+        run: cargo +1.87 test -p darudb --all-features
 
   run-test-rust:
     runs-on: ${{ matrix.os }}

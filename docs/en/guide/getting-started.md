@@ -11,7 +11,7 @@ This page adds DaruDB to a project from its language's registry, crates.io, npm,
 
 ::: lang rust
 
-- **Rust 1.85 or later**, installed with [rustup](https://rustup.rs).
+- **Rust 1.87 or later**, installed with [rustup](https://rustup.rs).
 
 :::
 
