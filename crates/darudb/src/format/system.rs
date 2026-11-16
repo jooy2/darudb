@@ -145,7 +145,7 @@ pub(crate) fn encode_runs(runs: &[(u64, u32)]) -> Vec<u8> {
 
 /// The runs of a retained tree value.
 pub(crate) fn decode_runs(value: &[u8]) -> Result<Vec<(u64, u32)>, &'static str> {
-    if value.len() % 12 != 0 {
+    if !value.len().is_multiple_of(12) {
         return Err("a retained tree value is not a list of runs");
     }
 

@@ -147,7 +147,7 @@ fn worker() {
 
     crate::testing::KEEP_SNAPSHOT_LOCKS.store(id % 2 == 1, Ordering::Relaxed);
 
-    let churn = id % 3 == 0;
+    let churn = id.is_multiple_of(3);
     let stop = Arc::new(AtomicBool::new(false));
     let readers: Vec<_> = (0..2)
         .map(|reader| {
@@ -407,7 +407,7 @@ fn contents(txn: &ReadTransaction) -> Result<(u64, u64, u64), String> {
     }
 
     // Now and then, every index entry against the objects.
-    if digest % 16 == 0 {
+    if digest.is_multiple_of(16) {
         let schema = txn.schema().cloned().ok_or("the handle has no schema")?;
 
         crate::schema::objects::check_indexes(txn, &schema.schema)

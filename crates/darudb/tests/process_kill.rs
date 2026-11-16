@@ -63,7 +63,7 @@ fn child_writer() {
     // Until the parent kills this process.
     loop {
         let mut txn = db.begin_write().unwrap();
-        let size = if round % 5 == 0 { 9000 } else { 40 };
+        let size = if round.is_multiple_of(5) { 9000 } else { 40 };
         let fill = u8::try_from(round % 251).unwrap();
 
         txn.insert("counter", b"round", &round.to_be_bytes())
@@ -71,11 +71,11 @@ fn child_writer() {
         txn.insert("log", &round.to_be_bytes(), &vec![fill; size])
             .unwrap();
 
-        if round % 3 == 0 && round > 0 {
+        if round.is_multiple_of(3) && round > 0 {
             txn.remove("log", &(round - 1).to_be_bytes()).unwrap();
         }
 
-        if round % 2 == 0 {
+        if round.is_multiple_of(2) {
             txn.commit_deferred().unwrap();
         } else {
             txn.commit().unwrap();

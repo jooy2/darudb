@@ -331,7 +331,7 @@ fn run(seed: u64, page_size: u32, steps: usize) {
         _ => &mut options,
     };
 
-    let defers = seed % 4 != 0;
+    let defers = !seed.is_multiple_of(4);
     let mut disk = Arc::new(SimDisk::default());
     let mut created = options.clone();
 
