@@ -29,8 +29,8 @@ jobs:
     name: Lint
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         name: Setup Node.js
         with:
           node-version: '24'
@@ -61,8 +61,8 @@ jobs:
           - { os: macos-latest, node_version: '24' }
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         name: Setup Node.js ${{ matrix.node_version }}
         with:
           node-version: ${{ matrix.node_version }}
@@ -81,8 +81,8 @@ jobs:
     name: Test in Electron's main process
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         name: Setup Node.js
         with:
           node-version: '24'

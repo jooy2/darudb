@@ -26,7 +26,7 @@ jobs:
     name: Format and lint
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # `rustup` is on every runner, and the first `cargo` command installs the
       # toolchain `rust-toolchain.toml` pins, with rustfmt and clippy.
       - uses: Swatinem/rust-cache@v2
@@ -44,7 +44,7 @@ jobs:
     # engine is checked: the Node.js binding is built with the pinned toolchain
     # and never by a consumer's compiler.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust 1.87
         run: rustup toolchain install 1.87 --profile minimal
       - uses: Swatinem/rust-cache@v2
@@ -60,7 +60,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace

@@ -18,19 +18,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # fetch all commits to get last updated time or other git log info
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
       # cache node_modules
       - name: Cache dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         id: npm-cache
         with:
           path: |
@@ -53,7 +53,7 @@ jobs:
 
       # @see https://github.com/crazy-max/ghaction-github-pages
       - name: Deploy to GitHub Pages
-        uses: crazy-max/ghaction-github-pages@v4
+        uses: crazy-max/ghaction-github-pages@v5
         with:
           target_branch: gh-pages
           build_dir: docs-dist
