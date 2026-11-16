@@ -43,10 +43,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      # The `cargo-fuzz` installed above is a musl binary, and it builds for
+      # the target it was built for unless it is given one. A sanitizer does
+      # not link into musl's static libc, so the target is named here.
       - name: Fuzz
         run: |
           mkdir -p fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }}
-          cargo +nightly fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=240 -max_len=2048 -len_control=0 -rss_limit_mb=3072
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=240 -max_len=2048 -len_control=0 -rss_limit_mb=3072
       # An input that failed, to run again where it can be looked into.
       - uses: actions/upload-artifact@v7
         if: failure()
