@@ -37,7 +37,7 @@ jobs:
         working-directory: ./crates/darudb
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # The targets need a nightly compiler, which nothing else here does.
       - run: rustup toolchain install nightly --profile minimal
       - uses: taiki-e/install-action@v2

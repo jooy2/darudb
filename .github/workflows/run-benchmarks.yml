@@ -37,8 +37,8 @@ jobs:
     name: Rust
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: Swatinem/rust-cache@v2
@@ -63,8 +63,8 @@ jobs:
     name: Node.js
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: Swatinem/rust-cache@v2
@@ -94,8 +94,8 @@ jobs:
     name: Dart
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: dart-lang/setup-dart@v1
@@ -144,11 +144,11 @@ jobs:
     name: Python
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
       - uses: Swatinem/rust-cache@v2
@@ -178,8 +178,8 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: actions/download-artifact@v8

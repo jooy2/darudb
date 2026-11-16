@@ -38,7 +38,7 @@ jobs:
     # run inside it, since the Node.js they bring needs a newer glibc, so the
     # build and the tests run in it through `docker run`.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Test in a container with glibc 2.17
         run: |
           docker run --rm --volume "$PWD:/work" --workdir /work \
@@ -55,7 +55,7 @@ jobs:
     name: Test on Android 5.0 (API 21)
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Let the emulator use KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -118,7 +118,7 @@ jobs:
         os: [windows-2022, macos-15-intel]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test -p darudb
