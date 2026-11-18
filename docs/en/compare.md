@@ -31,6 +31,6 @@ This page compares features only. [Performance](./performance.md) compares speed
 
 ## Sources
 
-Every cell was checked in October 2026 against the project's own documentation, its source and its package registry pages. Features change from one release to the next, so where a cell and a project's documentation disagree, the documentation is right, and an [issue](https://github.com/jooy2/darudb/issues) saying so is welcome.
+Every cell was checked in November 2026 against the project's own documentation, its source and its package registry pages. Features change from one release to the next, so where a cell and a project's documentation disagree, the documentation is right, and an [issue](https://github.com/jooy2/darudb/issues) saying so is welcome.
 
 To move an application's data into DaruDB from one of these databases, see the [migration guides](./migration/index.md).

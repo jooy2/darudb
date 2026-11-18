@@ -4,7 +4,7 @@
  * This file and the comparison pages, `docs/*\/compare.md`, are the only
  * places outside the migration guides that name other database products
  * (`CLAUDE.md`). Every value was checked against the project's own
- * documentation, source or registry pages in October 2026; the date on the
+ * documentation, source or registry pages in November 2026; the date on the
  * page says so, and a change here should be checked the same way.
  *
  * A cell is `yes`, `partial` or `no`, with a short note where the mark alone
@@ -209,10 +209,7 @@ export const SECTIONS: Section[] = [
           darudb: yes('darudb'),
           sqlite: yes('sqlite3 in the standard library', '표준 라이브러리 sqlite3'),
           realm: no(),
-          objectbox: partly(
-            'objectbox, an alpha release from 2024',
-            'objectbox, 2024년의 알파 버전'
-          ),
+          objectbox: yes('objectbox'),
           isar: no(),
           hive: no(),
           lmdb: yes('lmdb (third party)', 'lmdb (서드파티)'),
@@ -311,9 +308,9 @@ export const SECTIONS: Section[] = [
           'One process writes; others open secondary instances',
           '한 프로세스만 쓰기, 나머지는 보조 인스턴스'
         ),
-        redb: partly(
-          'Read-only sharing, or an experimental feature',
-          '읽기 전용 공유, 또는 실험적 기능'
+        redb: yes(
+          'Since 4.5, through byte-range file locks, in a mode chosen when opening',
+          '4.5부터 바이트 범위 파일 잠금으로, 열 때 모드를 골라야 함'
         )
       }),
       row('readers', 'Readers never wait for a writer', '읽기가 쓰기를 기다리지 않음', {
@@ -512,7 +509,7 @@ export const SECTIONS: Section[] = [
         darudb: yes(),
         sqlite: yes(),
         realm: yes('Offset by slicing the results', 'offset은 결과를 잘라서'),
-        objectbox: yes('No sorting in Python yet', 'Python에는 아직 정렬 없음'),
+        objectbox: yes(),
         isar: yes(),
         hive: no('Done in Dart', 'Dart 코드에서 직접'),
         lmdb: partly('Ranges in key order', '키 순서의 범위 탐색'),
@@ -573,7 +570,10 @@ export const SECTIONS: Section[] = [
           '텍스트 인덱스로 단어와 단어의 앞부분을 검색, 순위는 없음'
         ),
         sqlite: yes('FTS5'),
-        realm: partly('Whole words, Latin scripts only', '단어 단위, 라틴 문자만'),
+        realm: partly(
+          'Words and the starts of words, Latin scripts only',
+          '단어와 단어의 앞부분, 라틴 문자만'
+        ),
         objectbox: no(),
         isar: partly('Word lists in an index', '인덱스에 단어 목록을 담아서'),
         hive: no(),
@@ -585,7 +585,7 @@ export const SECTIONS: Section[] = [
         darudb: yes('Sum, min, max and mean, exact', '합계, 최솟값, 최댓값, 평균, 정확한 값'),
         sqlite: yes(),
         realm: yes(),
-        objectbox: yes(),
+        objectbox: yes('Not yet in Python', 'Python에는 아직 없음'),
         isar: yes(),
         hive: no(),
         lmdb: no(),
