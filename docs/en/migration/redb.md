@@ -163,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 ```
 
-`ReadOnlyDatabase` opens the file without writing to it, so it stays as it was; the application has to be closed, since a redb file is open in one process at a time. Every object goes in with the key it had, so `author` names the right user whichever collection is copied first. A value of a type of the application's is read with that type in the `TableDefinition`, as the application reads it, and copied field by field.
+`ReadOnlyDatabase` opens the file without writing to it, so it stays as it was; the application has to be closed first, since in redb's default concurrency mode a process that writes the file keeps every other process out of it. Every object goes in with the key it had, so `author` names the right user whichever collection is copied first. A value of a type of the application's is read with that type in the `TableDefinition`, as the application reads it, and copied field by field.
 
 ## Check the copy
 
@@ -188,7 +188,7 @@ What the application did with ranges and its own index tables becomes a query, w
 
 - **No index upkeep.** Writing an object updates every index declared on its collection in the same transaction, so the code that kept `users_by_email` and `post_tags` in step goes away.
 - **Objects, not tuples.** Objects go in and come out as an `Object`, or as a struct with `#[derive(Object)]`, read straight from the record. See [Collections and objects](../guide/objects.md).
-- **Several processes** can use one file at the same time: one writer, any number of readers. See [Several processes](../guide/processes.md).
+- **Several processes** can use one file at the same time: one writer, any number of readers, with no mode to choose when the file is opened. redb allows it from 4.5 only in a `ConcurrencyMode` other than its default. See [Several processes](../guide/processes.md).
 - **Transactions** keep their shape: a read sees one snapshot until it ends, and a write commits or aborts as a whole. See [Transactions](../guide/transactions.md).
 - **Encryption** of the whole file comes with the engine; see [Encryption](../guide/encryption.md).
 - **Schema changes** raise the schema's version, and the engine adds new collections, fields and indexes by itself. See [Migrations](../guide/migrations.md).
