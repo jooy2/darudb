@@ -4,6 +4,7 @@
 // read its page again.
 import 'dart:async';
 
+import 'package:darudb/darudb.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:darudb_sample/src/fields.dart';
@@ -27,8 +28,25 @@ final class SampleController extends ChangeNotifier {
     }
   }
 
+  /// Reads the file's counts again. The screen closes the store without
+  /// waiting for a refresh under way, so one that ends after the screen went
+  /// away is dropped, with the store's refusal if it had closed by then.
   Future<void> refresh() async {
-    final SampleInfo next = await store.info();
+    final SampleInfo next;
+
+    try {
+      next = await store.info();
+    } on DaruException catch (error) {
+      if (_disposed && error.code == 'CLOSED') {
+        return;
+      }
+
+      rethrow;
+    }
+
+    if (_disposed) {
+      return;
+    }
 
     info = next;
     _notify();

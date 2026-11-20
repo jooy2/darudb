@@ -255,6 +255,12 @@ final class SampleStore {
   }
 
   Future<SampleInfo> info() async {
+    // Read before the first wait: the screen may close the database while the
+    // counts are on their way, and a closed database refuses these.
+    final int pageSize = _db.pageSize;
+    final int formatVersion = _db.formatVersion;
+    final int? schemaVersion = _db.schemaVersion;
+    final bool encrypted = _db.isEncrypted;
     final List<int> counts = await _db.readAsync(
       (AsyncReadTransaction txn) => Future.wait(<Future<int>>[
         txn.collection(organizationSchema).count(),
@@ -266,10 +272,10 @@ final class SampleStore {
     return SampleInfo(
       path: path,
       bytes: await File(path).length(),
-      pageSize: _db.pageSize,
-      formatVersion: _db.formatVersion,
-      schemaVersion: _db.schemaVersion,
-      encrypted: _db.isEncrypted,
+      pageSize: pageSize,
+      formatVersion: formatVersion,
+      schemaVersion: schemaVersion,
+      encrypted: encrypted,
       engineVersion: engineVersion,
       counts: <SampleCollection, int>{
         SampleCollection.organizations: counts[0],
